@@ -52,6 +52,8 @@ jobs:
       - name: Initialize without remote backend
         working-directory: infra/terraform
         run: terraform init -backend=false
+      - name: Validate Linux development entrypoint
+        run: bash -n script/dev.sh
       - name: Validate Docker Compose configuration
         run: docker compose --env-file .env.test -f docker/docker-compose.yml config --quiet
       - name: Validate Azure resource definitions
