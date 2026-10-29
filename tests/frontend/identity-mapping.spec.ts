@@ -73,7 +73,7 @@ test('admin maps identities in saved revision and review remains blocked', async
   await expect(page.getByText('Alice Smith', { exact: true })).toBeVisible();
   await page.getByRole('textbox', { name: 'Alice Smith GitHub' }).fill('alice-gh');
   await page.getByRole('button', { name: /salva bozza mapping|save mapping draft/i }).click();
-  await expect(page.getByText(/bozza salvata|mapping draft saved/i)).toBeVisible();
+  await expect(page.getByRole('status').getByText(/bozza salvata|mapping draft saved/i)).toBeVisible();
   expect(savedRevision).toBe(1);
   expect(savedMappings).toEqual([{ sourceIdentityId: 'aad.alice', gitHubLogin: 'alice-gh' }]);
   await expect(page.getByText(/non pronto per assegnare accessi|not ready to grant access/i)).toBeVisible();
