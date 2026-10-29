@@ -35,6 +35,15 @@ public static class Bootstrap
             );
             CREATE INDEX IF NOT EXISTS ix_migration_discoveries_connection_collected
                 ON migration_discoveries(connection_id, collected_at_utc);
+            CREATE TABLE IF NOT EXISTS identity_mapping_drafts (
+                snapshot_id uuid NOT NULL,
+                destination_connection_id uuid NOT NULL,
+                target_organization varchar(100) NOT NULL,
+                revision integer NOT NULL,
+                updated_at_utc timestamp with time zone NOT NULL,
+                mappings_json jsonb NOT NULL,
+                PRIMARY KEY (snapshot_id, destination_connection_id)
+            );
             CREATE TABLE IF NOT EXISTS migration_connection_secrets (
                 reference varchar(100) PRIMARY KEY,
                 ciphertext bytea NOT NULL,

@@ -48,6 +48,8 @@ builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>(
 builder.Services.AddScoped<ConnectionService>();
 builder.Services.AddScoped<IDiscoveryRepository, PostgresDiscoveryRepository>();
 builder.Services.AddScoped<DiscoveryService>();
+builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMappingDraftRepository>();
+builder.Services.AddScoped<IdentityMappingService>();
 builder.Services.AddHttpClient<AzureDevOpsDiscoveryReader>(c => c.Timeout = TimeSpan.FromSeconds(15))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IDiscoveryReader>(s => s.GetRequiredService<AzureDevOpsDiscoveryReader>());
@@ -221,6 +223,7 @@ app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 
 app.MapConnectionEndpoints();
 app.MapDiscoveryEndpoints();
+app.MapIdentityMappingEndpoints();
 
 app.Run();
 

@@ -26,6 +26,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<ConnectionRecord> Connections => Set<ConnectionRecord>();
     public DbSet<EncryptedSecretRecord> ConnectionSecrets => Set<EncryptedSecretRecord>();
     public DbSet<DiscoveryInventoryRecord> Discoveries => Set<DiscoveryInventoryRecord>();
+    public DbSet<IdentityMappingDraftRecord> IdentityMappingDrafts => Set<IdentityMappingDraftRecord>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -62,6 +63,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.CollectedAtUtc).HasColumnName("collected_at_utc");
             entity.Property(x => x.Json).HasColumnName("inventory").HasColumnType("jsonb");
             entity.HasIndex(x => new { x.ConnectionId, x.CollectedAtUtc });
+        });
+        builder.Entity<IdentityMappingDraftRecord>(entity =>
+        {
+            entity.ToTable("identity_mapping_drafts");
+            entity.HasKey(x => new { x.SnapshotId, x.DestinationConnectionId });
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.DestinationConnectionId).HasColumnName("destination_connection_id");
+            entity.Property(x => x.TargetOrganization).HasColumnName("target_organization").HasMaxLength(100);
+            entity.Property(x => x.Revision).HasColumnName("revision");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.MappingsJson).HasColumnName("mappings_json").HasColumnType("jsonb");
         });
         builder.Entity<EncryptedSecretRecord>(entity =>
         {
