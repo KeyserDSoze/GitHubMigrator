@@ -2,7 +2,7 @@
 
 An extensible, feature-driven platform to migrate source control and (later) pipelines and work tracking from Azure DevOps Services, Azure DevOps Server / TFS, and other systems to GitHub Enterprise.
 
-**Status: Phase 1, F-002 connection management.** Azure DevOps Services and GitHub Enterprise Cloud credential connections can be verified and managed. Source discovery, TFVC conversion and real migrations are **not yet implemented**. The platform must never claim a migration completed without verification.
+**Status: Phase 1, F-002 connection management.** Azure DevOps Services and GitHub Enterprise Cloud credential connections can be verified and managed. **F-003 read-only inventory** now discovers projects, Git repositories/refs, TFVC roots and Graph users from Azure DevOps Services. Effective repository permissions, full TFVC history and real migrations are **not yet implemented**. The platform must never claim a migration completed without verification.
 
 ## Architecture
 
@@ -56,3 +56,9 @@ Sign in, change your bootstrap password, then open **Connections**. Add a source
 Local development stores PATs in PostgreSQL encrypted with AES-256-GCM using the 32-byte `LOCAL_ENCRYPTION_KEY` from ignored `.env.local`. Use a unique key per environment: losing it makes local PATs unreadable. Azure uses Key Vault with the API managed identity. Neither plain PAT nor encryption key belongs in Git. Current PAT integration is for user-driven development only; for enterprise production authentication prefer Microsoft Entra / GitHub App where feasible.
 
 See [connection API and threat model](docs/connections.md) and [ADR-005](ADR/ADR-005-connection-secrets.md).
+
+## F-003 Azure DevOps discovery
+
+After saving an Azure DevOps Services source connection, open **Discovery** (formerly Repositories) and run a read-only scan. Snapshots are immutable and stored in PostgreSQL. Browse projects, Git repositories and refs, TFVC branch roots, Graph identities and explicit coverage warnings. No source or destination writes occur. See [F-003 documentation](docs/discovery.md).
+
+**PAT scopes:** `vso.project`, `vso.code`, `vso.graph` as permitted. Without Graph permission, the snapshot is partial and shows an error rather than showing "no users" as verified. Effective repository permissions / group inheritance remain unresolved.
