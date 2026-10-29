@@ -55,6 +55,10 @@ public static class DiscoveryEndpoints
         repositoryCount = x.Snapshot.Projects.Sum(p => p.Repositories.Count),
         refCount = x.Refs.Count,
         identityCount = x.Snapshot.Identities.Count,
+        groupCount = x.Groups.Count,
+        membershipCount = x.Memberships.Count,
+        aclEntryCount = x.AclEvidence.Count,
+        x.SecurityCoverage,
         issueCount = x.Issues.Count,
         x.IdentitiesComplete, x.PermissionsComplete
     };
