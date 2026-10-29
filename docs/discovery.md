@@ -1,14 +1,14 @@
 # F-003 — Read-only discovery (initial vertical slice)
 
-**Current status:** source inventory implemented for **Azure DevOps Services**. No live-PAT integration has been executed from this environment. Azure DevOps Server/TFS on-prem, GitHub migration and effective permission/ACL collection remain future work.
+**Current status:** source inventory and raw Git repository security evidence implemented for **Azure DevOps Services**. No live-PAT integration has been executed from this environment. Azure DevOps Server/TFS on-prem, GitHub migration and effective permission/ACL collection remain future work.
 
 ## User journey
 
 1. Log in with an admin/superadmin account whose temporary password is changed.
 2. In **Connections**, create an Azure DevOps Services source with organization ID and PAT.
 3. In **Discovery**, select this saved source and choose **Run discovery**.
-4. The API reads Microsoft-hosted REST endpoints, creates an immutable snapshot in PostgreSQL and returns its summary.
-5. Browse the snapshot's projects/repositories, Git ref names + SHA/objectId, TFVC roots, users and coverage warnings. Re-scan creates a new snapshot without overwriting old ones.
+4. The API reads Microsoft-hosted REST endpoints, captures Graph groups/direct memberships and Git repository ACL masks, creates an immutable snapshot in PostgreSQL and returns its summary.
+5. Browse the snapshot's projects/repositories, Git ref names + SHA/objectId, TFVC roots, users, **groups and ACL evidence**, plus coverage warnings. Re-scan creates a new snapshot without overwriting old ones.
 
 The source PAT never appears in the snapshot, response, frontend localStorage or logs. No source or GitHub write request is performed.
 
@@ -33,7 +33,7 @@ The POST is synchronous in this initial implementation; a 90-second API deadline
 - `GET .../{projectId}/_apis/tfvc/branches?includeChildren=true&api-version=7.1` — TFVC branch roots and children, not complete item/changeset inventory; `vso.code`.
 - `GET https://vssps.dev.azure.com/{org}/_apis/graph/users?api-version=7.1-preview.1` — Graph user descriptors, display names and email when provided, paginated via X-MS-ContinuationToken; `vso.graph`.
 
-**Effective permissions NOT collected.** Graph users are organizational users, not proof of individual repository access. Group membership, ACLs, inherited grants and guest identity semantics are deliberately deferred. Snapshots always have `PermissionsComplete=false` and `PermissionsNotCollected`.
+**Effective permissions NOT verified.** Graph users, direct group memberships and raw project/repository ACLs are evidence, not proof of each individual's access. Group membership, ACLs, inherited grants and guest identity semantics are deliberately deferred. Snapshots always have `PermissionsComplete=false` and `PermissionsNotCollected`.
 
 Other limitations: TFVC root branches do not cover all versioned folders or changesets; we include the project root as a candidate rather than a verified Git repository. Refs and projects are read with explicit bounded page/record limits; hitting them produces truncation warnings. API token validation only verifies one read scope and does not prove full discovery coverage. Some API failures become issues on partial snapshots. Failure to obtain the root project list rejects the scan instead of saving misleading empty data.
 
@@ -53,3 +53,25 @@ Other limitations: TFVC root branches do not cover all versioned folders or chan
 - https://learn.microsoft.com/en-us/rest/api/azure/devops/git/refs/list?view=azure-devops-rest-7.1
 - https://learn.microsoft.com/en-us/rest/api/azure/devops/tfvc/branches/get-branches?view=azure-devops-rest-7.1
 - https://learn.microsoft.com/en-us/rest/api/azure/devops/graph/users/list?view=azure-devops-rest-7.1
+
+## Security inventory — F-003 extension
+
+The read-only adapter now gathers three additional datasets alongside Git/TFVC metadata:
+
+1. `GET https://vssps.dev.azure.com/{org}/_apis/graph/groups?api-version=7.1-preview.1`, following `X-MS-ContinuationToken` — group graph descriptor, display name and optional `legacyDescriptor`.
+2. `GET https://vssps.dev.azure.com/{org}/_apis/graph/Memberships/{groupDescriptor}?direction=down&depth=1&api-version=7.1-preview.1` — *direct*, not transitive, group membership edges. Nested groups remain distinct nodes. Requests are bounded; missing scope produces an incomplete coverage status.
+3. `GET https://dev.azure.com/{org}/_apis/accesscontrollists/2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87?token=repoV2/{projectId}[/{repoId}]&api-version=7.1` — separate project and repository Git ACLs, preserving token, legacy principal descriptor, raw `allow`/`deny` bitmask and `inheritPermissions`. Only an exact matching token is accepted. The namespace's `GenericRead` bit is **2**; `GenericContribute` is **4**. No POST, grant or mutation is performed.
+
+**Azure DevOps PAT requirements:** Graph group/membership reads require `vso.graph`. The security ACL query declares the **high-privilege** `vso.security_manage` scope, which can also change permissions through other endpoints. Use a dedicated least-duration PAT under an authorized administrator's control; do **not** enable extra scope casually. If unavailable, the app still collects source metadata and marks ACL coverage incomplete rather than claiming an empty permissions inventory. See the Microsoft [Access Control Lists Query](https://learn.microsoft.com/en-us/rest/api/azure/devops/security/access-control-lists/query?view=azure-devops-rest-7.1) and [Graph Memberships List](https://learn.microsoft.com/en-us/rest/api/azure/devops/graph/memberships/list?view=azure-devops-rest-7.1) documentation.
+
+### Critical security interpretation
+
+- `DiscoveryInventory.groups`, `memberships`, `aclEvidence` and `securityCoverage` are **raw evidence**, never target access assignments. Historical F-003 snapshots deserialize these optional properties as empty/unverified.
+- An ACL for a project may be inherited by a repository; it is shown with `scope=project` on each repository. `inheritPermissions` is **the ACL token's property**, not proof of effective inheritance on an individual user.
+- `legacyDescriptor` links an ACE identity to a Graph user/group **only when the provider returns that legacy descriptor**. If absent, preserve the unresolved security descriptor; never match by display name.
+- `PermissionsComplete=false` and `SecurityCoverage.EffectivePermissionsVerified=false` deliberately remain set. Azure DevOps effective rights can depend on group nesting, directory membership not visible in Graph, inheritance, Deny precedence, branch-level ACLs and externally granted permissions.
+- `DiscoverySnapshot.AccessGrants` stays empty. The migration planner emits `PermissionsNotCollected` instead of `OrphanedAccess` when that effective access inventory is incomplete. **No GitHub grants can be inferred from these ACLs**.
+- Large organizations currently require queued workers (F-008). The reader caps pages, groups, direct membership edges, repository scans and ACE counts, and emits coverage/truncation issue codes rather than silently ignoring failures. A single scan remains synchronous and is bounded by the API's 90-second deadline.
+- Access to the full inventory and identity/ACL evidence remains admin/superadmin-only, and REST requests are GET-only with fixed Microsoft hosts.
+
+The next slice is a dedicated, externally verified effective-permissions evaluator (possibly Azure DevOps Security permission evaluation API) and the completeness criteria for F-004 mapping. Do not merge raw group masks into a GitHub collaborator list without that validation.

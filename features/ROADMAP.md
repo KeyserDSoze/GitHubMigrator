@@ -6,7 +6,7 @@
 | --- | --- | --- | --- | --- |
 | 0 | F-000/F-001 Foundation and local authentication | – | React/.NET stack, roles, first-login change, Compose/Azure | Initial foundation |
 | 1 | **F-002 Secure source/destination connections** | F-001 | Azure DevOps Services/GitHub Enterprise Cloud PAT lifecycle and read probes | **Implemented; live/DB smoke testing pending** |
-| 2 | **F-003 Discovery** | F-002 | Read-only project, Git ref, TFVC branch-root and Graph-user snapshots | **MVP implemented; permissions/integration pending** |
+| 2 | **F-003 Discovery** | F-002 | Read-only project, Git ref, TFVC branch-root and Graph-user snapshots | **MVP plus group/ACL evidence; effective permissions/live integration pending** |
 | 3 | F-004 Identity mapping | F-003 | Map GitHub logins, inherited access and orphan warnings | Planned |
 | 4 | F-005 Migration plan/preview | F-003/F-004 | Repo selection, renaming, permission/destination previews and approval | Planned |
 | 5 | F-008 Durable job execution | F-005 | Workers, retries, checkpoints, progress, audit and verification | Planned |
