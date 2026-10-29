@@ -20,7 +20,7 @@ public sealed class AzureDevOpsDiscoveryReader(HttpClient client, TimeProvider c
     public async Task<DiscoveryInventory> DiscoverAsync(Guid connectionId, string organization, string accessToken, CancellationToken ct)
     {
         if (connectionId == Guid.Empty || string.IsNullOrWhiteSpace(organization) ||
-            !organization.All(char.IsLetterOrDigit) && !organization.Contains('-'))
+            !System.Text.RegularExpressions.Regex.IsMatch(organization, @"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$"))
             throw new ArgumentException("Invalid source connection.");
         var issues = new List<DiscoveryIssue>();
         var projects = new List<SourceProject>();
