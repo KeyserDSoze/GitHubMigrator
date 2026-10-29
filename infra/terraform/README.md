@@ -50,3 +50,7 @@ Set `enable_ai_model = true` only after confirming `ai_model_name = "gpt-6.1-sol
 ## 5. Security follow-up
 
 Private networking, narrowed firewall, WAF/edge protection, database least privilege, Key Vault rotation, identity-backed Blob access, encrypted remote state, migration job workers and audit retention are required before production.
+
+### F-002 Key Vault permission
+
+Creating, rotating and deleting connection PAT secrets requires the API managed identity to have `Key Vault Secrets Officer` (Terraform grants this for the development environment). This is more permissive than read-only `Key Vault Secrets User`; narrow the scope and consider a custom role / separate credentials service for production. The Key Vault references for bootstrap/JWT/PostgreSQL remain unchanged.

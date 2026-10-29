@@ -17,3 +17,7 @@ The API startup creates schema via `EnsureCreated` **for phase-0 bootstrap only*
 The Compose `test` action builds/runs xUnit and Playwright in isolated test containers. Playwright API calls are mocked in UI contract tests. The app starts without any real Azure DevOps/GitHub integration: source discovery and migration are not yet implemented.
 
 First container build pulls base images and NuGet/npm dependencies (internet access required).
+
+### F-002 connections
+
+Use `LOCAL_ENCRYPTION_KEY` (base64, 32 bytes) in `.env.local`; the example/test key is **public and not safe outside local development**. Start the stack, log in, change the bootstrap password, and open Connections. First test a PAT without storing it, then save it. The Azure DevOps Services source requires an organization name and sufficient read-only project permissions; GitHub Enterprise Cloud requires an organization login. PATs are encrypted in local PostgreSQL, or stored in Key Vault when deployed on Azure. No live tokens are needed for xUnit and mocked Playwright tests. Test against live APIs manually using dedicated throwaway PATs.

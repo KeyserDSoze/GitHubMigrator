@@ -40,3 +40,9 @@ Local users (superadmin, admin, user) are **platform identities**, not the Azure
 ## Observability
 
 Use structured `ILogger` messages with migrationRunId, sourceSystem, projectId, repoId, stage, duration, correlation/traceId, outcome, failureCode. Exclude PATs, bearer headers, credential URLs, raw secret payloads, personally sensitive user data. OpenTelemetry routes local telemetry to Grafana LGTM, Azure Monitor on cloud.
+
+## F-002 implemented connection boundary
+
+`ConnectionService` in Business owns provider-neutral connection orchestration and defines `IConnectionValidator`, `IConnectionRepository` and `IConnectionSecretStore`. Azure DevOps Services and GitHub Enterprise Cloud validators are separate infrastructure projects. The PostgreSQL adapter stores only connection metadata; the secret adapter is selected by DI (`EncryptedPostgreSql` in Development, Key Vault in Azure). The React Connections page exposes test, save, re-test, rotate and delete actions and **does not** persist PATs in browser storage.
+
+Server/collection URLs and GitHub Enterprise Server custom domains remain unsupported; arbitrary hostnames are intentionally rejected until safe connectivity controls and per-server authentication are designed.

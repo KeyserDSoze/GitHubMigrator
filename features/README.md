@@ -4,10 +4,10 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 
 | ID | Feature | State |
 | --- | --- | --- |
-| F-000 | Monorepo, local stack and Azure skeleton | Foundation in progress |
-| F-001 | Local identity, first-login password reset, RBAC | Foundation |
-| F-002 | Source/destination credential connections | Planned |
-| F-003 | Discover projects, repositories, TFVC paths, identities and grants | Planned |
+| F-000 | Monorepo, local stack and Azure skeleton | Foundation implemented |
+| F-001 | Local identity, first-login password reset, RBAC | Initial implementation |
+| F-002 | Provider-neutral connections and secure PAT lifecycle | Implemented for Azure DevOps Services + GitHub Enterprise Cloud; integration smoke pending |
+| F-003 | Discover projects, repositories, TFVC paths, identities and grants | Next |
 | F-004 | Map source users to GitHub handles and preview orphan access | Planned |
 | F-005 | Select projects/repos, rename target repos, preview permissions | Planned |
 | F-006 | Mirror Git history (all refs/branches/tags) and verify | Planned |
