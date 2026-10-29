@@ -6,6 +6,7 @@ import {
   Sun, Users, Workflow
 } from 'lucide-react';
 import { api, type Session } from './api';
+import ConnectionsPage from './ConnectionsPage';
 
 type Page = 'overview' | 'connections' | 'identities' | 'repositories' | 'runs' | 'users';
 const navigation: { id: Page; icon: typeof LayoutDashboard }[] = [
@@ -166,7 +167,8 @@ function App() {
             <h3>{tile.title}</h3><p>{tile.text}</p><div className="card-foot">{t('planned')} <CircleHelp size={15} /></div>
           </article>; })}</div>
         </>}
-        {page !== 'overview' && page !== 'users' && (() => {
+        {page === 'connections' && <ConnectionsPage token={session.accessToken} isAdmin={isAdmin} />}
+        {page !== 'overview' && page !== 'users' && page !== 'connections' && (() => {
           const placeholder = placeholders[page]; const Icon = placeholder.icon;
           return <section className="empty-card"><div className="empty-icon"><Icon size={29} /></div><h2>{placeholder.title}</h2>
             <p>{placeholder.body}</p><span className="subtle-tag">{t('planned')}</span></section>;
