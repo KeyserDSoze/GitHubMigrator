@@ -7,7 +7,7 @@ public enum VersionControlKind { Git, Tfvc }
 public enum HistoryStrategy { GitMirror, TipOnly, FullHistoryBestEffort, ArchiveAndTip }
 public enum MigrationRunState { Draft, Validated, Approved, Queued, Running, Verifying, Succeeded, Failed, PartiallySucceeded }
 
-public sealed record SourceIdentity(string ProviderId, string DisplayName, string? Email);
+public sealed record SourceIdentity(string ProviderId, string DisplayName, string? Email, string? LegacyDescriptor = null);
 public sealed record SourceRepository(string ProviderId, string ProjectId, string Name, VersionControlKind VersionControl, string? SourcePath = null);
 public sealed record SourceProject(string ProviderId, string Name, IReadOnlyList<SourceRepository> Repositories);
 public sealed record RepositoryAccess(string RepositoryId, string SourceIdentityId, string Permission, bool FromGroup);
