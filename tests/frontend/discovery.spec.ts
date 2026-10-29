@@ -63,7 +63,7 @@ test('admin discovers Git/TFVC, saves snapshot and reviews partial permissions',
   await expect(page.getByText('TFVC', { exact: true })).toBeVisible();
   await expect(page.getByText(/permessi effettivi|effective repository permissions/i)).toBeVisible();
   await page.getByRole('button', { name: /^identità$|^identities$/i }).click();
-  await expect(page.getByText('Alice')).toBeVisible();
+  await expect(page.getByText('Alice', { exact: true }).first()).toBeVisible();
   await page.getByRole('button', { name: /avvisi di copertura|coverage warnings/i }).click();
   await expect(page.getByText(/PermissionsNotCollected/i)).toBeVisible();
   expect(scanRequests).toBe(1);
