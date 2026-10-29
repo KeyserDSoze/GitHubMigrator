@@ -56,7 +56,7 @@ test('admin discovers Git/TFVC, saves snapshot and reviews partial permissions',
   await page.route(`**/api/discoveries/${id}`, route => route.fulfill({ json: detail }));
   await mockLogin(page, 'admin');
   await page.getByRole('button', { name: /^discovery$/i }).click();
-  await expect(page.getByText(/nessun inventario salvato|no saved inventories/i)).toBeVisible();
+  await expect(page.getByText(/nessun inventario salvato|no saved inventories/i).first()).toBeVisible();
   await page.getByRole('button', { name: /avvia discovery|run discovery/i }).click();
   await expect(page.getByRole('heading', { name: 'Payments' })).toBeVisible();
   await expect(page.getByText('Api', { exact: true })).toBeVisible();
