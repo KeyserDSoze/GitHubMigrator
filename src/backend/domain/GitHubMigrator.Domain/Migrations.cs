@@ -22,6 +22,8 @@ public sealed class DiscoverySnapshot
     public required IReadOnlyList<SourceProject> Projects { get; init; }
     public required IReadOnlyList<SourceIdentity> Identities { get; init; }
     public required IReadOnlyList<RepositoryAccess> AccessGrants { get; init; }
+    // Must be explicitly true before inferring that missing target grants imply orphaned access.
+    public bool PermissionsComplete { get; init; } = false;
     // Credentials and Git object contents intentionally excluded.
 }
 

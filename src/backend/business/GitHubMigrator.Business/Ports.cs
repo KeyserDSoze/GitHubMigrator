@@ -49,7 +49,10 @@ public sealed class MigrationPlanner
             }
             if (repo.VersionControl == VersionControlKind.Tfvc && selection.Strategy == HistoryStrategy.GitMirror)
                 issues.Add(new("InvalidHistoryStrategy", repo.ProviderId, "TFVC cannot be mirrored as native Git."));
-            if (plan.HasOrphanedAccess(repo.ProviderId, snapshot.AccessGrants))
+            if (!snapshot.PermissionsComplete)
+                issues.Add(new("PermissionsNotCollected", repo.ProviderId,
+                    "Repository access is not yet fully inventoried; orphaned access cannot be assessed."));
+            else if (plan.HasOrphanedAccess(repo.ProviderId, snapshot.AccessGrants))
                 issues.Add(new("OrphanedAccess", repo.ProviderId, "No mapped or explicitly assigned target users."));
         }
         return new(issues, plan.Selections.Count(s => s.Include));

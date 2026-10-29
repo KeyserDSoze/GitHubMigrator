@@ -62,3 +62,28 @@ public sealed class MigrationPlanTests
         Assert.Throws<ArgumentException>(() => plan.Select(new RepositorySelection("repo", name, HistoryStrategy.GitMirror)));
     }
 }
+
+public sealed class MigrationPlanPermissionCoverageTests
+{
+    [Fact]
+    public void Missing_permission_inventory_is_not_misrepresented_as_orphaned_users()
+    {
+        var snapshotId = Guid.NewGuid();
+        var snapshot = new DiscoverySnapshot
+        {
+            SnapshotId = snapshotId,
+            SourceSystem = SourceSystemKind.AzureDevOpsServices,
+            CollectedAt = DateTimeOffset.UtcNow,
+            Projects = [new SourceProject("project", "Project", [
+                new SourceRepository("repo", "project", "Repo", VersionControlKind.Git)])],
+            Identities = [],
+            AccessGrants = [],
+            PermissionsComplete = false
+        };
+        var plan = new MigrationPlan(snapshotId, "target");
+        plan.Select(new RepositorySelection("repo", "repo", HistoryStrategy.GitMirror));
+        var issues = new MigrationPlanner().Preview(snapshot, plan).Issues;
+        Assert.Contains(issues, x => x.Code == "PermissionsNotCollected");
+        Assert.DoesNotContain(issues, x => x.Code == "OrphanedAccess");
+    }
+}
