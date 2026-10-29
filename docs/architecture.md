@@ -50,3 +50,7 @@ Server/collection URLs and GitHub Enterprise Server custom domains remain unsupp
 ## F-003 discovery boundary
 
 `DiscoveryService` accepts a **saved source connection ID**, reads the secret exclusively through `IConnectionSecretStore`, chooses an `IDiscoveryReader` adapter and saves an immutable `DiscoveryInventory` using `IDiscoveryRepository`. The Azure DevOps Services reader calls fixed Microsoft hosts with read-only methods and bounded paging; the domain model is provider-neutral. The stored snapshot carries immutable source metadata and explicit `DiscoveryIssue` warnings for Graph scope failures, partial TFVC inventory, unknown project source control types and permissions not collected. The synchronous API has a request timeout; resilient background execution will follow with F-008.
+
+## F-004 review-only identity mapping
+
+`IdentityMappingService` joins two immutable contexts by ID: a discovered source snapshot and a verified GitHub Enterprise Cloud destination connection. Only known `SourceIdentity.ProviderId` identifiers can be mapped, to syntactically valid GitHub login names (not email, URL, display name or Graph alias). Duplicate destination logins are rejected case-insensitively. The application stores proposed mappings as JSONB with a monotonic revision and an atomic insert-only / compare-and-swap update to avoid lost admin edits. The preview explicitly refuses to assert verified effective permissions or target organization membership. Mutation of GitHub access is outside the F-004 API.

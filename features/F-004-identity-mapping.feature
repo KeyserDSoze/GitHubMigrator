@@ -1,18 +1,55 @@
-Feature: Map source identities to destination users
-  Scenario: Map an Azure DevOps identity
-    Given a discovery snapshot includes source identities with immutable provider IDs
-    When an operator maps an identity to a GitHub login
-    Then the map is stored independently of source PATs
-    And the mapping can be previewed without granting GitHub access
+Feature: Reviewable identity mapping drafts (F-004)
 
-  Scenario: Orphaned access warning
-    Given an included repository has access grants only for unmapped identities
-    When the permissions preview is generated
-    Then its access is marked orphaned
-    And the operator may add explicitly mapped GitHub principals
+  Background:
+    Given I am a platform administrator with a changed password
+    And an immutable Azure DevOps discovery snapshot exists
+    And a verified GitHub Enterprise Cloud destination connection exists
 
-  Scenario: Nested groups and unsupported identities
-    Given source permissions are inherited from groups
-    When the target permission mapping is prepared
-    Then effective grants, membership and unknown identities are reported separately
-    And no access is silently granted to another user
+  Scenario: Map a source user without granting GitHub access
+    When I map a known source Graph descriptor to a valid GitHub login
+    And I save the mapping as a draft
+    Then it is scoped to this snapshot and destination connection
+    And the saved draft has a revision and updated timestamp
+    And preview displays mapped and unmapped identities
+    And no GitHub repository permission or invitation is created
+
+  Scenario: Unknown source identity
+    When I submit a source descriptor absent from the snapshot
+    Then the service rejects the draft
+    And the existing draft remains unchanged
+
+  Scenario: Duplicate target login and malformed login
+    When I map two source identities to the same GitHub login (ignoring case)
+    Or I submit an email, URL or invalid GitHub login
+    Then the draft is rejected
+    And no mappings are persisted
+
+  Scenario: Concurrent administrators edit one draft
+    Given administrator A reads revision 1
+    And administrator B saves revision 2
+    When administrator A attempts to save revision 1
+    Then the API returns HTTP 409 RevisionConflict
+    And revision 2 is preserved
+
+  Scenario: Snapshot history is immutable
+    Given a mapping saved against snapshot A
+    When discovery creates snapshot B
+    Then its mappings start empty
+    And snapshot A mapping remains available
+
+  Scenario: Incomplete source permissions
+    Given source ACLs and group evidence are incomplete
+    When I inspect a mapping preview
+    Then EffectivePermissionsVerified and ReadyForGrants are false
+    And no unmapped user is claimed to have orphaned repository access
+
+  Scenario: Unverified GitHub organization membership
+    Given all visible source users have a GitHub login mapping
+    When I inspect the preview
+    Then TargetAccountsVerified and ReadyForGrants are false
+    And the review clearly says GitHub accounts/membership have not been verified
+
+  Scenario: Role protection
+    Given a regular platform user
+    When they attempt to read or save a mapping draft
+    Then the API forbids the operation
