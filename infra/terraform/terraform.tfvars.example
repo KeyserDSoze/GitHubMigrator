@@ -1,0 +1,16 @@
+# Example only. DO NOT commit actual credentials or a real *.tfvars.
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "westeurope"
+environment     = "dev"
+name_prefix     = "ghm"
+api_image_name  = "githubmigrator-api"
+api_image_tag   = "latest"
+
+# Required: supply TF_VAR_postgres_admin_password securely.
+# Optional: restrict operator access with allowed_client_ip = "203.0.113.5".
+# Foundry model deployment is intentionally disabled until regional quota/version is known.
+enable_ai_model = false
+ai_model_name   = "gpt-6.1-sol"
+ai_model_version = ""
+ai_model_sku     = "GlobalStandard"
+ai_model_capacity = 1
