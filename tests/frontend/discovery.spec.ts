@@ -78,3 +78,45 @@ test('regular platform user cannot discover or read snapshots', async ({ page })
   await expect(page.getByText(/solo gli amministratori|only platform administrators/i)).toBeVisible();
   expect(requests).toBe(0);
 });
+
+test('admin inspects Graph group edges and raw allow/deny masks without effective grant claims', async ({ page }) => {
+  const summaryWithSecurity = {
+    ...summary, groupCount: 1, membershipCount: 1, aclEntryCount: 2,
+    securityCoverage: {
+      groupsComplete: true, membershipsComplete: true,
+      aclsCollected: true, effectivePermissionsVerified: false
+    }
+  };
+  const detailWithSecurity = {
+    ...detail,
+    snapshot: {
+      ...detail.snapshot,
+      identities: [{ ...detail.snapshot.identities[0], legacyDescriptor: 'legacy-alice' }]
+    },
+    groups: [{ descriptor: 'vssgp.team', displayName: 'Contributors', legacyDescriptor: 'legacy-group' }],
+    memberships: [{ groupDescriptor: 'vssgp.team', memberDescriptor: 'aad.example' }],
+    aclEvidence: [
+      { repositoryId: 'repo-1', securityToken: 'repoV2/proj-1', securityDescriptor: 'legacy-group',
+        allowMask: 2, denyMask: 0, inheritPermissions: true, scope: 'project' },
+      { repositoryId: 'repo-1', securityToken: 'repoV2/proj-1/repo-1', securityDescriptor: 'legacy-alice',
+        allowMask: 4, denyMask: 2, inheritPermissions: false, scope: 'repository' }
+    ],
+    securityCoverage: summaryWithSecurity.securityCoverage,
+    issues: [{ code: 'EffectivePermissionsNotVerified', projectId: null, repositoryId: null }]
+  };
+  await page.route('**/api/connections', route => route.fulfill({ json: [{
+    id: connectionId, name: 'Demo DevOps', providerKey: 'azure-devops-services',
+    direction: 'source', organization: 'demo'
+  }] }));
+  await page.route('**/api/discoveries', route => route.fulfill({ json: [summaryWithSecurity] }));
+  await page.route(`**/api/discoveries/${id}`, route => route.fulfill({ json: detailWithSecurity }));
+  await mockLogin(page, 'admin');
+  await page.getByRole('button', { name: /^discovery$/i }).click();
+  await page.getByRole('button', { name: /^gruppi e acl$|^groups and acl evidence$/i }).click();
+  await expect(page.getByText('Contributors', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Alice', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/ACL di progetto|Project ACL/i)).toBeVisible();
+  await expect(page.getByText(/ACL repository|Repository ACL/i)).toBeVisible();
+  await expect(page.getByText(/consenti 4.*nega 2|allow 4.*deny 2/i)).toBeVisible();
+  await expect(page.getByText(/ACL grezze non equivalgono|Raw ACLs are not effective/i).first()).toBeVisible();
+});
