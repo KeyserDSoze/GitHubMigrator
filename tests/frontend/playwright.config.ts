@@ -9,5 +9,11 @@ export default defineConfig({
     ...devices['Desktop Chrome']
   },
   reporter: [['list']],
+  webServer: process.env.CI ? {
+    command: 'npm run dev --prefix ../../src/frontend',
+    url: 'http://127.0.0.1:5173',
+    timeout: 120_000,
+    reuseExistingServer: false
+  } : undefined,
   retries: process.env.CI ? 2 : 0
 });

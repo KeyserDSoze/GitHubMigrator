@@ -1,0 +1,57 @@
+name: Quality gates
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: .NET 10 / xUnit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore and test domain + business logic
+        run: dotnet test src/backend/GitHubMigrator.slnx --verbosity normal
+
+  frontend:
+    name: React / Playwright
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install frontend dependencies and build
+        working-directory: src/frontend
+        run: |
+          npm install
+          npm run build
+      - name: Install Playwright tests and browser
+        working-directory: tests/frontend
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+      - name: Run UI contract tests
+        working-directory: tests/frontend
+        env:
+          CI: 'true'
+        run: npm run test:e2e
+
+  terraform:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Initialize without remote backend
+        working-directory: infra/terraform
+        run: terraform init -backend=false
+      - name: Validate Azure resource definitions
+        working-directory: infra/terraform
+        run: terraform validate

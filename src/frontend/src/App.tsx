@@ -112,7 +112,7 @@ function App() {
                 <label>{t('password')}<input autoComplete="current-password" type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" /></label>
                 <button className="primary" disabled={busy} type="submit">{busy ? t('signingIn') : t('signIn')}<ArrowRight size={17} /></button>
               </form>}
-          <p className="auth-caption"><LockKeyhole size={14} /> Passwords never leave the encrypted connection</p>
+          <p className="auth-caption"><LockKeyhole size={14} /> Credentials are handled by the API; use HTTPS in production</p>
         </section>
       </div>
       <footer className="auth-footer">GitHubMigrator · Foundation v0.1</footer>

@@ -2,7 +2,7 @@
 
 Prerequisites: Docker Desktop (Windows PowerShell) or Docker Engine + Compose v2 (Linux). For direct development use .NET 10 SDK and Node 22+.
 
-Copy `.env.local.example` to `.env.local`; edit `HOST_BIND_ADDRESS` and any `*_PORT` values. Avoid publishing local development services on a public network. **Never commit .env.local or live tokens.**
+Copy `.env.local.example` to `.env.local`; edit `HOST_BIND_ADDRESS`, `PUBLIC_HOSTNAME` (when accessing a remote Linux host), and any `*_PORT` values. Avoid publishing local development services on a public network. **Never commit .env.local or live tokens.**
 
 Commands:
 - Linux: `./script/dev.sh up`, `down`, `logs`, `ps`, `test`, `reset`.

@@ -1,6 +1,6 @@
-using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Microsoft.AspNetCore.RateLimiting;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Storage.Blobs;
 using GitHubMigrator.Business;
@@ -110,7 +110,7 @@ app.UseAuthorization();
 await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Environment, app.Logger);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
-app.MapGet("/api/ready", async (AppDbContext db, CancellationToken ct) =>
+app.MapGet("/api/ready", async Task<IResult> (AppDbContext db, CancellationToken ct) =>
     await db.Database.CanConnectAsync(ct) ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));
 
 var auth = app.MapGroup("/api/auth");
@@ -131,13 +131,6 @@ auth.MapPost("/login", async Task<IResult> (LoginRequest request, UserManager<Ap
         user.Id, user.MustChangePassword);
     return Results.Ok(await jwt.CreateAsync(user));
 }).RequireRateLimiting("login");
-
-auth.MapGet("/me", async Task<IResult> (ClaimsPrincipal principal, UserManager<ApplicationUser> users,
-    JwtIssuer jwt) =>
-{
-    var user = await users.GetUserAsync(principal);
-    return user is null ? Results.Unauthorized() : Results.Ok(await jwt.CreateAsync(user));
-}).RequireAuthorization();
 
 auth.MapPost("/change-password", async Task<IResult> (ChangePasswordRequest request, ClaimsPrincipal principal,
     UserManager<ApplicationUser> users, JwtIssuer jwt, ILogger<Program> logger) =>
@@ -189,4 +182,4 @@ app.Run();
 public sealed record LoginRequest(string? Username, string? Password);
 public sealed record ChangePasswordRequest(string? CurrentPassword, string? NewPassword);
 public sealed record CreateUserRequest(string? Username, string? TemporaryPassword, string? Role);
-public partial class Program;
+public partial class Program { }
