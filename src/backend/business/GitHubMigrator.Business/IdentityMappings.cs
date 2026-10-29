@@ -23,7 +23,7 @@ public sealed class MappingInputException(string code) : Exception("Invalid iden
     public string Code { get; } = code;
 }
 
-public sealed class MappingRevisionConflictException : Exception("Identity mapping draft was changed concurrently");
+public sealed class MappingRevisionConflictException() : Exception("Identity mapping draft was changed concurrently");
 
 public interface IIdentityMappingDraftRepository
 {

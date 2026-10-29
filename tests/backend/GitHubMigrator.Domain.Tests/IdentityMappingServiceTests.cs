@@ -100,7 +100,7 @@ public sealed class IdentityMappingServiceTests
         var c = Context();
         await c.Service.SaveAsync(c.Inventory.Id, c.Destination.Id, 0,
             [new("aad.alice", "alice-gh")], CancellationToken.None);
-        var newSnapshot = c.Inventory withNewSnapshot();
+        var newSnapshot = c.Inventory.withNewSnapshot();
         var another = new IdentityMappingService(new FakeInventories([c.Inventory, newSnapshot]),
             new FakeConnections(c.Destination), c.Drafts, TimeProvider.System);
         var result = await another.GetAsync(newSnapshot.Id, c.Destination.Id, CancellationToken.None);
