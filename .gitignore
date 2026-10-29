@@ -1,0 +1,33 @@
+# Secrets and local overrides
+.env
+.env.*
+!.env.test
+!.env.local.example
+!.env.example
+**/appsettings.Development.local.json
+**/appsettings.Production.local.json
+*.tfvars
+!*.tfvars.example
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+# .NET
+**/bin/
+**/obj/
+**/TestResults/
+*.user
+# Node
+**/node_modules/
+**/dist/
+**/coverage/
+**/playwright-report/
+**/test-results/
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+# Runtime
+.artifacts/
+tmp/
