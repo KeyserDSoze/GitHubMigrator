@@ -2,7 +2,7 @@
 
 An extensible, feature-driven platform to migrate source control and (later) pipelines and work tracking from Azure DevOps Services, Azure DevOps Server / TFS, and other systems to GitHub Enterprise.
 
-**Status: Phase 1, F-002 connection management.** Azure DevOps Services and GitHub Enterprise Cloud credential connections can be verified and managed. **F-003 read-only inventory** now discovers projects, Git repositories/refs, TFVC roots and Graph users from Azure DevOps Services. Effective repository permissions, full TFVC history and real migrations are **not yet implemented**. The platform must never claim a migration completed without verification.
+**Status: Phase 1, F-002 connections + F-003 read-only discovery MVP.** Azure DevOps Services and GitHub Enterprise Cloud credential connections can be verified and managed. **F-003 read-only inventory** now discovers projects, Git repositories/refs, TFVC roots and Graph users from Azure DevOps Services. Effective repository permissions, full TFVC history and real migrations are **not yet implemented**. The platform must never claim a migration completed without verification.
 
 ## Architecture
 
@@ -43,7 +43,7 @@ See [architecture](docs/architecture.md), [local development](docs/local-develop
 
 ## Scope
 
-Phase 1: identities and basic credential connections (F-002 implemented); discovery, source-to-target mappings, code migration and reports (not implemented). Future: pipelines → Actions, boards → GitHub Issues/Projects, guest users, AI-assisted transformations. Until explicitly implemented these features are **planned**, not functional.
+Phase 1: local platform identities, credential connections (F-002), and read-only Azure DevOps Services inventory (F-003 MVP) implemented; effective access grants, mapping, code migration and reports are not yet implemented. Future: pipelines → Actions, boards → GitHub Issues/Projects, guest users, AI-assisted transformations. Until explicitly implemented these features are **planned**, not functional.
 
 ## Principles
 
