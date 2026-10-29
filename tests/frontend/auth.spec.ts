@@ -17,7 +17,7 @@ test('login and forced password change, then dashboard', async ({ page }) => {
   await page.getByRole('button', { name: /^accedi$|^sign in$/i }).click();
   await expect(page.getByRole('heading', { name: /imposta la nuova password|set your new password/i })).toBeVisible();
   await page.getByLabel(/password attuale|current password/i).fill('superadmin');
-  await page.getByLabel(/nuova password|new password/i).fill('ChangedPassword42!');
+  await page.getByLabel(/^(nuova password|new password)$/i).fill('ChangedPassword42!');
   await page.getByRole('button', { name: /salva password|save password/i }).click();
   await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeVisible();
   await expect(page.getByText(/nessuna scrittura automatica|no automatic writes/i).first()).toBeVisible();
