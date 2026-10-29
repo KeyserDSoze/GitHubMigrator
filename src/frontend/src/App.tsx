@@ -153,7 +153,7 @@ function App() {
       <div className="content">
         <div className="page-heading"><div className="eyebrow"><span className="live-dot" /> {t('foundational')}</div>
           <h1>{page === 'overview' ? t('readyToStart') : t(page)}</h1>
-          <p>{page === 'overview' ? t('description') : page === 'users' ? t('userInfo') : t('integrationsPending')}</p>
+          <p>{page === 'overview' ? t('description') : page === 'users' ? t('userInfo') : page === 'connections' ? t('connIntro') : t('integrationsPending')}</p>
         </div>
         {page === 'overview' && <>
           <div className="hero-banner"><div><span className="hero-label"><ShieldCheck size={16} /> PLATFORM READY · MIGRATION PLANNED</span>
@@ -164,7 +164,7 @@ function App() {
           <div className="section-header"><h2>Migration journey</h2><span>{t('nextStep')}</span></div>
           <div className="step-grid">{tiles.map(tile => { const Icon = tile.icon; return <article className="step-card" key={tile.index}>
             <div className="step-top"><span className="step-icon"><Icon size={21} /></span><span>{tile.index} / 03</span></div>
-            <h3>{tile.title}</h3><p>{tile.text}</p><div className="card-foot">{t('planned')} <CircleHelp size={15} /></div>
+            <h3>{tile.title}</h3><p>{tile.text}</p><div className="card-foot">{tile.index === '01' ? t('active') : t('planned')} <CircleHelp size={15} /></div>
           </article>; })}</div>
         </>}
         {page === 'connections' && <ConnectionsPage token={session.accessToken} isAdmin={isAdmin} />}
