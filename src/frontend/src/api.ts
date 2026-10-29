@@ -8,6 +8,25 @@ export type ConnectionDraft = { name: string; providerKey: string; organization:
 export type ValidationResult = {
   isValid: boolean; code: string; authenticatedAs: string | null; permissionAssessment: string
 };
+export type DiscoverySummary = {
+  id: string; connectionId: string; sourceProvider: string; organization: string; collectedAtUtc: string;
+  completeness: 'complete' | 'partial'; projectCount: number; repositoryCount: number;
+  refCount: number; identityCount: number; issueCount: number;
+  identitiesComplete: boolean; permissionsComplete: boolean;
+};
+export type DiscoveredRepository = {
+  providerId: string; projectId: string; name: string; versionControl: number; sourcePath: string | null
+};
+export type DiscoveryDetail = {
+  id: string; connectionId: string; organization: string; collectedAtUtc: string;
+  snapshot: {
+    projects: { providerId: string; name: string; repositories: DiscoveredRepository[] }[];
+    identities: { providerId: string; displayName: string; email: string | null }[];
+  };
+  refs: { repositoryId: string; name: string; objectId: string }[];
+  issues: { code: string; projectId: string | null; repositoryId: string | null }[];
+  identitiesComplete: boolean; permissionsComplete: boolean;
+};
 const base = import.meta.env.VITE_API_URL ?? '';
 
 async function call<T>(path: string, options: RequestInit): Promise<T> {
@@ -56,6 +75,14 @@ export const api = {
   rotateCredential: (token: string, id: string, personalAccessToken: string) =>
     call<Connection>(`/api/connections/${encodeURIComponent(id)}/credential`, {
       method: 'PUT', headers: withToken(token), body: JSON.stringify({ personalAccessToken })
+    }),
+  listDiscoveries: (token: string) =>
+    call<DiscoverySummary[]>('/api/discoveries', { headers: withToken(token) }),
+  getDiscovery: (token: string, id: string) =>
+    call<DiscoveryDetail>(`/api/discoveries/${encodeURIComponent(id)}`, { headers: withToken(token) }),
+  scanDiscovery: (token: string, connectionId: string) =>
+    call<DiscoverySummary>('/api/discoveries', {
+      method: 'POST', headers: withToken(token), body: JSON.stringify({ connectionId })
     }),
   deleteConnection: (token: string, id: string) =>
     call<void>(`/api/connections/${encodeURIComponent(id)}`, {
