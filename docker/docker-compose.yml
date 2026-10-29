@@ -1,0 +1,121 @@
+name: ${COMPOSE_PROJECT_NAME:-githubmigrator}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-githubmigrator}
+      POSTGRES_USER: ${POSTGRES_USER:-githubmigrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your env file}
+    ports:
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-githubmigrator} -d ${POSTGRES_DB:-githubmigrator}"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    restart: unless-stopped
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --location /data
+    ports:
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${AZURITE_BLOB_PORT:-10000}:10000"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${AZURITE_QUEUE_PORT:-10001}:10001"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${AZURITE_TABLE_PORT:-10002}:10002"
+    volumes:
+      - azurite_data:/data
+
+  observability:
+    image: grafana/otel-lgtm:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    ports:
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${OTLP_GRPC_PORT:-4317}:4317"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${OTLP_HTTP_PORT:-4318}:4318"
+    volumes:
+      - observability_data:/data
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__PostgreSql: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-githubmigrator};Username=${POSTGRES_USER:-githubmigrator};Password=${POSTGRES_PASSWORD}"
+      Storage__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
+      Storage__Container: migration-artifacts
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY}
+      Bootstrap__Username: ${BOOTSTRAP_USERNAME:-superadmin}
+      Bootstrap__Password: ${BOOTSTRAP_PASSWORD:?Set BOOTSTRAP_PASSWORD}
+      Frontend__Origin: "http://localhost:${FRONTEND_PORT:-5173}"
+      Observability__Provider: Otlp
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://observability:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+    ports:
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      azurite:
+        condition: service_started
+      observability:
+        condition: service_started
+
+  frontend:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /workspace
+    volumes:
+      - ../src/frontend:/workspace
+      - frontend_node_modules:/workspace/node_modules
+    environment:
+      VITE_API_URL: "http://localhost:${API_PORT:-8080}"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      api:
+        condition: service_started
+
+  backend-tests:
+    profiles: ["test"]
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+      target: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend-tests:
+    profiles: ["test"]
+    image: mcr.microsoft.com/playwright:v1.55.0-noble
+    working_dir: /workspace/src/frontend
+    volumes:
+      - ../src/frontend:/workspace/src/frontend
+      - ../tests/frontend:/workspace/tests/frontend
+      - frontend_tests_node_modules:/workspace/src/frontend/node_modules
+    environment:
+      PLAYWRIGHT_BASE_URL: http://frontend:5173
+    command: >
+      bash -c 'npm install &&
+      node -e "let n=0; const poll=async()=>{try{const r=await fetch(\"http://frontend:5173\");if(r.ok)process.exit(0);}catch{}if(n++>90)process.exit(1);setTimeout(poll,1000)};poll()" &&
+      npx playwright test --config ../../tests/frontend/playwright.config.ts'
+    depends_on:
+      frontend:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  azurite_data:
+  observability_data:
+  frontend_node_modules:
+  frontend_tests_node_modules:

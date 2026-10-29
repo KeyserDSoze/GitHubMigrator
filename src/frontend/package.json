@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --config ../../tests/frontend/playwright.config.ts"
   },
   "dependencies": {
     "react": "19.3.1",
@@ -23,6 +23,6 @@
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.9.3",
     "vite": "^8.3.5",
-    "@playwright/test": "^1.55.0"
+    "@playwright/test": "1.55.0"
   }
 }

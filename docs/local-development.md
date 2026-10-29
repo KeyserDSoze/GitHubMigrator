@@ -1,17 +1,19 @@
 # Local development
 
-- Install Docker Engine/Desktop with Compose v2. For host-only development use .NET 10 SDK and Node 22+.
-- Copy `.env.local.example` to `.env.local` and edit host ports. Never commit `.env.local` or real tokens.
-- `./script/dev.sh up` or `./script/dev.ps1 up` runs the stack; `down`, `logs`, `ps` and `test` are also accepted.
-- To deliberately run the checked-in test configuration use `./script/dev.sh up test` or `./script/dev.ps1 up test`.
-- `.env.test` contains non-secret **local test values** only and is tracked in Git.
-- Ports are host-side mappings; Docker service-to-service DNS uses standard container ports (5432, 10000, 4318, 8080).
-- UI: `http://localhost:${FRONTEND_PORT}`; API: `http://localhost:${API_PORT}/api/health`.
-- Grafana: `http://localhost:${GRAFANA_PORT}`, built-in dev login admin/admin. Logs and traces come through OTel.
-- PostgreSQL: localhost:${POSTGRES_PORT}; Azurite Blob: localhost:${AZURITE_BLOB_PORT}.
-- First login LOCAL TEST ONLY: superadmin / superadmin, forced password update. Production startup rejects this default.
-- The container build restores NuGet packages and npm packages; an internet connection is required on first run.
+Prerequisites: Docker Desktop (Windows PowerShell) or Docker Engine + Compose v2 (Linux). For direct development use .NET 10 SDK and Node 22+.
 
-`test` runs backend xUnit and frontend Playwright checks in containers. Integration tests requiring live Azure DevOps or GitHub credentials are not part of the default test suite.
+Copy `.env.local.example` to `.env.local`; edit `HOST_BIND_ADDRESS` and any `*_PORT` values. Avoid publishing local development services on a public network. **Never commit .env.local or live tokens.**
 
-Known initial limitations: feature adapters for real source discovery, job queue, database migrations and Git push are not yet implemented. The local scaffold is not a finished migrator.
+Commands:
+- Linux: `./script/dev.sh up`, `down`, `logs`, `ps`, `test`, `reset`.
+- Windows PowerShell: `./script/dev.ps1 up`, `down`, `logs`, `ps`, `test`, `reset`.
+- Pass `test` as SECOND argument to any command to use the tracked `.env.test` (e.g. `./script/dev.sh up test`). Default uses `.env.local` if it exists, otherwise test settings.
+- `reset` **deletes all local database, Azurite and telemetry volumes**.
+
+Ports are host-side mappings; Compose-internal services use constant ports. Endpoints by default: UI http://localhost:5173; API http://localhost:8080/api/health; Grafana http://localhost:3000 (admin/admin in test settings); PostgreSQL localhost:5432; Azurite 10000/10001/10002; OTLP 4317/4318.
+
+The API startup creates schema via `EnsureCreated` **for phase-0 bootstrap only**. Migrations must replace this before production. The local API seeds superadmin/superadmin *only in Development* and forces a password change at first login. Changing .env credentials does not alter an existing seeded account: reset the dev volume when appropriate. No provider PATs are required for the foundation.
+
+The Compose `test` action builds/runs xUnit and Playwright in isolated test containers. Playwright API calls are mocked in UI contract tests. The app starts without any real Azure DevOps/GitHub integration: source discovery and migration are not yet implemented.
+
+First container build pulls base images and NuGet/npm dependencies (internet access required).
