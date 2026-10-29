@@ -124,8 +124,11 @@ public sealed class AzureDevOpsDiscoveryReader(HttpClient client, TimeProvider c
             issues.Add(new(ex.Code));
         }
 
-        // Repository permissions and effective grants are deliberately NOT inferred from graph users.
-        issues.Add(new("PermissionsNotCollected"));
+        // Capture raw group/ACE evidence; it must not be confused with effective permissions.
+        var security = await new AzureDevOpsSecurityReader(client).ReadAsync(
+            organization, accessToken, projects, ct);
+        issues.AddRange(security.Issues);
+        issues.Add(new("EffectivePermissionsNotVerified"));
         var timestamp = clock.GetUtcNow();
         var snapshotId = Guid.NewGuid();
         var snapshot = new DiscoverySnapshot
@@ -135,7 +138,8 @@ public sealed class AzureDevOpsDiscoveryReader(HttpClient client, TimeProvider c
             CollectedAt = timestamp,
             Projects = projects,
             Identities = identities,
-            AccessGrants = []
+            AccessGrants = [],
+            PermissionsComplete = false
         };
         return new DiscoveryInventory
         {
@@ -149,7 +153,11 @@ public sealed class AzureDevOpsDiscoveryReader(HttpClient client, TimeProvider c
             Issues = issues,
             Completeness = DiscoveryCompleteness.Partial,
             IdentitiesComplete = identitiesComplete,
-            PermissionsComplete = false
+            PermissionsComplete = false,
+            Groups = security.Groups,
+            Memberships = security.Memberships,
+            AclEvidence = security.Acls,
+            SecurityCoverage = security.Coverage
         };
     }
 
@@ -233,7 +241,7 @@ public sealed class AzureDevOpsDiscoveryReader(HttpClient client, TimeProvider c
                 var id = Text(entry, "descriptor");
                 if (string.IsNullOrWhiteSpace(id)) continue;
                 users[id] = new SourceIdentity(id, Text(entry, "displayName") ?? id,
-                    Text(entry, "mailAddress"));
+                    Text(entry, "mailAddress"), Text(entry, "legacyDescriptor"));
             }
             if (users.Count >= MaxUsers) { issues.Add(new("GraphUsersTruncated")); break; }
             if (string.IsNullOrEmpty(response.Continuation)) return users.Values.ToArray();
