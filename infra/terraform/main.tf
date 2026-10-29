@@ -213,6 +213,8 @@ resource "azurerm_linux_web_app" "api" {
     ConnectionStrings__PostgreSql         = "@Microsoft.KeyVault(VaultName=${azurerm_key_vault.main.name};SecretName=postgres-connection-string)"
     Storage__ConnectionString             = "@Microsoft.KeyVault(VaultName=${azurerm_key_vault.main.name};SecretName=storage-connection-string)"
     Storage__Container                    = azurerm_storage_container.migration_artifacts.name
+    Secrets__Provider                     = "KeyVault"
+    Secrets__VaultUri                     = azurerm_key_vault.main.vault_uri
     Foundry__Endpoint                     = azurerm_cognitive_account.foundry.endpoint
     Foundry__Deployment                   = var.enable_ai_model ? azurerm_cognitive_deployment.pipeline_rewrite[0].name : ""
   }
@@ -228,7 +230,7 @@ resource "azurerm_role_assignment" "acr_pull" {
 
 resource "azurerm_role_assignment" "key_vault_reader" {
   scope                = azurerm_key_vault.main.id
-  role_definition_name = "Key Vault Secrets User"
+  role_definition_name = "Key Vault Secrets Officer"
   principal_id         = azurerm_linux_web_app.api.identity[0].principal_id
 }
 

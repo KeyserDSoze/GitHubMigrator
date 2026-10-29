@@ -53,6 +53,8 @@ services:
       Storage__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
       Storage__Container: migration-artifacts
       Jwt__SigningKey: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY}
+      Secrets__Provider: EncryptedPostgreSql
+      Secrets__LocalEncryptionKey: ${LOCAL_ENCRYPTION_KEY:?Set LOCAL_ENCRYPTION_KEY}
       Bootstrap__Username: ${BOOTSTRAP_USERNAME:-superadmin}
       Bootstrap__Password: ${BOOTSTRAP_PASSWORD:?Set BOOTSTRAP_PASSWORD}
       Frontend__Origin: "http://${PUBLIC_HOSTNAME:-localhost}:${FRONTEND_PORT:-5173}"

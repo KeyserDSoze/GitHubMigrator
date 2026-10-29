@@ -3,6 +3,9 @@
     <ProjectReference Include="../../business/GitHubMigrator.Business/GitHubMigrator.Business.csproj" />
     <ProjectReference Include="../../infrastructures/GitHubMigrator.Infrastructure.PostgreSql/GitHubMigrator.Infrastructure.PostgreSql.csproj" />
     <ProjectReference Include="../../infrastructures/GitHubMigrator.Infrastructure.AzureStorage/GitHubMigrator.Infrastructure.AzureStorage.csproj" />
+    <ProjectReference Include="../../infrastructures/GitHubMigrator.Infrastructure.AzureDevOps/GitHubMigrator.Infrastructure.AzureDevOps.csproj" />
+    <ProjectReference Include="../../infrastructures/GitHubMigrator.Infrastructure.GitHub/GitHubMigrator.Infrastructure.GitHub.csproj" />
+    <ProjectReference Include="../../infrastructures/GitHubMigrator.Infrastructure.KeyVault/GitHubMigrator.Infrastructure.KeyVault.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.6.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.20.1" />

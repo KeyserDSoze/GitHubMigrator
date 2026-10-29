@@ -11,6 +11,9 @@
   <Folder Name="/infrastructures/">
     <Project Path="infrastructures/GitHubMigrator.Infrastructure.PostgreSql/GitHubMigrator.Infrastructure.PostgreSql.csproj" />
     <Project Path="infrastructures/GitHubMigrator.Infrastructure.AzureStorage/GitHubMigrator.Infrastructure.AzureStorage.csproj" />
+    <Project Path="infrastructures/GitHubMigrator.Infrastructure.AzureDevOps/GitHubMigrator.Infrastructure.AzureDevOps.csproj" />
+    <Project Path="infrastructures/GitHubMigrator.Infrastructure.GitHub/GitHubMigrator.Infrastructure.GitHub.csproj" />
+    <Project Path="infrastructures/GitHubMigrator.Infrastructure.KeyVault/GitHubMigrator.Infrastructure.KeyVault.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="../../tests/backend/GitHubMigrator.Domain.Tests/GitHubMigrator.Domain.Tests.csproj" />

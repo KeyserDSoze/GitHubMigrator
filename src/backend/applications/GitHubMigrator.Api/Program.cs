@@ -3,6 +3,11 @@ using System.Text;
 using Microsoft.AspNetCore.RateLimiting;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Storage.Blobs;
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+using GitHubMigrator.Infrastructure.AzureDevOps;
+using GitHubMigrator.Infrastructure.GitHub;
+using GitHubMigrator.Infrastructure.KeyVault;
 using GitHubMigrator.Business;
 using GitHubMigrator.Infrastructure.AzureStorage;
 using GitHubMigrator.Infrastructure.PostgreSql;
@@ -38,6 +43,34 @@ builder.Services.AddIdentityCore<ApplicationUser>(options =>
 
 builder.Services.AddScoped<JwtIssuer>();
 builder.Services.AddScoped<MigrationPlanner>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>();
+builder.Services.AddScoped<ConnectionService>();
+builder.Services.AddHttpClient<AzureDevOpsConnectionValidator>(c => c.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddHttpClient<GitHubConnectionValidator>(c => c.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IConnectionValidator>(s => s.GetRequiredService<AzureDevOpsConnectionValidator>());
+builder.Services.AddTransient<IConnectionValidator>(s => s.GetRequiredService<GitHubConnectionValidator>());
+
+var credentialProvider = builder.Configuration["Secrets:Provider"] ??
+    (builder.Environment.IsDevelopment() ? "EncryptedPostgreSql" : "KeyVault");
+if (credentialProvider.Equals("KeyVault", StringComparison.OrdinalIgnoreCase))
+{
+    var vaultUri = builder.Configuration["Secrets:VaultUri"] ??
+        throw new InvalidOperationException("Secrets:VaultUri is required for KeyVault.");
+    builder.Services.AddSingleton(new SecretClient(new Uri(vaultUri), new DefaultAzureCredential()));
+    builder.Services.AddScoped<IConnectionSecretStore, KeyVaultConnectionSecretStore>();
+}
+else if (credentialProvider.Equals("EncryptedPostgreSql", StringComparison.OrdinalIgnoreCase) &&
+    builder.Environment.IsDevelopment())
+{
+    var encryptionKey = builder.Configuration["Secrets:LocalEncryptionKey"] ??
+        throw new InvalidOperationException("Secrets:LocalEncryptionKey is required for local development.");
+    builder.Services.AddScoped<IConnectionSecretStore>(s =>
+        new PostgresEncryptedConnectionSecretStore(s.GetRequiredService<AppDbContext>(), encryptionKey));
+}
+else throw new InvalidOperationException("Local encrypted credential storage is restricted to Development.");
 var storageConnection = builder.Configuration["Storage:ConnectionString"];
 if (!string.IsNullOrWhiteSpace(storageConnection))
 {
@@ -74,6 +107,12 @@ builder.Services.AddRateLimiter(options =>
     options.AddFixedWindowLimiter("login", limiter =>
     {
         limiter.PermitLimit = 8;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
+    options.AddFixedWindowLimiter("external", limiter =>
+    {
+        limiter.PermitLimit = 12;
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
@@ -169,13 +208,13 @@ app.MapPost("/api/users", async Task<IResult> (CreateUserRequest request, Claims
 }).RequireAuthorization("PasswordChanged").RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute
     { Roles = "superadmin,admin" });
 
-app.MapGet("/api/providers", () => Results.Ok(new[]
+app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 {
-    new { key = "azure-devops-services", status = "planned", versionControl = new[] { "git", "tfvc" } },
-    new { key = "azure-devops-server", status = "planned", versionControl = new[] { "git", "tfvc" } },
-    new { key = "tfs-server", status = "planned", versionControl = new[] { "git", "tfvc" } },
-    new { key = "github-enterprise", status = "planned", versionControl = new[] { "git" } }
+    available = service.SupportedProviders(),
+    planned = new[] { "azure-devops-server", "tfs-server", "github-enterprise-server" }
 })).RequireAuthorization("PasswordChanged");
+
+app.MapConnectionEndpoints();
 
 app.Run();
 
