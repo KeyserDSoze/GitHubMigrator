@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2, GitBranch, RefreshCw, ShieldAlert, Users } from 'lucide-react';
+import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
 import { api, type Connection, type DiscoveryDetail, type DiscoverySummary } from './api';
 
 type Tab = 'projects' | 'users' | 'issues';
