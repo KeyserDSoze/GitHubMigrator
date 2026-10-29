@@ -45,7 +45,10 @@ public sealed class ProtectedCredentialStorageTests
         var store = new PostgresEncryptedConnectionSecretStore(db, key);
         await store.SaveAsync("connection-test", "fake-token", CancellationToken.None);
         var record = await db.ConnectionSecrets.SingleAsync();
-        record.Ciphertext[0] ^= 0x01;
+        var tampered = record.Ciphertext.ToArray();
+        tampered[0] ^= 0x01;
+        record.Ciphertext = tampered;
+        db.Entry(record).Property(x => x.Ciphertext).IsModified = true;
         await db.SaveChangesAsync();
         await Assert.ThrowsAsync<AuthenticationTagMismatchException>(() =>
             store.ReadAsync("connection-test", CancellationToken.None));
