@@ -41,6 +41,20 @@ export type DiscoveryDetail = {
   aclEvidence?: AclEvidence[]; securityCoverage?: SecurityCoverage;
   identitiesComplete: boolean; permissionsComplete: boolean;
 };
+export type IdentityMap = { sourceIdentityId: string; gitHubLogin: string };
+export type IdentityDraft = {
+  snapshotId: string; destinationConnectionId: string; targetOrganization: string;
+  revision: number; updatedAtUtc: string; mappings: IdentityMap[];
+};
+export type IdentityPreviewIssue = { code: string; sourceIdentityId: string | null };
+export type IdentityPreview = {
+  discoveredIdentities: number; mappedIdentities: number; unmappedIdentities: number;
+  unresolvedAclPrincipals: number; sourceIdentitiesComplete: boolean;
+  effectivePermissionsVerified: boolean; targetAccountsVerified: boolean;
+  readyForGrants: boolean; issues: IdentityPreviewIssue[];
+};
+export type IdentityReview = { draft: IdentityDraft; preview: IdentityPreview };
+
 const base = import.meta.env.VITE_API_URL ?? '';
 
 async function call<T>(path: string, options: RequestInit): Promise<T> {
@@ -98,6 +112,14 @@ export const api = {
     call<DiscoverySummary>('/api/discoveries', {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ connectionId })
     }),
+  getIdentityReview: (token: string, snapshotId: string, destinationConnectionId: string) =>
+    call<IdentityReview>(`/api/identity-mappings/${encodeURIComponent(snapshotId)}?destinationConnectionId=${encodeURIComponent(destinationConnectionId)}`,
+      { headers: withToken(token) }),
+  saveIdentityMappings: (token: string, snapshotId: string, destinationConnectionId: string,
+      expectedRevision: number, mappings: IdentityMap[]) =>
+    call<IdentityReview>(`/api/identity-mappings/${encodeURIComponent(snapshotId)}`,
+      { method: 'PUT', headers: withToken(token),
+        body: JSON.stringify({ destinationConnectionId, expectedRevision, mappings }) }),
   deleteConnection: (token: string, id: string) =>
     call<void>(`/api/connections/${encodeURIComponent(id)}`, {
       method: 'DELETE', headers: withToken(token)

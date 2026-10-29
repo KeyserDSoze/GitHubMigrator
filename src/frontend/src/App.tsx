@@ -8,6 +8,7 @@ import {
 import { api, type Session } from './api';
 import ConnectionsPage from './ConnectionsPage';
 import DiscoveryPage from './DiscoveryPage';
+import IdentityMappingPage from './IdentityMappingPage';
 
 type Page = 'overview' | 'connections' | 'identities' | 'repositories' | 'runs' | 'users';
 const navigation: { id: Page; icon: typeof LayoutDashboard }[] = [
@@ -154,7 +155,7 @@ function App() {
       <div className="content">
         <div className="page-heading"><div className="eyebrow"><span className="live-dot" /> {t('foundational')}</div>
           <h1>{page === 'overview' ? t('readyToStart') : t(page)}</h1>
-          <p>{page === 'overview' ? t('description') : page === 'users' ? t('userInfo') : page === 'connections' ? t('connIntro') : page === 'repositories' ? t('discoveryIntro') : t('integrationsPending')}</p>
+          <p>{page === 'overview' ? t('description') : page === 'users' ? t('userInfo') : page === 'connections' ? t('connIntro') : page === 'repositories' ? t('discoveryIntro') : page === 'identities' ? t('mappingIntro') : t('integrationsPending')}</p>
         </div>
         {page === 'overview' && <>
           <div className="hero-banner"><div><span className="hero-label"><ShieldCheck size={16} /> PLATFORM READY · MIGRATION PLANNED</span>
@@ -170,7 +171,8 @@ function App() {
         </>}
         {page === 'connections' && <ConnectionsPage token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'repositories' && <DiscoveryPage token={session.accessToken} isAdmin={isAdmin} />}
-        {page !== 'overview' && page !== 'users' && page !== 'connections' && page !== 'repositories' && (() => {
+        {page === 'identities' && <IdentityMappingPage token={session.accessToken} isAdmin={isAdmin} />}
+        {page !== 'overview' && page !== 'users' && page !== 'connections' && page !== 'repositories' && page !== 'identities' && (() => {
           const placeholder = placeholders[page]; const Icon = placeholder.icon;
           return <section className="empty-card"><div className="empty-icon"><Icon size={29} /></div><h2>{placeholder.title}</h2>
             <p>{placeholder.body}</p><span className="subtle-tag">{t('planned')}</span></section>;
