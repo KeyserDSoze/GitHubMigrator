@@ -29,6 +29,8 @@ public sealed class AzureDevOpsDiscoveryReaderTests
                 return Json("""{"value":[{"name":"refs/heads/main","objectId":"abcdef"},{"name":"refs/tags/v1","objectId":"123456"}]}""");
             if (path.EndsWith("/_apis/graph/users"))
                 return Json("""{"value":[{"descriptor":"aad.123","displayName":"An Example","mailAddress":"example@test.invalid"}]}""");
+            if (path.EndsWith("/_apis/graph/groups")) return Json("""{"value":[]}""");
+            if (path.Contains("/_apis/accesscontrollists/")) return Json("""{"value":[]}""");
             throw new Xunit.Sdk.XunitException("Unexpected call: " + path);
         }));
         var inventory = await new AzureDevOpsDiscoveryReader(client, TimeProvider.System)
@@ -43,9 +45,9 @@ public sealed class AzureDevOpsDiscoveryReaderTests
         Assert.True(inventory.IdentitiesComplete);
         Assert.False(inventory.PermissionsComplete);
         Assert.Equal(DiscoveryCompleteness.Partial, inventory.Completeness);
-        Assert.Contains(inventory.Issues, x => x.Code == "PermissionsNotCollected");
+        Assert.Contains(inventory.Issues, x => x.Code == "EffectivePermissionsNotVerified");
         Assert.DoesNotContain("private-token", System.Text.Json.JsonSerializer.Serialize(inventory));
-        Assert.Equal(5, calls.Count);
+        Assert.Equal(8, calls.Count);
     }
 
     [Fact]
@@ -78,6 +80,8 @@ public sealed class AzureDevOpsDiscoveryReaderTests
                 return result;
             }
             if (url.AbsolutePath.EndsWith("/_apis/graph/users")) return Json("""{"value":[]}""");
+            if (url.AbsolutePath.EndsWith("/_apis/graph/groups")) return Json("""{"value":[]}""");
+            if (url.AbsolutePath.Contains("/_apis/accesscontrollists/")) return Json("""{"value":[]}""");
             throw new Xunit.Sdk.XunitException(url.ToString());
         }));
         var inventory = await new AzureDevOpsDiscoveryReader(client, TimeProvider.System)
@@ -101,6 +105,7 @@ public sealed class AzureDevOpsDiscoveryReaderTests
             if (path.EndsWith("/_apis/tfvc/branches"))
                 return Json("""{"value":[{"path":"$/Legacy/Main","children":[{"path":"$/Legacy/Release"}]}]}""");
             if (path.EndsWith("/_apis/graph/users")) return new HttpResponseMessage(HttpStatusCode.Forbidden);
+            if (path.EndsWith("/_apis/graph/groups")) return new HttpResponseMessage(HttpStatusCode.Forbidden);
             throw new Xunit.Sdk.XunitException(path);
         }));
         var inventory = await new AzureDevOpsDiscoveryReader(client, TimeProvider.System)
