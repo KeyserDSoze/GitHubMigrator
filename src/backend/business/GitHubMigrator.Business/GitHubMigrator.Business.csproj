@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../../domain/GitHubMigrator.Domain/GitHubMigrator.Domain.csproj" />
+  </ItemGroup>
+</Project>

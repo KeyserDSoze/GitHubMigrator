@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/applications/">
+    <Project Path="applications/GitHubMigrator.Api/GitHubMigrator.Api.csproj" />
+  </Folder>
+  <Folder Name="/business/">
+    <Project Path="business/GitHubMigrator.Business/GitHubMigrator.Business.csproj" />
+  </Folder>
+  <Folder Name="/domain/">
+    <Project Path="domain/GitHubMigrator.Domain/GitHubMigrator.Domain.csproj" />
+  </Folder>
+  <Folder Name="/infrastructures/">
+    <Project Path="infrastructures/GitHubMigrator.Infrastructure.PostgreSql/GitHubMigrator.Infrastructure.PostgreSql.csproj" />
+    <Project Path="infrastructures/GitHubMigrator.Infrastructure.AzureStorage/GitHubMigrator.Infrastructure.AzureStorage.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="../../tests/backend/GitHubMigrator.Domain.Tests/GitHubMigrator.Domain.Tests.csproj" />
+  </Folder>
+</Solution>
