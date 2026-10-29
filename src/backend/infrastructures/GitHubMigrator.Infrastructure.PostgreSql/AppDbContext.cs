@@ -25,6 +25,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<MigrationPlanRecord> MigrationPlans => Set<MigrationPlanRecord>();
     public DbSet<ConnectionRecord> Connections => Set<ConnectionRecord>();
     public DbSet<EncryptedSecretRecord> ConnectionSecrets => Set<EncryptedSecretRecord>();
+    public DbSet<DiscoveryInventoryRecord> Discoveries => Set<DiscoveryInventoryRecord>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -51,6 +52,16 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ValidationCode).HasColumnName("validation_code").HasMaxLength(64);
             entity.Property(x => x.AuthenticatedAs).HasColumnName("authenticated_as").HasMaxLength(160);
             entity.Property(x => x.PermissionAssessment).HasColumnName("permission_assessment").HasMaxLength(64);
+        });
+        builder.Entity<DiscoveryInventoryRecord>(entity =>
+        {
+            entity.ToTable("migration_discoveries");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.ConnectionId).HasColumnName("connection_id");
+            entity.Property(x => x.CollectedAtUtc).HasColumnName("collected_at_utc");
+            entity.Property(x => x.Json).HasColumnName("inventory").HasColumnType("jsonb");
+            entity.HasIndex(x => new { x.ConnectionId, x.CollectedAtUtc });
         });
         builder.Entity<EncryptedSecretRecord>(entity =>
         {

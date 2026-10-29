@@ -27,6 +27,14 @@ public static class Bootstrap
                 authenticated_as varchar(160) NULL,
                 permission_assessment varchar(64) NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS migration_discoveries (
+                id uuid PRIMARY KEY,
+                connection_id uuid NOT NULL,
+                collected_at_utc timestamp with time zone NOT NULL,
+                inventory jsonb NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_migration_discoveries_connection_collected
+                ON migration_discoveries(connection_id, collected_at_utc);
             CREATE TABLE IF NOT EXISTS migration_connection_secrets (
                 reference varchar(100) PRIMARY KEY,
                 ciphertext bytea NOT NULL,

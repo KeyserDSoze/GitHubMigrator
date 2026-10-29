@@ -46,6 +46,11 @@ builder.Services.AddScoped<MigrationPlanner>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>();
 builder.Services.AddScoped<ConnectionService>();
+builder.Services.AddScoped<IDiscoveryRepository, PostgresDiscoveryRepository>();
+builder.Services.AddScoped<DiscoveryService>();
+builder.Services.AddHttpClient<AzureDevOpsDiscoveryReader>(c => c.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IDiscoveryReader>(s => s.GetRequiredService<AzureDevOpsDiscoveryReader>());
 builder.Services.AddHttpClient<AzureDevOpsConnectionValidator>(c => c.Timeout = TimeSpan.FromSeconds(15))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddHttpClient<GitHubConnectionValidator>(c => c.Timeout = TimeSpan.FromSeconds(15))
@@ -215,6 +220,7 @@ app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 })).RequireAuthorization("PasswordChanged");
 
 app.MapConnectionEndpoints();
+app.MapDiscoveryEndpoints();
 
 app.Run();
 
