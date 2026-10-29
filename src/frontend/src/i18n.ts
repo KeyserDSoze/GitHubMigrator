@@ -4,6 +4,13 @@ import { initReactI18next } from 'react-i18next';
 const translations = {
   en: {
     translation: {
+      discoverySecurityEvidence: 'Groups and ACL evidence', discoveryGroups: 'Graph groups', discoveryMemberships: 'Direct memberships',
+      discoveryAcls: 'Git ACL entries', discoveryEffectiveWarning: 'Raw ACLs are not effective permissions. Deny, nested groups, branch-level scopes and external directory memberships require review before assigning GitHub access.',
+      discoveryCollected: 'collected', discoveryUnverified: 'incomplete', discoveryNoSecurity: 'No evidence available, or the PAT has insufficient scope.',
+      discoveryProjectScope: 'Project ACL', discoveryRepositoryScope: 'Repository ACL',
+      discoveryInherits: 'Inheritance enabled on token', discoveryNoInherit: 'Inheritance disabled on token',
+      discoveryAllow: 'Allow', discoveryDeny: 'Deny', discoveryNotSet: 'Not set',
+      discoveryReadBit: 'Read ACE bit', discoveryListCapped: 'List preview limited; the saved snapshot contains the available full evidence.',
       discoveryIntro: 'Read-only Azure DevOps inventory. Save a source connection first, then scan and inspect its projects, Git refs, TFVC branches and users.',
       discoverySource: 'Source connection', discoveryStart: 'Run discovery', discoveryBusy: 'Reading Azure DevOps…',
       discoveryNoSource: 'Create a verified Azure DevOps Services source connection before scanning.',
@@ -68,6 +75,13 @@ const translations = {
   },
   it: {
     translation: {
+      discoverySecurityEvidence: 'Gruppi e ACL', discoveryGroups: 'Gruppi Graph', discoveryMemberships: 'Appartenenze dirette',
+      discoveryAcls: 'Voci ACL Git', discoveryEffectiveWarning: 'Le ACL grezze non equivalgono ai permessi effettivi. Deny, gruppi annidati, scope branch e directory esterne devono essere verificati prima di assegnare accessi GitHub.',
+      discoveryCollected: 'raccolti', discoveryUnverified: 'incompleti', discoveryNoSecurity: 'Nessuna evidenza disponibile o scope PAT insufficiente.',
+      discoveryProjectScope: 'ACL di progetto', discoveryRepositoryScope: 'ACL repository',
+      discoveryInherits: 'Ereditarietà attiva nel token', discoveryNoInherit: 'Ereditarietà disattivata nel token',
+      discoveryAllow: 'Consenti', discoveryDeny: 'Nega', discoveryNotSet: 'Non impostato',
+      discoveryReadBit: 'Bit ACE lettura', discoveryListCapped: 'Anteprima limitata; lo snapshot salvato contiene tutte le evidenze disponibili.',
       discoveryIntro: 'Inventario Azure DevOps in sola lettura. Salva una connessione sorgente, quindi esplora progetti, riferimenti Git, branch TFVC e utenti.',
       discoverySource: 'Connessione sorgente', discoveryStart: 'Avvia discovery', discoveryBusy: 'Lettura Azure DevOps…',
       discoveryNoSource: 'Prima crea una connessione sorgente Azure DevOps Services verificata.',

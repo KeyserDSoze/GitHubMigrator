@@ -70,3 +70,20 @@
 .discovery-warning svg{flex-shrink:0;color:#edb869}
 @media(max-width:1050px){.discovery-grid{grid-template-columns:1fr}}
 @media(max-width:620px){.discovery-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.discovery-top label{min-width:100%}}
+
+/* F-003 security evidence, intentionally not an effective access matrix */
+.discovery-security-stats{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:14px 0 4px;font-size:12px;color:var(--muted)}
+.discovery-security-stats>div{border:1px solid var(--border);padding:9px 12px;background:var(--surface);border-radius:9px}
+.discovery-security-stats strong{color:var(--text);margin-left:8px}
+.discovery-security-stats>span{font-size:11px;flex-basis:100%;line-height:1.6}
+.discovery-security h3{font-size:13px;color:var(--text);margin:18px 0 10px}
+.discovery-security-flags{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin:14px 0}
+.discovery-security-flags span{background:var(--surface2);border:1px solid var(--border);padding:8px;border-radius:7px}
+.discovery-security-group,.discovery-acl-row{border:1px solid var(--border);background:var(--surface2);border-radius:10px;padding:13px;margin-bottom:8px;font-size:12px;overflow-wrap:anywhere}
+.discovery-security-group strong,.discovery-security-group small{display:block}
+.discovery-security-group small,.discovery-acl-row small{color:var(--muted);font-size:10px;line-height:1.6}
+.discovery-security-group span{color:var(--muted);font-size:11px}
+.discovery-security-group ul{margin:8px 0 0 18px;padding:0;color:var(--muted);display:grid;gap:4px}
+.discovery-acl-row{display:grid;grid-template-columns:1fr 1.5fr 1fr;gap:14px}
+.discovery-acl-row strong,.discovery-acl-row span,.discovery-acl-row small{display:block}
+@media(max-width:750px){.discovery-acl-row{grid-template-columns:1fr}}

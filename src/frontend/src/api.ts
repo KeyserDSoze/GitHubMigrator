@@ -12,19 +12,33 @@ export type DiscoverySummary = {
   id: string; connectionId: string; sourceProvider: string; organization: string; collectedAtUtc: string;
   completeness: 'complete' | 'partial'; projectCount: number; repositoryCount: number;
   refCount: number; identityCount: number; issueCount: number;
+  groupCount?: number; membershipCount?: number; aclEntryCount?: number;
+  securityCoverage?: SecurityCoverage;
   identitiesComplete: boolean; permissionsComplete: boolean;
 };
 export type DiscoveredRepository = {
   providerId: string; projectId: string; name: string; versionControl: number; sourcePath: string | null
 };
+export type SecurityCoverage = {
+  groupsComplete: boolean; membershipsComplete: boolean; aclsCollected: boolean;
+  effectivePermissionsVerified: boolean;
+};
+export type SecurityGroup = { descriptor: string; displayName: string; legacyDescriptor: string | null };
+export type SecurityMembership = { groupDescriptor: string; memberDescriptor: string };
+export type AclEvidence = {
+  repositoryId: string; securityToken: string; securityDescriptor: string;
+  allowMask: number; denyMask: number; inheritPermissions: boolean; scope: 'project' | 'repository';
+};
 export type DiscoveryDetail = {
   id: string; connectionId: string; organization: string; collectedAtUtc: string;
   snapshot: {
     projects: { providerId: string; name: string; repositories: DiscoveredRepository[] }[];
-    identities: { providerId: string; displayName: string; email: string | null }[];
+    identities: { providerId: string; displayName: string; email: string | null; legacyDescriptor?: string | null }[];
   };
   refs: { repositoryId: string; name: string; objectId: string }[];
   issues: { code: string; projectId: string | null; repositoryId: string | null }[];
+  groups?: SecurityGroup[]; memberships?: SecurityMembership[];
+  aclEvidence?: AclEvidence[]; securityCoverage?: SecurityCoverage;
   identitiesComplete: boolean; permissionsComplete: boolean;
 };
 const base = import.meta.env.VITE_API_URL ?? '';

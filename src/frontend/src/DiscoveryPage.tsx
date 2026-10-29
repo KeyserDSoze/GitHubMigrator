@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
 import { api, type Connection, type DiscoveryDetail, type DiscoverySummary } from './api';
 
-type Tab = 'projects' | 'users' | 'issues';
+type Tab = 'projects' | 'users' | 'security' | 'issues';
 
 export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdmin: boolean }) {
   const { t } = useTranslation();
@@ -60,6 +60,19 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   if (!isAdmin) return <section className="empty-card"><ShieldAlert size={30} /><p>{t('discoveryRequiresAdmin')}</p></section>;
 
   const summary = summaries.find(x => x.id === selectedId);
+  const groups = detail?.groups ?? [];
+  const memberships = detail?.memberships ?? [];
+  const acls = detail?.aclEvidence ?? [];
+  const displayPrincipal = (descriptor: string) => {
+    const group = groups.find(g => g.legacyDescriptor === descriptor);
+    if (group) return group.displayName;
+    const user = detail?.snapshot.identities.find(i => i.legacyDescriptor === descriptor);
+    return user?.displayName || descriptor;
+  };
+  const displayMember = (descriptor: string) =>
+    detail?.snapshot.identities.find(i => i.providerId === descriptor)?.displayName ||
+    groups.find(g => g.descriptor === descriptor)?.displayName || descriptor;
+  const showRead = (mask: number) => Math.floor(mask / 2) % 2 === 1;
   return <div>
     <section className="discovery-top" aria-label={t('discoverySource')}>
       <label>{t('discoverySource')}
@@ -88,6 +101,12 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     {summary && <div className="discovery-notice"><ShieldAlert size={17} />
       <span>{t('discoveryPartial')}. {t('discoveryPermissionWarning')}</span>
     </div>}
+    <div className="discovery-security-stats" aria-label={t('discoverySecurityEvidence')}>
+      <div>{t('discoveryGroups')}: <strong>{summary?.groupCount ?? groups.length}</strong></div>
+      <div>{t('discoveryMemberships')}: <strong>{summary?.membershipCount ?? memberships.length}</strong></div>
+      <div>{t('discoveryAcls')}: <strong>{summary?.aclEntryCount ?? acls.length}</strong></div>
+      <span>{t('discoveryEffectiveWarning')}</span>
+    </div>
     <div className="discovery-grid">
       <aside className="discovery-history">
         <h2>{t('discoverySelect')}</h2>
@@ -101,9 +120,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
       <section className="discovery-content">
         <h2>{t('discoveryBrowse')}</h2>
         <div className="discovery-tab-row">
-          {(['projects', 'users', 'issues'] as const).map(name => <button type="button" key={name}
+          {(['projects', 'users', 'security', 'issues'] as const).map(name => <button type="button" key={name}
             aria-pressed={tab === name} onClick={() => setTab(name)}>
-            {name === 'projects' ? t('discoveryDetails') : name === 'users' ? t('discoveryUsers') : t('discoveryWarnings')}
+            {name === 'projects' ? t('discoveryDetails') : name === 'users' ? t('discoveryUsers') : name === 'security' ? t('discoverySecurityEvidence') : t('discoveryWarnings')}
           </button>)}
         </div>
         {!detail ? <div className="discovery-empty"><p className="muted">{loading ? t('discoveryBusy') : t('discoveryEmpty')}</p></div> : <>
@@ -127,6 +146,37 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
                 <small>{identity.email || identity.providerId}</small>
               </div>) : <p className="muted">{t('discoveryNoUsers')}</p>}
           </>}
+          {tab === 'security' && <div className="discovery-security">
+            <div className="discovery-warning" role="note"><ShieldAlert size={16} />
+              <span>{t('discoveryEffectiveWarning')}</span></div>
+            <div className="discovery-security-flags">
+              <span>{t('discoveryGroups')}: {detail.securityCoverage?.groupsComplete ? t('discoveryCollected') : t('discoveryUnverified')}</span>
+              <span>{t('discoveryMemberships')}: {detail.securityCoverage?.membershipsComplete ? t('discoveryCollected') : t('discoveryUnverified')}</span>
+              <span>{t('discoveryAcls')}: {detail.securityCoverage?.aclsCollected ? t('discoveryCollected') : t('discoveryUnverified')}</span>
+            </div>
+            <h3>{t('discoveryGroups')}</h3>
+            {groups.length === 0 && <p className="muted">{t('discoveryNoSecurity')}</p>}
+            {groups.slice(0, 100).map(group => <div className="discovery-security-group" key={group.descriptor}>
+              <strong>{group.displayName}</strong>
+              <small>{group.legacyDescriptor || group.descriptor}</small>
+              <span>{memberships.filter(x => x.groupDescriptor === group.descriptor).length} {t('discoveryMemberships').toLowerCase()}</span>
+              <ul>{memberships.filter(x => x.groupDescriptor === group.descriptor).slice(0, 30).map(edge =>
+                <li key={edge.memberDescriptor}>{displayMember(edge.memberDescriptor)}</li>)}</ul>
+            </div>)}
+            {groups.length > 100 && <p className="muted">{t('discoveryListCapped')}</p>}
+            <h3>{t('discoveryAcls')}</h3>
+            {acls.length === 0 && <p className="muted">{t('discoveryNoSecurity')}</p>}
+            {acls.slice(0, 150).map((entry, i) => {
+              const repo = detail.snapshot.projects.flatMap(p => p.repositories).find(r => r.providerId === entry.repositoryId);
+              return <div className="discovery-acl-row" key={i}>
+                <div><strong>{repo?.name || entry.repositoryId}</strong><small>{entry.scope === 'project' ? t('discoveryProjectScope') : t('discoveryRepositoryScope')}</small></div>
+                <div><span>{displayPrincipal(entry.securityDescriptor)}</span><small>{entry.inheritPermissions ? t('discoveryInherits') : t('discoveryNoInherit')}</small></div>
+                <div><span>{t('discoveryAllow')} {entry.allowMask} · {t('discoveryDeny')} {entry.denyMask}</span>
+                  <small>{t('discoveryReadBit')}: {showRead(entry.denyMask) ? t('discoveryDeny') : showRead(entry.allowMask) ? t('discoveryAllow') : t('discoveryNotSet')}</small></div>
+              </div>;
+            })}
+            {acls.length > 150 && <p className="muted">{t('discoveryListCapped')}</p>}
+          </div>}
           {tab === 'issues' && <>
             {detail.issues.map((issue, index) => <div className="discovery-warning" key={index}>
               <ShieldAlert size={16} /><span>{issue.code}{issue.projectId && ` · ${issue.projectId}`}</span>
