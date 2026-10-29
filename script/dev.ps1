@@ -14,6 +14,18 @@ if ($Mode -eq 'test') {
   Write-Warning 'No .env.local found; using committed test values. Copy .env.local.example to .env.local to customize.'
   $envFile = Join-Path $root '.env.test'
 }
+if ($envFile -eq (Join-Path $root '.env.local') -and (Test-Path $envFile)) {
+  $contents = [System.IO.File]::ReadAllText($envFile)
+  if ($contents.Contains('LOCAL_ENCRYPTION_KEY=GENERATE_ON_FIRST_RUN')) {
+    $bytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    $key = [Convert]::ToBase64String($bytes)
+    $contents = $contents.Replace('LOCAL_ENCRYPTION_KEY=GENERATE_ON_FIRST_RUN', "LOCAL_ENCRYPTION_KEY=$key")
+    [System.IO.File]::WriteAllText($envFile, $contents)
+    Write-Host 'Generated a unique local encryption key in .env.local.'
+  }
+}
 $composeFile = Join-Path $root 'docker/docker-compose.yml'
 
 function Invoke-Compose {
