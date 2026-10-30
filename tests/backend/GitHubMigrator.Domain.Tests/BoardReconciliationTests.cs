@@ -25,13 +25,13 @@ public sealed class BoardReconciliationTests
         Assert.Equal(4, result.Links.Count);
         Assert.Contains(result.Links, x => x.WorkItemId == 101 &&
             x.SourceRelation == "System.LinkTypes.Hierarchy-Forward" &&
-            x.TargetReference == "#88" && x.Status == TraceabilityStatus.Verified);
+            x.TargetReference == "#88" && x.Status == TraceabilityStatus.TargetExists);
         Assert.Contains(result.Links, x => x.SourceRelation == "commit" &&
-            x.TargetReference == Sha && x.Status == TraceabilityStatus.Verified);
+            x.TargetReference == Sha && x.Status == TraceabilityStatus.TargetExists);
         Assert.Contains(result.Links, x => x.SourceRelation == "pull-request" &&
             x.TargetReference == "#22" && x.Status == TraceabilityStatus.NotFound);
         Assert.Contains(result.Links, x => x.Status == TraceabilityStatus.Unsupported);
-        Assert.Equal(2, result.VerifiedLinks);
+        Assert.Equal(2, result.TargetObjectsFound);
         Assert.Equal(2, result.UnresolvedLinks);
         Assert.False(result.ReadyToPublish);
         Assert.Contains(result.Issues, x => x.Code == "UnresolvedTraceability");
