@@ -92,7 +92,7 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client) : IAzureWorkloa
                     if (rel.StartsWith("System.LinkTypes.", StringComparison.Ordinal))
                     {
                         if (int.TryParse(address.Split('/').LastOrDefault(), out var n))
-                            links.Add(new("work-item", address, n));
+                            links.Add(new("work-item", address, n, rel));
                         else links.Add(new("unknown", address));
                     }
                     else if (rel == "ArtifactLink" && address.Contains("/Git/Commit/", StringComparison.OrdinalIgnoreCase))
