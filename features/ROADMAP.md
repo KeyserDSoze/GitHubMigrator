@@ -13,8 +13,8 @@
 | 6 | F-006 Native Git migration | F-005/F-008 | Mirror branches, tags and history; compare refs/SHAs | Planned |
 | 7 | F-007 TFVC conversion | F-005/F-008 | Best-effort changesets/branches conversion and evidence report | Research |
 | 8 | F-012 Azure DevOps Server/TFS and GitHub Enterprise Server | F-002/F-003 | Version-specific adapters and safe custom endpoints | Planned |
-| 9 | F-009 Pipeline → Actions | F-005/F-008 | Rule-based conversion + Foundry AI suggestions + human approval | Later |
-| 10 | F-010 Boards → Issues/Projects | F-003/F-008 | Work item hierarchy and metadata mapping | Later |
+| 9 | F-009 Pipeline → Actions | F-002/F-003 | Read-only YAML task analysis + AI advisory + safe disabled draft; later conversion/approval/PR | **Preview MVP; deployment pending** |
+| 10 | F-010 Boards → Issues/Projects | F-002/F-003 | Issue draft with source ID, direct relations, target GitHub existence checks; later idempotent issue write | **Preview and reconciliation MVP; publishing pending** |
 | 11 | F-011 Guest/external users | F-004/F-005 | Guest governance, invitations and reviews | Later |
 
 ## Product boundaries
