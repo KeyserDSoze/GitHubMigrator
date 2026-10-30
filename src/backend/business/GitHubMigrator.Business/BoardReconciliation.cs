@@ -151,7 +151,7 @@ public sealed class BoardReconciliationService(
         async Task<TraceabilityStatus> CheckAsync(Func<Task<bool>> check)
         {
             if (++probes > MaxProbes) return TraceabilityStatus.NotChecked;
-            try { return await check() ? TraceabilityStatus.Verified : TraceabilityStatus.NotFound; }
+            try { return await check() ? TraceabilityStatus.TargetExists : TraceabilityStatus.NotFound; }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (HttpRequestException) { return TraceabilityStatus.Unavailable; }
         }
