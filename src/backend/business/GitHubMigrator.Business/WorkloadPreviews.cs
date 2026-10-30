@@ -149,8 +149,11 @@ public sealed class WorkloadPreviewService(
                     : $"GitHub repository Settings > Secrets and variables > Actions > Variables > New repository variable: {variable.Name}. Confirm the value manually; no source values are copied."));
         }
         foreach (var endpoint in pipeline.ServiceConnections)
-            steps.Add(new(endpoint.Name, "service-connection", false,
-                $"Reconfigure Azure DevOps service connection '{endpoint.Name}' ({endpoint.Kind}) as GitHub OIDC/federated credential, environment and cloud role, or an approved secret. Validate permissions in the target cloud."));
+            steps.Add(new(endpoint.Name, "candidate-service-connection", false,
+                $"Project-level candidate '{endpoint.Name}' ({endpoint.Kind}). First confirm this pipeline actually uses it, then replace with GitHub OIDC/federated credential and an appropriate cloud role, or a reviewed secret."));
+        if (pipeline.ServiceConnections.Count > 0)
+            warnings.Add(new("ServiceConnectionUsageUnverified",
+                "Azure project endpoint inventory is not pipeline-scoped; listed service connections may be unrelated.", "blocker"));
         if (steps.Any(x => !x.ExistsOnGitHub))
             warnings.Add(new("ConfigurationMissing", "Destination has missing configuration steps.", "blocker"));
         warnings.Add(new("WorkflowConversionRequiresReview",
