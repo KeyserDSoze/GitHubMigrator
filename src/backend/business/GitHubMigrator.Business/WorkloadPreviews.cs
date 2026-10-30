@@ -20,7 +20,7 @@ public sealed record PipelineBlueprint(
     string WorkflowYaml, IReadOnlyList<ConfigurationStep> SetupSteps, IReadOnlyList<WorkloadIssue> Issues,
     AiReview Ai, bool DeployableWithoutReview);
 
-public sealed record AzureBoardLink(string Kind, string Target, int? RelatedWorkItemId = null);
+public sealed record AzureBoardLink(string Kind, string Target, int? RelatedWorkItemId = null, string? RelationType = null);
 public sealed record AzureBoardItem(int Id, string Title, string Type, string State,
     string? Description, IReadOnlyList<AzureBoardLink> Links);
 public sealed record BoardIssueDraft(int SourceId, string Title, string Body, string State,
