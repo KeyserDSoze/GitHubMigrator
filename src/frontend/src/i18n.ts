@@ -4,6 +4,11 @@ import { initReactI18next } from 'react-i18next';
 const translations = {
   en: {
     translation: {
+      workloadCommits: 'Commit SHA mappings (optional)', workloadPulls: 'Pull request mappings (optional)',
+      workloadVerify: 'Check target links', workloadReconciliation: 'Source-to-GitHub traceability audit',
+      workloadTargetObjects: 'GitHub objects found', workloadUnresolved: 'Unresolved source links',
+      workloadExistsNotLinked: 'Finding the target object does not recreate the relationship in a GitHub Issue. Linking and coverage are still pending.',
+
       pipelines: 'Pipelines → Actions', boards: 'Boards → Issues',
       pipelineIntro: 'Preview Azure Pipelines as GitHub Actions, with optional Azure AI review. Nothing is published automatically.',
       boardIntro: 'Preview Azure Boards as GitHub Issues with original IDs, commit/PR relations and warnings for missing links.',
@@ -116,6 +121,11 @@ const translations = {
   },
   it: {
     translation: {
+      workloadCommits: 'Mappatura SHA commit (facoltativa)', workloadPulls: 'Mappatura pull request (facoltativa)',
+      workloadVerify: 'Verifica i collegamenti target', workloadReconciliation: 'Verifica tracciabilità Azure → GitHub',
+      workloadTargetObjects: 'Oggetti GitHub trovati', workloadUnresolved: 'Collegamenti sorgente non risolti',
+      workloadExistsNotLinked: 'Trovare un oggetto GitHub non ricrea il collegamento nell’Issue. La ricostruzione delle relazioni e la copertura completa sono ancora da implementare.',
+
       pipelines: 'Pipelines → Actions', boards: 'Boards → Issues',
       pipelineIntro: 'Anteprima delle Azure Pipelines come GitHub Actions, con revisione AI facoltativa. Non pubblica automaticamente nulla.',
       boardIntro: 'Anteprima degli Azure Boards come GitHub Issues con ID originali, collegamenti a commit/PR e avvisi sui legami mancanti.',
