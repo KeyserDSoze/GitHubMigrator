@@ -55,6 +55,17 @@ export type IdentityPreview = {
 };
 export type IdentityReview = { draft: IdentityDraft; preview: IdentityPreview };
 
+export type WorkloadIssue = { code: string; detail: string; severity: string };
+export type SetupStep = { name: string; kind: string; existsOnGitHub: boolean; instructions: string };
+export type PipelineBlueprint = {
+  pipelineId: number; sourceName: string; targetRepository: string; workflowPath: string;
+  workflowYaml: string; setupSteps: SetupStep[]; issues: WorkloadIssue[];
+  ai: { status: string; findings: string[] }; deployableWithoutReview: boolean;
+};
+export type BoardIssueDraft = {
+  sourceId: number; title: string; body: string; state: string; issues: WorkloadIssue[];
+};
+export type BoardsPreview = { issues: BoardIssueDraft[]; globalWarnings: WorkloadIssue[]; readyToPublish: boolean };
 const base = import.meta.env.VITE_API_URL ?? '';
 
 async function call<T>(path: string, options: RequestInit): Promise<T> {
@@ -120,6 +131,18 @@ export const api = {
     call<IdentityReview>(`/api/identity-mappings/${encodeURIComponent(snapshotId)}`,
       { method: 'PUT', headers: withToken(token),
         body: JSON.stringify({ destinationConnectionId, expectedRevision, mappings }) }),
+  previewPipeline: (token: string, sourceConnectionId: string, destinationConnectionId: string,
+    projectId: string, pipelineId: number, targetRepository: string) =>
+    call<PipelineBlueprint>('/api/workloads/pipelines/preview', {
+      method: 'POST', headers: withToken(token),
+      body: JSON.stringify({ sourceConnectionId, destinationConnectionId, projectId, pipelineId, targetRepository })
+    }),
+  previewBoards: (token: string, sourceConnectionId: string, projectId: string,
+    workItemIds: number[], knownGitHubIssues: Record<number, number>) =>
+    call<BoardsPreview>('/api/workloads/boards/preview', {
+      method: 'POST', headers: withToken(token),
+      body: JSON.stringify({ sourceConnectionId, projectId, workItemIds, knownGitHubIssues })
+    }),
   deleteConnection: (token: string, id: string) =>
     call<void>(`/api/connections/${encodeURIComponent(id)}`, {
       method: 'DELETE', headers: withToken(token)
