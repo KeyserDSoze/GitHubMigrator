@@ -1,3 +1,4 @@
+using Xunit;
 using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
 using GitHubMigrator.Infrastructure.PostgreSql;
