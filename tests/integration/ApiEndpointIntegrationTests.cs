@@ -4,6 +4,9 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Xunit;
+using GitHubMigrator.Infrastructure.PostgreSql;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace GitHubMigrator.Integration.Tests;
 
@@ -157,6 +160,45 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains("InvalidWorkItemIds", await response.Content.ReadAsStringAsync());
         Assert.Equal(count, harness.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Password_change_unlocks_admin_endpoints_only_with_a_new_JWT()
+    {
+        var name = "rotation-" + Guid.NewGuid().ToString("N");
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var manager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+            var user = new ApplicationUser { UserName = name, MustChangePassword = true };
+            var created = await manager.CreateAsync(user, "Temporary-Admin#2026");
+            Assert.True(created.Succeeded);
+            Assert.True((await manager.AddToRoleAsync(user, "admin")).Succeeded);
+        }
+
+        var pendingJwt = await harness.LoginAsync(name, "Temporary-Admin#2026");
+        var input = new { sourceConnectionId = harness.SourceConnectionId,
+                          projectId = "project", workItemIds = new[] { 101 } };
+        using var denied = await PostAsync("/api/workloads/boards/preview", input, pendingJwt);
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/change-password")
+        {
+            Content = JsonContent.Create(new {
+                currentPassword = "Temporary-Admin#2026",
+                newPassword = "Rotated-Admin#2026"
+            })
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", pendingJwt);
+        using var changed = await harness.Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, changed.StatusCode);
+        using var response = JsonDocument.Parse(await changed.Content.ReadAsStringAsync());
+        Assert.False(response.RootElement.GetProperty("mustChangePassword").GetBoolean());
+        var updatedJwt = response.RootElement.GetProperty("accessToken").GetString()!;
+
+        using var stillDenied = await PostAsync("/api/workloads/boards/preview", input, pendingJwt);
+        Assert.Equal(HttpStatusCode.Forbidden, stillDenied.StatusCode);
+        using var allowed = await PostAsync("/api/workloads/boards/preview", input, updatedJwt);
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
     }
 
     private async Task<HttpResponseMessage> PostAsync(string path, object payload, string? bearer = null)
