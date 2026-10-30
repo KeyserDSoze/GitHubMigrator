@@ -3,11 +3,11 @@ using GitHubMigrator.Domain;
 
 namespace GitHubMigrator.Business;
 
-public enum TraceabilityStatus { Verified, MissingMapping, NotFound, Unavailable, Unsupported, NotChecked }
+public enum TraceabilityStatus { TargetExists, MissingMapping, NotFound, Unavailable, Unsupported, NotChecked }
 public sealed record BoardLinkCheck(int WorkItemId, string SourceRelation,
     string SourceReference, string? TargetReference, TraceabilityStatus Status);
 public sealed record BoardReconciliationReport(string TargetOrganization, string TargetRepository,
-    IReadOnlyList<BoardLinkCheck> Links, int VerifiedLinks, int UnresolvedLinks,
+    IReadOnlyList<BoardLinkCheck> Links, int TargetObjectsFound, int UnresolvedLinks,
     IReadOnlyList<WorkloadIssue> Issues, bool ReadyToPublish);
 
 public interface IGitHubTraceabilityReader
@@ -140,12 +140,12 @@ public sealed class BoardReconciliationService(
                     TraceabilityStatus.Unsupported));
             }
         }
-        var verified = links.Count(x => x.Status == TraceabilityStatus.Verified);
+        var verified = links.Count(x => x.Status == TraceabilityStatus.TargetExists);
         var unresolved = links.Count - verified;
         if (unresolved > 0)
             warnings.Add(new("UnresolvedTraceability", $"{unresolved} source links are not verified on GitHub.", "blocker"));
         warnings.Add(new("CoverageNotGuaranteed",
-            "Only direct Azure work-item relations and explicitly supplied mappings were checked; commit messages, TFVC changesets and indirect links need separate scanning.", "blocker"));
+            "Target existence is not proof that GitHub issues reference those objects. Direct Azure work-item relations only were checked; commit messages, TFVC changesets and indirect links need separate scanning.", "blocker"));
         return new(destination.Organization, targetRepository, links, verified, unresolved, warnings, false);
 
         async Task<TraceabilityStatus> CheckAsync(Func<Task<bool>> check)
