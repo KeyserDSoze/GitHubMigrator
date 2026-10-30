@@ -4,6 +4,23 @@ import { initReactI18next } from 'react-i18next';
 const translations = {
   en: {
     translation: {
+      pipelines: 'Pipelines → Actions', boards: 'Boards → Issues',
+      pipelineIntro: 'Preview Azure Pipelines as GitHub Actions, with optional Azure AI review. Nothing is published automatically.',
+      boardIntro: 'Preview Azure Boards as GitHub Issues with original IDs, commit/PR relations and warnings for missing links.',
+      workloadSource: 'Azure DevOps source', workloadTarget: 'GitHub destination', workloadProject: 'Azure project ID',
+      workloadPipelineId: 'Azure pipeline ID', workloadRepository: 'GitHub repository',
+      workloadBoardIds: 'Azure work item IDs (comma-separated)', workloadKnownIssues: 'Existing GitHub issue numbers (101:77,102:78)',
+      workloadPreview: 'Generate preview', workloadBusy: 'Reading source…',
+      workloadWarning: 'Review-only mode: no workflow, repository, secret or issue is created.',
+      workloadNoSource: 'Create a source connection', workloadNoTarget: 'Create a verified GitHub destination',
+      workloadError: 'Preview failed. Check credentials, permissions and identifiers.',
+      workloadNoAdmin: 'Only administrators can preview workload migrations.',
+      workloadPath: 'Proposed workflow path', workloadDraft: 'Disabled workflow scaffold',
+      workloadSetup: 'Configuration checklist', workloadAi: 'Azure AI review',
+      workloadWarnings: 'Warnings and missing links', workloadState: 'Original state',
+      workloadIssueDrafts: 'GitHub Issue drafts', workloadCopy: 'Copy', workloadCopied: 'Text copied',
+      workloadExisting: 'Name present (value not verified)', workloadMissing: 'Setup needed',
+
       mappingIntro: 'Review source identities and explicitly map them to GitHub logins. Mapping never grants access automatically.',
       mappingSnapshot: 'Source snapshot', mappingDestination: 'GitHub destination',
       mappingLoad: 'Load draft', mappingSave: 'Save mapping draft', mappingReload: 'Reload saved draft',
@@ -99,6 +116,23 @@ const translations = {
   },
   it: {
     translation: {
+      pipelines: 'Pipelines → Actions', boards: 'Boards → Issues',
+      pipelineIntro: 'Anteprima delle Azure Pipelines come GitHub Actions, con revisione AI facoltativa. Non pubblica automaticamente nulla.',
+      boardIntro: 'Anteprima degli Azure Boards come GitHub Issues con ID originali, collegamenti a commit/PR e avvisi sui legami mancanti.',
+      workloadSource: 'Sorgente Azure DevOps', workloadTarget: 'Destinazione GitHub', workloadProject: 'ID progetto Azure',
+      workloadPipelineId: 'ID pipeline Azure', workloadRepository: 'Repository GitHub',
+      workloadBoardIds: 'ID work item Azure (separati da virgole)', workloadKnownIssues: 'Numeri issue GitHub già creati (101:77,102:78)',
+      workloadPreview: 'Genera anteprima', workloadBusy: 'Lettura sorgente…',
+      workloadWarning: 'Solo revisione: non viene creato alcun workflow, repository, secret o issue.',
+      workloadNoSource: 'Crea una connessione sorgente', workloadNoTarget: 'Crea una destinazione GitHub verificata',
+      workloadError: 'Anteprima non riuscita. Controlla credenziali, permessi e identificativi.',
+      workloadNoAdmin: 'Solo gli amministratori possono visualizzare le anteprime.',
+      workloadPath: 'Percorso workflow proposto', workloadDraft: 'Bozza workflow disabilitata',
+      workloadSetup: 'Checklist configurativa', workloadAi: 'Revisione Azure AI',
+      workloadWarnings: 'Avvisi e collegamenti mancanti', workloadState: 'Stato originale',
+      workloadIssueDrafts: 'Bozze GitHub Issues', workloadCopy: 'Copia', workloadCopied: 'Testo copiato',
+      workloadExisting: 'Nome presente (valore non verificato)', workloadMissing: 'Configurazione necessaria',
+
       mappingIntro: 'Associa esplicitamente le identità sorgente agli account GitHub. Il mapping non concede mai accessi automaticamente.',
       mappingSnapshot: 'Snapshot sorgente', mappingDestination: 'Destinazione GitHub',
       mappingLoad: 'Carica bozza', mappingSave: 'Salva bozza mapping', mappingReload: 'Ricarica bozza salvata',
