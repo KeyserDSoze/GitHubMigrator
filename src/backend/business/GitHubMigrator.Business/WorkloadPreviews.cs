@@ -6,10 +6,13 @@ namespace GitHubMigrator.Business;
 
 // All workbench outputs are explicit review drafts. Never silently deploy a workflow or create an issue.
 public sealed record WorkloadIssue(string Code, string Detail, string Severity = "warning");
+public sealed record PipelineTaskEvidence(string Kind, string Identifier);
+public sealed record PipelineStructure(IReadOnlyList<PipelineTaskEvidence> Tasks,
+    bool Truncated, bool ParseFailed);
 public sealed record AzurePipelineSource(
     int Id, string Name, string Kind, string? YamlPath, string? RepositoryId,
     IReadOnlyList<AzureVariableReference> Variables, IReadOnlyList<AzureServiceReference> ServiceConnections,
-    string? SourceYaml);
+    string? SourceYaml, PipelineStructure? Structure = null);
 public sealed record AzureVariableReference(string Name, bool IsSecret, string Group);
 public sealed record AzureServiceReference(string Name, string Kind);
 public sealed record GitHubConfigNames(IReadOnlyList<string> Secrets, IReadOnlyList<string> Variables);
