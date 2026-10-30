@@ -41,6 +41,7 @@ public sealed class ApiHarness : IAsyncLifetime
     public HttpClient Client { get; private set; } = null!;
     public WebApplicationFactory<Program> Host { get; private set; } = null!;
     private readonly Dictionary<string, string?> _savedEnvironment = new();
+    private readonly Dictionary<string, string> _issuedTokens = new();
 
     public async Task InitializeAsync()
     {
@@ -114,10 +115,15 @@ public sealed class ApiHarness : IAsyncLifetime
 
     public async Task<string> LoginAsync(string name, string password)
     {
+        // Reuse each real-login token across independent endpoint checks. The API login
+        // limiter is intentionally only 8/minute; tests must not inadvertently exhaust it.
+        if (_issuedTokens.TryGetValue(name, out var existing)) return existing;
         using var response = await Client.PostAsJsonAsync("/api/auth/login", new { username = name, password });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        return json.RootElement.GetProperty("accessToken").GetString()!;
+        var token = json.RootElement.GetProperty("accessToken").GetString()!;
+        _issuedTokens[name] = token;
+        return token;
     }
 
     private static HttpResponseMessage ReplyAzure(HttpRequestMessage req)
