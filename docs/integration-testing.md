@@ -2,13 +2,14 @@
 
 **Status:** HTTP-contract mock tests, browser mock journeys, dedicated PostgreSQL 17 integration suite, coverage artifacts and browser failure traces run in GitHub Actions. No live Azure DevOps or GitHub account is required for the deterministic suites.
 
-## Four independent levels
+## Five integration layers
 
 | Layer | Tool | Runs what is real? | What is simulated? |
 | --- | --- | --- | --- |
 | Domain | xUnit | Planner, mapping validation, YAML task parser, safety rules | Data objects |
 | HTTP integration | xUnit + `HttpMessageHandler` | Azure DevOps and GitHub REST adapters, HTTP request construction, preview orchestration, AI-safe payload | Only outbound provider responses and the AI result |
 | Persistence integration | xUnit + actual PostgreSQL 17 | EF Core/Npgsql model, JSONB persistence, SQL compare-and-swap revision updates | No source/destination API; short-lived PostgreSQL container |
+| Full API integration | ASP.NET Core WebApplicationFactory/TestServer + PostgreSQL 17 | Actual minimal API routes, authentication with signed JWT, roles and password-change policy, PostgreSQL EF Core, AES-GCM-backed PAT references, production Azure/GitHub HTTP adapters, HTTP status and JSON | Only third-party HTTP responses; Azure AI is unconfigured |
 | UI journeys | Playwright + `page.route()` | React browser UI, navigation, requests, rendering, error handling | Backend JSON and authentication response |
 
 The wire-mock tests exercise the **production readers** `AzureDevOpsWorkloadReader`, `GitHubConfigurationReader` and `GitHubTraceabilityReader` rather than replacing these with mock services. Contract fixtures include:
@@ -20,7 +21,15 @@ The wire-mock tests exercise the **production readers** `AzureDevOpsWorkloadRead
 - Cases where a target object exists but **no GitHub Issue relationship has been created**
 - UI invalid SHA and duplicate work-item IDs, admin vs regular user role access, backend error visibility
 
-The PostgreSQL suite tests a real database created by EF Core on an ephemeral GitHub Actions service container: snapshot/destination isolation, JSONB roundtrip including quoted Unicode descriptors, stale revision conflict and distinct readers/writers. **It must fail when the database is unavailable**, not silently use EF InMemory.
+The full TestServer suite runs against the same ephemeral PostgreSQL 17 container. It logs in via `POST /api/auth/login` and sends authorized HTTP requests to the actual `/api/workloads/pipelines/preview`, `/api/workloads/boards/preview` and `/api/workloads/boards/reconcile` routes, covering:
+
+- anonymous 401, ordinary-user 403, admin awaiting password change 403 and authenticated admin success
+- blocked workflow YAML with real HTTP reader + encrypted PAT store; no credentials or source script leakage in JSON
+- provider 403 translated to HTTP 422; invalid ID batches fail early with 400 and no external requests
+- Boards draft IDs, missing work items and actual target existence checks
+- **camelCase status strings** in live API JSON; this catches a real backend/UI contract mismatch missed by the prior service-level mocks
+
+The PostgreSQL suite also tests a real database created by EF Core on an ephemeral GitHub Actions service container: snapshot/destination isolation, JSONB roundtrip including quoted Unicode descriptors, stale revision conflict and distinct readers/writers. **It must fail when the database is unavailable**, not silently use EF InMemory.
 
 ## Commands
 
