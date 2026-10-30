@@ -30,6 +30,8 @@ public sealed class BoardReconciliationService(
         RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex Sha = new(@"(?<![A-Fa-f0-9])([A-Fa-f0-9]{40})(?![A-Fa-f0-9])",
         RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
+    private static readonly Regex ExactSha = new(@"^[a-fA-F0-9]{40}$",
+        RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
 
     public async Task<BoardReconciliationReport> ReconcileAsync(
         Guid sourceConnectionId, Guid destinationConnectionId, string projectId,
@@ -48,7 +50,7 @@ public sealed class BoardReconciliationService(
             (knownPullRequests?.Count ?? 0) > 500 ||
             (knownIssues?.Any(x => x.Key < 1 || x.Value < 1) ?? false) ||
             (knownPullRequests?.Any(x => x.Key < 1 || x.Value < 1) ?? false) ||
-            (knownCommits?.Any(x => !Sha.IsMatch(x.Key) || !Sha.IsMatch(x.Value)) ?? false))
+            (knownCommits?.Any(x => !ExactSha.IsMatch(x.Key) || !ExactSha.IsMatch(x.Value)) ?? false))
             throw new WorkloadInputException("InvalidTraceabilityMapping");
 
         var sourceConnection = await connections.GetAsync(sourceConnectionId, ct);
@@ -109,7 +111,7 @@ public sealed class BoardReconciliationService(
                     }
                     var srcSha = match.Groups[1].Value;
                     var mappedSha = knownCommits?.GetValueOrDefault(srcSha) ?? srcSha;
-                    if (!Sha.IsMatch(mappedSha))
+                    if (!ExactSha.IsMatch(mappedSha))
                     {
                         links.Add(new(id, "commit", srcSha, null, TraceabilityStatus.MissingMapping));
                         continue;
