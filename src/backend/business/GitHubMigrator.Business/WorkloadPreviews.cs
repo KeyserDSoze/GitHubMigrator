@@ -107,6 +107,23 @@ public sealed class WorkloadPreviewService(
         yaml.AppendLine("      - uses: actions/checkout@v4");
         yaml.AppendLine("      - name: Manual migration required");
         yaml.AppendLine("        run: echo 'TODO review Azure Pipelines tasks, agents, conditions and service connections'");
+        if (pipeline.Structure is { ParseFailed: true })
+            warnings.Add(new("SourceYamlAnalysisFailed",
+                "YAML is unreadable or exceeds safe analysis limits; review the source manually.", "blocker"));
+        if (pipeline.Structure is { Truncated: true })
+            warnings.Add(new("SourceYamlAnalysisTruncated",
+                "Task inventory reached safety limits; do not assume all tasks are listed.", "blocker"));
+        if (pipeline.Structure is { Tasks.Count: > 0 } structure)
+        {
+            for (var index = 0; index < structure.Tasks.Count; index++)
+            {
+                var task = structure.Tasks[index];
+                yaml.AppendLine($"      - name: 'REVIEW {index + 1}: {task.Identifier}'");
+                yaml.AppendLine($"        run: echo 'TODO translate Azure {task.Kind} task {index + 1}'");
+                warnings.Add(new("TaskTranslationPending",
+                    $"Azure step {index + 1} ({task.Kind}: {task.Identifier}) needs explicit GitHub Actions translation.", "blocker"));
+            }
+        }
         var safeYaml = yaml.ToString();
 
         GitHubConfigNames existing;
@@ -146,7 +163,10 @@ public sealed class WorkloadPreviewService(
         {
             var summary = $"Azure pipeline ID {pipeline.Id}; kind {pipeline.Kind}; " +
                 $"variables count {pipeline.Variables.Count}; connection types " +
-                string.Join(",", pipeline.ServiceConnections.Select(e => e.Kind).Distinct());
+                string.Join(",", pipeline.ServiceConnections.Select(e => e.Kind).Distinct()) +
+                $"; task identifiers: " + string.Join(",",
+                    pipeline.Structure?.Tasks.Take(60).Select(t => t.Kind + ":" + t.Identifier)
+                    ?? Array.Empty<string>());
             review = await ai.ReviewAsync(summary, safeYaml, steps, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
