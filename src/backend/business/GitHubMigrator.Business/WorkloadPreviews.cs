@@ -202,7 +202,7 @@ public sealed class WorkloadPreviewService(
                 {
                     var sha = CommitSha.Match(link.Target);
                     if (sha.Success) {
-                        body.AppendLine($"- Commit \`{sha.Groups[1].Value}\` (source reference; verify SHA in migrated GitHub repository)");
+                        body.AppendLine($"- Commit `{sha.Groups[1].Value}` (source reference; verify SHA in migrated GitHub repository)");
                         issues.Add(new("CommitTargetUnverified", "Commit SHA not yet verified in GitHub."));
                     }
                     else issues.Add(new("CommitReferenceUnresolved", "Commit artifact does not contain a verifiable full SHA."));
