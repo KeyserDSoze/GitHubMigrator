@@ -40,27 +40,38 @@ public sealed class ApiHarness : IAsyncLifetime
     public ConcurrentQueue<(string Method, Uri Url, string? AuthScheme)> Calls { get; } = new();
     public HttpClient Client { get; private set; } = null!;
     public WebApplicationFactory<Program> Host { get; private set; } = null!;
+    private readonly Dictionary<string, string?> _savedEnvironment = new();
 
     public async Task InitializeAsync()
     {
         var connection = Environment.GetEnvironmentVariable("GITHUBMIGRATOR_TEST_POSTGRES")
             ?? throw new InvalidOperationException("GITHUBMIGRATOR_TEST_POSTGRES required; no InMemory fallback.");
+        // Minimal-hosting WebApplicationFactory applies ConfigureAppConfiguration after the
+        // top-level Program reads some settings. Install isolated process environment values
+        // BEFORE starting TestServer; restore all of them when the fixture is disposed.
+        var values = new Dictionary<string, string>
+        {
+            ["ConnectionStrings__PostgreSql"] = connection,
+            ["Jwt__SigningKey"] = "integration-testing-only-key-with-48-characters-2026",
+            ["Bootstrap__Username"] = "bootstrap-" + Guid.NewGuid().ToString("N"),
+            ["Bootstrap__Password"] = "Bootstrap-Strong#2026",
+            ["Secrets__Provider"] = "EncryptedPostgreSql",
+            ["Secrets__LocalEncryptionKey"] = Convert.ToBase64String(new byte[32]),
+            ["Observability__Provider"] = "None",
+            ["ASPNETCORE_ENVIRONMENT"] = "Development",
+            ["DOTNET_ENVIRONMENT"] = "Development"
+        };
+        foreach (var pair in values)
+        {
+            _savedEnvironment[pair.Key] = Environment.GetEnvironmentVariable(pair.Key);
+            Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+        }
+
         var azure = new WireStub(request => ReplyAzure(request), Calls);
         var github = new WireStub(request => ReplyGitHub(request), Calls);
         Host = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseEnvironment("Development");
-            builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
-                new Dictionary<string, string?>
-                {
-                    ["ConnectionStrings:PostgreSql"] = connection,
-                    ["Jwt:SigningKey"] = "integration-testing-only-key-with-48-characters-2026",
-                    ["Bootstrap:Username"] = "bootstrap-" + Guid.NewGuid().ToString("N"),
-                    ["Bootstrap:Password"] = "Bootstrap-Strong#2026",
-                    ["Secrets:Provider"] = "EncryptedPostgreSql",
-                    ["Secrets:LocalEncryptionKey"] = Convert.ToBase64String(new byte[32]),
-                    ["Observability:Provider"] = "None"
-                }));
             builder.ConfigureTestServices(services =>
             {
                 // App constructs the actual typed readers; their outbound transport is a strict stub.
@@ -194,6 +205,8 @@ public sealed class ApiHarness : IAsyncLifetime
     {
         Client?.Dispose();
         Host?.Dispose();
+        foreach (var pair in _savedEnvironment)
+            Environment.SetEnvironmentVariable(pair.Key, pair.Value);
         return Task.CompletedTask;
     }
 
