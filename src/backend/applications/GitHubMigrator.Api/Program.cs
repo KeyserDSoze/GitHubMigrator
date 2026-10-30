@@ -50,6 +50,16 @@ builder.Services.AddScoped<IDiscoveryRepository, PostgresDiscoveryRepository>();
 builder.Services.AddScoped<DiscoveryService>();
 builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMappingDraftRepository>();
 builder.Services.AddScoped<IdentityMappingService>();
+builder.Services.AddScoped<WorkloadPreviewService>();
+builder.Services.AddHttpClient<AzureDevOpsWorkloadReader>(c => c.Timeout = TimeSpan.FromSeconds(20))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddHttpClient<GitHubConfigurationReader>(c => c.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddHttpClient<FoundryPipelineReviewer>(c => c.Timeout = TimeSpan.FromSeconds(30))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IAzureWorkloadReader>(s => s.GetRequiredService<AzureDevOpsWorkloadReader>());
+builder.Services.AddTransient<IGitHubConfigurationReader>(s => s.GetRequiredService<GitHubConfigurationReader>());
+builder.Services.AddTransient<IPipelineAiReviewer>(s => s.GetRequiredService<FoundryPipelineReviewer>());
 builder.Services.AddHttpClient<AzureDevOpsDiscoveryReader>(c => c.Timeout = TimeSpan.FromSeconds(15))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IDiscoveryReader>(s => s.GetRequiredService<AzureDevOpsDiscoveryReader>());
@@ -224,6 +234,7 @@ app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 app.MapConnectionEndpoints();
 app.MapDiscoveryEndpoints();
 app.MapIdentityMappingEndpoints();
+app.MapWorkloadEndpoints();
 
 app.Run();
 
