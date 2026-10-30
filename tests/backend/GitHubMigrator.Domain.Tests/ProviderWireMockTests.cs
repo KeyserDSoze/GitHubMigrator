@@ -122,7 +122,7 @@ public sealed class ProviderWireMockTests
         {
             if (req.RequestUri!.AbsolutePath.EndsWith("/secrets"))
             {
-                if (req.RequestUri.Query.Contains("page=1"))
+                if (req.RequestUri.Query.Contains("&page=1", StringComparison.Ordinal))
                     return Json(JsonSerializer.Serialize(new { total_count = 101,
                         secrets = Enumerable.Range(0, 100).Select(i => new { name = "KEY_" + i }).ToArray() }));
                 return Json("""{"total_count":101,"secrets":[{"name":"KEY_100"}]}""");
