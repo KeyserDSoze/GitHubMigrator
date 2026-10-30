@@ -66,6 +66,16 @@ export type BoardIssueDraft = {
   sourceId: number; title: string; body: string; state: string; issues: WorkloadIssue[];
 };
 export type BoardsPreview = { issues: BoardIssueDraft[]; globalWarnings: WorkloadIssue[]; readyToPublish: boolean };
+export type BoardLinkCheck = {
+  workItemId: number; sourceRelation: string; sourceReference: string;
+  targetReference: string | null;
+  status: 'targetExists' | 'missingMapping' | 'notFound' | 'unavailable' | 'unsupported' | 'notChecked';
+};
+export type BoardReconciliationReport = {
+  targetOrganization: string; targetRepository: string; links: BoardLinkCheck[];
+  targetObjectsFound: number; unresolvedLinks: number;
+  issues: WorkloadIssue[]; readyToPublish: boolean;
+};
 const base = import.meta.env.VITE_API_URL ?? '';
 
 async function call<T>(path: string, options: RequestInit): Promise<T> {
@@ -142,6 +152,15 @@ export const api = {
     call<BoardsPreview>('/api/workloads/boards/preview', {
       method: 'POST', headers: withToken(token),
       body: JSON.stringify({ sourceConnectionId, projectId, workItemIds, knownGitHubIssues })
+    }),
+  reconcileBoards: (token: string, sourceConnectionId: string, destinationConnectionId: string,
+    projectId: string, targetRepository: string, workItemIds: number[],
+    knownGitHubIssues: Record<number, number>, knownGitHubCommits: Record<string, string>,
+    knownGitHubPullRequests: Record<number, number>) =>
+    call<BoardReconciliationReport>('/api/workloads/boards/reconcile', {
+      method: 'POST', headers: withToken(token),
+      body: JSON.stringify({ sourceConnectionId, destinationConnectionId, projectId, targetRepository,
+        workItemIds, knownGitHubIssues, knownGitHubCommits, knownGitHubPullRequests })
     }),
   deleteConnection: (token: string, id: string) =>
     call<void>(`/api/connections/${encodeURIComponent(id)}`, {
