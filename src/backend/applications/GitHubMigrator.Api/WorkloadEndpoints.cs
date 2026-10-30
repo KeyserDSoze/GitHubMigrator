@@ -28,8 +28,28 @@ public static class WorkloadEndpoints
             catch (WorkloadInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
             catch (HttpRequestException) { return Results.UnprocessableEntity(new { error = "ProviderReadFailed" }); }
         }).RequireRateLimiting("external");
+        group.MapPost("/boards/reconcile", async Task<IResult>(
+            BoardsReconciliationInput input, BoardReconciliationService service, CancellationToken ct) =>
+        {
+            try
+            {
+                return Results.Ok(await service.ReconcileAsync(
+                    input.SourceConnectionId, input.DestinationConnectionId,
+                    input.ProjectId ?? "", input.TargetRepository ?? "",
+                    input.WorkItemIds, input.KnownGitHubIssues,
+                    input.KnownGitHubCommits, input.KnownGitHubPullRequests, ct));
+            }
+            catch (WorkloadInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
+            catch (HttpRequestException) { return Results.UnprocessableEntity(new { error = "ProviderReadFailed" }); }
+        }).RequireRateLimiting("external");
     }
 }
+
+public sealed record BoardsReconciliationInput(Guid SourceConnectionId, Guid DestinationConnectionId,
+    string? ProjectId, string? TargetRepository,
+    IReadOnlyList<int>? WorkItemIds, IReadOnlyDictionary<int, int>? KnownGitHubIssues,
+    IReadOnlyDictionary<string, string>? KnownGitHubCommits,
+    IReadOnlyDictionary<int, int>? KnownGitHubPullRequests);
 
 public sealed record PipelinePreviewInput(Guid SourceConnectionId, Guid DestinationConnectionId,
     string? ProjectId, int PipelineId, string? TargetRepository);
