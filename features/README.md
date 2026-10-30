@@ -13,6 +13,6 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-006 | Mirror Git history (all refs/branches/tags) and verify | Planned |
 | F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
-| F-009 | Convert pipelines to GitHub Actions with human-reviewed AI | Later |
-| F-010 | Map boards/features to GitHub Issues and Projects | Later |
+| F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |
+| F-010 | Boards work-item issue drafts + ID-specific GitHub object reconciliation | **Review MVP implemented**; issue creation and link patching pending |
 | F-011 | Guest user handling and governance | Later |
