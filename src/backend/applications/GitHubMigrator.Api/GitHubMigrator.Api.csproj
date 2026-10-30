@@ -7,6 +7,8 @@
     <ProjectReference Include="../../infrastructures/GitHubMigrator.Infrastructure.GitHub/GitHubMigrator.Infrastructure.GitHub.csproj" />
     <ProjectReference Include="../../infrastructures/GitHubMigrator.Infrastructure.KeyVault/GitHubMigrator.Infrastructure.KeyVault.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+    <!-- Azure.Core >=1.53 contains DefaultAzureCredential; older transitive Azure.Identity conflicts (CS0433). -->
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.6.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.20.1" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.20.1" />
