@@ -65,6 +65,9 @@ public sealed class BoardReconciliationTests
             svc.ReconcileAsync(source.Id, target.Id, "project", "../oops", [101], null, null, null, CancellationToken.None));
         await Assert.ThrowsAsync<WorkloadInputException>(() =>
             svc.ReconcileAsync(source.Id, target.Id, "project", "repo", [101, 101], null, null, null, CancellationToken.None));
+        await Assert.ThrowsAsync<WorkloadInputException>(() =>
+            svc.ReconcileAsync(source.Id, target.Id, "project", "repo", [101], null,
+                new Dictionary<string, string> { ["prefix" + Sha] = Sha }, null, CancellationToken.None));
     }
 
     [Fact]
