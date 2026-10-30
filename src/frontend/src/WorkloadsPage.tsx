@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, ClipboardCopy, RefreshCw, ShieldAlert } from 'lucide-react';
-import { api, type Connection, type BoardsPreview, type PipelineBlueprint } from './api';
+import { api, type Connection, type BoardsPreview, type PipelineBlueprint, type BoardReconciliationReport } from './api';
 
 type Props = { mode: 'pipelines' | 'boards'; token: string; isAdmin: boolean };
 export default function WorkloadsPage({ mode, token, isAdmin }: Props) {
@@ -15,8 +15,11 @@ export default function WorkloadsPage({ mode, token, isAdmin }: Props) {
   const [repository, setRepository] = useState('');
   const [itemIds, setItemIds] = useState('');
   const [issueMap, setIssueMap] = useState('');
+  const [commitMap, setCommitMap] = useState('');
+  const [pullRequestMap, setPullRequestMap] = useState('');
   const [pipeline, setPipeline] = useState<PipelineBlueprint | null>(null);
   const [boards, setBoards] = useState<BoardsPreview | null>(null);
+  const [reconciliation, setReconciliation] = useState<BoardReconciliationReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -61,6 +64,46 @@ export default function WorkloadsPage({ mode, token, isAdmin }: Props) {
     finally { setBusy(false); }
   }
 
+  function parseIds(): number[] {
+    const ids = itemIds.split(',').map(x => Number(x.trim()));
+    if (ids.length < 1 || ids.length > 100 ||
+        ids.some(x => !Number.isSafeInteger(x) || x < 1) || new Set(ids).size !== ids.length)
+      throw new Error('InvalidWorkItemIds');
+    return ids;
+  }
+  function parseNumberMap(value: string): Record<number, number> {
+    const result: Record<number, number> = {};
+    if (value.trim()) for (const part of value.split(',')) {
+      const numbers = part.split(':').map(x => Number(x.trim()));
+      if (numbers.length !== 2 || numbers.some(x => !Number.isSafeInteger(x) || x < 1))
+        throw new Error('InvalidMapping');
+      result[numbers[0]] = numbers[1];
+    }
+    return result;
+  }
+  function parseCommitMap(value: string): Record<string, string> {
+    const result: Record<string, string> = {};
+    if (value.trim()) for (const part of value.split(',')) {
+      const pair = part.split(':').map(x => x.trim().toLowerCase());
+      if (pair.length !== 2 || pair.some(x => !/^[0-9a-f]{40}$/.test(x)))
+        throw new Error('InvalidCommitMapping');
+      result[pair[0]] = pair[1];
+    }
+    return result;
+  }
+
+  async function verifyLinks() {
+    if (!sourceId || !destinationId || !projectId || !repository) return;
+    setBusy(true); setError(''); setNotice(''); setReconciliation(null);
+    try {
+      const result = await api.reconcileBoards(token, sourceId, destinationId, projectId,
+        repository, parseIds(), parseNumberMap(issueMap), parseCommitMap(commitMap),
+        parseNumberMap(pullRequestMap));
+      setReconciliation(result);
+    } catch { setError(t('workloadError')); }
+    finally { setBusy(false); }
+  }
+
   async function copy(value: string) {
     try {
       await navigator.clipboard.writeText(value);
@@ -88,8 +131,7 @@ export default function WorkloadsPage({ mode, token, isAdmin }: Props) {
         <input required value={projectId} onChange={e => setProjectId(e.target.value)}
           placeholder="Azure DevOps project ID" />
       </label>
-      {mode === 'pipelines' ? <>
-        <label>{t('workloadTarget')}
+      <label>{t('workloadTarget')}
           <select required aria-label={t('workloadTarget')} value={destinationId}
             onChange={e => setDestinationId(e.target.value)}>
             {!targets.length && <option value="">{t('workloadNoTarget')}</option>}
@@ -97,8 +139,9 @@ export default function WorkloadsPage({ mode, token, isAdmin }: Props) {
           </select>
         </label>
         <label>{t('workloadRepository')}
-          <input required value={repository} onChange={e => setRepository(e.target.value)} placeholder="repository" />
+          <input value={repository} onChange={e => setRepository(e.target.value)} placeholder="repository" />
         </label>
+      {mode === 'pipelines' ? <>
         <label>{t('workloadPipelineId')}
           <input type="number" min={1} required value={pipelineId} onChange={e => setPipelineId(e.target.value)} />
         </label>
@@ -109,11 +152,23 @@ export default function WorkloadsPage({ mode, token, isAdmin }: Props) {
         <label>{t('workloadKnownIssues')}
           <input value={issueMap} onChange={e => setIssueMap(e.target.value)} placeholder="101:77,102:78" />
         </label>
+        <label>{t('workloadCommits')}
+          <input value={commitMap} onChange={e => setCommitMap(e.target.value)}
+            placeholder="40-char source SHA:40-char GitHub SHA" />
+        </label>
+        <label>{t('workloadPulls')}
+          <input value={pullRequestMap} onChange={e => setPullRequestMap(e.target.value)} placeholder="301:55" />
+        </label>
       </>}
       <button type="submit" className="primary" disabled={busy || !sourceId ||
         (mode === 'pipelines' && (!destinationId || !pipelineId || !repository))}>
         <RefreshCw size={16}/>{busy ? t('workloadBusy') : t('workloadPreview')}
       </button>
+      {mode === 'boards' && <button type="button" className="icon-button"
+        disabled={busy || !sourceId || !destinationId || !projectId || !repository || !itemIds}
+        onClick={() => { void verifyLinks(); }}>
+        {t('workloadVerify')}
+      </button>}
     </form>
     {pipeline && <section className="workload-output">
       <h2>{pipeline.sourceName}</h2>
@@ -137,6 +192,19 @@ export default function WorkloadsPage({ mode, token, isAdmin }: Props) {
       {pipeline.issues.map((issue, i) => <div key={i} className="workload-entry">
         <AlertTriangle size={14}/><strong>{issue.code}</strong><p>{issue.detail}</p>
       </div>)}
+    </section>}
+    {reconciliation && <section className="workload-output">
+      <h2>{t('workloadReconciliation')}</h2>
+      <p>{t('workloadTargetObjects')}: <strong>{reconciliation.targetObjectsFound}</strong>
+        {' · '}{t('workloadUnresolved')}: <strong>{reconciliation.unresolvedLinks}</strong></p>
+      <div className="workload-notice"><ShieldAlert size={16} />{t('workloadExistsNotLinked')}</div>
+      {reconciliation.links.map((link, index) => <div className="workload-entry" key={index}>
+        <strong>#{link.workItemId} · {link.sourceRelation}</strong>
+        <p>{link.sourceReference} → {link.targetReference || '—'}</p>
+        <span>{link.status}</span>
+      </div>)}
+      {reconciliation.issues.map((issue, index) => <p className="workload-finding" key={index}>
+        {issue.code}: {issue.detail}</p>)}
     </section>}
     {boards && <section className="workload-output">
       <h2>{t('workloadIssueDrafts')}</h2>
