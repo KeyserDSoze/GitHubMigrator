@@ -56,19 +56,24 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client) : IAzureWorkloa
 
         // Prove the YAML file exists, but never read it into an AI prompt or API result.
         string? yaml = null;
+        PipelineStructure? structure = null;
         if (kind == "yaml" && !string.IsNullOrEmpty(path) && !string.IsNullOrEmpty(repo))
             try
             {
                 var url = $"{root}/_apis/git/repositories/{Uri.EscapeDataString(repo)}/items" +
-                          $"?path={Uri.EscapeDataString(path)}&includeContent=true&api-version=7.1";
+                          $"?path={Uri.EscapeDataString(path)}&includeContent=true&$format=json&api-version=7.1";
                 using var item = await GetAsync(url, token, ct);
-                if (Text(item.RootElement, "content") is { Length: > 0 }) yaml = "available";
+                if (Text(item.RootElement, "content") is { Length: > 0 } raw)
+                {
+                    yaml = "available";
+                    structure = AzureYamlTaskAnalyzer.Analyze(raw);
+                }
             }
             catch (HttpRequestException) { /* incomplete */ }
 
         return new(pipelineId, Text(pipe.RootElement, "name") ?? $"pipeline-{pipelineId}",
             kind, path, repo, variables.DistinctBy(v => (v.Name, v.Group)).Take(200).ToArray(),
-            endpoints.Take(100).ToArray(), yaml);
+            endpoints.Take(100).ToArray(), yaml, structure);
     }
 
     public async Task<IReadOnlyList<AzureBoardItem>> GetBoardItemsAsync(
