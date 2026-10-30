@@ -17,7 +17,15 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - name: Restore and test domain + business logic
-        run: dotnet test src/backend/GitHubMigrator.slnx --verbosity normal
+        run: dotnet test src/backend/GitHubMigrator.slnx --verbosity normal --collect:"XPlat Code Coverage"
+      - name: Upload backend coverage and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: tests/backend/**/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
 
   frontend:
     name: React / Playwright
@@ -42,6 +50,16 @@ jobs:
         env:
           CI: 'true'
         run: npm run test:e2e
+      - name: Upload Playwright traces and screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failures
+          path: |
+            tests/frontend/playwright-report/**
+            tests/frontend/test-results/**
+          if-no-files-found: warn
+          retention-days: 7
 
   terraform:
     name: Terraform validate
@@ -85,4 +103,12 @@ jobs:
       - name: Verify persistence with actual PostgreSQL and optimistic concurrency
         env:
           GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
-        run: dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj --verbosity normal
+        run: dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj --verbosity normal --collect:"XPlat Code Coverage"
+      - name: Upload PostgreSQL integration coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-integration-results
+          path: tests/integration/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
