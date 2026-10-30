@@ -59,3 +59,30 @@ jobs:
       - name: Validate Azure resource definitions
         working-directory: infra/terraform
         run: terraform validate
+
+  postgres-integration:
+    name: PostgreSQL 17 / Integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: migrator_test
+          POSTGRES_PASSWORD: ci-local-only-password
+          POSTGRES_DB: migrator_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U migrator_test -d migrator_tests"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify persistence with actual PostgreSQL and optimistic concurrency
+        env:
+          GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
+        run: dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj --verbosity normal
