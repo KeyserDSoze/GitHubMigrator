@@ -51,6 +51,10 @@ builder.Services.AddScoped<DiscoveryService>();
 builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMappingDraftRepository>();
 builder.Services.AddScoped<IdentityMappingService>();
 builder.Services.AddScoped<WorkloadPreviewService>();
+builder.Services.AddScoped<BoardReconciliationService>();
+builder.Services.AddHttpClient<GitHubTraceabilityReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubTraceabilityReader>(s => s.GetRequiredService<GitHubTraceabilityReader>());
 builder.Services.AddHttpClient<AzureDevOpsWorkloadReader>(c => c.Timeout = TimeSpan.FromSeconds(20))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddHttpClient<GitHubConfigurationReader>(c => c.Timeout = TimeSpan.FromSeconds(15))
