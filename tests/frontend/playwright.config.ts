@@ -6,9 +6,11 @@ export default defineConfig({
   timeout: 30_000,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173',
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
     ...devices['Desktop Chrome']
   },
-  reporter: [['list']],
+  reporter: [['list'], ['html', { open: 'never' }]],
   webServer: process.env.CI ? {
     command: 'npm run dev --prefix ../../src/frontend',
     url: 'http://127.0.0.1:5173',
