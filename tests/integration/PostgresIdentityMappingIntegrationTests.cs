@@ -108,7 +108,7 @@ public sealed class PostgresIdentityMappingIntegrationTests(PostgresDraftFixture
         var snapshot = Guid.NewGuid();
         var target = Guid.NewGuid();
         var draft = NewDraft(snapshot, target, 1,
-            [new("vssgp;nome-"ospite"-à", "validated-login"), new("aad.second", "another-login")]);
+            [new("vssgp;nome-\"ospite\"-à", "validated-login"), new("aad.second", "another-login")]);
         await using var db = fixture.NewContext();
         var repo = new PostgresIdentityMappingDraftRepository(db);
         Assert.True(await repo.SaveAsync(draft, 0, CancellationToken.None));
