@@ -16,6 +16,15 @@ Feature: Select and approve repository migration plan
     When the administrator explicitly approves the plan
     Then its snapshot and version are frozen for migration
 
+  Scenario: GitHub organization access remains evidence, not a write authorization
+    Given a saved verified GitHub Enterprise Cloud destination and authenticated login
+    When the administrator checks organization access
+    Then the adapter reads self-membership and private repository creation policy using only GET
+    And the identity and organization in GitHub's response match the saved connection
+    And pending or unavailable membership cannot be treated as active
+    And org owner/member status and policy do not prove token repository-create permission
+    And no plan is automatically approved
+
   Scenario: Target GitHub preflight distinguishes occupied from unverified names
     Given a selected migration plan with verified destination connection
     When an administrator checks target repository names
