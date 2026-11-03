@@ -44,6 +44,15 @@ public static class Bootstrap
                 mappings_json jsonb NOT NULL,
                 PRIMARY KEY (snapshot_id, destination_connection_id)
             );
+            CREATE TABLE IF NOT EXISTS migration_plan_drafts (
+                snapshot_id uuid NOT NULL,
+                destination_connection_id uuid NOT NULL,
+                target_organization varchar(100) NOT NULL,
+                revision integer NOT NULL,
+                updated_at_utc timestamp with time zone NOT NULL,
+                repositories_json jsonb NOT NULL,
+                PRIMARY KEY (snapshot_id, destination_connection_id)
+            );
             CREATE TABLE IF NOT EXISTS migration_connection_secrets (
                 reference varchar(100) PRIMARY KEY,
                 ciphertext bytea NOT NULL,
