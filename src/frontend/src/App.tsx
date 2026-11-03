@@ -10,11 +10,13 @@ import ConnectionsPage from './ConnectionsPage';
 import DiscoveryPage from './DiscoveryPage';
 import WorkloadsPage from './WorkloadsPage';
 import IdentityMappingPage from './IdentityMappingPage';
+import MigrationPlanPage from './MigrationPlanPage';
 
-type Page = 'overview' | 'connections' | 'identities' | 'repositories' | 'pipelines' | 'boards' | 'runs' | 'users';
+type Page = 'overview' | 'connections' | 'identities' | 'repositories' | 'plans' | 'pipelines' | 'boards' | 'runs' | 'users';
 const navigation: { id: Page; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', icon: LayoutDashboard }, { id: 'connections', icon: Cloud },
   { id: 'identities', icon: Users }, { id: 'repositories', icon: GitBranch },
+  { id: 'plans', icon: GitBranch },
   { id: 'pipelines', icon: Workflow }, { id: 'boards', icon: ClipboardList },
   { id: 'runs', icon: Workflow }, { id: 'users', icon: ShieldCheck }
 ];
@@ -124,7 +126,7 @@ function App() {
     </div>;
   }
 
-  const placeholders: Record<Exclude<Page, 'overview' | 'users' | 'pipelines' | 'boards'>, { title: string; body: string; icon: typeof Cloud }> = {
+  const placeholders: Record<Exclude<Page, 'overview' | 'users' | 'pipelines' | 'boards' | 'plans'>, { title: string; body: string; icon: typeof Cloud }> = {
     connections: { title: t('noConnections'), body: t('noConnectionsText'), icon: Cloud },
     identities: { title: t('noIdentities'), body: t('noIdentitiesText'), icon: Users },
     repositories: { title: t('noRepositories'), body: t('noRepositoriesText'), icon: GitBranch },
@@ -157,7 +159,7 @@ function App() {
       <div className="content">
         <div className="page-heading"><div className="eyebrow"><span className="live-dot" /> {t('foundational')}</div>
           <h1>{page === 'overview' ? t('readyToStart') : t(page)}</h1>
-          <p>{page === 'overview' ? t('description') : page === 'users' ? t('userInfo') : page === 'connections' ? t('connIntro') : page === 'repositories' ? t('discoveryIntro') : page === 'identities' ? t('mappingIntro') : page === 'pipelines' ? t('pipelineIntro') : page === 'boards' ? t('boardIntro') : t('integrationsPending')}</p>
+          <p>{page === 'overview' ? t('description') : page === 'users' ? t('userInfo') : page === 'connections' ? t('connIntro') : page === 'repositories' ? t('discoveryIntro') : page === 'plans' ? t('planIntro') : page === 'identities' ? t('mappingIntro') : page === 'pipelines' ? t('pipelineIntro') : page === 'boards' ? t('boardIntro') : t('integrationsPending')}</p>
         </div>
         {page === 'overview' && <>
           <div className="hero-banner"><div><span className="hero-label"><ShieldCheck size={16} /> PLATFORM READY · MIGRATION PLANNED</span>
@@ -173,10 +175,11 @@ function App() {
         </>}
         {page === 'connections' && <ConnectionsPage token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'repositories' && <DiscoveryPage token={session.accessToken} isAdmin={isAdmin} />}
+        {page === 'plans' && <MigrationPlanPage token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'pipelines' && <WorkloadsPage mode="pipelines" token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'boards' && <WorkloadsPage mode="boards" token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'identities' && <IdentityMappingPage token={session.accessToken} isAdmin={isAdmin} />}
-        {page !== 'overview' && page !== 'users' && page !== 'connections' && page !== 'repositories' && page !== 'identities' && page !== 'pipelines' && page !== 'boards' && (() => {
+        {page !== 'overview' && page !== 'users' && page !== 'connections' && page !== 'repositories' && page !== 'identities' && page !== 'plans' && page !== 'pipelines' && page !== 'boards' && (() => {
           const placeholder = placeholders[page]; const Icon = placeholder.icon;
           return <section className="empty-card"><div className="empty-icon"><Icon size={29} /></div><h2>{placeholder.title}</h2>
             <p>{placeholder.body}</p><span className="subtle-tag">{t('planned')}</span></section>;
