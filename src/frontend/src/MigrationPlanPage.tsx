@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Eye, RefreshCw, Save, ShieldAlert } from 'lucide-react';
 import { api, type Connection, type DiscoveryDetail, type DiscoverySummary,
-  type MigrationTargetPreflight, type PlanReview, type PlanSelection } from './api';
+  type DestinationAccessReview, type MigrationTargetPreflight, type PlanReview, type PlanSelection } from './api';
 
 // HistoryStrategy is serialized as a numeric enum by the ASP.NET API.
 const GIT_MIRROR = 0;
@@ -20,6 +20,7 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
   const [selections, setSelections] = useState<PlanSelection[]>([]);
   const [review, setReview] = useState<PlanReview | null>(null);
   const [targetPreflight, setTargetPreflight] = useState<MigrationTargetPreflight | null>(null);
+  const [destinationAccess, setDestinationAccess] = useState<DestinationAccessReview | null>(null);
   const [revision, setRevision] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState('');
@@ -48,7 +49,7 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
   }, [token, isAdmin, t]);
 
   useEffect(() => {
-    setInventory(null); setSelections([]); setReview(null); setTargetPreflight(null); setError('');
+    setInventory(null); setSelections([]); setReview(null); setTargetPreflight(null); setDestinationAccess(null); setError('');
     setRevision(0); setDirty(false); setNotice('');
     if (!isAdmin || !snapshotId || !destinationId) return;
     let active = true;
@@ -128,6 +129,16 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
     } finally { setBusy(false); }
   }
 
+  async function checkDestinationAccess() {
+    if (!destinationId) return;
+    setBusy(true); setError(''); setDestinationAccess(null);
+    try {
+      setDestinationAccess(await api.checkDestinationAccess(token, destinationId));
+    } catch {
+      setError(t('planDestinationAccessError'));
+    } finally { setBusy(false); }
+  }
+
   if (!isAdmin) return <section className="empty-card"><ShieldAlert size={30} /><p>{t('planNoAdmin')}</p></section>;
 
   const selectedCount = selections.filter(row => row.include).length;
@@ -195,9 +206,28 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
         <button type="button" className="plan-secondary" onClick={() => void checkTarget()}
           disabled={loading || busy || !destinationId || selectedCount === 0 || selectedCount > 10}>
           <ShieldAlert size={17} />{t('planTargetPreflight')}</button>
+        <button type="button" className="plan-secondary" onClick={() => void checkDestinationAccess()}
+          disabled={loading || busy || !destinationId}>
+          <ShieldAlert size={17} />{t('planDestinationAccessButton')}</button>
       </div>
     </section>}
 
+    {destinationAccess && <section className="user-card" aria-live="polite">
+      <div className="section-header"><h2>{t('planDestinationAccessTitle')}</h2>
+        <span>{destinationAccess.targetOrganization} · {destinationAccess.authenticatedAs}</span></div>
+      <div className="notice">{t('planDestinationAccessCaution')}</div>
+      <div className="plan-check"><strong>{t('planDestinationMemberLabel')}</strong>
+        <span>{t('planDestinationMember' + destinationAccess.membershipStatus,
+          { defaultValue: destinationAccess.membershipStatus })}</span></div>
+      <div className="plan-check"><strong>{t('planDestinationRoleLabel')}</strong>
+        <span>{t('planDestinationRole' + destinationAccess.membershipRole,
+          { defaultValue: destinationAccess.membershipRole })}</span></div>
+      <div className="plan-check"><strong>{t('planDestinationPolicyLabel')}</strong>
+        <span>{t('planDestinationPolicy' + destinationAccess.privateRepositoryPolicy,
+          { defaultValue: destinationAccess.privateRepositoryPolicy })}</span></div>
+      <div className="plan-check"><strong>{t('planDestinationWriteLabel')}</strong>
+        <span>{t('planDestinationWriteUnverified')}</span></div>
+    </section>}
     {targetPreflight && <section className="user-card" aria-live="polite">
       <div className="section-header"><h2>{t('planTargetResults')}</h2>
         <span>{targetPreflight.checkedCount} {t('planTargetChecked')}</span></div>
