@@ -75,7 +75,7 @@ The UI displays discovered, currently mapped and unmapped counts, unknown ACL pr
 
 ## F-005 repository migration preview
 
-Open **Migration plan / Piano di migrazione** after discovery. Select source repositories, rename GitHub targets and choose a history strategy. The admin-only preview reports invalid names, conflicting target names, incompatible TFVC strategies and explicit missing permission/membership/preflight evidence. **Draft selections can be saved and reloaded in PostgreSQL with optimistic revision checks (HTTP 409 on concurrent edits), but saving is not an approval or migration.** Target repository existence and GitHub organization membership are not yet verified; `readyForApproval` is always false. See [F-005 preview documentation](docs/migration-plan-preview.md).
+Open **Migration plan / Piano di migrazione** after discovery. Select source repositories, rename GitHub targets and choose a history strategy. The admin-only preview reports invalid names, conflicting target names, incompatible TFVC strategies and explicit missing permission/membership/preflight evidence. **Draft selections can be saved and reloaded in PostgreSQL with optimistic revision checks (HTTP 409 on concurrent edits), but saving is not an approval or migration.** The separate read-only **Check GitHub targets** action detects repositories visible to the saved destination credential (GET 200), and treats GitHub 404 as ambiguous—not proof of an available name. Creation privileges and GitHub organization membership remain unverified; `readyForApproval` is always false. See [F-005 preview documentation](docs/migration-plan-preview.md).
 
 ## F-009 / F-010 workload previews
 
