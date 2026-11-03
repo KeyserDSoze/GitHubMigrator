@@ -1,6 +1,6 @@
 # F-005 — Repository migration plan preview (slice 1)
 
-Status: **read-only preview, versioned PostgreSQL plan drafts, and GitHub target existence probes implemented**. Verified target availability/write permissions, approval and execution are **not implemented**.
+Status: **read-only preview, versioned drafts, GitHub target existence and authenticated organization membership/policy review implemented**. Token create permissions, full availability, approval and execution are **not implemented**.
 
 ## Operator workflow
 
@@ -52,16 +52,29 @@ The **Check GitHub targets / Controlla target GitHub** button invokes `POST /api
 
 The response includes the lookup timestamp and statuses, but deliberately keeps `targetAvailabilityVerified=false` and `readyForApproval=false`. Reading repository metadata does **not** verify GitHub organization membership, repository creation rights or the ability to migrate content. The `404` ambiguity can only be resolved with additional safe provider authorization checks or an explicitly approved creation operation, and must not be promoted to an “available” success state.
 
+## GitHub organization access review (GET only)
+
+The **Check GitHub organization access / Verifica accesso organizzazione GitHub** action calls `GET /api/migration-plans/destinations/{destinationConnectionId}/access`. This is admin-only and independently rate-limited. It accepts **only a saved, verified GitHub Enterprise Cloud destination connection**. The authenticated login is retrieved from the saved F-002 validation record, **not from a user-supplied login field**; the credential comes from the existing secret store.
+
+Two fixed-host, read-only GitHub calls may be made:
+
+1. `GET https://api.github.com/user/memberships/orgs/{org}` — the response must match both the saved GitHub login and destination organization, with `state=active`. Pending memberships, mismatched identities, 401/403/404, throttling and unavailable responses never establish active membership. A 404 is reported as **not confirmed**, rather than asserting a non-member.
+2. When membership is confirmed active, `GET https://api.github.com/orgs/{org}` reads the optional `members_can_create_private_repositories` setting (if returned) as **organization policy only**. It does not prove that the saved token can create repositories. Member/owner role does not prove credential write grants either.
+
+The returned evidence exposes `membershipVerified` only for a validated active self-membership, but keeps `repositoryCreatePermissionVerified=false` and `readyForApproval=false` for **all** results. GitHub's create-repository endpoint needs write-capable scopes and the relevant organization policy; exercising it would be a write, and is intentionally out of scope here. No GitHub user/password/token values are logged or returned. The adapter bounds response bodies, avoids redirects/cookies and never accepts arbitrary hosts.
+
+See [GitHub membership REST API](https://docs.github.com/en/rest/orgs/members) and [Create an organization repository](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository).
+
 ## Validation semantics
 
 - **Blockers** include invalid target names, case-insensitive duplicate target names, TFVC selected with GitMirror, no repositories selected, incomplete source identities and unverified effective permissions.
-- **Always-unverified blockers in this slice:** destination repository-name availability, repository-creation privileges and organization membership. The initial F-002 GitHub validation only proves the token can authenticate and inspect the organization.
+- **Unverified approval blockers:** name availability is still ambiguous for hidden 404 repositories; repository creation permission and token write scopes remain unverified. Organization membership may now be individually confirmed for the saved authenticated account via a separate read-only probe, but not for arbitrary identity mappings.
 - **Warnings** include a missing identity mapping draft and Git strategies that could reduce retained history.
 - Candidate mapped logins, where available, are **not GitHub access grants**. The current discovery ACL masks are not an effective-permission calculation; missing or inherited access must not be silently treated as an empty or verified permission set.
-- Repository existence and permission grants are not checked against live GitHub here, so `TargetRepositoryAvailabilityVerified` and `TargetMembershipVerified` are always false.
+- The standalone preflight can confirm visible target collisions and the new destination-access route can confirm membership of the saved authenticated account. The **plan preview's** `TargetRepositoryAvailabilityVerified` and `TargetMembershipVerified` fields remain false because the evidence is not yet bound to an immutable approved plan or to all mapped GitHub principals.
 
 ## Next F-005 slices
 
-Implemented persisted and versioned drafts with compare-and-swap. GET-only GitHub target existence probes now distinguish 200 collisions from ambiguous 404. Next implement organization membership and create-permission checks using least privilege, then an explicit audited approval step that freezes the exact snapshot and plan version. F-008 will consume only approved plans for durable jobs; F-006/F-007 will perform actual migration and verification.
+Implemented persisted and versioned drafts with compare-and-swap. GET-only GitHub target existence probes now distinguish 200 collisions from ambiguous 404. Authenticated destination organization membership and creation *policy* checks are implemented, but token write/create privileges and mapped-user membership remain unverified. Next add approval readiness evidence binding, least-privilege authorization design, then an explicit audited approval step that freezes the exact snapshot and plan version. F-008 will consume only approved plans for durable jobs; F-006/F-007 will perform actual migration and verification.
 
 No status should be represented as approved or migrated until those gates exist.
