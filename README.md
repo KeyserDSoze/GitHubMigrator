@@ -2,7 +2,7 @@
 
 An extensible, feature-driven platform to migrate source control and (later) pipelines and work tracking from Azure DevOps Services, Azure DevOps Server / TFS, and other systems to GitHub Enterprise.
 
-**Status: Phase 1, F-002 connections + F-003 read-only discovery + F-004 identity mapping drafts.** Azure DevOps Services and GitHub Enterprise Cloud credential connections can be verified and managed. **F-003 read-only inventory** now discovers projects, Git repositories/refs, TFVC roots, Graph users/groups and direct memberships, plus Git ACL allow/deny evidence from Azure DevOps Services. Effective repository permissions, verified GitHub organization membership, full TFVC history and real migrations are **not yet implemented**. The platform must never claim a migration completed without verification.
+**Status: Phase 1, F-002 connections + F-003 read-only discovery + F-004 identity mapping drafts + F-005 read-only plan preview.** Azure DevOps Services and GitHub Enterprise Cloud credential connections can be verified and managed. **F-003 read-only inventory** now discovers projects, Git repositories/refs, TFVC roots, Graph users/groups and direct memberships, plus Git ACL allow/deny evidence from Azure DevOps Services. Effective repository permissions, verified GitHub organization membership, full TFVC history and real migrations are **not yet implemented**. The platform must never claim a migration completed without verification.
 
 ## Architecture
 
@@ -43,7 +43,7 @@ See [architecture](docs/architecture.md), [local development](docs/local-develop
 
 ## Scope
 
-Phase 1: local platform identities, credential connections (F-002), Azure DevOps Services inventory (F-003), and review-only identity mapping drafts (F-004 MVP) implemented; verified effective access grants, code migration and reports are not yet implemented. Future: pipelines → Actions, boards → GitHub Issues/Projects, guest users, AI-assisted transformations. Until explicitly implemented these features are **planned**, not functional.
+Phase 1: local platform identities, credential connections (F-002), Azure DevOps Services inventory (F-003), review-only identity mapping drafts (F-004 MVP), and read-only repository plan preview (F-005 slice 1) implemented; verified effective access grants, code migration and reports are not yet implemented. Future: pipelines → Actions, boards → GitHub Issues/Projects, guest users, AI-assisted transformations. Until explicitly implemented these features are **planned**, not functional.
 
 ## Principles
 
@@ -72,6 +72,10 @@ The **Discovery → Groups and ACL evidence** tab shows Azure DevOps Graph group
 After read-only source discovery and creation of a verified GitHub Enterprise Cloud destination connection, open **Identity mapping / Mapping utenti**. Select a snapshot and a destination. Assign source Graph users to explicit GitHub **login names**, leave unresolved users blank, and save a versioned draft. Each snapshot/destination pair has an independent draft. A concurrent edit by a different admin returns HTTP 409 instead of silently overwriting the newer mapping.
 
 The UI displays discovered, currently mapped and unmapped counts, unknown ACL principals and explicit blockers. **A mapped login is not an authenticated GitHub account, a member of the target organization, or a repository grant.** Neither F-004 nor the source ACL snapshot issues invitations or changes permissions. See [F-004 documentation](docs/identity-mapping.md).
+
+## F-005 repository migration preview
+
+Open **Migration plan / Piano di migrazione** after discovery. Select source repositories, rename GitHub targets and choose a history strategy. The admin-only preview reports invalid names, conflicting target names, incompatible TFVC strategies and explicit missing permission/membership/preflight evidence. **This is a non-persistent read-only draft, not an approval or migration.** Target repository existence and GitHub organization membership are not yet verified; `readyForApproval` is always false. See [F-005 preview documentation](docs/migration-plan-preview.md).
 
 ## F-009 / F-010 workload previews
 
