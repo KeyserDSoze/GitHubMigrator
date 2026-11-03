@@ -58,6 +58,10 @@ export type IdentityReview = { draft: IdentityDraft; preview: IdentityPreview };
 export type PlanSelection = {
   sourceRepositoryId: string; targetRepositoryName: string; strategy: number; include: boolean;
 };
+export type MigrationPlanDraft = {
+  snapshotId: string; destinationConnectionId: string; targetOrganization: string;
+  revision: number; updatedAtUtc: string; repositories: PlanSelection[];
+};
 export type PlanCheck = { code: string; severity: 'blocker' | 'warning'; repositoryId: string | null };
 export type PlanRepositoryReview = {
   sourceRepositoryId: string; sourceProjectId: string; sourceName: string;
@@ -158,6 +162,15 @@ export const api = {
     call<IdentityReview>(`/api/identity-mappings/${encodeURIComponent(snapshotId)}`,
       { method: 'PUT', headers: withToken(token),
         body: JSON.stringify({ destinationConnectionId, expectedRevision, mappings }) }),
+  getMigrationPlanDraft: (token: string, snapshotId: string, destinationConnectionId: string) =>
+    call<MigrationPlanDraft>(`/api/migration-plans/drafts/${encodeURIComponent(snapshotId)}?destinationConnectionId=${encodeURIComponent(destinationConnectionId)}`,
+      { headers: withToken(token) }),
+  saveMigrationPlanDraft: (token: string, snapshotId: string, destinationConnectionId: string,
+      expectedRevision: number, repositories: PlanSelection[]) =>
+    call<MigrationPlanDraft>(`/api/migration-plans/drafts/${encodeURIComponent(snapshotId)}`, {
+      method: 'PUT', headers: withToken(token),
+      body: JSON.stringify({ destinationConnectionId, expectedRevision, repositories })
+    }),
   previewMigrationPlan: (token: string, snapshotId: string, destinationConnectionId: string,
       repositories: PlanSelection[]) =>
     call<PlanReview>('/api/migration-plans/preview', {

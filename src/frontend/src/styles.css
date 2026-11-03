@@ -156,3 +156,7 @@
 .plan-check{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--border);padding:12px 0;font-size:13px}
 .plan-check span:first-child{font-size:11px;font-weight:700;min-width:65px;text-transform:uppercase}
 .plan-blocker{color:#f39292}.plan-warning{color:#eac77c}
+
+.plan-action-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.plan-secondary{display:flex;align-items:center;justify-content:center;gap:9px;border:1px solid var(--border);background:var(--surface2);color:var(--text);padding:12px 16px;border-radius:10px;font-size:13px;font-weight:700;min-height:47px}
+.plan-secondary:disabled{opacity:.5;cursor:not-allowed}

@@ -51,6 +51,8 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.Services.AddScoped<JwtIssuer>();
 builder.Services.AddScoped<MigrationPlanner>();
 builder.Services.AddScoped<MigrationPlanReviewService>();
+builder.Services.AddScoped<IMigrationPlanDraftRepository, PostgresMigrationPlanDraftRepository>();
+builder.Services.AddScoped<MigrationPlanDraftService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>();
 builder.Services.AddScoped<ConnectionService>();

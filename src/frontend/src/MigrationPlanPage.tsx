@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Eye, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, Eye, RefreshCw, Save, ShieldAlert } from 'lucide-react';
 import { api, type Connection, type DiscoveryDetail, type DiscoverySummary,
   type PlanReview, type PlanSelection } from './api';
 
@@ -19,6 +19,9 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
   const [inventory, setInventory] = useState<DiscoveryDetail | null>(null);
   const [selections, setSelections] = useState<PlanSelection[]>([]);
   const [review, setReview] = useState<PlanReview | null>(null);
+  const [revision, setRevision] = useState(0);
+  const [dirty, setDirty] = useState(false);
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -45,26 +48,61 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
 
   useEffect(() => {
     setInventory(null); setSelections([]); setReview(null); setError('');
-    if (!isAdmin || !snapshotId) return;
+    setRevision(0); setDirty(false); setNotice('');
+    if (!isAdmin || !snapshotId || !destinationId) return;
     let active = true;
     setLoading(true);
-    api.getDiscovery(token, snapshotId).then(item => {
-      if (!active) return;
-      setInventory(item);
-      setSelections(item.snapshot.projects.flatMap(project =>
-        project.repositories.map(repo => ({
-          sourceRepositoryId: repo.providerId, targetRepositoryName: repo.name,
-          strategy: repo.versionControl === 0 ? GIT_MIRROR : ARCHIVE_AND_TIP, include: false
-        }))));
-    }).catch(() => { if (active) setError(t('planError')); })
+    Promise.all([api.getDiscovery(token, snapshotId),
+      api.getMigrationPlanDraft(token, snapshotId, destinationId)])
+      .then(([item, draft]) => {
+        if (!active) return;
+        setInventory(item);
+        setRevision(draft.revision);
+        const saved = new Map(draft.repositories.map(row => [row.sourceRepositoryId, row]));
+        setSelections(item.snapshot.projects.flatMap(project =>
+          project.repositories.map(repo => saved.get(repo.providerId) ?? ({
+            sourceRepositoryId: repo.providerId, targetRepositoryName: repo.name,
+            strategy: repo.versionControl === 0 ? GIT_MIRROR : ARCHIVE_AND_TIP, include: false
+          }))));
+      }).catch(() => { if (active) setError(t('planError')); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [token, snapshotId, isAdmin, t]);
+  }, [token, snapshotId, destinationId, isAdmin, t]);
 
   function update(sourceId: string, changes: Partial<PlanSelection>) {
     setSelections(previous => previous.map(row =>
       row.sourceRepositoryId === sourceId ? { ...row, ...changes } : row));
-    setReview(null);
+    setDirty(true); setNotice(''); setReview(null);
+  }
+
+  async function saveDraft() {
+    if (!snapshotId || !destinationId) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const draft = await api.saveMigrationPlanDraft(token, snapshotId, destinationId,
+        revision, selections);
+      setRevision(draft.revision);
+      setDirty(false);
+      setNotice(t('planSaved'));
+    } catch (e) {
+      setError(e instanceof Error && e.message === 'PlanRevisionConflict'
+        ? t('planConflict') : t('planError'));
+    } finally { setBusy(false); }
+  }
+
+  async function reloadDraft() {
+    if (!snapshotId || !destinationId || !inventory) return;
+    setBusy(true); setError(''); setNotice(''); setReview(null);
+    try {
+      const draft = await api.getMigrationPlanDraft(token, snapshotId, destinationId);
+      const saved = new Map(draft.repositories.map(row => [row.sourceRepositoryId, row]));
+      setSelections(inventory.snapshot.projects.flatMap(project =>
+        project.repositories.map(repo => saved.get(repo.providerId) ?? ({
+          sourceRepositoryId: repo.providerId, targetRepositoryName: repo.name,
+          strategy: repo.versionControl === 0 ? GIT_MIRROR : ARCHIVE_AND_TIP, include: false
+        }))));
+      setRevision(draft.revision); setDirty(false);
+    } catch { setError(t('planError')); } finally { setBusy(false); }
   }
 
   async function preview() {
@@ -104,10 +142,11 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
     </section>
     {loading && <p className="muted">{t('planLoading')}</p>}
     {error && <div className="alert" role="alert">{error}</div>}
+    {notice && <div className="notice" role="status">{notice}</div>}
     <div className="notice" role="status">{t('planSafety')}</div>
     {inventory && <section className="user-card">
       <div className="section-header"><h2>{t('planRepositorySelection')}</h2>
-        <span>{selectedCount} / {selections.length} {t('planSelected')}</span></div>
+        <span>{selectedCount} / {selections.length} {t('planSelected')} · {t('planRevision')} {revision}{dirty ? ` · ${t('planUnsaved')}` : ''}</span></div>
       <div className="plan-table-wrap">
         <table className="plan-table">
           <thead><tr><th>{t('planInclude')}</th><th>{t('planSource')}</th>
@@ -133,9 +172,16 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
             }))}</tbody>
         </table>
       </div>
-      <button type="button" className="primary" onClick={() => void preview()}
-        disabled={loading || busy || !destinationId || selectedCount === 0}>
-        <Eye size={17} />{busy ? t('planChecking') : t('planPreview')}</button>
+      <div className="plan-action-row">
+        <button type="button" className="primary" onClick={() => void saveDraft()}
+          disabled={loading || busy || !destinationId || !dirty}>
+          <Save size={17} />{t('planSave')}</button>
+        <button type="button" className="plan-secondary" onClick={() => void reloadDraft()}
+          disabled={loading || busy || !destinationId}><RefreshCw size={16} />{t('planReload')}</button>
+        <button type="button" className="plan-secondary" onClick={() => void preview()}
+          disabled={loading || busy || !destinationId || selectedCount === 0}>
+          <Eye size={17} />{t('planPreview')}</button>
+      </div>
     </section>}
 
     {review && <section className="user-card" aria-live="polite">

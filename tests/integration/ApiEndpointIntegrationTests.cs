@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using Xunit;
 using GitHubMigrator.Infrastructure.PostgreSql;
+using GitHubMigrator.Business;
+using GitHubMigrator.Domain;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -199,6 +201,81 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(HttpStatusCode.Forbidden, stillDenied.StatusCode);
         using var allowed = await PostAsync("/api/workloads/boards/preview", input, updatedJwt);
         Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+    }
+
+    [Fact]
+    public async Task Plan_draft_HTTP_requires_admin_and_returns_409_for_stale_revision()
+    {
+        var snapshotId = Guid.NewGuid();
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var discoveries = scope.ServiceProvider.GetRequiredService<IDiscoveryRepository>();
+            await discoveries.SaveAsync(new DiscoveryInventory
+            {
+                Id = snapshotId, ConnectionId = harness.SourceConnectionId,
+                SourceProvider = "azure-devops-services", Organization = "az-org",
+                CollectedAtUtc = DateTimeOffset.UtcNow,
+                Snapshot = new DiscoverySnapshot
+                {
+                    SnapshotId = snapshotId, SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                    CollectedAt = DateTimeOffset.UtcNow,
+                    Projects = [new SourceProject("proj-1", "Project", [
+                        new SourceRepository("repo-1", "proj-1", "Api", VersionControlKind.Git)])],
+                    Identities = [], AccessGrants = [], PermissionsComplete = false
+                },
+                Refs = [], Issues = [], Completeness = DiscoveryCompleteness.Partial,
+                IdentitiesComplete = false, PermissionsComplete = false
+            }, default);
+        }
+        var url = $"/api/migration-plans/drafts/{snapshotId}";
+        var payload = new
+        {
+            destinationConnectionId = harness.DestinationConnectionId,
+            expectedRevision = 0,
+            repositories = new[] { new {
+                sourceRepositoryId = "repo-1", targetRepositoryName = "renamed",
+                strategy = 0, include = true
+            }}
+        };
+        using (var anonymous = new HttpRequestMessage(HttpMethod.Put, url) { Content = JsonContent.Create(payload) })
+        using (var response = await harness.Client.SendAsync(anonymous))
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var userJwt = await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword);
+        using (var denied = new HttpRequestMessage(HttpMethod.Put, url) { Content = JsonContent.Create(payload) })
+        {
+            denied.Headers.Authorization = new AuthenticationHeaderValue("Bearer", userJwt);
+            using var response = await harness.Client.SendAsync(denied);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+        var jwt = await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword);
+        var before = harness.Calls.Count;
+        using (var write = new HttpRequestMessage(HttpMethod.Put, url) { Content = JsonContent.Create(payload) })
+        {
+            write.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+            using var response = await harness.Client.SendAsync(write);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(1, doc.RootElement.GetProperty("revision").GetInt32());
+            Assert.Equal("renamed", doc.RootElement.GetProperty("repositories")[0]
+                .GetProperty("targetRepositoryName").GetString());
+        }
+        using (var stale = new HttpRequestMessage(HttpMethod.Put, url) { Content = JsonContent.Create(payload) })
+        {
+            stale.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+            using var response = await harness.Client.SendAsync(stale);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("PlanRevisionConflict", await response.Content.ReadAsStringAsync());
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            url + "?destinationConnectionId=" + harness.DestinationConnectionId))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(1, doc.RootElement.GetProperty("revision").GetInt32());
+        }
+        Assert.Equal(before, harness.Calls.Count); // draft persistence must not call external providers
     }
 
     private async Task<HttpResponseMessage> PostAsync(string path, object payload, string? bearer = null)

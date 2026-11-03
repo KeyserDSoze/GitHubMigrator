@@ -34,6 +34,11 @@ test('admin configures a plan and sees blocking read-only preview', async ({ pag
     id: snapshotId, organization: 'az-org', collectedAtUtc: source.collectedAtUtc
   }] }));
   await page.route(`**/api/discoveries/${snapshotId}`, route => route.fulfill({ json: source }));
+  await page.route(`**/api/migration-plans/drafts/${snapshotId}**`, route =>
+    route.fulfill({ json: {
+      snapshotId, destinationConnectionId: destinationId, targetOrganization: 'gh-org',
+      revision: 0, updatedAtUtc: '2026-11-03T11:00:00Z', repositories: []
+    } }));
   await page.route('**/api/migration-plans/preview', route => {
     const body = route.request().postDataJSON();
     expect(route.request().method()).toBe('POST');
@@ -72,6 +77,57 @@ test('admin configures a plan and sees blocking read-only preview', async ({ pag
   await expect(page.getByText(/due repository selezionati|two selected repositories/i)).toBeVisible();
   await expect(page.getByText(/non approvato|not approved/i)).toBeVisible();
   expect(previewCount).toBe(1);
+});
+
+
+test('admin can save a versioned plan and a stale save reports a 409 conflict', async ({ page }) => {
+  let revision = 0;
+  let saves = 0;
+  let remoteSelections: { sourceRepositoryId: string; targetRepositoryName: string; strategy: number; include: boolean }[] = [];
+  await page.route('**/api/connections', route => route.fulfill({ json: [{
+    id: destinationId, name: 'GitHub', providerKey: 'github-enterprise-cloud',
+    direction: 'destination', organization: 'gh-org', validationCode: 'Verified'
+  }] }));
+  await page.route('**/api/discoveries', route => route.fulfill({ json: [{
+    id: snapshotId, organization: 'az-org', collectedAtUtc: source.collectedAtUtc
+  }] }));
+  await page.route(`**/api/discoveries/${snapshotId}`, route => route.fulfill({ json: source }));
+  await page.route(`**/api/migration-plans/drafts/${snapshotId}**`, route => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      saves++;
+      expect(body.destinationConnectionId).toBe(destinationId);
+      if (saves === 2) {
+        revision = 2;
+        remoteSelections = body.repositories.map((s: typeof remoteSelections[number]) =>
+          s.sourceRepositoryId === 'repo-1' ? { ...s, targetRepositoryName: 'remote-version' } : s);
+        return route.fulfill({ status: 409, json: { error: 'PlanRevisionConflict' } });
+      }
+      expect(body.expectedRevision).toBe(0);
+      revision = 1;
+      remoteSelections = body.repositories;
+    }
+    return route.fulfill({ json: {
+      snapshotId, destinationConnectionId: destinationId, targetOrganization: 'gh-org',
+      revision, updatedAtUtc: '2026-11-03T11:00:00Z', repositories: remoteSelections
+    } });
+  });
+  await signIn(page, 'admin');
+  await page.getByRole('button', { name: /piano di migrazione|migration plan/i }).click();
+  const input = page.getByRole('textbox', { name: /nome repository github: api|github target name: api/i });
+  await expect(input).toBeVisible();
+  await page.getByRole('checkbox').first().check();
+  await input.fill('new-api');
+  await page.getByRole('button', { name: /^salva bozza$|^save draft$/i }).click();
+  await expect(page.getByText(/bozza del piano salvata|migration plan draft saved/i)).toBeVisible();
+  await expect(page.getByText(/revisione 1|revision 1/i)).toBeVisible();
+  await input.fill('another-name');
+  await page.getByRole('button', { name: /^salva bozza$|^save draft$/i }).click();
+  await expect(page.getByRole('alert').getByText(/un altro amministratore|another administrator/i)).toBeVisible();
+  await page.getByRole('button', { name: /ricarica bozza salvata|reload saved draft/i }).click();
+  await expect(input).toHaveValue('remote-version');
+  await expect(page.getByText(/revisione 2|revision 2/i)).toBeVisible();
+  expect(saves).toBe(2);
 });
 
 test('ordinary users cannot access plans or trigger preview requests', async ({ page }) => {
