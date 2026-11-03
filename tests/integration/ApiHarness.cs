@@ -84,6 +84,8 @@ public sealed class ApiHarness : IAsyncLifetime
                     .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubTargetRepositoryProbe>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
+                services.AddHttpClient<GitHubDestinationAccessReader>()
+                    .ConfigurePrimaryHttpMessageHandler(() => github);
             });
         });
         Client = Host.CreateClient();
@@ -203,6 +205,10 @@ public sealed class ApiHarness : IAsyncLifetime
             return Json(JsonSerializer.Serialize(new { sha = Sha }));
         if (path.EndsWith("/pulls/9", StringComparison.Ordinal))
             return new(HttpStatusCode.NotFound);
+        if (path == "/user/memberships/orgs/gh-org")
+            return Json("""{"state":"active","role":"admin","user":{"login":"test"},"organization":{"login":"gh-org"}}""");
+        if (path == "/orgs/gh-org")
+            return Json("""{"login":"gh-org","members_can_create_private_repositories":true}""");
         if (path == "/repos/gh-org/occupied")
             return Json("""{"full_name":"gh-org/occupied"}""");
         if (path == "/repos/gh-org/hidden")
