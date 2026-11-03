@@ -278,6 +278,67 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(before, harness.Calls.Count); // draft persistence must not call external providers
     }
 
+    [Fact]
+    public async Task GitHub_target_preflight_detects_visible_collision_but_never_claims_404_name_available()
+    {
+        var snapshotId = Guid.NewGuid();
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var reader = scope.ServiceProvider.GetRequiredService<IDiscoveryRepository>();
+            await reader.SaveAsync(new DiscoveryInventory
+            {
+                Id = snapshotId, ConnectionId = harness.SourceConnectionId,
+                SourceProvider = "azure-devops-services", Organization = "az-org",
+                CollectedAtUtc = DateTimeOffset.UtcNow,
+                Snapshot = new DiscoverySnapshot
+                {
+                    SnapshotId = snapshotId, SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                    CollectedAt = DateTimeOffset.UtcNow,
+                    Projects = [new SourceProject("proj", "Project", [
+                        new SourceRepository("first", "proj", "First", VersionControlKind.Git),
+                        new SourceRepository("second", "proj", "Second", VersionControlKind.Git)])],
+                    Identities = [], AccessGrants = [], PermissionsComplete = false
+                },
+                Refs = [], Issues = [], Completeness = DiscoveryCompleteness.Partial,
+                IdentitiesComplete = false, PermissionsComplete = false
+            }, default);
+        }
+        var payload = new
+        {
+            snapshotId, destinationConnectionId = harness.DestinationConnectionId,
+            repositories = new[]
+            {
+                new { sourceRepositoryId = "first", targetRepositoryName = "occupied", strategy = 0, include = true },
+                new { sourceRepositoryId = "second", targetRepositoryName = "hidden", strategy = 0, include = true }
+            }
+        };
+        var url = "/api/migration-plans/preflight";
+        using var anonymous = await PostAsync(url, payload);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var user = await PostAsync(url, payload,
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, user.StatusCode);
+        var before = harness.Calls.Count;
+        var adminJwt = await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword);
+        using var response = await PostAsync(url, payload, adminJwt);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = doc.RootElement;
+        Assert.False(root.GetProperty("targetAvailabilityVerified").GetBoolean());
+        Assert.False(root.GetProperty("readyForApproval").GetBoolean());
+        Assert.Equal(2, root.GetProperty("checkedCount").GetInt32());
+        Assert.Equal("Exists", root.GetProperty("repositories")[0].GetProperty("status").GetString());
+        Assert.Equal("NotVisibleOrMissing", root.GetProperty("repositories")[1].GetProperty("status").GetString());
+        var newCalls = harness.Calls.ToArray().Skip(before).ToArray();
+        Assert.Equal(2, newCalls.Length);
+        Assert.All(newCalls, x =>
+        {
+            Assert.Equal("GET", x.Method);
+            Assert.Equal("api.github.com", x.Url.Host);
+            Assert.DoesNotContain(ApiHarness.TargetToken, x.Url.ToString());
+        });
+    }
+
     private async Task<HttpResponseMessage> PostAsync(string path, object payload, string? bearer = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path)
