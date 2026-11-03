@@ -50,6 +50,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 builder.Services.AddScoped<JwtIssuer>();
 builder.Services.AddScoped<MigrationPlanner>();
+builder.Services.AddScoped<MigrationPlanReviewService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>();
 builder.Services.AddScoped<ConnectionService>();
@@ -245,6 +246,7 @@ app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 app.MapConnectionEndpoints();
 app.MapDiscoveryEndpoints();
 app.MapIdentityMappingEndpoints();
+app.MapMigrationPlanEndpoints();
 app.MapWorkloadEndpoints();
 
 app.Run();
