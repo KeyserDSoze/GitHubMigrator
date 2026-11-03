@@ -54,6 +54,7 @@ builder.Services.AddScoped<MigrationPlanReviewService>();
 builder.Services.AddScoped<IMigrationPlanDraftRepository, PostgresMigrationPlanDraftRepository>();
 builder.Services.AddScoped<MigrationPlanDraftService>();
 builder.Services.AddScoped<GitHubTargetPreflightService>();
+builder.Services.AddScoped<GitHubDestinationAccessService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>();
 builder.Services.AddScoped<ConnectionService>();
@@ -63,6 +64,9 @@ builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMapp
 builder.Services.AddScoped<IdentityMappingService>();
 builder.Services.AddScoped<WorkloadPreviewService>();
 builder.Services.AddScoped<BoardReconciliationService>();
+builder.Services.AddHttpClient<GitHubDestinationAccessReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubDestinationAccessReader>(s => s.GetRequiredService<GitHubDestinationAccessReader>());
 builder.Services.AddHttpClient<GitHubTargetRepositoryProbe>(c => c.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubTargetRepositoryProbe>(s => s.GetRequiredService<GitHubTargetRepositoryProbe>());
