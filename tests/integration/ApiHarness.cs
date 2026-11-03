@@ -82,6 +82,8 @@ public sealed class ApiHarness : IAsyncLifetime
                     .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubTraceabilityReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
+                services.AddHttpClient<GitHubTargetRepositoryProbe>()
+                    .ConfigurePrimaryHttpMessageHandler(() => github);
             });
         });
         Client = Host.CreateClient();
@@ -201,6 +203,12 @@ public sealed class ApiHarness : IAsyncLifetime
             return Json(JsonSerializer.Serialize(new { sha = Sha }));
         if (path.EndsWith("/pulls/9", StringComparison.Ordinal))
             return new(HttpStatusCode.NotFound);
+        if (path == "/repos/gh-org/occupied")
+            return Json("""{"full_name":"gh-org/occupied"}""");
+        if (path == "/repos/gh-org/hidden")
+            return new(HttpStatusCode.NotFound);
+        if (path == "/repos/gh-org/denied")
+            return new(HttpStatusCode.Forbidden);
         throw new InvalidOperationException("Unmocked GitHub route: " + path);
     }
 
