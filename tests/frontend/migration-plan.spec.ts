@@ -169,6 +169,41 @@ test('admin can check GitHub names while 404 remains explicitly unverified', asy
   expect(probes).toBe(1);
 });
 
+test('organization membership is shown without claiming GitHub token create permissions', async ({ page }) => {
+  let accessCalls = 0;
+  await page.route('**/api/connections', route => route.fulfill({ json: [{
+    id: destinationId, name: 'GitHub', providerKey: 'github-enterprise-cloud',
+    direction: 'destination', organization: 'gh-org', validationCode: 'Verified'
+  }] }));
+  await page.route('**/api/discoveries', route => route.fulfill({ json: [{
+    id: snapshotId, organization: 'az-org', collectedAtUtc: source.collectedAtUtc
+  }] }));
+  await page.route(`**/api/discoveries/${snapshotId}`, route => route.fulfill({ json: source }));
+  await page.route(`**/api/migration-plans/drafts/${snapshotId}**`, route => route.fulfill({ json: {
+    snapshotId, destinationConnectionId: destinationId, targetOrganization: 'gh-org',
+    revision: 0, updatedAtUtc: source.collectedAtUtc, repositories: []
+  } }));
+  await page.route(`**/api/migration-plans/destinations/${destinationId}/access`, route => {
+    expect(route.request().method()).toBe('GET');
+    accessCalls++;
+    return route.fulfill({ json: {
+      destinationConnectionId: destinationId, targetOrganization: 'gh-org',
+      authenticatedAs: 'operator', checkedAtUtc: source.collectedAtUtc,
+      membershipStatus: 'Active', membershipRole: 'Member',
+      privateRepositoryPolicy: 'AllowedForMembers',
+      membershipVerified: true, repositoryCreatePermissionVerified: false,
+      readyForApproval: false
+    } });
+  });
+  await signIn(page, 'admin');
+  await page.getByRole('button', { name: /piano di migrazione|migration plan/i }).click();
+  await expect(page.getByText('Api', { exact: true }).first()).toBeVisible();
+  await page.getByRole('button', { name: /verifica accesso organizzazione github|check github organization access/i }).click();
+  await expect(page.getByText(/appartenenza attiva confermata|active membership confirmed/i)).toBeVisible();
+  await expect(page.getByText(/non verificato tramite controlli|not verified by these read-only probes/i)).toBeVisible();
+  expect(accessCalls).toBe(1);
+});
+
 test('ordinary users cannot access plans or trigger preview requests', async ({ page }) => {
   let calls = 0;
   await page.route('**/api/discoveries**', route => { calls++; return route.fulfill({ status: 403 }); });
