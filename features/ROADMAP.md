@@ -8,7 +8,7 @@
 | 1 | **F-002 Secure source/destination connections** | F-001 | Azure DevOps Services/GitHub Enterprise Cloud PAT lifecycle and read probes | **Implemented; live/DB smoke testing pending** |
 | 2 | **F-003 Discovery** | F-002 | Read-only project, Git ref, TFVC branch-root and Graph-user snapshots | **MVP plus group/ACL evidence; effective permissions/live integration pending** |
 | 3 | F-004 Identity mapping | F-003 | Map GitHub logins, inherited access and orphan warnings | Planned |
-| 4 | F-005 Migration plan/preview | F-003/F-004 | Repo selection, renaming, permission/destination previews and approval | Planned |
+| 4 | F-005 Migration plan/preview | F-003/F-004 | Repo selection, renaming, permission/destination previews and approval | **Read-only preview slice; persistence/preflight/approval pending** |
 | 5 | F-008 Durable job execution | F-005 | Workers, retries, checkpoints, progress, audit and verification | Planned |
 | 6 | F-006 Native Git migration | F-005/F-008 | Mirror branches, tags and history; compare refs/SHAs | Planned |
 | 7 | F-007 TFVC conversion | F-005/F-008 | Best-effort changesets/branches conversion and evidence report | Research |
@@ -27,7 +27,15 @@
 - Secret storage, rate limiting, provider isolation, redaction, human approval and logging/traces are cross-cutting requirements.
 - AI conversion can suggest transformations, not approve them or expose secrets; Foundry model availability depends on quota and region.
 
-## Next: F-003 discovery implementation slices
+## Next: F-005 migration plan delivery slices
+
+1. Persist versioned per-snapshot/destination draft selections with compare-and-swap concurrency.
+2. Safely verify target repository availability, organization membership and explicit repository-creation permission, treating unavailable/hidden results as unverified.
+3. Validate effective source access and permission intent without inferring GitHub grants from ACL masks or mapped logins.
+4. Explicitly approve an immutable, validated plan version before F-008 workers may execute it.
+5. Add live provider smoke tests, HTTP integration and Playwright coverage for draft concurrency, preflight and approvals.
+
+## Historical F-003 discovery implementation slices
 
 1. Azure DevOps Services projects list with paging and cancellation, using saved F-002 connection references.
 2. Project Git repositories, branch inventory and default branches.
