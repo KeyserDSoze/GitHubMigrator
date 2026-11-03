@@ -22,6 +22,26 @@ public static class MigrationPlanEndpoints
             catch (PlanInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
         });
 
+        routes.MapPost("/preflight", async Task<IResult> (
+            MigrationPlanPreviewRequest request, GitHubTargetPreflightService service,
+            CancellationToken ct) =>
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(45));
+            try
+            {
+                return Results.Ok(await service.CheckAsync(request.SnapshotId,
+                    request.DestinationConnectionId, request.Repositories, deadline.Token));
+            }
+            catch (KeyNotFoundException) { return Results.NotFound(new { error = "PlanContextNotFound" }); }
+            catch (PlanInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
+            catch (TargetPreflightInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return Results.UnprocessableEntity(new { error = "TargetPreflightTimeout" });
+            }
+        }).RequireRateLimiting("external");
+
         routes.MapGet("/drafts/{snapshotId:guid}", async Task<IResult> (
             Guid snapshotId, Guid destinationConnectionId,
             MigrationPlanDraftService service, CancellationToken ct) =>
