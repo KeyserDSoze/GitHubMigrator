@@ -9,7 +9,7 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-002 | Provider-neutral connections and secure PAT lifecycle | Implemented for Azure DevOps Services + GitHub Enterprise Cloud; integration smoke pending |
 | F-003 | Discovery projects, Git/TFVC, Graph users/groups/memberships and Git ACL evidence | **Read-only evidence implemented**; effective permission validation pending |
 | F-004 | Per-snapshot GitHub identity mapping drafts and coverage preview | **Initial review-only implementation**; account/membership verification and effective grants pending |
-| F-005 | Select repositories, rename GitHub targets and review safety blockers | **Preview, versioned drafts and GET-only target existence probes implemented**; verified availability/create rights and approval pending |
+| F-005 | Select repositories, rename GitHub targets and review safety blockers | **Preview, versioned drafts, GET-only target existence and destination self-membership/policy review implemented**; token create rights and approval pending |
 | F-006 | Mirror Git history (all refs/branches/tags) and verify | Planned |
 | F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |

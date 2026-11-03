@@ -63,6 +63,12 @@ export type TargetRepositoryProbeResult = {
   status: 'Exists' | 'NotVisibleOrMissing' | 'Unauthorized' | 'Forbidden' |
     'RateLimited' | 'Unavailable' | 'InvalidResponse';
 };
+export type DestinationAccessReview = {
+  destinationConnectionId: string; targetOrganization: string; authenticatedAs: string;
+  checkedAtUtc: string; membershipStatus: string; membershipRole: string;
+  privateRepositoryPolicy: string; membershipVerified: boolean;
+  repositoryCreatePermissionVerified: boolean; readyForApproval: boolean;
+};
 export type MigrationTargetPreflight = {
   snapshotId: string; destinationConnectionId: string; targetOrganization: string;
   checkedAtUtc: string; checkedCount: number;
@@ -182,6 +188,10 @@ export const api = {
       method: 'PUT', headers: withToken(token),
       body: JSON.stringify({ destinationConnectionId, expectedRevision, repositories })
     }),
+  checkDestinationAccess: (token: string, destinationConnectionId: string) =>
+    call<DestinationAccessReview>(
+      `/api/migration-plans/destinations/${encodeURIComponent(destinationConnectionId)}/access`,
+      { headers: withToken(token) }),
   preflightMigrationPlanTargets: (token: string, snapshotId: string, destinationConnectionId: string,
       repositories: PlanSelection[]) =>
     call<MigrationTargetPreflight>('/api/migration-plans/preflight', {

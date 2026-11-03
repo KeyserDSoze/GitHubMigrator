@@ -339,6 +339,47 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         });
     }
 
+    [Fact]
+    public async Task GitHub_destination_access_requires_admin_and_never_claims_token_create_permission()
+    {
+        var url = $"/api/migration-plans/destinations/{harness.DestinationConnectionId}/access";
+        using var anonymous = await harness.Client.GetAsync(url);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        var userToken = await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword);
+        using (var denied = new HttpRequestMessage(HttpMethod.Get, url))
+        {
+            denied.Headers.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+            using var response = await harness.Client.SendAsync(denied);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+        var adminToken = await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword);
+        var before = harness.Calls.Count;
+        using var authorized = new HttpRequestMessage(HttpMethod.Get, url);
+        authorized.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+        using var accepted = await harness.Client.SendAsync(authorized);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        using var doc = JsonDocument.Parse(await accepted.Content.ReadAsStringAsync());
+        var result = doc.RootElement;
+        Assert.Equal("gh-org", result.GetProperty("targetOrganization").GetString());
+        Assert.Equal("test", result.GetProperty("authenticatedAs").GetString());
+        Assert.True(result.GetProperty("membershipVerified").GetBoolean());
+        Assert.Equal("Active", result.GetProperty("membershipStatus").GetString());
+        Assert.Equal("Owner", result.GetProperty("membershipRole").GetString());
+        Assert.Equal("AllowedForMembers", result.GetProperty("privateRepositoryPolicy").GetString());
+        Assert.False(result.GetProperty("repositoryCreatePermissionVerified").GetBoolean());
+        Assert.False(result.GetProperty("readyForApproval").GetBoolean());
+        var calls = harness.Calls.ToArray().Skip(before).ToArray();
+        Assert.Equal(2, calls.Length);
+        Assert.Equal("/user/memberships/orgs/gh-org", calls[0].Url.AbsolutePath);
+        Assert.Equal("/orgs/gh-org", calls[1].Url.AbsolutePath);
+        Assert.All(calls, call =>
+        {
+            Assert.Equal("GET", call.Method);
+            Assert.Equal("api.github.com", call.Url.Host);
+            Assert.DoesNotContain(ApiHarness.TargetToken, call.Url.ToString());
+        });
+    }
+
     private async Task<HttpResponseMessage> PostAsync(string path, object payload, string? bearer = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path)
