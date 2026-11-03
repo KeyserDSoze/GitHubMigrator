@@ -38,13 +38,14 @@ public sealed class MigrationPlanDraftService(
     {
         if (expectedRevision is < 0 or int.MaxValue || selections is null)
             throw new PlanInputException("InvalidPlanDraft");
-        // Preview performs repository scope, history strategy, duplicate ID and target name checks.
-        // Blocking findings are allowed in drafts; approval remains unavailable.
-        var context = await preview.PreviewAsync(snapshotId, destinationId, selections, ct);
-        // Bound accepted input size independently of any provider response or JSON storage size.
-        if (selections.Any(s => s is null || s.SourceRepositoryId.Length > 256 ||
-            (s.TargetRepositoryName?.Length ?? 0) > 256))
+        // Bound untrusted request size BEFORE preview, including potentially pathological regex inputs.
+        if (selections.Count > 1_000 ||
+            selections.Any(s => s is null || (s.SourceRepositoryId?.Length ?? 0) > 256 ||
+                (s.TargetRepositoryName?.Length ?? 0) > 256))
             throw new PlanInputException("PlanDraftTooLarge");
+        // Preview checks snapshot scope, strategy and duplicate source IDs. Blocking findings
+        // are allowed in drafts, but no approvals can be issued.
+        var context = await preview.PreviewAsync(snapshotId, destinationId, selections, ct);
         var next = new MigrationPlanDraft(snapshotId, destinationId, context.TargetOrganization,
             expectedRevision + 1, clock.GetUtcNow(),
             selections.Select(s => s with { TargetRepositoryName = s.TargetRepositoryName?.Trim() ?? "" })
