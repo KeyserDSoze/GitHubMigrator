@@ -58,6 +58,17 @@ export type IdentityReview = { draft: IdentityDraft; preview: IdentityPreview };
 export type PlanSelection = {
   sourceRepositoryId: string; targetRepositoryName: string; strategy: number; include: boolean;
 };
+export type TargetRepositoryProbeResult = {
+  sourceRepositoryId: string; targetRepositoryName: string;
+  status: 'Exists' | 'NotVisibleOrMissing' | 'Unauthorized' | 'Forbidden' |
+    'RateLimited' | 'Unavailable' | 'InvalidResponse';
+};
+export type MigrationTargetPreflight = {
+  snapshotId: string; destinationConnectionId: string; targetOrganization: string;
+  checkedAtUtc: string; checkedCount: number;
+  targetAvailabilityVerified: boolean; readyForApproval: boolean;
+  repositories: TargetRepositoryProbeResult[];
+};
 export type MigrationPlanDraft = {
   snapshotId: string; destinationConnectionId: string; targetOrganization: string;
   revision: number; updatedAtUtc: string; repositories: PlanSelection[];
@@ -170,6 +181,12 @@ export const api = {
     call<MigrationPlanDraft>(`/api/migration-plans/drafts/${encodeURIComponent(snapshotId)}`, {
       method: 'PUT', headers: withToken(token),
       body: JSON.stringify({ destinationConnectionId, expectedRevision, repositories })
+    }),
+  preflightMigrationPlanTargets: (token: string, snapshotId: string, destinationConnectionId: string,
+      repositories: PlanSelection[]) =>
+    call<MigrationTargetPreflight>('/api/migration-plans/preflight', {
+      method: 'POST', headers: withToken(token),
+      body: JSON.stringify({ snapshotId, destinationConnectionId, repositories })
     }),
   previewMigrationPlan: (token: string, snapshotId: string, destinationConnectionId: string,
       repositories: PlanSelection[]) =>

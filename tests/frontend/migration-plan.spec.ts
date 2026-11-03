@@ -130,6 +130,45 @@ test('admin can save a versioned plan and a stale save reports a 409 conflict', 
   expect(saves).toBe(2);
 });
 
+test('admin can check GitHub names while 404 remains explicitly unverified', async ({ page }) => {
+  let probes = 0;
+  await page.route('**/api/connections', route => route.fulfill({ json: [{
+    id: destinationId, name: 'GitHub', providerKey: 'github-enterprise-cloud',
+    direction: 'destination', organization: 'gh-org', validationCode: 'Verified'
+  }] }));
+  await page.route('**/api/discoveries', route => route.fulfill({ json: [{
+    id: snapshotId, organization: 'az-org', collectedAtUtc: source.collectedAtUtc
+  }] }));
+  await page.route(`**/api/discoveries/${snapshotId}`, route => route.fulfill({ json: source }));
+  await page.route(`**/api/migration-plans/drafts/${snapshotId}**`, route => route.fulfill({ json: {
+    snapshotId, destinationConnectionId: destinationId, targetOrganization: 'gh-org',
+    revision: 0, updatedAtUtc: source.collectedAtUtc, repositories: []
+  } }));
+  await page.route('**/api/migration-plans/preflight', route => {
+    const body = route.request().postDataJSON();
+    expect(body.repositories.filter((r: { include: boolean }) => r.include)).toHaveLength(2);
+    probes++;
+    return route.fulfill({ json: {
+      snapshotId, destinationConnectionId: destinationId, targetOrganization: 'gh-org',
+      checkedAtUtc: source.collectedAtUtc, checkedCount: 2,
+      targetAvailabilityVerified: false, readyForApproval: false,
+      repositories: [
+        { sourceRepositoryId: 'repo-1', targetRepositoryName: 'Api', status: 'Exists' },
+        { sourceRepositoryId: 'tfvc-1', targetRepositoryName: 'Legacy', status: 'NotVisibleOrMissing' }
+      ]
+    } });
+  });
+  await signIn(page, 'admin');
+  await page.getByRole('button', { name: /piano di migrazione|migration plan/i }).click();
+  await expect(page.getByText('Api', { exact: true }).first()).toBeVisible();
+  await page.getByRole('checkbox').nth(0).check();
+  await page.getByRole('checkbox').nth(1).check();
+  await page.getByRole('button', { name: /controlla target github|check github targets/i }).click();
+  await expect(page.getByText(/nome di destinazione occupato|destination name is occupied/i)).toBeVisible();
+  await expect(page.getByText(/disponibilità non confermata|availability cannot be confirmed/i)).toBeVisible();
+  expect(probes).toBe(1);
+});
+
 test('ordinary users cannot access plans or trigger preview requests', async ({ page }) => {
   let calls = 0;
   await page.route('**/api/discoveries**', route => { calls++; return route.fulfill({ status: 403 }); });

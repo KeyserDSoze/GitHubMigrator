@@ -53,6 +53,7 @@ builder.Services.AddScoped<MigrationPlanner>();
 builder.Services.AddScoped<MigrationPlanReviewService>();
 builder.Services.AddScoped<IMigrationPlanDraftRepository, PostgresMigrationPlanDraftRepository>();
 builder.Services.AddScoped<MigrationPlanDraftService>();
+builder.Services.AddScoped<GitHubTargetPreflightService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>();
 builder.Services.AddScoped<ConnectionService>();
@@ -62,6 +63,9 @@ builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMapp
 builder.Services.AddScoped<IdentityMappingService>();
 builder.Services.AddScoped<WorkloadPreviewService>();
 builder.Services.AddScoped<BoardReconciliationService>();
+builder.Services.AddHttpClient<GitHubTargetRepositoryProbe>(c => c.Timeout = TimeSpan.FromSeconds(10))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubTargetRepositoryProbe>(s => s.GetRequiredService<GitHubTargetRepositoryProbe>());
 builder.Services.AddHttpClient<GitHubTraceabilityReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubTraceabilityReader>(s => s.GetRequiredService<GitHubTraceabilityReader>());
@@ -144,6 +148,13 @@ builder.Services.AddRateLimiter(options =>
     options.AddFixedWindowLimiter("external", limiter =>
     {
         limiter.PermitLimit = 12;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
+    // Isolated provider lookup budget: preflight must not starve migration/Boards/Pipelines.
+    options.AddFixedWindowLimiter("target-preflight", limiter =>
+    {
+        limiter.PermitLimit = 6;
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });

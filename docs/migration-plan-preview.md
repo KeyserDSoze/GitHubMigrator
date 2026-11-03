@@ -1,6 +1,6 @@
 # F-005 — Repository migration plan preview (slice 1)
 
-Status: **read-only preview and versioned PostgreSQL plan drafts implemented**. Target availability preflight, approval and execution are **not implemented**.
+Status: **read-only preview, versioned PostgreSQL plan drafts, and GitHub target existence probes implemented**. Verified target availability/write permissions, approval and execution are **not implemented**.
 
 ## Operator workflow
 
@@ -39,6 +39,19 @@ Response: snapshot/destination binding, target organization, identity-draft revi
 - Drafts can contain unresolved blockers; operators may save work in progress, but no endpoint approves or executes it.
 - The PostgreSQL schema is provisioned by the current additive bootstrap DDL for compatibility with existing dev databases; this must be replaced by reviewed EF migrations before production.
 
+## GitHub target existence preflight (GET only)
+
+The **Check GitHub targets / Controlla target GitHub** button invokes `POST /api/migration-plans/preflight` with the same snapshot/destination/repository selection contract as preview. The API accepts 1–10 selected repositories with unique syntactically valid target names, uses the saved verified GitHub destination credential, and sends **only GET** requests to the fixed GitHub API host `api.github.com/repos/{organization}/{repo}`. Redirects and cookies are disabled; requests are rate-limited and have a deadline. No user-supplied hostname is accepted.
+
+| Probe result | Meaning |
+| --- | --- |
+| `Exists` | HTTP 200 JSON has the exact expected `full_name`: a visible destination repository already occupies the name |
+| `NotVisibleOrMissing` | HTTP 404: the repository is absent **or hidden from the token**; this is **not** proof the name is free |
+| `Unauthorized`, `Forbidden` | Lookup cannot establish visibility; access requires review |
+| `RateLimited`, `Unavailable`, `InvalidResponse` | Provider unavailable, throttled, or response cannot be trusted; retry or investigate |
+
+The response includes the lookup timestamp and statuses, but deliberately keeps `targetAvailabilityVerified=false` and `readyForApproval=false`. Reading repository metadata does **not** verify GitHub organization membership, repository creation rights or the ability to migrate content. The `404` ambiguity can only be resolved with additional safe provider authorization checks or an explicitly approved creation operation, and must not be promoted to an “available” success state.
+
 ## Validation semantics
 
 - **Blockers** include invalid target names, case-insensitive duplicate target names, TFVC selected with GitMirror, no repositories selected, incomplete source identities and unverified effective permissions.
@@ -49,6 +62,6 @@ Response: snapshot/destination binding, target organization, identity-draft revi
 
 ## Next F-005 slices
 
-Implemented persisted and versioned drafts with compare-and-swap. Next implement safe GitHub GET-only preflight (distinguishing 404 from unauthorized/hidden repositories), membership and create-permission checks using least privilege, then an explicit audited approval step that freezes the exact snapshot and plan version. F-008 will consume only approved plans for durable jobs; F-006/F-007 will perform actual migration and verification.
+Implemented persisted and versioned drafts with compare-and-swap. GET-only GitHub target existence probes now distinguish 200 collisions from ambiguous 404. Next implement organization membership and create-permission checks using least privilege, then an explicit audited approval step that freezes the exact snapshot and plan version. F-008 will consume only approved plans for durable jobs; F-006/F-007 will perform actual migration and verification.
 
 No status should be represented as approved or migrated until those gates exist.

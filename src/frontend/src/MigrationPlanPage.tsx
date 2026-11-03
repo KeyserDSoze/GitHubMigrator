@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Eye, RefreshCw, Save, ShieldAlert } from 'lucide-react';
 import { api, type Connection, type DiscoveryDetail, type DiscoverySummary,
-  type PlanReview, type PlanSelection } from './api';
+  type MigrationTargetPreflight, type PlanReview, type PlanSelection } from './api';
 
 // HistoryStrategy is serialized as a numeric enum by the ASP.NET API.
 const GIT_MIRROR = 0;
@@ -19,6 +19,7 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
   const [inventory, setInventory] = useState<DiscoveryDetail | null>(null);
   const [selections, setSelections] = useState<PlanSelection[]>([]);
   const [review, setReview] = useState<PlanReview | null>(null);
+  const [targetPreflight, setTargetPreflight] = useState<MigrationTargetPreflight | null>(null);
   const [revision, setRevision] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState('');
@@ -47,7 +48,7 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
   }, [token, isAdmin, t]);
 
   useEffect(() => {
-    setInventory(null); setSelections([]); setReview(null); setError('');
+    setInventory(null); setSelections([]); setReview(null); setTargetPreflight(null); setError('');
     setRevision(0); setDirty(false); setNotice('');
     if (!isAdmin || !snapshotId || !destinationId) return;
     let active = true;
@@ -72,7 +73,7 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
   function update(sourceId: string, changes: Partial<PlanSelection>) {
     setSelections(previous => previous.map(row =>
       row.sourceRepositoryId === sourceId ? { ...row, ...changes } : row));
-    setDirty(true); setNotice(''); setReview(null);
+    setDirty(true); setNotice(''); setReview(null); setTargetPreflight(null);
   }
 
   async function saveDraft() {
@@ -92,7 +93,7 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
 
   async function reloadDraft() {
     if (!snapshotId || !destinationId || !inventory) return;
-    setBusy(true); setError(''); setNotice(''); setReview(null);
+    setBusy(true); setError(''); setNotice(''); setReview(null); setTargetPreflight(null);
     try {
       const draft = await api.getMigrationPlanDraft(token, snapshotId, destinationId);
       const saved = new Map(draft.repositories.map(row => [row.sourceRepositoryId, row]));
@@ -115,6 +116,16 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
     } finally {
       setBusy(false);
     }
+  }
+
+  async function checkTarget() {
+    if (!inventory || !snapshotId || !destinationId) return;
+    setBusy(true); setError(''); setTargetPreflight(null);
+    try {
+      setTargetPreflight(await api.preflightMigrationPlanTargets(token, snapshotId, destinationId, selections));
+    } catch {
+      setError(t('planTargetPreflightError'));
+    } finally { setBusy(false); }
   }
 
   if (!isAdmin) return <section className="empty-card"><ShieldAlert size={30} /><p>{t('planNoAdmin')}</p></section>;
@@ -181,9 +192,21 @@ export default function MigrationPlanPage({ token, isAdmin }: { token: string; i
         <button type="button" className="plan-secondary" onClick={() => void preview()}
           disabled={loading || busy || !destinationId || selectedCount === 0}>
           <Eye size={17} />{t('planPreview')}</button>
+        <button type="button" className="plan-secondary" onClick={() => void checkTarget()}
+          disabled={loading || busy || !destinationId || selectedCount === 0 || selectedCount > 10}>
+          <ShieldAlert size={17} />{t('planTargetPreflight')}</button>
       </div>
     </section>}
 
+    {targetPreflight && <section className="user-card" aria-live="polite">
+      <div className="section-header"><h2>{t('planTargetResults')}</h2>
+        <span>{targetPreflight.checkedCount} {t('planTargetChecked')}</span></div>
+      <div className="notice">{t('planTargetCaution')}</div>
+      {targetPreflight.repositories.map(result => <div className="plan-check" key={result.sourceRepositoryId}>
+        <strong>{result.targetRepositoryName}</strong>
+        <span>{t('planTargetStatus' + result.status, { defaultValue: result.status })}</span>
+      </div>)}
+    </section>}
     {review && <section className="user-card" aria-live="polite">
       <div className="section-header"><h2>{t('planResults')}</h2>
         <span>{review.selectedRepositories} {t('planSelected')} · {blockers} {t('planBlockers')}</span></div>
