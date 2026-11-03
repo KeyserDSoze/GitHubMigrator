@@ -15,3 +15,11 @@ Feature: Select and approve repository migration plan
     Given all blocking validations pass
     When the administrator explicitly approves the plan
     Then its snapshot and version are frozen for migration
+
+  Scenario: Target GitHub preflight distinguishes occupied from unverified names
+    Given a selected migration plan with verified destination connection
+    When an administrator checks target repository names
+    Then only read-only GitHub GET requests are sent
+    And a visible existing target repository is reported as a collision
+    And a GitHub 404 is reported as not visible or missing, not as available
+    And the plan cannot yet be approved or executed
