@@ -151,6 +151,13 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    // Isolated provider lookup budget: preflight must not starve migration/Boards/Pipelines.
+    options.AddFixedWindowLimiter("target-preflight", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 
