@@ -138,3 +138,21 @@
 .workload-entry svg{vertical-align:middle;margin-right:5px}
 .workload-finding{font-size:12px;color:var(--muted);line-height:1.6}
 @media(max-width:700px){.workload-form{grid-template-columns:1fr}}
+
+/* F-005 read-only migration plan workbench */
+.plan-table-wrap{width:100%;overflow-x:auto;margin:20px 0}
+.plan-table{width:100%;border-collapse:collapse;min-width:700px;font-size:13px}
+.plan-table th{text-align:left;color:var(--muted);font-weight:700;padding:12px;border-bottom:1px solid var(--border)}
+.plan-table td{padding:12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.plan-table td strong,.plan-table td small{display:block}
+.plan-table td small{color:var(--muted);margin-top:4px;font-size:11px}
+.plan-table input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);box-shadow:none}
+.plan-table input:not([type=checkbox]){min-width:140px}
+.plan-table select{min-width:170px}
+.plan-results{display:grid;gap:8px;margin:18px 0}
+.plan-result{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:9px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px}
+.plan-result strong{overflow-wrap:anywhere}
+.plan-result small,.plan-check small{color:var(--muted)}
+.plan-check{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--border);padding:12px 0;font-size:13px}
+.plan-check span:first-child{font-size:11px;font-weight:700;min-width:65px;text-transform:uppercase}
+.plan-blocker{color:#f39292}.plan-warning{color:#eac77c}
