@@ -40,7 +40,7 @@ public static class MigrationPlanEndpoints
             {
                 return Results.UnprocessableEntity(new { error = "TargetPreflightTimeout" });
             }
-        }).RequireRateLimiting("external");
+        }).RequireRateLimiting("target-preflight");
 
         routes.MapGet("/drafts/{snapshotId:guid}", async Task<IResult> (
             Guid snapshotId, Guid destinationConnectionId,
