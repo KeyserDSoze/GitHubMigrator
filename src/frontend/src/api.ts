@@ -55,6 +55,23 @@ export type IdentityPreview = {
 };
 export type IdentityReview = { draft: IdentityDraft; preview: IdentityPreview };
 
+export type PlanSelection = {
+  sourceRepositoryId: string; targetRepositoryName: string; strategy: number; include: boolean;
+};
+export type PlanCheck = { code: string; severity: 'blocker' | 'warning'; repositoryId: string | null };
+export type PlanRepositoryReview = {
+  sourceRepositoryId: string; sourceProjectId: string; sourceName: string;
+  targetRepositoryName: string; versionControl: number; strategy: number;
+  refCount: number; candidateGitHubLogins: string[];
+};
+export type PlanReview = {
+  snapshotId: string; destinationConnectionId: string; targetOrganization: string;
+  identityDraftRevision: number; selectedRepositories: number; availableRepositories: number;
+  effectivePermissionsVerified: boolean; targetRepositoryAvailabilityVerified: boolean;
+  targetMembershipVerified: boolean; readyForApproval: boolean;
+  repositories: PlanRepositoryReview[]; checks: PlanCheck[];
+};
+
 export type WorkloadIssue = { code: string; detail: string; severity: string };
 export type SetupStep = { name: string; kind: string; existsOnGitHub: boolean; instructions: string };
 export type PipelineBlueprint = {
@@ -141,6 +158,12 @@ export const api = {
     call<IdentityReview>(`/api/identity-mappings/${encodeURIComponent(snapshotId)}`,
       { method: 'PUT', headers: withToken(token),
         body: JSON.stringify({ destinationConnectionId, expectedRevision, mappings }) }),
+  previewMigrationPlan: (token: string, snapshotId: string, destinationConnectionId: string,
+      repositories: PlanSelection[]) =>
+    call<PlanReview>('/api/migration-plans/preview', {
+      method: 'POST', headers: withToken(token),
+      body: JSON.stringify({ snapshotId, destinationConnectionId, repositories })
+    }),
   previewPipeline: (token: string, sourceConnectionId: string, destinationConnectionId: string,
     projectId: string, pipelineId: number, targetRepository: string) =>
     call<PipelineBlueprint>('/api/workloads/pipelines/preview', {
