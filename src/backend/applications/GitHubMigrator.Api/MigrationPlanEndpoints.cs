@@ -42,6 +42,18 @@ public static class MigrationPlanEndpoints
             }
         }).RequireRateLimiting("target-preflight");
 
+        routes.MapGet("/destinations/{destinationId:guid}/access", async Task<IResult> (
+            Guid destinationId, GitHubDestinationAccessService service, CancellationToken ct) =>
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(30));
+            try { return Results.Ok(await service.CheckAsync(destinationId, deadline.Token)); }
+            catch (KeyNotFoundException) { return Results.NotFound(new { error = "DestinationNotFound" }); }
+            catch (DestinationAccessInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            { return Results.UnprocessableEntity(new { error = "DestinationAccessTimeout" }); }
+        }).RequireRateLimiting("target-preflight");
+
         routes.MapGet("/drafts/{snapshotId:guid}", async Task<IResult> (
             Guid snapshotId, Guid destinationConnectionId,
             MigrationPlanDraftService service, CancellationToken ct) =>
