@@ -43,6 +43,47 @@ public sealed class DiscoveryServiceTests
         Assert.Empty(await storage.ListAsync(CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Stable_job_snapshot_id_reuses_committed_scan_without_provider_calls()
+    {
+        var conn = NewConnection(ConnectionDirection.Source);
+        var reader = new FakeReader();
+        var secrets = new FakeSecrets(conn.SecretReference, "private-token");
+        var store = new FakeInventories();
+        var service = new DiscoveryService(new FakeConnections(conn), secrets, [reader], store);
+        var id = Guid.NewGuid();
+        var first = await service.ScanAsync(conn.Id, CancellationToken.None, id);
+        var replay = await service.ScanAsync(conn.Id, CancellationToken.None, id);
+        Assert.Equal(id, first.Id);
+        Assert.Equal(id, first.Snapshot.SnapshotId);
+        Assert.Equal(id, replay.Id);
+        Assert.Equal(1, reader.Calls);
+        Assert.Single(await store.ListAsync(CancellationToken.None));
+        Assert.DoesNotContain("private-token", System.Text.Json.JsonSerializer.Serialize(replay));
+    }
+
+    [Fact]
+    public async Task Stable_snapshot_owned_by_a_different_connection_never_gets_reused()
+    {
+        var connection = NewConnection(ConnectionDirection.Source);
+        var reader = new FakeReader();
+        var stored = new FakeInventories();
+        var first = new DiscoveryService(new FakeConnections(connection),
+            new FakeSecrets(connection.SecretReference, "secret"), [reader], stored);
+        var id = Guid.NewGuid();
+        await first.ScanAsync(connection.Id, CancellationToken.None, id);
+
+        var wrong = new MigrationConnection(Guid.NewGuid(), connection.Name,
+            connection.ProviderKey, ConnectionDirection.Source, connection.Organization,
+            connection.SecretReference, connection.CreatedAtUtc, connection.ValidatedAtUtc,
+            connection.ValidationCode, connection.AuthenticatedAs, connection.PermissionAssessment);
+        var other = new DiscoveryService(new FakeConnections(wrong),
+            new FakeSecrets(wrong.SecretReference, "secret"), [reader], stored);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            other.ScanAsync(wrong.Id, CancellationToken.None, id));
+        Assert.Equal(1, reader.Calls);
+    }
+
     private static MigrationConnection NewConnection(ConnectionDirection direction) =>
         new(Guid.NewGuid(), "Source", "azure-devops-services", direction, "example-org", "connection-secret",
             DateTimeOffset.UtcNow, null, "Verified", null, "organization_projects_read");
@@ -51,8 +92,10 @@ public sealed class DiscoveryServiceTests
     {
         public string ProviderKey => "azure-devops-services";
         public string? ReceivedPat { get; private set; }
+        public int Calls { get; private set; }
         public Task<DiscoveryInventory> DiscoverAsync(Guid id, string org, string token, CancellationToken ct)
         {
+            Calls++;
             ReceivedPat = token;
             var snap = new DiscoverySnapshot {
                 SnapshotId = Guid.NewGuid(), SourceSystem = SourceSystemKind.AzureDevOpsServices,
