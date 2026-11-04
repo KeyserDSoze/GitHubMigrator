@@ -9,6 +9,7 @@ using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 
 namespace GitHubMigrator.Integration.Tests;
 
