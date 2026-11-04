@@ -141,8 +141,10 @@ public sealed class PostgresStagingRepository(AppDbContext db, TimeProvider cloc
         var saved = new StagingSnapshotSyncRecord
         {
             SnapshotId = inventory.Id, SourceConnectionId = inventory.ConnectionId,
-            SourceCollectedAtUtc = inventory.CollectedAtUtc,
-            AppliedAtUtc = clock.GetUtcNow(), Observed = assets.Count,
+            // PostgreSQL timestamptz uses microseconds; normalize BEFORE returning
+            // so the first request and all idempotent replays serialize identically.
+            SourceCollectedAtUtc = PostgreSqlTimestamp(inventory.CollectedAtUtc),
+            AppliedAtUtc = PostgreSqlTimestamp(clock.GetUtcNow()), Observed = assets.Count,
             Added = added, Changed = changed, Unchanged = assets.Count - added - changed,
             MarkedMissing = missing, SourceInventoryComplete = fullyCovered
         };
@@ -173,6 +175,12 @@ public sealed class PostgresStagingRepository(AppDbContext db, TimeProvider cloc
             .SumAsync(x => (long?)x.Revision, ct) ?? 0;
         return new(sourceConnectionId, latest?.SnapshotId, latest?.AppliedAtUtc,
             active, missing, checked((int)Math.Min(revisions, int.MaxValue)));
+    }
+
+    private static DateTimeOffset PostgreSqlTimestamp(DateTimeOffset value)
+    {
+        var utc = value.ToUniversalTime();
+        return utc.AddTicks(-(utc.Ticks % 10)); // 10 ticks = 1 microsecond
     }
 
     private static StagingSyncResult ToResult(StagingSnapshotSyncRecord row) =>
