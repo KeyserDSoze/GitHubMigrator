@@ -126,6 +126,16 @@ public static class Bootstrap
             );
             CREATE INDEX IF NOT EXISTS ix_migration_job_events_job
                 ON migration_job_events(job_id, id);
+            CREATE TABLE IF NOT EXISTS discovery_page_checkpoints (
+                job_id uuid NOT NULL REFERENCES migration_jobs(id) ON DELETE CASCADE,
+                resource_key varchar(256) NOT NULL,
+                page_index integer NOT NULL,
+                request_hash varchar(64) NOT NULL,
+                safe_payload_json jsonb NOT NULL,
+                next_continuation varchar(4096) NULL,
+                saved_at_utc timestamp with time zone NOT NULL,
+                PRIMARY KEY (job_id, resource_key, page_index)
+            );
             CREATE TABLE IF NOT EXISTS migration_connection_secrets (
                 reference varchar(100) PRIMARY KEY,
                 ciphertext bytea NOT NULL,
