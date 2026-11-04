@@ -150,3 +150,58 @@ test('admin replays a source snapshot into PostgreSQL staging and sees changed-a
   await expect(status).toContainText(/copertura parziale|partial or unverified coverage/i);
   expect(syncCalls).toBe(1);
 });
+
+test('admin queues a durable staging job and sees persisted success without claiming GitHub migration', async ({ page }) => {
+  const jobId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+  let submissions = 0;
+  let polls = 0;
+  const baseJob = {
+    id: jobId, kind: 'StageSnapshot', snapshotId: id, sourceConnectionId: connectionId,
+    enqueuedBy: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    state: 'Queued', attempts: 0, maxAttempts: 5,
+    availableAtUtc: summary.collectedAtUtc, leaseUntilUtc: null,
+    createdAtUtc: summary.collectedAtUtc, updatedAtUtc: summary.collectedAtUtc,
+    completedAtUtc: null, lastErrorCode: null, result: null
+  };
+  const sync = {
+    snapshotId: id, sourceConnectionId: connectionId,
+    sourceCollectedAtUtc: summary.collectedAtUtc, appliedAtUtc: summary.collectedAtUtc,
+    observed: 5, added: 5, changed: 0, unchanged: 0,
+    markedMissing: 0, sourceInventoryComplete: false
+  };
+  await page.route('**/api/connections', route => route.fulfill({ json: [{
+    id: connectionId, name: 'Demo DevOps', providerKey: 'azure-devops-services',
+    direction: 'source', organization: 'demo', validationCode: 'Verified'
+  }] }));
+  await page.route('**/api/discoveries', route => route.fulfill({ json: [summary] }));
+  await page.route(`**/api/discoveries/${id}`, route => route.fulfill({ json: detail }));
+  await page.route(`**/api/staging/snapshots/${id}`, route =>
+    route.fulfill({ status: 404, json: { error: 'StagingSyncNotFound' } }));
+  await page.route(`**/api/jobs/connections/${connectionId}`, route =>
+    route.fulfill({ json: [] }));
+  await page.route('**/api/jobs/staging', route => {
+    expect(route.request().method()).toBe('POST');
+    expect(route.request().postDataJSON()).toEqual({ snapshotId: id });
+    submissions++;
+    return route.fulfill({ status: 202, json: baseJob });
+  });
+  await page.route(`**/api/jobs/${jobId}`, route => {
+    polls++;
+    return route.fulfill({ json: polls < 2 ? baseJob : {
+      ...baseJob, state: 'Succeeded', attempts: 1,
+      completedAtUtc: summary.collectedAtUtc, result: sync
+    } });
+  });
+  await mockLogin(page, 'admin');
+  await page.getByRole('button', { name: /^discovery$/i }).click();
+  await expect(page.getByRole('heading', { name: 'Payments' })).toBeVisible();
+  await page.getByRole('button', { name: /accoda sync staging in background|queue background staging sync/i }).click();
+  const status = page.getByRole('status', { name: /job di staging persistente|durable staging job/i });
+  await expect(status).toContainText(/in coda|queued/i);
+  await expect(status).toContainText(/staging completato|succeeded in staging/i, { timeout: 15000 });
+  await expect(page.getByRole('status', { name: /db intermedio di staging|intermediate staging db/i }))
+    .toContainText('5');
+  expect(submissions).toBe(1);
+  expect(polls).toBeGreaterThanOrEqual(2);
+});
+
