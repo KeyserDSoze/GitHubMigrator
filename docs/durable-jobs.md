@@ -56,11 +56,11 @@ The poller is intentionally conservative: one in-flight job per worker host and 
 
 `POST /api/jobs/discovery` accepts a verified Azure DevOps source `connectionId` and a UUID `requestId`. A partial unique index prevents concurrent queued/running scans for the same source, including separate browser tabs; an identical request ID is idempotent. The worker gives each scan a stable snapshot ID equal to its job ID, commits an immutable discovery inventory, persists a lease-fenced `SnapshotSaved` checkpoint, and then stages the result. On retry, it reads that same snapshot from PostgreSQL without repeating provider calls. Scan + stage has a four-minute deadline within a five-minute lease.
 
-This is not yet *per Azure DevOps API page* checkpointing, true server-side delta collection, or scheduled auto-sync. For detailed API, safety boundaries and test coverage see [async-discovery.md](async-discovery.md).
+Source project/ref/user **per-page checkpoints are now implemented** (see [durable-discovery-pages.md](durable-discovery-pages.md)); other Azure DevOps API calls remain uncheckpointed. True server-side delta collection and scheduled auto-sync are not implemented. For detailed API, safety boundaries and test coverage see [async-discovery.md](async-discovery.md).
 
 ## Follow-on slices
 
-1. **Implemented initial slice:** execute read-only Azure DevOps discovery in durable jobs, checkpoint the complete source snapshot, preserve existing provider pagination. Next persist individual page cursors and source delta checkpoints for large deployments.
+1. **Implemented initial slice:** execute read-only Azure DevOps discovery in durable jobs, checkpoint the complete source snapshot, preserve existing provider pagination. Next complete coverage of remaining API page cursors, implement streaming source staging and source-side delta checkpoints for large deployments.
 2. Stage pipeline definitions, Boards, dependency graph edges, normalized source/target mappings and immutable blob artifacts.
 3. Add authorization-gated plan approval and durable write job definitions with per-resource idempotency and read-after-write reconciliation.
 4. Build instrumented load tests, tenancy isolation and production EF migrations.
