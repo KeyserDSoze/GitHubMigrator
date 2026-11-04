@@ -1,6 +1,3 @@
-using System.Text.Json;
-using GitHubMigrator.Domain;
-
 namespace GitHubMigrator.Business;
 
 // F-008 slice 1: durable jobs can ONLY normalize a previously saved discovery snapshot.
@@ -77,7 +74,7 @@ public sealed class MigrationJobService(
 }
 
 public sealed class MigrationJobProcessor(
-    IMigrationJobRepository jobs, StagingSyncService staging, ILogger<MigrationJobProcessor> logger)
+    IMigrationJobRepository jobs, StagingSyncService staging)
 {
     // Lease > execution deadline, ensuring normal slow work cannot run past its lease.
     // An abrupt process death is recovered after the lease expires by another worker.
@@ -99,8 +96,7 @@ public sealed class MigrationJobProcessor(
             using var work = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
             work.CancelAfter(ExecutionDeadline);
             var result = await staging.SyncAsync(lease.SnapshotId, work.Token);
-            if (!await jobs.CompleteAsync(lease, result, shutdown))
-                logger.LogWarning("Stale worker completion discarded JobId={JobId}", lease.Id);
+            await jobs.CompleteAsync(lease, result, shutdown);
         }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
         {
@@ -135,9 +131,6 @@ public sealed class MigrationJobProcessor(
     private async Task RecordFailureAsync(
         MigrationJobLease lease, string errorCode, bool permanent, CancellationToken ct)
     {
-        var updated = await jobs.FailAsync(lease, errorCode, permanent, ct);
-        logger.LogWarning(
-            "Migration staging job attempt finished with error JobId={JobId} Attempt={Attempt} Code={Code} Applied={Applied}",
-            lease.Id, lease.Attempt, errorCode, updated);
+        await jobs.FailAsync(lease, errorCode, permanent, ct);
     }
 }
