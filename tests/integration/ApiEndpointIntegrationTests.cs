@@ -638,20 +638,26 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var eventResponse = await harness.Client.SendAsync(eventRequest);
         Assert.Equal(HttpStatusCode.OK, eventResponse.StatusCode);
         using var events = JsonDocument.Parse(await eventResponse.Content.ReadAsStringAsync());
-        // Three independent page checkpoints (projects, Git refs, Graph users)
-        // must be persisted in addition to the final snapshot.
-        Assert.Equal(new[] { "Queued", "Claimed", "PageSaved", "PageSaved", "PageSaved",
-                "SnapshotSaved", "Succeeded" },
+        // All eight read-only GET sections are checkpointed before the final
+        // snapshot: projects, capabilities, repositories, refs, users, groups,
+        // parent ACL evidence and repository ACL evidence.
+        Assert.Equal(new[] { "Queued", "Claimed" }
+            .Concat(Enumerable.Repeat("PageSaved", 8))
+            .Concat(["SnapshotSaved", "Succeeded"]),
             events.RootElement.EnumerateArray().Select(x => x.GetProperty("eventType").GetString()));
         await using (var scope = harness.Host.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var pages = await db.DiscoveryPageCheckpoints.AsNoTracking()
                 .Where(x => x.JobId == jobId).ToListAsync();
-            Assert.Equal(3, pages.Count);
+            Assert.Equal(8, pages.Count);
             Assert.Contains(pages, x => x.ResourceKey == "projects");
+            Assert.Contains(pages, x => x.ResourceKey == "capabilities:project");
+            Assert.Contains(pages, x => x.ResourceKey == "repos:project");
             Assert.Contains(pages, x => x.ResourceKey == "refs:source-git");
             Assert.Contains(pages, x => x.ResourceKey == "graph-users");
+            Assert.Contains(pages, x => x.ResourceKey == "security-groups");
+            Assert.Equal(2, pages.Count(x => x.ResourceKey.StartsWith("security-acl:", StringComparison.Ordinal)));
             Assert.All(pages, x => Assert.DoesNotContain(ApiHarness.SourceToken, x.SafePayloadJson));
         }
 
