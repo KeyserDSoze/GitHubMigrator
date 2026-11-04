@@ -177,6 +177,29 @@ public sealed class PostgresStagingRepository(AppDbContext db, TimeProvider cloc
             active, missing, checked((int)Math.Min(revisions, int.MaxValue)));
     }
 
+    public async Task<StagingAssetPage> ListAssetsAsync(Guid sourceConnectionId,
+        string assetType, string? after, int take, CancellationToken ct)
+    {
+        // Keyset pagination uses the PK index (source_connection_id, asset_type, source_id).
+        // No OFFSET scan and no materialization of the entire asset catalog.
+        var rows = await db.StagingAssets.FromSqlInterpolated($"""
+                SELECT * FROM staging_assets
+                WHERE source_connection_id = {sourceConnectionId}
+                  AND asset_type = {assetType}
+                  AND source_id > {after ?? ""}
+                ORDER BY source_id
+                LIMIT {take + 1}
+                """).AsNoTracking().ToListAsync(ct);
+        var hasNext = rows.Count > take;
+        var page = rows.Take(take).Select(row => new StagingAssetView(
+            row.AssetType, row.SourceId, row.ProjectId, row.Fingerprint,
+            row.Revision, row.Missing, row.FirstSnapshotId,
+            row.LastSeenSnapshotId, row.LastChangedSnapshotId,
+            JsonSerializer.Deserialize<JsonElement>(row.PayloadJson))).ToArray();
+        return new(sourceConnectionId, assetType, page,
+            hasNext ? page[^1].SourceId : null);
+    }
+
     private static DateTimeOffset PostgreSqlTimestamp(DateTimeOffset value)
     {
         var utc = value.ToUniversalTime();
