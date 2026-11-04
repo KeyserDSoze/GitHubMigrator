@@ -35,6 +35,16 @@ public sealed class PostgresStagingSyncIntegrationTests(PostgresDraftFixture fix
             var saved = await repo.GetSyncAsync(inventory.Id, default);
             Assert.NotNull(saved);
             Assert.Equal(1_202, saved.Observed);
+            var page1 = await repo.ListAssetsAsync(source, "ref", null, 100, default);
+            Assert.Equal(100, page1.Items.Count);
+            Assert.NotNull(page1.NextAfter);
+            Assert.All(page1.Items, x => Assert.Equal("sha-1",
+                x.Properties.GetProperty("ObjectId").GetString()));
+            var page2 = await repo.ListAssetsAsync(source, "ref", page1.NextAfter, 100, default);
+            Assert.Equal(100, page2.Items.Count);
+            Assert.DoesNotContain(page2.Items, x => page1.Items.Any(y => y.SourceId == x.SourceId));
+            Assert.True(string.CompareOrdinal(page1.Items[^1].SourceId, page2.Items[0].SourceId) < 0);
+
             Assert.Equal(1_202, await verify.StagingAssets.CountAsync(
                 a => a.SourceConnectionId == source));
             Assert.All(await verify.StagingAssets.Where(a => a.SourceConnectionId == source)
