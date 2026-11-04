@@ -55,8 +55,8 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
         var claims = await Task.WhenAll(Claim(), Claim());
         Assert.All(claims, x => Assert.NotNull(x));
         Assert.Equal(2, claims.Select(x => x!.Id).Distinct().Count());
-        Assert.Equal(new HashSet<Guid> { firstId, secondId },
-            claims.Select(x => x!.Id).ToHashSet());
+        Assert.Contains(firstId, claims.Select(x => x!.Id));
+        Assert.Contains(secondId, claims.Select(x => x!.Id));
 
         await using var verify = fixture.NewContext();
         var repository = new PostgresMigrationJobRepository(verify, clock);
