@@ -131,6 +131,71 @@ public sealed class AzureDevOpsSecurityCheckpointTests
         Assert.Equal(3, reads["acl"]); // failed parent, successful parent and repo
     }
 
+    [Fact]
+    public async Task Direct_membership_second_page_retries_using_checkpointed_group_and_first_edge()
+    {
+        var lease = new DiscoveryLeaseContext(Guid.NewGuid(), Guid.NewGuid(), 1);
+        var checkpoints = new FakeCheckpoints();
+        var calls = new Dictionary<string, int>(StringComparer.Ordinal);
+        using var client = new HttpClient(new Stub(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            var continued = req.RequestUri.Query.Contains("continuationToken", StringComparison.Ordinal);
+            var key = path.Contains("/_apis/graph/Memberships/", StringComparison.Ordinal)
+                ? continued ? "members-next" : "members-start" : "groups";
+            calls[key] = calls.TryGetValue(key, out var n) ? n + 1 : 1;
+            if (key == "groups")
+                return Json("""{"value":[{"descriptor":"group.1","displayName":"Operators"}]}""");
+            if (key == "members-start")
+            {
+                var response = Json("""{"value":[{"containerDescriptor":"group.1","memberDescriptor":"user.a","unknownPAT":"DO_NOT_STAGE"}]}""");
+                response.Headers.Add("X-MS-ContinuationToken", "opaque+/next");
+                return response;
+            }
+            if (calls[key] == 1) throw new HttpRequestException("temporary second page failure");
+            return Json("""{"value":[{"containerDescriptor":"group.1","memberDescriptor":"user.b"}]}""");
+        }));
+        var reader = new AzureDevOpsSecurityReader(client, checkpoints, TimeProvider.System);
+        var error = await Assert.ThrowsAsync<DiscoveryProviderException>(() =>
+            reader.ReadAsync("az-org", "TEST-PAT", [], default, lease));
+        Assert.Equal("ProviderUnavailable", error.Code);
+        Assert.NotNull(await checkpoints.GetAsync(lease.JobId, "security-groups", 0, default));
+        Assert.Equal(2, checkpoints.Saved.Count); // group + first membership page
+
+        var result = await reader.ReadAsync("az-org", "TEST-PAT", [], default, lease);
+        Assert.True(result.Coverage.MembershipsComplete);
+        Assert.Equal(2, result.Memberships.Count);
+        Assert.Contains(result.Memberships, m => m.MemberDescriptor == "user.b");
+        Assert.Equal(1, calls["groups"]);
+        Assert.Equal(1, calls["members-start"]);
+        Assert.Equal(2, calls["members-next"]);
+        Assert.Equal(3, checkpoints.Saved.Count);
+        Assert.DoesNotContain("DO_NOT_STAGE",
+            string.Join(" ", checkpoints.Saved.Select(x => x.SafePayloadJson)));
+        var providerCalls = calls.Values.Sum();
+        await reader.ReadAsync("az-org", "TEST-PAT", [], default, lease);
+        Assert.Equal(providerCalls, calls.Values.Sum());
+    }
+
+    [Fact]
+    public async Task Repeated_membership_cursor_sets_incomplete_coverage_instead_of_reporting_all_members()
+    {
+        using var client = new HttpClient(new Stub(req =>
+        {
+            if (req.RequestUri!.AbsolutePath.EndsWith("/_apis/graph/groups"))
+                return Json("""{"value":[{"descriptor":"group.1","displayName":"Operators"}]}""");
+            var response = Json("""{"value":[{"containerDescriptor":"group.1","memberDescriptor":"user.a"}]}""");
+            response.Headers.Add("X-MS-ContinuationToken", "same-cursor");
+            return response;
+        }));
+        var result = await new AzureDevOpsSecurityReader(client)
+            .ReadAsync("az-org", "PAT", [], default);
+        Assert.True(result.Coverage.GroupsComplete);
+        Assert.False(result.Coverage.MembershipsComplete);
+        Assert.Contains(result.Issues, issue => issue.Code == "MembershipsPaginationIncomplete");
+        Assert.Single(result.Memberships);
+    }
+
     private sealed class FakeCheckpoints : IDiscoveryPageCheckpointStore
     {
         private readonly Dictionary<(Guid, string, int), DiscoveryPageCheckpoint> rows = [];
