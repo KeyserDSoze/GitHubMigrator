@@ -10,7 +10,7 @@
 | 3 | F-004 Identity mapping | F-003 | Map GitHub logins, inherited access and orphan warnings | Planned |
 | 4 | F-005 Migration plan/preview | F-003/F-004 | Repo selection, renaming, permission/destination previews and approval | **Preview, versioned drafts, target collision probes and destination self-membership/policy review; approval pending** |
 | 4.5 | **F-013 Canonical staging and incremental sync** | F-003 | Indexed per-asset PostgreSQL catalog, SHA-256 deltas, idempotent source snapshot sync | **First working slice; provider delta polling and graph pending** |
-| 5 | F-008 Durable job execution | F-005 | Workers, retries, checkpoints, progress, audit and verification | Planned |
+| 5 | **F-008 Durable job execution** | F-013 (staging); F-005 (future writes) | PostgreSQL leased workers, retries, idempotency and audit | **Staging-only queue implemented; GitHub write workers blocked pending approval** |
 | 6 | F-006 Native Git migration | F-005/F-008 | Mirror branches, tags and history; compare refs/SHAs | Planned |
 | 7 | F-007 TFVC conversion | F-005/F-008 | Best-effort changesets/branches conversion and evidence report | Research |
 | 8 | F-012 Azure DevOps Server/TFS and GitHub Enterprise Server | F-002/F-003 | Version-specific adapters and safe custom endpoints | Planned |
@@ -50,4 +50,4 @@
 
 ## Staging-driven migration engine
 
-F-013 normalizes F-003 discovery snapshots into a revisioned, queryable PostgreSQL catalog. See [staging-sync.md](../docs/staging-sync.md). Next: source API cursor/polling, dependency graph, pipeline/Boards staging, durable F-008 jobs, artifact storage and approved GitHub writes with reconciliation. Staging is not an approval or successful migration.
+F-013 normalizes F-003 discovery snapshots into a revisioned, queryable PostgreSQL catalog. See [staging-sync.md](../docs/staging-sync.md). Next: source API cursor/polling, dependency graph, pipeline/Boards staging, F-008 PostgreSQL staging jobs, artifact storage and approved GitHub writes with reconciliation. Staging is not an approval or successful migration.
