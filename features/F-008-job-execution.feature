@@ -31,6 +31,26 @@ Feature: Durable and verifiable migration execution
     And the job never publishes repositories, Actions or Issues to GitHub
 
   # Future phases begin after governed F-005 plan approval, not in this slice.
+  Scenario: Async Azure DevOps discovery resumes after source snapshot commit
+    Given a verified Azure DevOps source connection and an enqueued discovery job
+    When a worker saves an immutable snapshot and then crashes before staging
+    Then retry loads the snapshot by the same job ID
+    And it does not repeat Azure DevOps API reads
+    And staging normalization completes and records the result
+
+  Scenario: Only one source discovery can be active for a connection
+    Given two administrators request Azure DevOps discovery concurrently
+    When their jobs are enqueued for the same source connection
+    Then the PostgreSQL queue stores only one active discovery
+    And they receive the same job while it remains queued or running
+    And another scan can be queued after the first becomes terminal
+
+  Scenario: A checkpoint is fenced by the current worker lease
+    Given a previous worker's lease has expired and a newer worker has reclaimed its job
+    When the previous worker attempts to save a snapshot checkpoint
+    Then the checkpoint update is rejected
+    And a stale worker cannot claim the job succeeded
+
   Scenario: Interrupted migration
     Given a migration was interrupted after a verified push stage
     When a worker resumes with its lease and checkpoint
