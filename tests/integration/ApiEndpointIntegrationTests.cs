@@ -380,6 +380,69 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         });
     }
 
+    [Fact]
+    public async Task Staging_HTTP_contract_supports_admin_sync_replay_and_read_only_summary()
+    {
+        var snapshotId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var discovery = scope.ServiceProvider.GetRequiredService<IDiscoveryRepository>();
+            await discovery.SaveAsync(new DiscoveryInventory
+            {
+                Id = snapshotId, ConnectionId = harness.SourceConnectionId,
+                SourceProvider = "azure-devops-services", Organization = "az-org",
+                CollectedAtUtc = now,
+                Snapshot = new DiscoverySnapshot
+                {
+                    SnapshotId = snapshotId, SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                    CollectedAt = now,
+                    Projects = [new SourceProject("project-1", "Project", [
+                        new SourceRepository("repo-1", "project-1", "API", VersionControlKind.Git)])],
+                    Identities = [], AccessGrants = []
+                },
+                Refs = [new RepositoryRef("repo-1", "refs/heads/main", "abc")],
+                Issues = [], Completeness = DiscoveryCompleteness.Partial,
+                IdentitiesComplete = false, PermissionsComplete = false
+            }, default);
+        }
+
+        var path = $"/api/staging/snapshots/{snapshotId}/sync";
+        using var anonymous = await PostAsync(path, new { });
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        var ordinaryJwt = await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword);
+        using var forbidden = await PostAsync(path, new { }, ordinaryJwt);
+        Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+        var adminJwt = await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword);
+        var before = harness.Calls.Count;
+        using var created = await PostAsync(path, new { }, adminJwt);
+        Assert.Equal(HttpStatusCode.OK, created.StatusCode);
+        var body = await created.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal(3, doc.RootElement.GetProperty("observed").GetInt32());
+        Assert.Equal(3, doc.RootElement.GetProperty("added").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("markedMissing").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("sourceInventoryComplete").GetBoolean());
+        using var replay = await PostAsync(path, new { }, adminJwt);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(body, await replay.Content.ReadAsStringAsync());
+
+        using var get = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/staging/snapshots/{snapshotId}");
+        get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminJwt);
+        using var viewed = await harness.Client.SendAsync(get);
+        Assert.Equal(HttpStatusCode.OK, viewed.StatusCode);
+        using var summaryRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/staging/connections/{harness.SourceConnectionId}/summary");
+        summaryRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminJwt);
+        using var summaryResponse = await harness.Client.SendAsync(summaryRequest);
+        Assert.Equal(HttpStatusCode.OK, summaryResponse.StatusCode);
+        using var summary = JsonDocument.Parse(await summaryResponse.Content.ReadAsStringAsync());
+        Assert.Equal(3, summary.RootElement.GetProperty("activeAssets").GetInt32());
+        Assert.Equal(snapshotId.ToString(), summary.RootElement.GetProperty("latestSnapshotId").GetString());
+        Assert.Equal(before, harness.Calls.Count); // staging never talks to source or GitHub
+    }
+
     private async Task<HttpResponseMessage> PostAsync(string path, object payload, string? bearer = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path)
