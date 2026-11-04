@@ -84,7 +84,7 @@ public sealed class AzureDevOpsSecurityCheckpointTests
         });
         Assert.Equal(1, calls["groups-start"]);
         Assert.Equal(2, calls["groups-next"]);
-        Assert.Equal(8, checkpoints.Saved.Count);
+        Assert.Equal(6, checkpoints.Saved.Count); // two group pages, two memberships, parent + repo ACL
         Assert.DoesNotContain("DO_NOT_STAGE",
             string.Join(" ", checkpoints.Saved.Select(x => x.SafePayloadJson)));
         Assert.DoesNotContain("TEST-PAT",
