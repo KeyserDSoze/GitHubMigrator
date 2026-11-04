@@ -1,6 +1,6 @@
 # F-008 — Asynchronous Azure DevOps discovery and checkpointed staging
 
-**Status:** source discovery can now be queued on PostgreSQL and executed by an F-008 .NET worker, independently from the operator's HTTP request. This is the next slice of the database-centered engine in the AGIC design.
+**Status:** source discovery runs as a durable F-008 job and now checkpoints project, Git ref and Graph user pages in PostgreSQL as a first granular recovery slice. This is the next slice of the database-centered engine in the AGIC design.
 
 ## Operator workflow
 
@@ -32,9 +32,9 @@
 
 ## Paging and honest limitations
 
-The Azure DevOps reader already uses bounded API pagination/continuation handling for projects, Git refs, Graph users and groups; the worker delegates to that implementation. However **pagination cursor checkpoints are not yet persisted per page**. Project and ref manifests still accumulate in memory during one provider scan. A 4-minute deadline, hard page/item caps and partial-inventory flags mean this is an operationally useful vertical slice, **not yet a large-enterprise streaming discovery implementation**.
+The Azure DevOps reader already uses bounded API pagination/continuation handling for projects, Git refs, Graph users and groups; the worker delegates to that implementation. **Project list, Git ref and Graph user cursor checkpoints are now persisted per page** (see [durable discovery pages](durable-discovery-pages.md)). Other provider reads and source collections still lack page checkpoints. Project and ref manifests still accumulate in memory during one provider scan. A 4-minute deadline, hard page/item caps and partial-inventory flags mean this is an operationally useful vertical slice, **not yet a large-enterprise streaming discovery implementation**.
 
-Before claiming continuous, high-volume synchronization we must add per-endpoint durable provider cursor checkpoints, streaming staging writes, source API rate-limit telemetry, partial-scan restart tests, scheduled periodic discovery or webhook triggers, true provider delta APIs where supported, stress tests and a reviewed schema migration. The previously implemented F-013 incremental hash sync currently compares *successive full source snapshots*. No live automatic scheduling has been enabled.
+Before claiming continuous, high-volume synchronization we must expand checkpoints to remaining provider endpoints, add streaming staging writes, source API rate-limit telemetry, partial-scan restart tests, scheduled periodic discovery or webhook triggers, true provider delta APIs where supported, stress tests and a reviewed schema migration. The previously implemented F-013 incremental hash sync currently compares *successive full source snapshots*. No live automatic scheduling has been enabled.
 
 ## Verification
 
