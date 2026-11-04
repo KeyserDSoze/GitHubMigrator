@@ -8,6 +8,15 @@ export type ConnectionDraft = { name: string; providerKey: string; organization:
 export type ValidationResult = {
   isValid: boolean; code: string; authenticatedAs: string | null; permissionAssessment: string
 };
+export type StagingSyncResult = {
+  snapshotId: string; sourceConnectionId: string; sourceCollectedAtUtc: string;
+  appliedAtUtc: string; observed: number; added: number; changed: number;
+  unchanged: number; markedMissing: number; sourceInventoryComplete: boolean;
+};
+export type StagingCatalogSummary = {
+  sourceConnectionId: string; latestSnapshotId: string | null; lastSyncAtUtc: string | null;
+  activeAssets: number; missingAssets: number; totalRevisions: number;
+};
 export type DiscoverySummary = {
   id: string; connectionId: string; sourceProvider: string; organization: string; collectedAtUtc: string;
   completeness: 'complete' | 'partial'; projectCount: number; repositoryCount: number;
@@ -171,6 +180,16 @@ export const api = {
     call<DiscoverySummary>('/api/discoveries', {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ connectionId })
     }),
+  syncStagingSnapshot: (token: string, snapshotId: string) =>
+    call<StagingSyncResult>(`/api/staging/snapshots/${encodeURIComponent(snapshotId)}/sync`, {
+      method: 'POST', headers: withToken(token)
+    }),
+  getStagingSync: (token: string, snapshotId: string) =>
+    call<StagingSyncResult>(`/api/staging/snapshots/${encodeURIComponent(snapshotId)}`,
+      { headers: withToken(token) }),
+  getStagingSummary: (token: string, connectionId: string) =>
+    call<StagingCatalogSummary>(`/api/staging/connections/${encodeURIComponent(connectionId)}/summary`,
+      { headers: withToken(token) }),
   getIdentityReview: (token: string, snapshotId: string, destinationConnectionId: string) =>
     call<IdentityReview>(`/api/identity-mappings/${encodeURIComponent(snapshotId)}?destinationConnectionId=${encodeURIComponent(destinationConnectionId)}`,
       { headers: withToken(token) }),
