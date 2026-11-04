@@ -26,9 +26,11 @@ The design extends the stable whole-snapshot checkpoint in [asynchronous discove
 | `repos:{projectId}` | `/{projectId}/_apis/git/repositories` | `id`, `name` |
 | `security-groups` | `/_apis/graph/groups` | `descriptor`, `displayName`, `legacyDescriptor` |
 | `security-members:{sha256}` | `/_apis/graph/Memberships/{groupId}` | `containerDescriptor`, `memberDescriptor` (direct edges only) |
+
+Membership pages use the opaque `X-MS-ContinuationToken` and are persisted separately. A repeated cursor produces `MembershipsPaginationIncomplete` and prevents a false complete-coverage claim. These are **direct edges only**, not transitive membership or effective authorization.
 | `security-acl:{sha256}` | `/_apis/accesscontrollists/{GitNamespace}` | `token`, `inheritPermissions`, `acesDictionary` containing *only* descriptor, allow/deny masks |
 
-The same bounded reader caps remain: 30 pages per pageable collection, 2,000 projects, 30,000 refs per repository, 15,000 users. Per-page checkpoint payloads are bounded to 1 MiB of UTF-8 metadata. Project, ref and user metadata is still collected in memory until the final source snapshot is saved. **This is page-level replay, not full streaming ingest.**
+The source reader retains its limits of 30 pages per project/ref/user collection, 2,000 projects, 30,000 refs per repository and 15,000 users. The security reader adds at most **20 group pages and 20 direct-membership pages per group**, with global bounds of 1,000 groups and 20,000 membership edges. Repeated Graph continuation tokens or caps mark membership coverage **incomplete**, never verified.  Per-page checkpoint payloads are bounded to 1 MiB of UTF-8 metadata. Project, ref and user metadata is still collected in memory until the final source snapshot is saved. **This is page-level replay, not full streaming ingest.**
 
 ## Data integrity, authorization and recovery
 
