@@ -80,7 +80,7 @@ public sealed class AzureDevOpsPageCheckpointTests
         var store = new FakePageStore();
         var calls = new Dictionary<string, int>(StringComparer.Ordinal);
         var firstPage = string.Join(",", Enumerable.Range(0, 100)
-            .Select(i => $"""{"id":"project-{{i}}","name":"Project {{i}}"}"""));
+            .Select(i => $$"""{"id":"project-{{i}}","name":"Project {{i}}"}"""));
         using var http = new HttpClient(new Stub(req =>
         {
             var path = req.RequestUri!.AbsolutePath;
