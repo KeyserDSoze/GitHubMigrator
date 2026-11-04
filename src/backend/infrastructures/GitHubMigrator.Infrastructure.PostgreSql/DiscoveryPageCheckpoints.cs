@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using GitHubMigrator.Business;
 using Microsoft.EntityFrameworkCore;
 
@@ -79,8 +80,11 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
 
         var stored = await GetAsync(page.JobId, page.ResourceKey, page.PageIndex, ct)
             ?? throw new DiscoveryCheckpointException("CheckpointNotSaved");
+        // jsonb canonicalizes key order and whitespace. Semantic equality,
+        // rather than byte-for-byte string comparison, is required for replay.
         if (!string.Equals(stored.RequestHash, page.RequestHash, StringComparison.Ordinal) ||
-            !string.Equals(stored.SafePayloadJson, page.SafePayloadJson, StringComparison.Ordinal))
+            !JsonNode.DeepEquals(JsonNode.Parse(stored.SafePayloadJson),
+                JsonNode.Parse(page.SafePayloadJson)))
             throw new DiscoveryCheckpointException("CheckpointMismatch");
         return stored;
     }
