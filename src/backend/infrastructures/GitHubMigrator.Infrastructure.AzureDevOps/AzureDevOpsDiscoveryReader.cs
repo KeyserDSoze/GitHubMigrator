@@ -87,6 +87,7 @@ public sealed class AzureDevOpsDiscoveryReader(
                         references.AddRange(refs);
                     }
                     catch (DiscoveryProviderException ex)
+                        when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
                     {
                         issues.Add(new(ex.Code, projectId, repoId));
                     }
@@ -138,6 +139,7 @@ public sealed class AzureDevOpsDiscoveryReader(
             if (issues.Any(x => x.Code is "GraphUsersTruncated")) identitiesComplete = false;
         }
         catch (DiscoveryProviderException ex)
+            when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
         {
             identitiesComplete = false;
             issues.Add(new(ex.Code));
