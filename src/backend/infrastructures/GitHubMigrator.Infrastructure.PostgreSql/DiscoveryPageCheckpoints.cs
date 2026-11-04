@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using GitHubMigrator.Business;
 using Microsoft.EntityFrameworkCore;
@@ -19,7 +20,7 @@ public sealed class DiscoveryPageCheckpointRecord
 // workers are never allowed to insert pages after another worker has reclaimed
 // the lease. Every committed page is immutable and individually resumable.
 public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimeProvider clock)
-    : IDiscoveryPageCheckpointStore
+    : IDiscoveryPageCheckpointStore, IDiscoveryRefIngestProgress
 {
     private const int MaxPageBytes = 1_048_576;
     private const int MaxResourceLength = 256;
@@ -45,6 +46,10 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
             (page.NextContinuation?.Length ?? 0) > 4096)
             throw new DiscoveryCheckpointException("InvalidCheckpointPage");
         var now = clock.GetUtcNow();
+        // The checkpoint, its audit event, and every bounded batch of observed
+        // Git refs commit together. A crash cannot leave a page without its
+        // provisional asset observations, or vice versa.
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         // A single SQL statement couples immutable insertion to a current,
         // unexpired job lease and emits an audit event only for a new page.
@@ -86,7 +91,117 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
             !JsonNode.DeepEquals(JsonNode.Parse(stored.SafePayloadJson),
                 JsonNode.Parse(page.SafePayloadJson)))
             throw new DiscoveryCheckpointException("CheckpointMismatch");
+
+        if (stored.ResourceKey.StartsWith("refs:", StringComparison.Ordinal))
+            await IngestRefPageAsync(stored, ct);
+
+        // Fencing must hold at commit time as well, even when a very large
+        // source page took longer than expected to normalize and persist.
+        var commitTime = clock.GetUtcNow();
+        var stillOwned = await db.MigrationJobs.AsNoTracking().AnyAsync(x =>
+            x.Id == lease.JobId && x.Kind == MigrationJobKinds.DiscoverSource &&
+            x.State == MigrationJobStates.Running &&
+            x.Attempts == lease.Attempt && x.LeaseToken == lease.LeaseToken &&
+            x.LeaseUntilUtc > commitTime, ct);
+        if (!stillOwned)
+            throw new DiscoveryCheckpointException("DiscoveryLeaseLost");
+
+        await transaction.CommitAsync(ct);
         return stored;
+    }
+
+    private async Task IngestRefPageAsync(DiscoveryPageCheckpoint page, CancellationToken ct)
+    {
+        var repositoryId = page.ResourceKey["refs:".Length..];
+        if (string.IsNullOrWhiteSpace(repositoryId) || repositoryId.Length > 256)
+            throw new DiscoveryCheckpointException("InvalidRefObservation");
+
+        using var doc = JsonDocument.Parse(page.SafePayloadJson);
+        if (!doc.RootElement.TryGetProperty("value", out var rows) ||
+            rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() > 1_000)
+            throw new DiscoveryCheckpointException("InvalidRefObservation");
+
+        // Keep at most one provider page (1,000 refs) in temporary memory.
+        var assets = new List<StagingAssetInput>(rows.GetArrayLength());
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in rows.EnumerateArray())
+        {
+            // Preserve the reader's behavior: malformed/empty source refs
+            // are ignored rather than turning an incomplete provider row into
+            // a real asset. The final snapshot applies the same filtering.
+            if (entry.ValueKind != JsonValueKind.Object ||
+                !entry.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String ||
+                !entry.TryGetProperty("objectId", out var objectId) ||
+                objectId.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(name.GetString()) ||
+                string.IsNullOrWhiteSpace(objectId.GetString()))
+                continue;
+            StagingAssetInput asset;
+            try
+            {
+                asset = StagingAssetNormalizer.NormalizeRef(
+                    repositoryId, name.GetString()!, objectId.GetString()!);
+            }
+            catch (StagingSyncInputException)
+            {
+                throw new DiscoveryCheckpointException("InvalidRefObservation");
+            }
+            if (!seen.Add(asset.SourceId))
+                throw new DiscoveryCheckpointException("DuplicateRefObservation");
+            assets.Add(asset);
+        }
+
+        // Bound PostgreSQL input and parameters: 250 rows per SQL command.
+        // The page checkpoint row is protected by the same transaction.
+        const int batchSize = 250;
+        for (var i = 0; i < assets.Count; i += batchSize)
+        {
+            var part = assets.Skip(i).Take(batchSize).ToArray();
+            var payload = JsonSerializer.Serialize(part.Select(asset => new
+            {
+                source_id = asset.SourceId,
+                fingerprint = asset.Fingerprint,
+                payload_json = asset.PayloadJson
+            }));
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                WITH incoming AS (
+                    SELECT * FROM jsonb_to_recordset({payload}::jsonb)
+                    AS items(source_id text, fingerprint text, payload_json text)
+                )
+                INSERT INTO discovery_ref_observations (
+                    job_id, source_id, repository_id, fingerprint, payload_json,
+                    resource_key, page_index)
+                SELECT {page.JobId}, source_id, {repositoryId}, fingerprint,
+                    payload_json::jsonb, {page.ResourceKey}, {page.PageIndex}
+                FROM incoming
+                ON CONFLICT (job_id, source_id) DO NOTHING
+                """, ct);
+
+            // The same ref may appear twice on unstable provider pagination:
+            // identical values are safe to deduplicate; different OIDs fail
+            // rather than silently accepting a contradictory source snapshot.
+            var ids = part.Select(x => x.SourceId).ToArray();
+            var persisted = await db.DiscoveryRefObservations.AsNoTracking()
+                .Where(x => x.JobId == page.JobId && ids.Contains(x.SourceId))
+                .Select(x => new { x.SourceId, x.Fingerprint, x.RepositoryId })
+                .ToArrayAsync(ct);
+            if (persisted.Length != part.Length ||
+                persisted.Any(row => row.RepositoryId != repositoryId ||
+                    !part.Any(item => item.SourceId == row.SourceId &&
+                        item.Fingerprint == row.Fingerprint)))
+                throw new DiscoveryCheckpointException("RefObservationConflict");
+        }
+    }
+
+    public async Task<DiscoveryRefIngestProgress> GetAsync(Guid jobId, CancellationToken ct)
+    {
+        if (jobId == Guid.Empty)
+            throw new DiscoveryCheckpointException("InvalidCheckpointKey");
+        var pages = await db.DiscoveryPageCheckpoints.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId && x.ResourceKey.StartsWith("refs:"), ct);
+        var observed = await db.DiscoveryRefObservations.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId, ct);
+        return new(jobId, pages, observed);
     }
 
     private static void ValidateKey(Guid jobId, string resourceKey, int pageIndex)

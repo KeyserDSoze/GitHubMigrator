@@ -114,12 +114,21 @@ test('discovery worker survives page refresh while no snapshot has been saved', 
     createdAtUtc: summary.collectedAtUtc, updatedAtUtc: summary.collectedAtUtc,
     completedAtUtc: null, lastErrorCode: null, result: null
   } }));
+  await page.route(`**/api/jobs/${discoveryJobId}/ref-progress`, route =>
+    route.fulfill({ json: {
+      jobId: discoveryJobId, checkpointedRefPages: 3, observedRefs: 2450
+    } }));
   await mockLogin(page, 'admin');
   await page.getByRole('button', { name: /^discovery$/i }).click();
   const status = page.getByRole('status', { name: /job di staging persistente|durable staging job/i });
   await expect(status).toContainText(/in coda|queued/i);
   await expect(status).toContainText(/in esecuzione|running/i, { timeout: 15000 });
   await expect(page.getByText(/nessun inventario salvato|no saved inventories/i).first()).toBeVisible();
+  const progress = page.getByRole('status', {
+    name: /riferimenti git osservati in postgresql|git refs observed in postgresql/i
+  });
+  await expect(progress).toContainText('2450', { timeout: 15000 });
+  await expect(progress).toContainText('3');
 });
 
 test('regular platform user cannot discover or read snapshots', async ({ page }) => {

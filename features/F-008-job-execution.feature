@@ -44,6 +44,19 @@ Feature: Durable and verifiable migration execution
     And raw ACL allow and deny masks are preserved without unrecognized fields
     And effective GitHub permissions remain unverified
 
+  Scenario: Ref page and normalized observations commit atomically
+    Given an active Azure DevOps discovery worker and one page of Git refs
+    When the source page is saved in PostgreSQL
+    Then its normalized SHA-256 ref observations are saved in batches
+    And an interrupted page cannot leave a partial ref catalog
+    And provisional observations never mark canonical refs as missing
+
+  Scenario: Conflicting source refs reject an entire page
+    Given a saved Git ref from the first source page
+    When another page contains that same ref name with a different object ID
+    Then the new page and all its ref observations roll back
+    And the first committed source page and its audit remain unchanged
+
   Scenario: Failed Azure DevOps ref pagination resumes from the saved page
     Given a leased discovery job which saved the first page of Git refs
     When the second page fails with a transient provider error

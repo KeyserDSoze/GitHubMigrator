@@ -48,6 +48,17 @@ public static class MigrationJobEndpoints
             return job is null ? Results.NotFound(new { error = "JobNotFound" }) : Results.Ok(job);
         });
 
+        routes.MapGet("/{jobId:guid}/ref-progress", async Task<IResult> (
+            Guid jobId, MigrationJobService service,
+            IDiscoveryRefIngestProgress observations, CancellationToken ct) =>
+        {
+            var job = await service.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            return Results.Ok(await observations.GetAsync(jobId, ct));
+        });
+
         routes.MapGet("/{jobId:guid}/events", async Task<IResult> (
             Guid jobId, MigrationJobService service, CancellationToken ct) =>
         {

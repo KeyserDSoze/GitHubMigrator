@@ -467,7 +467,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         // HTTP test from other worker tests' intentionally abandoned leases.
         await using (var reset = harness.Host.Services.CreateAsyncScope())
             await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
         // The staging catalog is shared across API tests: use an isolated
         // logical source connection so exact asset count assertions are stable.
         var sourceId = Guid.NewGuid();
@@ -559,7 +559,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         await using (var scope = harness.Host.Services.CreateAsyncScope())
         {
             await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
             await scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>()
                 .SaveAsync(secretRef, ApiHarness.SourceToken, default);
             await scope.ServiceProvider.GetRequiredService<IConnectionRepository>().SaveAsync(
@@ -660,6 +660,30 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             Assert.Equal(2, pages.Count(x => x.ResourceKey.StartsWith("security-acl:", StringComparison.Ordinal)));
             Assert.All(pages, x => Assert.DoesNotContain(ApiHarness.SourceToken, x.SafePayloadJson));
         }
+
+        using var progressRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/ref-progress");
+        progressRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var progressReply = await harness.Client.SendAsync(progressRequest);
+        Assert.Equal(HttpStatusCode.OK, progressReply.StatusCode);
+        using var progress = JsonDocument.Parse(await progressReply.Content.ReadAsStringAsync());
+        Assert.Equal(jobId, progress.RootElement.GetProperty("jobId").GetGuid());
+        Assert.Equal(1, progress.RootElement.GetProperty("checkpointedRefPages").GetInt32());
+        Assert.Equal(1, progress.RootElement.GetProperty("observedRefs").GetInt32());
+
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var streamed = await db.DiscoveryRefObservations.AsNoTracking()
+                .SingleAsync(x => x.JobId == jobId);
+            var committed = await db.StagingAssets.AsNoTracking()
+                .SingleAsync(x => x.SourceConnectionId == sourceId && x.AssetType == "ref");
+            Assert.Equal(committed.SourceId, streamed.SourceId);
+            Assert.Equal(committed.Fingerprint, streamed.Fingerprint);
+        }
+        using var progressUnauthenticated = await harness.Client.GetAsync(
+            $"/api/jobs/{jobId}/ref-progress");
+        Assert.Equal(HttpStatusCode.Unauthorized, progressUnauthenticated.StatusCode);
 
         var providerReadCount = harness.Calls.Count;
         using var replay = await PostAsync("/api/jobs/discovery", payload, admin);

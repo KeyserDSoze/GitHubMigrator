@@ -136,6 +136,23 @@ public static class Bootstrap
                 saved_at_utc timestamp with time zone NOT NULL,
                 PRIMARY KEY (job_id, resource_key, page_index)
             );
+            -- Provisional Git ref observations: atomic with committed source pages.
+            -- These are NOT the committed canonical catalog and cannot mark missing refs.
+            CREATE TABLE IF NOT EXISTS discovery_ref_observations (
+                job_id uuid NOT NULL REFERENCES migration_jobs(id) ON DELETE CASCADE,
+                source_id varchar(1024) NOT NULL,
+                repository_id varchar(256) NOT NULL,
+                fingerprint varchar(64) NOT NULL,
+                payload_json jsonb NOT NULL,
+                resource_key varchar(256) NOT NULL,
+                page_index integer NOT NULL,
+                PRIMARY KEY (job_id, source_id),
+                FOREIGN KEY (job_id, resource_key, page_index)
+                    REFERENCES discovery_page_checkpoints(job_id, resource_key, page_index)
+                    ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS ix_discovery_ref_observations_repo
+                ON discovery_ref_observations(job_id, repository_id);
             CREATE TABLE IF NOT EXISTS migration_connection_secrets (
                 reference varchar(100) PRIMARY KEY,
                 ciphertext bytea NOT NULL,

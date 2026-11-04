@@ -50,6 +50,10 @@ The source reader retains its limits of 30 pages per project/ref/user collection
 - Full API integration: a real GET-only Azure DevOps discovery job creates three safe page checkpoints, final snapshot and normalized staging result.
 - Existing queue, HTTP RBAC, browser and Terraform test suites continue to run.
 
+## Per-page normalized Git ref observations (F-014)
+
+Source Git ref pages now also produce normalized **provisional** PostgreSQL observations, committed atomically with each page checkpoint. The new admin-only per-job progress endpoint shows the saved page/ref counts; the canonical F-013 catalog changes only after the complete snapshot has been accepted. See [F-014 implementation and limits](streamed-ref-observations.md). Collection still builds the full immutable inventory in memory at the end.
+
 ## Not yet implemented — scalability roadmap
 
 This increment does **not** persist progress for TFVC trees, arbitrary Work Items/pipelines/Boards or provider-side delta scans. Project capabilities and repository lists are checkpointed as single-response sections, not pageable server-side listings; the Azure REST responses may still be large. In-flight provider GETs that fail *before* the page is committed may be repeated. The Azure DevOps REST API does not give a guaranteed point-in-time snapshot across separate page requests; changes during a long scan can require a new verification pass.

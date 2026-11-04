@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -14,6 +14,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [detail, setDetail] = useState<DiscoveryDetail | null>(null);
   const [staging, setStaging] = useState<StagingSyncResult | null>(null);
   const [job, setJob] = useState<MigrationJob | null>(null);
+  const [refProgress, setRefProgress] = useState<DiscoveryRefIngestProgress | null>(null);
   const [tab, setTab] = useState<Tab>('projects');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -79,7 +80,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
 
   async function scan() {
     if (!sourceId) return;
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); setError(''); setNotice(''); setRefProgress(null);
     try {
       // Preserve the request ID after an uncertain network failure so retry
       // cannot enqueue a second scan while the first is being processed.
@@ -121,6 +122,11 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     if (!job || (job.state !== 'Queued' && job.state !== 'Running')) return;
     let active = true;
     const timer = window.setInterval(() => {
+      if (job.kind === 'DiscoverSource') {
+        void api.getDiscoveryRefProgress(token, job.id).then(progress => {
+          if (active) setRefProgress(progress);
+        }).catch(() => {}); // Status polling remains usable if progress endpoint is unavailable.
+      }
       void api.getMigrationJob(token, job.id).then(current => {
         if (!active) return;
         setJob(current);
@@ -185,6 +191,13 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
       {' · '}{job.attempts}/{job.maxAttempts} {t('jobAttempts')}
       {job.lastErrorCode && <> · {t('jobErrorCode')}: {job.lastErrorCode}</>}
     </section>}
+    {job?.kind === 'DiscoverSource' && refProgress?.jobId === job.id &&
+      <section className="notice" role="status" aria-label={t('discoveryRefProgressTitle')}>
+        <strong>{t('discoveryRefProgressTitle')}</strong>
+        {' · '}{refProgress.observedRefs} {t('discoveryRefProgressRefs')}
+        {' · '}{refProgress.checkpointedRefPages} {t('discoveryRefProgressPages')}
+        {' · '}{t('discoveryRefProgressProvisional')}
+      </section>}
     {staging && <section className="notice" role="status" aria-label={t('stagingStatus')}>
       <strong>{t('stagingStatus')}</strong> · {staging.observed} {t('stagingObserved')}
       {' · +'}{staging.added} {t('stagingAdded')}

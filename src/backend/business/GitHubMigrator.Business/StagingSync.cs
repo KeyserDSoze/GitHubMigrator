@@ -49,6 +49,24 @@ public static class StagingAssetNormalizer
 {
     public const int MaxAssetsPerSnapshot = 200_000;
 
+    // The same canonical representation is used by the final snapshot import
+    // and by provisional per-page observations, preventing divergent hashes.
+    public static StagingAssetInput NormalizeRef(string repositoryId, string refName, string objectId)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId) || string.IsNullOrWhiteSpace(refName) ||
+            string.IsNullOrWhiteSpace(objectId))
+            throw new StagingSyncInputException("InvalidStagingAssetId");
+        var sourceId = JsonSerializer.Serialize(new[] { repositoryId, refName });
+        if (sourceId.Length > 1024)
+            throw new StagingSyncInputException("InvalidStagingAssetId");
+        var payload = JsonSerializer.Serialize(new { ObjectId = objectId });
+        if (payload.Length > 65_536)
+            throw new StagingSyncInputException("StagingAssetTooLarge");
+        var fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+            "staging-v1\nref\n" + payload)));
+        return new("ref", sourceId, null, fingerprint, payload);
+    }
+
     public static (IReadOnlyList<StagingAssetInput> Assets, IReadOnlySet<string> CompleteTypes)
         Normalize(DiscoveryInventory inventory)
     {
@@ -89,9 +107,12 @@ public static class StagingAssetNormalizer
         }
         foreach (var reference in inventory.Refs)
         {
-            // JSON tuple produces an unambiguous composite identity for each repository/ref.
-            var id = JsonSerializer.Serialize(new[] { reference.RepositoryId, reference.Name });
-            Add("ref", id, null, new { reference.ObjectId });
+            var normalized = NormalizeRef(reference.RepositoryId, reference.Name, reference.ObjectId);
+            var key = (normalized.AssetType, normalized.SourceId);
+            if (!assets.TryAdd(key, normalized))
+                throw new StagingSyncInputException("DuplicateStagingAsset");
+            if (assets.Count > MaxAssetsPerSnapshot)
+                throw new StagingSyncInputException("StagingAssetLimit");
         }
         foreach (var identity in inventory.Snapshot.Identities)
             Add("identity", identity.ProviderId, null, new {

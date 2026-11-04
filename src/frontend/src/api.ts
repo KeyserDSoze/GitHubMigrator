@@ -8,6 +8,9 @@ export type ConnectionDraft = { name: string; providerKey: string; organization:
 export type ValidationResult = {
   isValid: boolean; code: string; authenticatedAs: string | null; permissionAssessment: string
 };
+export type DiscoveryRefIngestProgress = {
+  jobId: string; checkpointedRefPages: number; observedRefs: number;
+};
 export type MigrationJob = {
   id: string; kind: 'StageSnapshot' | 'DiscoverSource'; snapshotId: string; sourceConnectionId: string;
   enqueuedBy: string; state: 'Queued' | 'Running' | 'Succeeded' | 'Failed';
@@ -201,6 +204,9 @@ export const api = {
     call<MigrationJob>('/api/jobs/staging', {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ snapshotId })
     }),
+  getDiscoveryRefProgress: (token: string, jobId: string) =>
+    call<DiscoveryRefIngestProgress>(`/api/jobs/${encodeURIComponent(jobId)}/ref-progress`,
+      { headers: withToken(token) }),
   getMigrationJob: (token: string, jobId: string) =>
     call<MigrationJob>(`/api/jobs/${encodeURIComponent(jobId)}`,
       { headers: withToken(token) }),

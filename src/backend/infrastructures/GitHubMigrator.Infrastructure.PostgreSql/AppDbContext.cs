@@ -33,6 +33,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<MigrationJobRecord> MigrationJobs => Set<MigrationJobRecord>();
     public DbSet<MigrationJobEventRecord> MigrationJobEvents => Set<MigrationJobEventRecord>();
     public DbSet<DiscoveryPageCheckpointRecord> DiscoveryPageCheckpoints => Set<DiscoveryPageCheckpointRecord>();
+    public DbSet<DiscoveryRefObservationRecord> DiscoveryRefObservations => Set<DiscoveryRefObservationRecord>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -183,6 +184,20 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.SafePayloadJson).HasColumnName("safe_payload_json").HasColumnType("jsonb");
             entity.Property(x => x.NextContinuation).HasColumnName("next_continuation").HasMaxLength(4096);
             entity.Property(x => x.SavedAtUtc).HasColumnName("saved_at_utc");
+        });
+        builder.Entity<DiscoveryRefObservationRecord>(entity =>
+        {
+            entity.ToTable("discovery_ref_observations");
+            entity.HasKey(x => new { x.JobId, x.SourceId });
+            entity.Property(x => x.JobId).HasColumnName("job_id");
+            entity.Property(x => x.SourceId).HasColumnName("source_id").HasMaxLength(1024);
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id").HasMaxLength(256);
+            entity.Property(x => x.Fingerprint).HasColumnName("fingerprint").HasMaxLength(64);
+            entity.Property(x => x.PayloadJson).HasColumnName("payload_json").HasColumnType("jsonb");
+            entity.Property(x => x.ResourceKey).HasColumnName("resource_key").HasMaxLength(256);
+            entity.Property(x => x.PageIndex).HasColumnName("page_index");
+            entity.HasIndex(x => new { x.JobId, x.RepositoryId })
+                .HasDatabaseName("ix_discovery_ref_observations_repo");
         });
         builder.Entity<EncryptedSecretRecord>(entity =>
         {
