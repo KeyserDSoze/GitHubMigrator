@@ -39,7 +39,7 @@ public static class MigrationJobEndpoints
             }
             catch (KeyNotFoundException) { return Results.NotFound(new { error = "ConnectionNotFound" }); }
             catch (MigrationJobInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
-        }).RequireRateLimiting("external");
+        }).RequireRateLimiting("discovery-queue");
 
         routes.MapGet("/{jobId:guid}", async Task<IResult> (
             Guid jobId, MigrationJobService service, CancellationToken ct) =>
