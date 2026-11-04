@@ -53,6 +53,38 @@ public static class Bootstrap
                 repositories_json jsonb NOT NULL,
                 PRIMARY KEY (snapshot_id, destination_connection_id)
             );
+            CREATE TABLE IF NOT EXISTS staging_assets (
+                source_connection_id uuid NOT NULL,
+                asset_type varchar(32) NOT NULL,
+                source_id varchar(1024) NOT NULL,
+                project_id varchar(512) NULL,
+                fingerprint varchar(64) NOT NULL,
+                payload_json jsonb NOT NULL,
+                first_snapshot_id uuid NOT NULL,
+                last_seen_snapshot_id uuid NOT NULL,
+                last_changed_snapshot_id uuid NOT NULL,
+                revision integer NOT NULL,
+                missing boolean NOT NULL DEFAULT false,
+                PRIMARY KEY (source_connection_id, asset_type, source_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_staging_assets_changed
+                ON staging_assets(source_connection_id, last_changed_snapshot_id);
+            CREATE INDEX IF NOT EXISTS ix_staging_assets_missing
+                ON staging_assets(source_connection_id, missing);
+            CREATE TABLE IF NOT EXISTS staging_snapshot_syncs (
+                snapshot_id uuid PRIMARY KEY,
+                source_connection_id uuid NOT NULL,
+                source_collected_at_utc timestamp with time zone NOT NULL,
+                applied_at_utc timestamp with time zone NOT NULL,
+                observed integer NOT NULL,
+                added integer NOT NULL,
+                changed integer NOT NULL,
+                unchanged integer NOT NULL,
+                marked_missing integer NOT NULL,
+                source_inventory_complete boolean NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_staging_snapshot_syncs_source
+                ON staging_snapshot_syncs(source_connection_id, source_collected_at_utc);
             CREATE TABLE IF NOT EXISTS migration_connection_secrets (
                 reference varchar(100) PRIMARY KEY,
                 ciphertext bytea NOT NULL,
