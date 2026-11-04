@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
 import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult } from './api';
@@ -19,6 +19,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const pendingDiscoveryRequest = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isAdmin) { setLoading(false); return; }
@@ -29,7 +30,16 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         const available = connections.filter(c =>
           c.providerKey === 'azure-devops-services' && c.direction === 'source');
         setSources(available);
-        if (available.length) setSourceId(available[0].id);
+        if (available.length) {
+          setSourceId(available[0].id);
+          // Recover queued/running discovery state even if no snapshot exists yet.
+          void api.listMigrationJobs(token, available[0].id).then(jobs => {
+            if (!active) return;
+            setJob(existing =>
+              jobs.find(x => x.kind === 'DiscoverSource' &&
+                (x.state === 'Queued' || x.state === 'Running')) ?? existing);
+          }).catch(() => {});
+        }
         setSummaries(history);
         if (history.length) {
           setSelectedId(history[0].id);
@@ -40,7 +50,11 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
           ]).then(([value, stage, jobs]) => {
             if (active) {
               setDetail(value); setStaging(stage);
-              setJob(jobs.find(x => x.snapshotId === history[0].id) ?? null);
+              setJob(previous => previous?.kind === 'DiscoverSource' &&
+                (previous.state === 'Queued' || previous.state === 'Running')
+                  ? previous : jobs.find(x => x.kind === 'DiscoverSource' &&
+                    (x.state === 'Queued' || x.state === 'Running')) ??
+                    jobs.find(x => x.snapshotId === history[0].id) ?? null);
             }
           })
             .catch(() => { if (active) setError(t('operationError')); });
@@ -67,11 +81,14 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     if (!sourceId) return;
     setBusy(true); setError(''); setNotice('');
     try {
-      const saved = await api.scanDiscovery(token, sourceId);
-      setSummaries(current => [saved, ...current.filter(x => x.id !== saved.id)]);
-      await viewSnapshot(saved.id);
-      setNotice(t('discoverySummary'));
-    } catch { setError(t('discoveryScanError')); }
+      // Preserve the request ID after an uncertain network failure so retry
+      // cannot enqueue a second scan while the first is being processed.
+      const requestId = pendingDiscoveryRequest.current ?? crypto.randomUUID();
+      pendingDiscoveryRequest.current = requestId;
+      const accepted = await api.enqueueDiscoveryJob(token, sourceId, requestId);
+      setJob(accepted);
+      setNotice(t('discoveryQueued'));
+    } catch { setError(t('discoveryQueueError')); }
     finally { setBusy(false); }
   }
 
@@ -108,6 +125,17 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         if (!active) return;
         setJob(current);
         if (current.state === 'Succeeded' && current.result) setStaging(current.result);
+        if (current.kind === 'DiscoverSource' &&
+            (current.state === 'Succeeded' || current.state === 'Failed')) {
+          pendingDiscoveryRequest.current = null;
+          if (current.state === 'Succeeded' &&
+              current.snapshotId !== '00000000-0000-0000-0000-000000000000') {
+            void api.listDiscoveries(token).then(items => {
+              if (active) setSummaries(items);
+            }).catch(() => {});
+            void viewSnapshot(current.snapshotId);
+          }
+        }
       }).catch(() => { if (active) setError(t('jobRefreshError')); });
     }, 2000);
     return () => { active = false; window.clearInterval(timer); };
@@ -138,7 +166,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         </select>
       </label>
       <button className="primary" disabled={busy || loading || !sourceId} type="button" onClick={() => { void scan(); }}>
-        <RefreshCw size={16} /> {busy ? t('discoveryBusy') : t('discoveryStart')}
+        <RefreshCw size={16} /> {busy ? t('discoveryBusy') : t('discoveryQueueStart')}
       </button>
       <button className="plan-secondary" disabled={busy || loading || !selectedId} type="button"
         onClick={() => { void syncSnapshot(); }}>
@@ -153,7 +181,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     {error && <div className="alert" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     {job && <section className="notice" role="status" aria-label={t('jobStatusTitle')}>
-      <strong>{t('jobStatusTitle')}</strong> · {t('jobState' + job.state)}
+      <strong>{job.kind === 'DiscoverSource' ? t('discoveryJobStatusTitle') : t('jobStatusTitle')}</strong> · {t('jobState' + job.state)}
       {' · '}{job.attempts}/{job.maxAttempts} {t('jobAttempts')}
       {job.lastErrorCode && <> · {t('jobErrorCode')}: {job.lastErrorCode}</>}
     </section>}
