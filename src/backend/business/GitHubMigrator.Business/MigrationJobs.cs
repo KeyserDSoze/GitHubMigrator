@@ -127,7 +127,8 @@ public sealed class MigrationJobProcessor(
                     throw new InvalidOperationException("Discovery worker service not registered");
                 // Stable snapshot ID = job ID. A retry checks PostgreSQL first:
                 // if source discovery already committed, do not call Azure DevOps again.
-                var snapshot = await discovery.ScanAsync(lease.SourceConnectionId, work.Token, lease.Id);
+                var snapshot = await discovery.ScanAsync(lease.SourceConnectionId, work.Token, lease.Id,
+                    new DiscoveryLeaseContext(lease.Id, lease.LeaseToken, lease.Attempt));
                 snapshotId = snapshot.Id;
                 if (snapshotId != lease.Id || snapshot.ConnectionId != lease.SourceConnectionId)
                     throw new MigrationJobInputException("DiscoveryJobSourceMismatch");
@@ -153,6 +154,11 @@ public sealed class MigrationJobProcessor(
         }
         catch (StagingSyncInputException ex)
         {
+            await RecordFailureAsync(lease, ex.Code, true, shutdown);
+        }
+        catch (DiscoveryCheckpointException ex)
+        {
+            if (ex.Code == "DiscoveryLeaseLost") return true;
             await RecordFailureAsync(lease, ex.Code, true, shutdown);
         }
         catch (DiscoveryProviderException ex)

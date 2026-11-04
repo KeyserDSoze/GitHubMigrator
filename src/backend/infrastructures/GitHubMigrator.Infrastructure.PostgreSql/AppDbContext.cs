@@ -32,6 +32,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<StagingSnapshotSyncRecord> StagingSnapshotSyncs => Set<StagingSnapshotSyncRecord>();
     public DbSet<MigrationJobRecord> MigrationJobs => Set<MigrationJobRecord>();
     public DbSet<MigrationJobEventRecord> MigrationJobEvents => Set<MigrationJobEventRecord>();
+    public DbSet<DiscoveryPageCheckpointRecord> DiscoveryPageCheckpoints => Set<DiscoveryPageCheckpointRecord>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -170,6 +171,18 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
             entity.Property(x => x.ErrorCode).HasColumnName("error_code").HasMaxLength(70);
             entity.HasIndex(x => new { x.JobId, x.Id }).HasDatabaseName("ix_migration_job_events_job");
+        });
+        builder.Entity<DiscoveryPageCheckpointRecord>(entity =>
+        {
+            entity.ToTable("discovery_page_checkpoints");
+            entity.HasKey(x => new { x.JobId, x.ResourceKey, x.PageIndex });
+            entity.Property(x => x.JobId).HasColumnName("job_id");
+            entity.Property(x => x.ResourceKey).HasColumnName("resource_key").HasMaxLength(256);
+            entity.Property(x => x.PageIndex).HasColumnName("page_index");
+            entity.Property(x => x.RequestHash).HasColumnName("request_hash").HasMaxLength(64);
+            entity.Property(x => x.SafePayloadJson).HasColumnName("safe_payload_json").HasColumnType("jsonb");
+            entity.Property(x => x.NextContinuation).HasColumnName("next_continuation").HasMaxLength(4096);
+            entity.Property(x => x.SavedAtUtc).HasColumnName("saved_at_utc");
         });
         builder.Entity<EncryptedSecretRecord>(entity =>
         {

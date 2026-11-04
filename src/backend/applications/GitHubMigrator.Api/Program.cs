@@ -60,6 +60,7 @@ builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>(
 builder.Services.AddScoped<ConnectionService>();
 builder.Services.AddScoped<IDiscoveryRepository, PostgresDiscoveryRepository>();
 builder.Services.AddScoped<DiscoveryService>();
+builder.Services.AddScoped<IDiscoveryPageCheckpointStore, PostgresDiscoveryPageCheckpointStore>();
 builder.Services.AddScoped<IStagingRepository, PostgresStagingRepository>();
 builder.Services.AddScoped<StagingSyncService>();
 builder.Services.AddScoped<IMigrationJobRepository, PostgresMigrationJobRepository>();

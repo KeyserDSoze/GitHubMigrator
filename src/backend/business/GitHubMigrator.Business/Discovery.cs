@@ -13,6 +13,37 @@ public interface IDiscoveryReader
     Task<DiscoveryInventory> DiscoverAsync(Guid connectionId, string organization, string accessToken, CancellationToken ct);
 }
 
+// A durable source reader may reuse page-level PostgreSQL checkpoints. The
+// ordinary reader interface stays compatible with synchronous discovery and
+// adapters that do not support granular resume.
+public readonly record struct DiscoveryLeaseContext(Guid JobId, Guid LeaseToken, int Attempt);
+public interface IResumableDiscoveryReader : IDiscoveryReader
+{
+    Task<DiscoveryInventory> DiscoverWithCheckpointsAsync(
+        Guid connectionId, string organization, string accessToken,
+        DiscoveryLeaseContext lease, CancellationToken ct);
+}
+
+// Page data is strictly allowlisted discovery metadata. Opaque continuation
+// markers stay in the database, never in job status, events or API responses.
+public sealed record DiscoveryPageCheckpoint(
+    Guid JobId, string ResourceKey, int PageIndex, string RequestHash,
+    string SafePayloadJson, string? NextContinuation, DateTimeOffset SavedAtUtc);
+
+public interface IDiscoveryPageCheckpointStore
+{
+    Task<DiscoveryPageCheckpoint?> GetAsync(
+        Guid jobId, string resourceKey, int pageIndex, CancellationToken ct);
+    Task<DiscoveryPageCheckpoint> SaveAsync(
+        DiscoveryLeaseContext lease, DiscoveryPageCheckpoint page, CancellationToken ct);
+}
+
+public sealed class DiscoveryCheckpointException(string code)
+    : Exception("Invalid or expired discovery page checkpoint")
+{
+    public string Code { get; } = code;
+}
+
 public interface IDiscoveryRepository
 {
     Task SaveAsync(DiscoveryInventory inventory, CancellationToken ct);
@@ -33,7 +64,8 @@ public sealed class DiscoveryService(
     public Task<DiscoveryInventory?> GetAsync(Guid id, CancellationToken ct) => repository.GetAsync(id, ct);
 
     public async Task<DiscoveryInventory> ScanAsync(
-        Guid connectionId, CancellationToken ct, Guid? stableSnapshotId = null)
+        Guid connectionId, CancellationToken ct, Guid? stableSnapshotId = null,
+        DiscoveryLeaseContext? checkpointLease = null)
     {
         var connection = await connections.GetAsync(connectionId, ct)
             ?? throw new KeyNotFoundException("Connection not found");
@@ -59,7 +91,12 @@ public sealed class DiscoveryService(
         var token = await credentials.ReadAsync(connection.SecretReference, ct);
         if (string.IsNullOrWhiteSpace(token)) throw new DiscoveryProviderException("CredentialMissing");
         // Reader can only access this transient token during the operation, never through the persisted inventory.
-        var inventory = await reader.DiscoverAsync(connection.Id, connection.Organization, token, ct);
+        // Checkpoints are enabled only for a leased worker attempt, never for
+        // a synchronous request that has no exclusive source-job ownership.
+        var inventory = checkpointLease is { } lease && reader is IResumableDiscoveryReader resumable
+            ? await resumable.DiscoverWithCheckpointsAsync(
+                connection.Id, connection.Organization, token, lease, ct)
+            : await reader.DiscoverAsync(connection.Id, connection.Organization, token, ct);
         if (inventory.ConnectionId != connection.Id || inventory.SourceProvider != connection.ProviderKey ||
             inventory.Organization != connection.Organization)
             throw new InvalidOperationException("Source adapter returned an inventory for another connection.");

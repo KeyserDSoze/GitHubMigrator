@@ -1,0 +1,50 @@
+# F-008 — Durable Azure DevOps page checkpoints (first granular slice)
+
+**Implemented scope:** the existing read-only Azure DevOps Services discovery worker now persists an immutable page checkpoint after each successfully retrieved **project list**, **Git repository refs**, and **Graph users** page. On a retry of the same discovery job, saved pages are reconstructed from PostgreSQL, their request fingerprints are checked, and those provider pages are not downloaded again.
+
+The design extends the stable whole-snapshot checkpoint in [asynchronous discovery](async-discovery.md) and the F-008 PostgreSQL queue in [durable jobs](durable-jobs.md).
+
+## Collection flow
+
+1. An admin enqueues one `DiscoverSource` job for a verified source connection.
+2. The worker claims a durable, lease-fenced attempt.
+3. The source reader checks `discovery_page_checkpoints` for `(job_id, resource_key, page_index)` before each eligible GET.
+4. An existing page is returned from `safe_payload_json`, **only if** the SHA-256 hash of the exact provider request URL matches the saved `request_hash`.
+5. Otherwise the reader issues the fixed-host Azure DevOps GET, retains only known fields, stores an immutable PostgreSQL page under the current worker lease and records a `PageSaved` audit event.
+6. The reader reconstructs the continuation marker from the saved page and proceeds to the next page, even after a process crash.
+7. A successful full inventory becomes an immutable `migration_discoveries` snapshot (job ID = snapshot ID), then the F-013 staging hash catalog is updated.
+8. If a crash occurs after the final snapshot commit, the original F-008 checkpoint resumes immediately from that snapshot without source requests.
+
+## Supported pageable resources
+
+| Resource key | Azure DevOps API | Safe persisted fields |
+| --- | --- | --- |
+| `projects` | `/_apis/projects` (100 entries per request) | `id`, `name` |
+| `refs:{repoId}` | `/_apis/git/repositories/{repoId}/refs` (up to 1,000 refs/request) | `name`, `objectId` |
+| `graph-users` | `/_apis/graph/users` | `descriptor`, `displayName`, `mailAddress`, `legacyDescriptor` |
+
+The same bounded reader caps remain: 30 pages per pageable collection, 2,000 projects, 30,000 refs per repository, 15,000 users. Per-page checkpoint payloads are bounded to 1 MiB of UTF-8 metadata. Project, ref and user metadata is still collected in memory until the final source snapshot is saved. **This is page-level replay, not full streaming ingest.**
+
+## Data integrity, authorization and recovery
+
+- `discovery_page_checkpoints` has a composite PK on `(job_id, resource_key, page_index)`, a foreign key to `migration_jobs`, an opaque `next_continuation`, a SHA-256 request fingerprint and a `jsonb` allowlisted response payload.
+- `INSERT ... SELECT FROM owner ... ON CONFLICT DO NOTHING` under a PostgreSQL `FOR UPDATE` lease check means an expired/reclaimed attempt cannot append new pages. Two attempts cannot silently change a checkpoint.
+- The canonical payload is verified using semantic JSON equality after PostgreSQL's `jsonb` normalization. Request mismatches fail closed.
+- A transient page error (provider unavailable/timeout) causes the durable scan to retry, rather than silently treating missing Git refs or Graph users as completed evidence. Permanent scope/permission problems remain visible through the inventory's partial-coverage semantics.
+- No PAT, arbitrary API JSON, provider error body or authorization header is persisted as a checkpoint. Opaque continuation tokens are stored only in PostgreSQL, never returned in the job status API.
+- Data is partitioned by job ID. New scans have distinct job IDs and do **not** reuse older pages: this avoids importing stale page contents into new source snapshots.
+- These source reads **never** grant access, create repositories or write to GitHub.
+
+## Tests
+
+- Reader unit: transient error on page two of 1,001 Git refs, retry without re-fetching page one or the projects page; correct opaque continuation and excluded unknown/secret-like fields.
+- Reader unit: mismatched request fingerprint aborts before calling Azure DevOps.
+- PostgreSQL integration: immutable checkpoints and append-only `PageSaved` audit, JSONB key-order replay, stale lease rejection, active lease acceptance, conflicting request fingerprint protection.
+- Full API integration: a real GET-only Azure DevOps discovery job creates three safe page checkpoints, final snapshot and normalized staging result.
+- Existing queue, HTTP RBAC, browser and Terraform test suites continue to run.
+
+## Not yet implemented — scalability roadmap
+
+This increment does **not** persist progress for project capability queries, repository enumeration, TFVC trees, security ACL evidence, group membership collection, or arbitrary Work Items/pipelines. In-flight provider GETs that fail *before* the page is committed may be repeated. The Azure DevOps REST API does not give a guaranteed point-in-time snapshot across separate page requests; changes during a long scan can require a new verification pass.
+
+Next work: checkpoint all relevant sources including security pages, move large collections directly into chunked staging tables without retaining the whole inventory in RAM, add provider-side delta synchronization where supported, scheduling, rate limit backpressure, production EF migrations and measured load tests (10k–1m assets). Until these are delivered, no enterprise throughput claim is warranted.

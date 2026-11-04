@@ -195,7 +195,7 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
         // assuming which job a worker should claim.
         await using var db = fixture.NewContext();
         await db.Database.ExecuteSqlRawAsync(
-            "TRUNCATE TABLE migration_job_events, migration_jobs RESTART IDENTITY", CancellationToken.None);
+            "TRUNCATE TABLE discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY", CancellationToken.None);
     }
 
     private static StagingSyncResult Result(MigrationJobLease lease) =>

@@ -467,7 +467,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         // HTTP test from other worker tests' intentionally abandoned leases.
         await using (var reset = harness.Host.Services.CreateAsyncScope())
             await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
         // The staging catalog is shared across API tests: use an isolated
         // logical source connection so exact asset count assertions are stable.
         var sourceId = Guid.NewGuid();
@@ -559,7 +559,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         await using (var scope = harness.Host.Services.CreateAsyncScope())
         {
             await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
             await scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>()
                 .SaveAsync(secretRef, ApiHarness.SourceToken, default);
             await scope.ServiceProvider.GetRequiredService<IConnectionRepository>().SaveAsync(
@@ -638,8 +638,22 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var eventResponse = await harness.Client.SendAsync(eventRequest);
         Assert.Equal(HttpStatusCode.OK, eventResponse.StatusCode);
         using var events = JsonDocument.Parse(await eventResponse.Content.ReadAsStringAsync());
-        Assert.Equal(new[] { "Queued", "Claimed", "SnapshotSaved", "Succeeded" },
+        // Three independent page checkpoints (projects, Git refs, Graph users)
+        // must be persisted in addition to the final snapshot.
+        Assert.Equal(new[] { "Queued", "Claimed", "PageSaved", "PageSaved", "PageSaved",
+                "SnapshotSaved", "Succeeded" },
             events.RootElement.EnumerateArray().Select(x => x.GetProperty("eventType").GetString()));
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var pages = await db.DiscoveryPageCheckpoints.AsNoTracking()
+                .Where(x => x.JobId == jobId).ToListAsync();
+            Assert.Equal(3, pages.Count);
+            Assert.Contains(pages, x => x.ResourceKey == "projects");
+            Assert.Contains(pages, x => x.ResourceKey == "refs:source-git");
+            Assert.Contains(pages, x => x.ResourceKey == "graph-users");
+            Assert.All(pages, x => Assert.DoesNotContain(ApiHarness.SourceToken, x.SafePayloadJson));
+        }
 
         var providerReadCount = harness.Calls.Count;
         using var replay = await PostAsync("/api/jobs/discovery", payload, admin);
