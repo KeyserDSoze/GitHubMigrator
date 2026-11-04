@@ -125,6 +125,39 @@ public sealed class PostgresStagingSyncIntegrationTests(PostgresDraftFixture fix
         Assert.Equal(b.Id, (await repo.GetSummaryAsync(b.ConnectionId, default)).LatestSnapshotId);
     }
 
+    [Fact]
+    public async Task Failed_second_batch_rolls_back_first_batch_and_release_source_lock_for_retry()
+    {
+        var source = Guid.NewGuid();
+        var inventory = Snapshot(source, DateTimeOffset.UtcNow, "sha");
+        var invalid = Enumerable.Range(0, 300).Select(i =>
+            new StagingAssetInput("ref", $"source-{i:0000}", null, new string('a', 64),
+                i == 275 ? "{bad-json" : "{}")).ToArray();
+        await using (var failingDb = fixture.NewContext())
+        {
+            var repository = new PostgresStagingRepository(failingDb, TimeProvider.System);
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                repository.ApplyAsync(inventory, invalid, new HashSet<string>(), default));
+        }
+
+        await using (var verify = fixture.NewContext())
+        {
+            Assert.Equal(0, await verify.StagingAssets.CountAsync(x => x.SourceConnectionId == source));
+            Assert.Null(await new PostgresStagingRepository(verify, TimeProvider.System)
+                .GetSyncAsync(inventory.Id, default));
+        }
+
+        // Recovery with corrected data uses the same snapshot and source advisory lock.
+        await using (var recovered = fixture.NewContext())
+        {
+            var repository = new PostgresStagingRepository(recovered, TimeProvider.System);
+            var normalized = StagingAssetNormalizer.Normalize(inventory);
+            var result = await repository.ApplyAsync(inventory, normalized.Assets,
+                normalized.CompleteTypes, default);
+            Assert.Equal(3, result.Added);
+        }
+    }
+
     private static DiscoveryInventory Snapshot(Guid connectionId, DateTimeOffset collected,
         string oid, DiscoveryCompleteness completeness = DiscoveryCompleteness.Partial,
         IReadOnlyList<RepositoryRef>? refs = null)
