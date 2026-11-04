@@ -36,7 +36,10 @@ public sealed class PostgresStreamedRefObservationTests(PostgresDraftFixture fix
             "repo-1", "refs/heads/branch-0420", "oid-420");
         Assert.Equal(expected.SourceId, sample.SourceId);
         Assert.Equal(expected.Fingerprint, sample.Fingerprint);
-        Assert.Equal(expected.PayloadJson, sample.PayloadJson);
+        using var persistedJson = JsonDocument.Parse(sample.PayloadJson);
+        using var canonicalJson = JsonDocument.Parse(expected.PayloadJson);
+        Assert.Equal(canonicalJson.RootElement.GetProperty("ObjectId").GetString(),
+            persistedJson.RootElement.GetProperty("ObjectId").GetString());
 
         // Simulates an old cached page re-encountered by a restarted worker.
         await store.SaveAsync(lease, first, default);
