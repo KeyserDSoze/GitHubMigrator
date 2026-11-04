@@ -155,6 +155,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasDatabaseName("ix_migration_jobs_ready");
             entity.HasIndex(x => new { x.SourceConnectionId, x.CreatedAtUtc })
                 .HasDatabaseName("ix_migration_jobs_source");
+            entity.HasIndex(x => x.SourceConnectionId).IsUnique()
+                .HasFilter("kind = 'DiscoverSource' AND state IN ('Queued', 'Running')")
+                .HasDatabaseName("ux_migration_jobs_active_discovery");
         });
         builder.Entity<MigrationJobEventRecord>(entity =>
         {
