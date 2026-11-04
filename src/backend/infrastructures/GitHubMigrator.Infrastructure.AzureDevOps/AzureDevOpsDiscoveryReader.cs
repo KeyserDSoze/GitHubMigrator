@@ -94,6 +94,7 @@ public sealed class AzureDevOpsDiscoveryReader(
                 }
             }
             catch (DiscoveryProviderException ex)
+                when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
             {
                 issues.Add(new(ex.Code, projectId));
             }
