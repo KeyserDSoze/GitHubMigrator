@@ -81,6 +81,10 @@ Open **Migration plan / Piano di migrazione** after discovery. Select source rep
 
 The **Discovery** workbench can enqueue an asynchronous staging synchronization. Jobs are stored in PostgreSQL, claimed by an atomic `SKIP LOCKED` lease across workers, retried with bounded backoff and recorded in an audit ledger. The same queue can now run a read-only Azure DevOps discovery, checkpoint the immutable source inventory and normalize it to staging, with one active scan per source connection. Status survives restarts and is polled in the UI. Only the read-only `StageSnapshot` and `DiscoverSource` job kinds are supported; no GitHub writes or automatic plan approvals. See [durable job architecture](docs/durable-jobs.md), [asynchronous discovery](docs/async-discovery.md) and [granular source, repository and security-evidence checkpoints](docs/durable-discovery-pages.md). The original direct staging sync remains available during transition.
 
+## F-014 per-page source ingestion
+
+During a queued Azure DevOps discovery, each Git ref page now commits **provisional normalized observations** into PostgreSQL in the same transaction as its immutable F-008 page checkpoint. This provides live ref/page counts, idempotent replay, worker-lease fencing and rollback without changing the authoritative F-013 catalog until full discovery finishes. The Discovery UI labels counts as provisional. This is **not yet constant-memory end-to-end streaming**, since the full immutable inventory is still materialized. See [F-014 design, API and tests](docs/streamed-ref-observations.md).
+
 ## F-013 canonical intermediate staging
 
 Each new Azure DevOps discovery now writes an immutable source snapshot and synchronizes a **normalized PostgreSQL asset catalog**. Assets receive stable source IDs, SHA-256 fingerprints, revision numbers and last-seen/changed snapshot references. The Discovery workbench displays added, changed and missing counts and allows idempotent retry. The admin API exposes indexed keyset pagination for future transform workers.
