@@ -83,7 +83,7 @@ public static class StagingAssetNormalizer
                 if (!string.Equals(repo.ProjectId, project.ProviderId, StringComparison.Ordinal))
                     throw new StagingSyncInputException("RepositoryProjectMismatch");
                 Add("repository", repo.ProviderId, repo.ProjectId, new {
-                    repo.Name, repo.VersionControl, repo.SourcePath
+                    repo.ProjectId, repo.Name, repo.VersionControl, repo.SourcePath
                 });
             }
         }
