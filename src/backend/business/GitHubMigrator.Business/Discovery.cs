@@ -38,6 +38,17 @@ public interface IDiscoveryPageCheckpointStore
         DiscoveryLeaseContext lease, DiscoveryPageCheckpoint page, CancellationToken ct);
 }
 
+// Ref observations may become visible before a complete discovery snapshot.
+// They are *provisional* and must never imply deletions, approved migrations
+// or committed canonical staging state.
+public sealed record DiscoveryRefIngestProgress(
+    Guid JobId, int CheckpointedRefPages, int ObservedRefs);
+
+public interface IDiscoveryRefIngestProgress
+{
+    Task<DiscoveryRefIngestProgress> GetAsync(Guid jobId, CancellationToken ct);
+}
+
 public sealed class DiscoveryCheckpointException(string code)
     : Exception("Invalid or expired discovery page checkpoint")
 {
