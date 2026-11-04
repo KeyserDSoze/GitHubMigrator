@@ -25,7 +25,7 @@ public sealed class AzureDevOpsPageCheckpointTests
                 ? "#continued" : "#start");
             calls[key] = calls.TryGetValue(key, out var n) ? n + 1 : 1;
             Assert.Equal(HttpMethod.Get, req.Method);
-            Assert.Contains(url.Host, ["dev.azure.com", "vssps.dev.azure.com"]);
+            Assert.Contains(url.Host, new[] { "dev.azure.com", "vssps.dev.azure.com" });
             if (path.EndsWith("/_apis/projects"))
                 return Json("""{"value":[{"id":"p1","name":"Project","unsafeField":"NOT_FOR_STAGING"}]}""");
             if (path.EndsWith("/_apis/projects/p1"))
