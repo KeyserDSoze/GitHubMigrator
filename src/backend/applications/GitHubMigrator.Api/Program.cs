@@ -174,6 +174,14 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    // Enqueueing work is cheap; it must not consume the shared external-API
+    // budget used by Boards, Pipelines and legacy synchronous discovery.
+    options.AddFixedWindowLimiter("discovery-queue", limiter =>
+    {
+        limiter.PermitLimit = 30;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 
