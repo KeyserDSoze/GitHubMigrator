@@ -18,6 +18,15 @@ public sealed record StagingCatalogSummary(
     Guid SourceConnectionId, Guid? LatestSnapshotId, DateTimeOffset? LastSyncAtUtc,
     int ActiveAssets, int MissingAssets, int TotalRevisions);
 
+public sealed record StagingAssetView(
+    string AssetType, string SourceId, string? ProjectId, string Fingerprint,
+    int Revision, bool Missing, Guid FirstSnapshotId, Guid LastSeenSnapshotId,
+    Guid LastChangedSnapshotId, JsonElement Properties);
+
+public sealed record StagingAssetPage(
+    Guid SourceConnectionId, string AssetType, IReadOnlyList<StagingAssetView> Items,
+    string? NextAfter);
+
 public interface IStagingRepository
 {
     Task<StagingSyncResult> ApplyAsync(DiscoveryInventory inventory,
@@ -25,6 +34,8 @@ public interface IStagingRepository
         CancellationToken ct);
     Task<StagingSyncResult?> GetSyncAsync(Guid snapshotId, CancellationToken ct);
     Task<StagingCatalogSummary> GetSummaryAsync(Guid sourceConnectionId, CancellationToken ct);
+    Task<StagingAssetPage> ListAssetsAsync(Guid sourceConnectionId, string assetType,
+        string? after, int take, CancellationToken ct);
 }
 
 public sealed class StagingSyncInputException(string code) : Exception("Invalid staging sync")
@@ -120,6 +131,21 @@ public sealed class StagingSyncService(IDiscoveryRepository discoveries, IStagin
 
     public Task<StagingCatalogSummary> GetSummaryAsync(Guid connectionId, CancellationToken ct) =>
         staging.GetSummaryAsync(connectionId, ct);
+
+    private static readonly HashSet<string> SupportedTypes = new(StringComparer.Ordinal)
+    {
+        "project", "repository", "ref", "identity", "group", "membership", "acl"
+    };
+
+    public Task<StagingAssetPage> ListAssetsAsync(Guid connectionId, string assetType,
+        string? after, int take, CancellationToken ct)
+    {
+        if (connectionId == Guid.Empty || !SupportedTypes.Contains(assetType))
+            throw new StagingSyncInputException("UnsupportedStagingAssetType");
+        if (take is < 1 or > 100 || (after?.Length ?? 0) > 1024)
+            throw new StagingSyncInputException("InvalidStagingPage");
+        return staging.ListAssetsAsync(connectionId, assetType, after, take, ct);
+    }
 
     public async Task<StagingSyncResult> SyncAsync(Guid snapshotId, CancellationToken ct)
     {
