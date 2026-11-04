@@ -118,7 +118,7 @@ public sealed class PostgresDiscoveryPageCheckpointTests(PostgresDraftFixture fi
     {
         await using var db = fixture.NewContext();
         await db.Database.ExecuteSqlRawAsync(
-            "TRUNCATE TABLE discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY",
+            "TRUNCATE TABLE discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY",
             CancellationToken.None);
     }
 
