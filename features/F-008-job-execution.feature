@@ -31,6 +31,20 @@ Feature: Durable and verifiable migration execution
     And the job never publishes repositories, Actions or Issues to GitHub
 
   # Future phases begin after governed F-005 plan approval, not in this slice.
+  Scenario: Failed Azure DevOps ref pagination resumes from the saved page
+    Given a leased discovery job which saved the first page of Git refs
+    When the second page fails with a transient provider error
+    Then the worker retries after bounded backoff
+    And the first page and its opaque cursor are reused from PostgreSQL
+    And only missing pages are fetched again
+    And unrecognized provider JSON fields are never persisted as page checkpoints
+
+  Scenario: Expired worker cannot append discovery pages
+    Given an in-progress discovery job that was reclaimed after lease expiration
+    When its previous worker tries to save another source page
+    Then PostgreSQL rejects that stale checkpoint write
+    And the current worker can continue from existing immutable pages
+
   Scenario: Async Azure DevOps discovery resumes after source snapshot commit
     Given a verified Azure DevOps source connection and an enqueued discovery job
     When a worker saves an immutable snapshot and then crashes before staging
