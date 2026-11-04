@@ -9,6 +9,7 @@
 | 2 | **F-003 Discovery** | F-002 | Read-only project, Git ref, TFVC branch-root and Graph-user snapshots | **MVP plus group/ACL evidence; effective permissions/live integration pending** |
 | 3 | F-004 Identity mapping | F-003 | Map GitHub logins, inherited access and orphan warnings | Planned |
 | 4 | F-005 Migration plan/preview | F-003/F-004 | Repo selection, renaming, permission/destination previews and approval | **Preview, versioned drafts, target collision probes and destination self-membership/policy review; approval pending** |
+| 4.5 | **F-013 Canonical staging and incremental sync** | F-003 | Indexed per-asset PostgreSQL catalog, SHA-256 deltas, idempotent source snapshot sync | **First working slice; provider delta polling and graph pending** |
 | 5 | F-008 Durable job execution | F-005 | Workers, retries, checkpoints, progress, audit and verification | Planned |
 | 6 | F-006 Native Git migration | F-005/F-008 | Mirror branches, tags and history; compare refs/SHAs | Planned |
 | 7 | F-007 TFVC conversion | F-005/F-008 | Best-effort changesets/branches conversion and evidence report | Research |
@@ -46,3 +47,7 @@
 7. Mocked HTTP unit tests, deterministic domain tests, endpoint tests, Playwright and optional live-provider smoke.
 
 **Definition of Done:** all acceptance criteria covered, CI green, no PATs/secret references in external responses or logs, supported permissions documented, backward-compatible schema handled, and an operator can complete the intended feature end-to-end.
+
+## Staging-driven migration engine
+
+F-013 normalizes F-003 discovery snapshots into a revisioned, queryable PostgreSQL catalog. See [staging-sync.md](../docs/staging-sync.md). Next: source API cursor/polling, dependency graph, pipeline/Boards staging, durable F-008 jobs, artifact storage and approved GitHub writes with reconciliation. Staging is not an approval or successful migration.
