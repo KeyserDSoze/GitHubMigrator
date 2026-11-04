@@ -462,6 +462,11 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
     [Fact]
     public async Task Durable_staging_job_HTTP_is_admin_only_idempotent_audited_and_worker_driven()
     {
+        // The queue is global to the test PostgreSQL instance; isolate this
+        // HTTP test from other worker tests' intentionally abandoned leases.
+        await using (var reset = harness.Host.Services.CreateAsyncScope())
+            await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
+                .ExecuteSqlRawAsync("TRUNCATE TABLE migration_job_events, migration_jobs RESTART IDENTITY");
         var snapshotId = Guid.NewGuid();
         var now = DateTimeOffset.UtcNow;
         await using (var scope = harness.Host.Services.CreateAsyncScope())
