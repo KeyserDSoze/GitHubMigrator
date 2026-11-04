@@ -37,6 +37,21 @@ public static class StagingEndpoints
             return state is null ? Results.NotFound(new { error = "StagingSyncNotFound" }) : Results.Ok(state);
         });
 
+        routes.MapGet("/connections/{connectionId:guid}/assets/{assetType}", async Task<IResult> (
+            Guid connectionId, string assetType, string? after, int? take,
+            StagingSyncService service, CancellationToken ct) =>
+        {
+            try
+            {
+                return Results.Ok(await service.ListAssetsAsync(connectionId,
+                    assetType, after, take ?? 50, ct));
+            }
+            catch (StagingSyncInputException ex)
+            {
+                return Results.BadRequest(new { error = ex.Code });
+            }
+        });
+
         routes.MapGet("/connections/{connectionId:guid}/summary", async (
             Guid connectionId, StagingSyncService service, CancellationToken ct) =>
             Results.Ok(await service.GetSummaryAsync(connectionId, ct)));
