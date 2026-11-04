@@ -104,8 +104,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.LastChangedSnapshotId).HasColumnName("last_changed_snapshot_id");
             entity.Property(x => x.Revision).HasColumnName("revision");
             entity.Property(x => x.Missing).HasColumnName("missing");
-            entity.HasIndex(x => new { x.SourceConnectionId, x.LastChangedSnapshotId });
-            entity.HasIndex(x => new { x.SourceConnectionId, x.Missing });
+            entity.HasIndex(x => new { x.SourceConnectionId, x.LastChangedSnapshotId })
+                .HasDatabaseName("ix_staging_assets_changed");
+            entity.HasIndex(x => new { x.SourceConnectionId, x.Missing })
+                .HasDatabaseName("ix_staging_assets_missing");
         });
         builder.Entity<StagingSnapshotSyncRecord>(entity =>
         {
@@ -121,7 +123,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.Unchanged).HasColumnName("unchanged");
             entity.Property(x => x.MarkedMissing).HasColumnName("marked_missing");
             entity.Property(x => x.SourceInventoryComplete).HasColumnName("source_inventory_complete");
-            entity.HasIndex(x => new { x.SourceConnectionId, x.SourceCollectedAtUtc });
+            entity.HasIndex(x => new { x.SourceConnectionId, x.SourceCollectedAtUtc })
+                .HasDatabaseName("ix_staging_snapshot_syncs_source");
         });
         builder.Entity<EncryptedSecretRecord>(entity =>
         {
