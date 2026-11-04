@@ -119,7 +119,7 @@ test('discovery worker survives page refresh while no snapshot has been saved', 
   const status = page.getByRole('status', { name: /job di staging persistente|durable staging job/i });
   await expect(status).toContainText(/in coda|queued/i);
   await expect(status).toContainText(/in esecuzione|running/i, { timeout: 15000 });
-  await expect(page.getByText(/nessun inventario salvato|no saved inventories/i)).toBeVisible();
+  await expect(page.getByText(/nessun inventario salvato|no saved inventories/i).first()).toBeVisible();
 });
 
 test('regular platform user cannot discover or read snapshots', async ({ page }) => {
