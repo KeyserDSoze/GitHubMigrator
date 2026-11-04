@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using GitHubMigrator.Business;
@@ -16,7 +17,9 @@ public sealed record SecurityEvidenceResult(
 
 // Fixed-host read-only security evidence, not a target access policy or an effective rights calculator.
 // Git namespace: 2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87; GenericRead=2, Contribute=4.
-public sealed class AzureDevOpsSecurityReader(HttpClient client)
+public sealed class AzureDevOpsSecurityReader(
+    HttpClient client, IDiscoveryPageCheckpointStore? checkpoints = null,
+    TimeProvider? clock = null)
 {
     private const string GitNamespace = "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87";
     private const int MaxGroupPages = 20;
@@ -26,7 +29,8 @@ public sealed class AzureDevOpsSecurityReader(HttpClient client)
     private const int MaxAclEntries = 30000;
 
     public async Task<SecurityEvidenceResult> ReadAsync(
-        string organization, string token, IReadOnlyList<SourceProject> projects, CancellationToken ct)
+        string organization, string token, IReadOnlyList<SourceProject> projects,
+        CancellationToken ct, DiscoveryLeaseContext? lease = null)
     {
         var groups = new List<DiscoveryGroup>();
         var edges = new List<DiscoveryMembership>();
@@ -44,7 +48,8 @@ public sealed class AzureDevOpsSecurityReader(HttpClient client)
                 var url = $"{graphRoot}/_apis/graph/groups?api-version=7.1-preview.1";
                 if (!string.IsNullOrEmpty(continuation))
                     url += $"&continuationToken={Uri.EscapeDataString(continuation)}";
-                using var response = await ReadAsync(url, token, ct);
+                using var response = await ReadCheckpointedAsync(
+                    url, token, lease, "security-groups", page, "groups", ct);
                 foreach (var group in Values(response.Document))
                 {
                     var descriptor = Text(group, "descriptor");
@@ -69,6 +74,7 @@ public sealed class AzureDevOpsSecurityReader(HttpClient client)
             }
         }
         catch (DiscoveryProviderException ex)
+            when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
         {
             groupsComplete = false;
             issues.Add(new("GroupsUnavailable:" + ex.Code));
@@ -95,7 +101,9 @@ public sealed class AzureDevOpsSecurityReader(HttpClient client)
             {
                 var url = $"{graphRoot}/_apis/graph/Memberships/{Uri.EscapeDataString(group.Descriptor)}" +
                     "?direction=down&depth=1&api-version=7.1-preview.1";
-                using var response = await ReadAsync(url, token, ct);
+                using var response = await ReadCheckpointedAsync(
+                    url, token, lease, "security-members:" + Hash(group.Descriptor),
+                    0, "memberships", ct);
                 foreach (var membership in Values(response.Document))
                 {
                     var container = Text(membership, "containerDescriptor");
@@ -107,6 +115,7 @@ public sealed class AzureDevOpsSecurityReader(HttpClient client)
                 }
             }
             catch (DiscoveryProviderException ex)
+                when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
             {
                 membershipsComplete = false;
                 issues.Add(new("MembershipsUnavailable:" + ex.Code));
@@ -138,9 +147,10 @@ public sealed class AzureDevOpsSecurityReader(HttpClient client)
             IReadOnlyList<AclRow> parentRows = [];
             try
             {
-                parentRows = await ReadAclAsync(root, token, projectToken, ct);
+                parentRows = await ReadAclAsync(root, token, projectToken, lease, ct);
             }
             catch (DiscoveryProviderException ex)
+                when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
             {
                 aclsCollected = false;
                 issues.Add(new("ProjectAclUnavailable:" + ex.Code, project.ProviderId));
@@ -154,11 +164,12 @@ public sealed class AzureDevOpsSecurityReader(HttpClient client)
                 try
                 {
                     var repoToken = $"{projectToken}/{repository.ProviderId}";
-                    foreach (var row in await ReadAclAsync(root, token, repoToken, ct))
+                    foreach (var row in await ReadAclAsync(root, token, repoToken, lease, ct))
                         acls.Add(new(repository.ProviderId, row.Token, row.Descriptor, row.Allow, row.Deny,
                             row.InheritPermissions, "repository"));
                 }
                 catch (DiscoveryProviderException ex)
+                    when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
                 {
                     aclsCollected = false;
                     issues.Add(new("RepositoryAclUnavailable:" + ex.Code, project.ProviderId, repository.ProviderId));
@@ -181,10 +192,11 @@ public sealed class AzureDevOpsSecurityReader(HttpClient client)
     }
 
     private async Task<IReadOnlyList<AclRow>> ReadAclAsync(string root, string token, string securityToken,
-        CancellationToken ct)
+        DiscoveryLeaseContext? lease, CancellationToken ct)
     {
         var url = $"{root}/_apis/accesscontrollists/{GitNamespace}?token={Uri.EscapeDataString(securityToken)}&api-version=7.1";
-        using var response = await ReadAsync(url, token, ct);
+        using var response = await ReadCheckpointedAsync(
+            url, token, lease, "security-acl:" + Hash(securityToken), 0, "acls", ct);
         var items = new List<AclRow>();
         foreach (var acl in Values(response.Document))
         {
@@ -211,6 +223,84 @@ public sealed class AzureDevOpsSecurityReader(HttpClient client)
             }
         }
         return items;
+    }
+
+    private static string Hash(string value) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..40];
+
+    private async Task<JsonPage> ReadCheckpointedAsync(
+        string url, string token, DiscoveryLeaseContext? lease, string resource,
+        int page, string kind, CancellationToken ct)
+    {
+        if (lease is null) return await ReadAsync(url, token, ct);
+        if (checkpoints is null)
+            throw new DiscoveryCheckpointException("CheckpointStorageUnavailable");
+        var requestHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(url)));
+        var existing = await checkpoints.GetAsync(lease.Value.JobId, resource, page, ct);
+        if (existing is not null)
+        {
+            if (!string.Equals(requestHash, existing.RequestHash, StringComparison.Ordinal))
+                throw new DiscoveryCheckpointException("CheckpointRequestMismatch");
+            try { return new JsonPage(JsonDocument.Parse(existing.SafePayloadJson), existing.NextContinuation); }
+            catch (JsonException) { throw new DiscoveryCheckpointException("CheckpointPayloadInvalid"); }
+        }
+
+        using var response = await ReadAsync(url, token, ct);
+        // Strict projections only. The full Graph/ACL responses may contain
+        // unexpected fields; those must never enter PostgreSQL checkpoints.
+        var safe = kind switch
+        {
+            "groups" => JsonSerializer.Serialize(new { value = Values(response.Document)
+                .Select(group => new { descriptor = Text(group, "descriptor"),
+                    displayName = Text(group, "displayName"),
+                    legacyDescriptor = Text(group, "legacyDescriptor") }).ToArray() }),
+            "memberships" => JsonSerializer.Serialize(new { value = Values(response.Document)
+                .Select(edge => new { containerDescriptor = Text(edge, "containerDescriptor"),
+                    memberDescriptor = Text(edge, "memberDescriptor") }).ToArray() }),
+            "acls" => SafeAcls(response.Document),
+            _ => throw new DiscoveryCheckpointException("UnknownCheckpointKind")
+        };
+        if (Encoding.UTF8.GetByteCount(safe) > 1_048_576)
+            throw new DiscoveryCheckpointException("CheckpointPageTooLarge");
+        var checkpoint = await checkpoints.SaveAsync(lease.Value,
+            new DiscoveryPageCheckpoint(lease.Value.JobId, resource, page,
+                requestHash, safe, response.Continuation,
+                (clock ?? TimeProvider.System).GetUtcNow()), ct);
+        try { return new JsonPage(JsonDocument.Parse(checkpoint.SafePayloadJson),
+            checkpoint.NextContinuation); }
+        catch (JsonException) { throw new DiscoveryCheckpointException("CheckpointPayloadInvalid"); }
+    }
+
+    private static string SafeAcls(JsonDocument doc)
+    {
+        var rows = new List<object>();
+        foreach (var acl in Values(doc))
+        {
+            var token = Text(acl, "token");
+            if (string.IsNullOrWhiteSpace(token) ||
+                !acl.TryGetProperty("acesDictionary", out var entries) ||
+                entries.ValueKind != JsonValueKind.Object)
+                throw new DiscoveryProviderException("UnexpectedResponse");
+            var dictionary = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (var entry in entries.EnumerateObject())
+            {
+                var descriptor = Text(entry.Value, "descriptor") ?? entry.Name;
+                if (!string.Equals(descriptor, entry.Name, StringComparison.Ordinal) ||
+                    !entry.Value.TryGetProperty("allow", out var allow) ||
+                    !allow.TryGetInt64(out var allowMask) ||
+                    !entry.Value.TryGetProperty("deny", out var deny) ||
+                    !deny.TryGetInt64(out var denyMask))
+                    throw new DiscoveryProviderException("UnexpectedResponse");
+                dictionary.Add(entry.Name, new { descriptor, allow = allowMask, deny = denyMask });
+            }
+            rows.Add(new {
+                token,
+                inheritPermissions = acl.TryGetProperty("inheritPermissions", out var inherit) &&
+                    inherit.ValueKind == JsonValueKind.True,
+                acesDictionary = dictionary
+            });
+        }
+        return JsonSerializer.Serialize(new { value = rows });
     }
 
     private async Task<JsonPage> ReadAsync(string url, string token, CancellationToken ct)
