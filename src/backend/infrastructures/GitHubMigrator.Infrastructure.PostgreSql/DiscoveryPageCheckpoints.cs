@@ -126,11 +126,16 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in rows.EnumerateArray())
         {
+            // Preserve the reader's behavior: malformed/empty source refs
+            // are ignored rather than turning an incomplete provider row into
+            // a real asset. The final snapshot applies the same filtering.
             if (entry.ValueKind != JsonValueKind.Object ||
                 !entry.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String ||
                 !entry.TryGetProperty("objectId", out var objectId) ||
-                objectId.ValueKind != JsonValueKind.String)
-                throw new DiscoveryCheckpointException("InvalidRefObservation");
+                objectId.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(name.GetString()) ||
+                string.IsNullOrWhiteSpace(objectId.GetString()))
+                continue;
             StagingAssetInput asset;
             try
             {
