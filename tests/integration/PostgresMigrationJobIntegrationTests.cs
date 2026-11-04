@@ -12,6 +12,7 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
     [Fact]
     public async Task Concurrent_enqueues_have_one_job_and_one_audited_queued_event()
     {
+        await ResetJobsAsync();
         var source = Guid.NewGuid();
         var snapshot = Guid.NewGuid();
         var actor = Guid.NewGuid();
@@ -35,6 +36,7 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
     [Fact]
     public async Task Two_workers_claim_distinct_jobs_and_only_current_lease_can_commit()
     {
+        await ResetJobsAsync();
         var source = Guid.NewGuid();
         var clock = new ManualClock(DateTimeOffset.UtcNow);
         Guid firstId;
@@ -78,6 +80,7 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
     [Fact]
     public async Task Expired_lease_can_be_reclaimed_and_stale_worker_is_fenced()
     {
+        await ResetJobsAsync();
         var clock = new ManualClock(DateTimeOffset.UtcNow);
         await using var db = fixture.NewContext();
         var jobs = new PostgresMigrationJobRepository(db, clock);
@@ -96,6 +99,7 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
     [Fact]
     public async Task Retriable_failure_waits_with_exponential_backoff_and_exhausts_at_five_attempts()
     {
+        await ResetJobsAsync();
         var clock = new ManualClock(DateTimeOffset.UtcNow);
         await using var db = fixture.NewContext();
         var jobs = new PostgresMigrationJobRepository(db, clock);
@@ -128,6 +132,7 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
     [Fact]
     public async Task Expired_final_attempt_becomes_failed_and_is_never_reclaimed_again()
     {
+        await ResetJobsAsync();
         var clock = new ManualClock(DateTimeOffset.UtcNow);
         await using var db = fixture.NewContext();
         var jobs = new PostgresMigrationJobRepository(db, clock);
@@ -149,6 +154,7 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
     [Fact]
     public async Task Worker_normalizes_saved_snapshot_and_persists_result_without_provider_access()
     {
+        await ResetJobsAsync();
         var source = Guid.NewGuid();
         var snapshot = Snapshot(source);
         await using var db = fixture.NewContext();
@@ -170,6 +176,7 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
     [Fact]
     public async Task Malformed_error_codes_are_rejected_to_prevent_raw_secret_leakage()
     {
+        await ResetJobsAsync();
         var clock = new ManualClock(DateTimeOffset.UtcNow);
         await using var db = fixture.NewContext();
         var jobs = new PostgresMigrationJobRepository(db, clock);
@@ -179,6 +186,16 @@ public sealed class PostgresMigrationJobIntegrationTests(PostgresDraftFixture fi
             jobs.FailAsync(lease, "token=TOPSECRET", false, default));
         Assert.Equal("UnsafeJobErrorCode", ex.Code);
         Assert.Equal(MigrationJobStates.Running, (await jobs.GetAsync(lease.Id, default))!.State);
+    }
+
+    private async Task ResetJobsAsync()
+    {
+        // All integration tests share the same ephemeral PostgreSQL database.
+        // The queue is intentionally global, so remove leftover test jobs before
+        // assuming which job a worker should claim.
+        await using var db = fixture.NewContext();
+        await db.Database.ExecuteSqlRawAsync(
+            "TRUNCATE TABLE migration_job_events, migration_jobs RESTART IDENTITY", default);
     }
 
     private static StagingSyncResult Result(MigrationJobLease lease) =>
