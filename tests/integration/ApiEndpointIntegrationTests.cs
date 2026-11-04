@@ -468,6 +468,9 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         await using (var reset = harness.Host.Services.CreateAsyncScope())
             await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
                 .ExecuteSqlRawAsync("TRUNCATE TABLE migration_job_events, migration_jobs RESTART IDENTITY");
+        // The staging catalog is shared across API tests: use an isolated
+        // logical source connection so exact asset count assertions are stable.
+        var sourceId = Guid.NewGuid();
         var snapshotId = Guid.NewGuid();
         var now = DateTimeOffset.UtcNow;
         await using (var scope = harness.Host.Services.CreateAsyncScope())
@@ -475,7 +478,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             await scope.ServiceProvider.GetRequiredService<IDiscoveryRepository>().SaveAsync(
                 new DiscoveryInventory
                 {
-                    Id = snapshotId, ConnectionId = harness.SourceConnectionId,
+                    Id = snapshotId, ConnectionId = sourceId,
                     SourceProvider = "azure-devops-services", Organization = "az-org",
                     CollectedAtUtc = now,
                     Snapshot = new DiscoverySnapshot
@@ -539,7 +542,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             events.RootElement.EnumerateArray().Select(x => x.GetProperty("eventType").GetString()));
 
         using var listRequest = new HttpRequestMessage(HttpMethod.Get,
-            $"/api/jobs/connections/{harness.SourceConnectionId}");
+            $"/api/jobs/connections/{sourceId}");
         listRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
         using var listing = await harness.Client.SendAsync(listRequest);
         Assert.Equal(HttpStatusCode.OK, listing.StatusCode);
