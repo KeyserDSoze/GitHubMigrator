@@ -121,6 +121,55 @@ public sealed class AzureDevOpsPageCheckpointTests
     }
 
     [Fact]
+    public async Task Failed_repository_listing_reuses_project_and_capability_checkpoints()
+    {
+        var lease = new DiscoveryLeaseContext(Guid.NewGuid(), Guid.NewGuid(), 1);
+        var store = new FakePageStore();
+        var requests = new Dictionary<string, int>(StringComparer.Ordinal);
+        using var http = new HttpClient(new Stub(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            requests[path] = requests.TryGetValue(path, out var n) ? n + 1 : 1;
+            if (path.EndsWith("/_apis/projects"))
+                return Json("""{"value":[{"id":"p1","name":"Project","providerToken":"DO_NOT_STAGE"}]}""");
+            if (path.EndsWith("/_apis/projects/p1"))
+                return Json("""{"capabilities":{"versioncontrol":{"sourceControlType":"Git","otherField":"DO_NOT_STAGE"}},"serviceConnections":"DO_NOT_STAGE"}""");
+            if (path.EndsWith("/_apis/git/repositories"))
+            {
+                if (requests[path] == 1) throw new HttpRequestException("temporary repository list error");
+                return Json("""{"value":[{"id":"repo-1","name":"Repo","privateMetadata":"DO_NOT_STAGE"}]}""");
+            }
+            if (path.EndsWith("/_apis/git/repositories/repo-1/refs"))
+                return Json("""{"value":[{"name":"refs/heads/main","objectId":"abc"}]}""");
+            if (path.EndsWith("/_apis/graph/users") || path.EndsWith("/_apis/graph/groups") ||
+                path.Contains("/_apis/accesscontrollists/"))
+                return Json("""{"value":[]}""");
+            throw new Xunit.Sdk.XunitException("Unexpected GET " + path);
+        }));
+        var reader = new AzureDevOpsDiscoveryReader(http, TimeProvider.System, store);
+        var source = Guid.NewGuid();
+        var error = await Assert.ThrowsAsync<DiscoveryProviderException>(() =>
+            reader.DiscoverWithCheckpointsAsync(source, "az-org", "PAT", lease, default));
+        Assert.Equal("ProviderUnavailable", error.Code);
+        Assert.NotNull(await store.GetAsync(lease.JobId, "projects", 0, default));
+        Assert.NotNull(await store.GetAsync(lease.JobId, "capabilities:p1", 0, default));
+        Assert.Null(await store.GetAsync(lease.JobId, "repos:p1", 0, default));
+
+        var completed = await reader.DiscoverWithCheckpointsAsync(source, "az-org", "PAT", lease, default);
+        Assert.Single(completed.Snapshot.Projects[0].Repositories);
+        Assert.Single(completed.Refs);
+        Assert.Equal(1, requests["/az-org/_apis/projects"]);
+        Assert.Equal(1, requests["/az-org/_apis/projects/p1"]);
+        Assert.Equal(2, requests["/az-org/p1/_apis/git/repositories"]);
+        Assert.NotNull(await store.GetAsync(lease.JobId, "repos:p1", 0, default));
+        Assert.DoesNotContain("DO_NOT_STAGE",
+            string.Join(" ", store.Items.Select(x => x.SafePayloadJson)));
+        var totalRequests = requests.Values.Sum();
+        await reader.DiscoverWithCheckpointsAsync(source, "az-org", "PAT", lease, default);
+        Assert.Equal(totalRequests, requests.Values.Sum());
+    }
+
+    [Fact]
     public async Task Mismatched_page_request_is_rejected_before_any_provider_call()
     {
         var source = Guid.NewGuid();
