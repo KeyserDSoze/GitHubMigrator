@@ -23,6 +23,7 @@ public sealed class AzureDevOpsSecurityReader(
 {
     private const string GitNamespace = "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87";
     private const int MaxGroupPages = 20;
+    private const int MaxMembershipPages = 20;
     private const int MaxGroups = 1000;
     private const int MaxMembershipEdges = 20000;
     private const int MaxRepositories = 1500;
@@ -99,19 +100,40 @@ public sealed class AzureDevOpsSecurityReader(
             }
             try
             {
-                var url = $"{graphRoot}/_apis/graph/Memberships/{Uri.EscapeDataString(group.Descriptor)}" +
-                    "?direction=down&depth=1&api-version=7.1-preview.1";
-                using var response = await ReadCheckpointedAsync(
-                    url, token, lease, "security-members:" + Hash(group.Descriptor),
-                    0, "memberships", ct);
-                foreach (var membership in Values(response.Document))
+                var seenCursors = new HashSet<string>(StringComparer.Ordinal);
+                string? continuation = null;
+                for (var page = 0; page < MaxMembershipPages; page++)
                 {
-                    var container = Text(membership, "containerDescriptor");
-                    var member = Text(membership, "memberDescriptor");
-                    // Reject malformed / unrelated edges, but do not infer transitive membership.
-                    if (string.Equals(container, group.Descriptor, StringComparison.Ordinal) &&
-                        !string.IsNullOrWhiteSpace(member))
-                        edges.Add(new(container, member));
+                    var url = $"{graphRoot}/_apis/graph/Memberships/{Uri.EscapeDataString(group.Descriptor)}" +
+                        "?direction=down&depth=1&api-version=7.1-preview.1";
+                    if (!string.IsNullOrEmpty(continuation))
+                        url += $"&continuationToken={Uri.EscapeDataString(continuation)}";
+                    using var response = await ReadCheckpointedAsync(
+                        url, token, lease, "security-members:" + Hash(group.Descriptor),
+                        page, "memberships", ct);
+                    foreach (var membership in Values(response.Document))
+                    {
+                        var container = Text(membership, "containerDescriptor");
+                        var member = Text(membership, "memberDescriptor");
+                        // Reject unrelated edges and never infer transitive membership.
+                        if (string.Equals(container, group.Descriptor, StringComparison.Ordinal) &&
+                            !string.IsNullOrWhiteSpace(member))
+                            edges.Add(new(container, member));
+                    }
+                    if (edges.Count >= MaxMembershipEdges)
+                    {
+                        membershipsComplete = false;
+                        issues.Add(new("MembershipsTruncated"));
+                        break;
+                    }
+                    if (string.IsNullOrEmpty(response.Continuation)) break;
+                    if (!seenCursors.Add(response.Continuation) || page == MaxMembershipPages - 1)
+                    {
+                        membershipsComplete = false;
+                        issues.Add(new("MembershipsPaginationIncomplete"));
+                        break;
+                    }
+                    continuation = response.Continuation;
                 }
             }
             catch (DiscoveryProviderException ex)
