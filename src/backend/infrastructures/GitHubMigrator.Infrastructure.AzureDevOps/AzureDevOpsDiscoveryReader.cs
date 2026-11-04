@@ -61,20 +61,24 @@ public sealed class AzureDevOpsDiscoveryReader(
             string? sourceControlType = null;
             try
             {
-                using var details = await GetAsync($"{root}/_apis/projects/{Uri.EscapeDataString(projectId)}?includeCapabilities=true&api-version=7.1",
-                    accessToken, ct);
+                using var details = await GetCheckpointedProjectCapabilitiesAsync(
+                    $"{root}/_apis/projects/{Uri.EscapeDataString(projectId)}?includeCapabilities=true&api-version=7.1",
+                    accessToken, lease, projectId, ct);
                 if (details.Json.RootElement.TryGetProperty("capabilities", out var capabilities) &&
                     capabilities.TryGetProperty("versioncontrol", out var versionControl))
                     sourceControlType = Text(versionControl, "sourceControlType");
             }
-            catch (DiscoveryProviderException)
+            catch (DiscoveryProviderException ex)
+                when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
             {
                 issues.Add(new("ProjectCapabilitiesUnavailable", projectId));
             }
 
             try
             {
-                using var repos = await GetAsync($"{projectUri}/_apis/git/repositories?api-version=7.1", accessToken, ct);
+                using var repos = await GetPageAsync(
+                    $"{projectUri}/_apis/git/repositories?api-version=7.1",
+                    accessToken, lease, "repos:" + projectId, 0, ["id", "name"], ct);
                 foreach (var entry in Items(repos.Json))
                 {
                     var repoId = Text(entry, "id");
@@ -147,8 +151,8 @@ public sealed class AzureDevOpsDiscoveryReader(
         }
 
         // Capture raw group/ACE evidence; it must not be confused with effective permissions.
-        var security = await new AzureDevOpsSecurityReader(client).ReadAsync(
-            organization, accessToken, projects, ct);
+        var security = await new AzureDevOpsSecurityReader(client, checkpoints, clock).ReadAsync(
+            organization, accessToken, projects, ct, lease);
         issues.AddRange(security.Issues);
         issues.Add(new("EffectivePermissionsNotVerified"));
         var timestamp = clock.GetUtcNow();
@@ -279,6 +283,44 @@ public sealed class AzureDevOpsDiscoveryReader(
             if (page == MaxPages - 1) issues.Add(new("GraphUsersTruncated"));
         }
         return users.Values.ToArray();
+    }
+
+    private async Task<ResponsePage> GetCheckpointedProjectCapabilitiesAsync(
+        string url, string token, DiscoveryLeaseContext? lease,
+        string projectId, CancellationToken ct)
+    {
+        if (lease is null) return await GetAsync(url, token, ct);
+        if (checkpoints is null)
+            throw new DiscoveryCheckpointException("CheckpointStorageUnavailable");
+
+        var key = "capabilities:" + projectId;
+        var requestHash = Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(url)));
+        var saved = await checkpoints.GetAsync(lease.Value.JobId, key, 0, ct);
+        if (saved is not null)
+        {
+            if (!string.Equals(saved.RequestHash, requestHash, StringComparison.Ordinal))
+                throw new DiscoveryCheckpointException("CheckpointRequestMismatch");
+            try { return new ResponsePage(JsonDocument.Parse(saved.SafePayloadJson), null); }
+            catch (JsonException) { throw new DiscoveryCheckpointException("CheckpointPayloadInvalid"); }
+        }
+
+        using var response = await GetAsync(url, token, ct);
+        string? sourceControlType = null;
+        if (response.Json.RootElement.TryGetProperty("capabilities", out var capabilities) &&
+            capabilities.TryGetProperty("versioncontrol", out var versionControl))
+            sourceControlType = Text(versionControl, "sourceControlType");
+
+        var safeJson = JsonSerializer.Serialize(new {
+            capabilities = new {
+                versioncontrol = new { sourceControlType }
+            }
+        });
+        var stored = await checkpoints.SaveAsync(lease.Value,
+            new DiscoveryPageCheckpoint(lease.Value.JobId, key, 0,
+                requestHash, safeJson, null, clock.GetUtcNow()), ct);
+        try { return new ResponsePage(JsonDocument.Parse(stored.SafePayloadJson), null); }
+        catch (JsonException) { throw new DiscoveryCheckpointException("CheckpointPayloadInvalid"); }
     }
 
     private async Task<ResponsePage> GetPageAsync(

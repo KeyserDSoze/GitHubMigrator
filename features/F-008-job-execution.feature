@@ -31,6 +31,19 @@ Feature: Durable and verifiable migration execution
     And the job never publishes repositories, Actions or Issues to GitHub
 
   # Future phases begin after governed F-005 plan approval, not in this slice.
+  Scenario: Repository enumeration resumes without re-downloading project metadata
+    Given a worker has checkpointed an Azure DevOps project and its capabilities
+    When the repository enumeration GET fails transiently
+    Then the worker retries without re-fetching the earlier project and capabilities
+    And the repository list is persisted using only approved ID and name metadata
+
+  Scenario: Security evidence page recovery retains raw ACL masks only
+    Given a leased worker has checkpointed Graph group and membership evidence
+    When an ACL GET fails transiently
+    Then the source scan is retried and reuses saved group and membership pages
+    And raw ACL allow and deny masks are preserved without unrecognized fields
+    And effective GitHub permissions remain unverified
+
   Scenario: Failed Azure DevOps ref pagination resumes from the saved page
     Given a leased discovery job which saved the first page of Git refs
     When the second page fails with a transient provider error
