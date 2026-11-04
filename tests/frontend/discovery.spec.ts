@@ -120,3 +120,33 @@ test('admin inspects Graph group edges and raw allow/deny masks without effectiv
   await expect(page.getByText(/consenti 4.*nega 2|allow 4.*deny 2/i)).toBeVisible();
   await expect(page.getByText(/ACL grezze non equivalgono|Raw ACLs are not effective/i).first()).toBeVisible();
 });
+
+test('admin replays a source snapshot into PostgreSQL staging and sees changed-asset counts', async ({ page }) => {
+  let syncCalls = 0;
+  await page.route('**/api/connections', route => route.fulfill({ json: [{
+    id: connectionId, name: 'Demo DevOps', providerKey: 'azure-devops-services',
+    direction: 'source', organization: 'demo', validationCode: 'Verified'
+  }] }));
+  await page.route('**/api/discoveries', route => route.fulfill({ json: [summary] }));
+  await page.route(`**/api/discoveries/${id}`, route => route.fulfill({ json: detail }));
+  await page.route(`**/api/staging/snapshots/${id}`, route =>
+    route.fulfill({ status: 404, json: { error: 'StagingSyncNotFound' } }));
+  await page.route(`**/api/staging/snapshots/${id}/sync`, route => {
+    expect(route.request().method()).toBe('POST');
+    syncCalls++;
+    return route.fulfill({ json: {
+      snapshotId: id, sourceConnectionId: connectionId, sourceCollectedAtUtc: summary.collectedAtUtc,
+      appliedAtUtc: summary.collectedAtUtc, observed: 6, added: 5, changed: 1,
+      unchanged: 0, markedMissing: 0, sourceInventoryComplete: false
+    } });
+  });
+  await mockLogin(page, 'admin');
+  await page.getByRole('button', { name: /^discovery$/i }).click();
+  await expect(page.getByRole('heading', { name: 'Payments' })).toBeVisible();
+  await page.getByRole('button', { name: /sincronizza snapshot nel db staging|sync selected snapshot to staging/i }).click();
+  const status = page.getByRole('status', { name: /db intermedio di staging|intermediate staging db/i });
+  await expect(status).toContainText(/6/);
+  await expect(status).toContainText(/5/);
+  await expect(status).toContainText(/copertura parziale|partial or unverified coverage/i);
+  expect(syncCalls).toBe(1);
+});

@@ -77,6 +77,12 @@ The UI displays discovered, currently mapped and unmapped counts, unknown ACL pr
 
 Open **Migration plan / Piano di migrazione** after discovery. Select source repositories, rename GitHub targets and choose a history strategy. The admin-only preview reports invalid names, conflicting target names, incompatible TFVC strategies and explicit missing permission/membership/preflight evidence. **Draft selections can be saved and reloaded in PostgreSQL with optimistic revision checks (HTTP 409 on concurrent edits), but saving is not an approval or migration.** The separate read-only **Check GitHub targets** action detects repositories visible to the saved destination credential (GET 200), and treats GitHub 404 as ambiguous—not proof of an available name. The separate **Check GitHub organization access** action verifies the authenticated destination account's active membership and reads available org private-repo policy. Neither check proves token write/create privilege; `readyForApproval` is still always false. See [F-005 preview documentation](docs/migration-plan-preview.md).
 
+## F-013 canonical intermediate staging
+
+Each new Azure DevOps discovery now writes an immutable source snapshot and synchronizes a **normalized PostgreSQL asset catalog**. Assets receive stable source IDs, SHA-256 fingerprints, revision numbers and last-seen/changed snapshot references. The Discovery workbench displays added, changed and missing counts and allows idempotent retry. The admin API exposes indexed keyset pagination for future transform workers.
+
+Incrementality currently applies to **catalog revisions between complete source scans**, not to provider-side delta polling, background sync or GitHub writes. Missing objects remain unverified unless source coverage is complete. See [staging architecture and tests](docs/staging-sync.md).
+
 ## F-009 / F-010 workload previews
 
 **Pipelines → Actions** reads Azure Pipelines metadata, extracts task types (not scripts or secrets), proposes a disabled GitHub Actions workflow at `.github/workflows/...`, shows missing secrets/variables and project-level service connection candidates, and optionally requests an Azure AI advisory review. **Boards → Issues** previews work items by original Azure ID, displays related commits/PRs/issues, and can verify the existence of mapped GitHub objects. Both are admin-only and **read-only**. Neither creates a workflow, secrets, issues or reconstructed links yet. See [migration workbench documentation](docs/workload-previews.md).

@@ -60,6 +60,8 @@ builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>(
 builder.Services.AddScoped<ConnectionService>();
 builder.Services.AddScoped<IDiscoveryRepository, PostgresDiscoveryRepository>();
 builder.Services.AddScoped<DiscoveryService>();
+builder.Services.AddScoped<IStagingRepository, PostgresStagingRepository>();
+builder.Services.AddScoped<StagingSyncService>();
 builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMappingDraftRepository>();
 builder.Services.AddScoped<IdentityMappingService>();
 builder.Services.AddScoped<WorkloadPreviewService>();
@@ -159,6 +161,12 @@ builder.Services.AddRateLimiter(options =>
     options.AddFixedWindowLimiter("target-preflight", limiter =>
     {
         limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
+    options.AddFixedWindowLimiter("staging-sync", limiter =>
+    {
+        limiter.PermitLimit = 20;
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
@@ -262,6 +270,7 @@ app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 
 app.MapConnectionEndpoints();
 app.MapDiscoveryEndpoints();
+app.MapStagingEndpoints();
 app.MapIdentityMappingEndpoints();
 app.MapMigrationPlanEndpoints();
 app.MapWorkloadEndpoints();

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type StagingSyncResult } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -12,6 +12,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [summaries, setSummaries] = useState<DiscoverySummary[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<DiscoveryDetail | null>(null);
+  const [staging, setStaging] = useState<StagingSyncResult | null>(null);
   const [tab, setTab] = useState<Tab>('projects');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -31,7 +32,10 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         setSummaries(history);
         if (history.length) {
           setSelectedId(history[0].id);
-          void api.getDiscovery(token, history[0].id).then(value => { if (active) setDetail(value); })
+          void Promise.all([
+            api.getDiscovery(token, history[0].id),
+            api.getStagingSync(token, history[0].id).catch(() => null)
+          ]).then(([value, stage]) => { if (active) { setDetail(value); setStaging(stage); } })
             .catch(() => { if (active) setError(t('operationError')); });
         }
       }).catch(() => { if (active) setError(t('operationError')); })
@@ -40,9 +44,13 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   }, [token, isAdmin, t]);
 
   async function viewSnapshot(id: string) {
-    setSelectedId(id); setDetail(null); setTab('projects'); setError('');
-    try { setDetail(await api.getDiscovery(token, id)); }
-    catch { setError(t('operationError')); }
+    setSelectedId(id); setDetail(null); setStaging(null); setTab('projects'); setError('');
+    try {
+      const [data, sync] = await Promise.all([
+        api.getDiscovery(token, id), api.getStagingSync(token, id).catch(() => null)
+      ]);
+      setDetail(data); setStaging(sync);
+    } catch { setError(t('operationError')); }
   }
 
   async function scan() {
@@ -55,6 +63,19 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
       setNotice(t('discoverySummary'));
     } catch { setError(t('discoveryScanError')); }
     finally { setBusy(false); }
+  }
+
+  async function syncSnapshot() {
+    if (!selectedId) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const result = await api.syncStagingSnapshot(token, selectedId);
+      setStaging(result);
+      setNotice(t('stagingSaved'));
+    } catch (e) {
+      setError(e instanceof Error && e.message === 'StagingSnapshotOutOfOrder'
+        ? t('stagingStale') : t('stagingError'));
+    } finally { setBusy(false); }
   }
 
   if (!isAdmin) return <section className="empty-card"><ShieldAlert size={30} /><p>{t('discoveryRequiresAdmin')}</p></section>;
@@ -84,10 +105,21 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
       <button className="primary" disabled={busy || loading || !sourceId} type="button" onClick={() => { void scan(); }}>
         <RefreshCw size={16} /> {busy ? t('discoveryBusy') : t('discoveryStart')}
       </button>
+      <button className="plan-secondary" disabled={busy || loading || !selectedId} type="button"
+        onClick={() => { void syncSnapshot(); }}>
+        <RefreshCw size={16} /> {t('stagingSync')}
+      </button>
     </section>
     <div className="discovery-note">{t('discoveryNotReady')}</div>
     {error && <div className="alert" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
+    {staging && <section className="notice" role="status" aria-label={t('stagingStatus')}>
+      <strong>{t('stagingStatus')}</strong> · {staging.observed} {t('stagingObserved')}
+      {' · +'}{staging.added} {t('stagingAdded')}
+      {' · ~'}{staging.changed} {t('stagingChanged')}
+      {' · '}{staging.markedMissing} {t('stagingMissing')}
+      {' · '}{staging.sourceInventoryComplete ? t('stagingCoverageComplete') : t('stagingCoveragePartial')}
+    </section>}
     {summary && <div className="discovery-summary">
       {[
         [t('discoveryProjectCount'), summary.projectCount],

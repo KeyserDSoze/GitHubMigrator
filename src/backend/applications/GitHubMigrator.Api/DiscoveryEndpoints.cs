@@ -11,7 +11,7 @@ public static class DiscoveryEndpoints
             .RequireAuthorization(new AuthorizeAttribute { Roles = "superadmin,admin" });
 
         routes.MapPost("", async Task<IResult> (DiscoverRequest request, DiscoveryService service,
-            ILoggerFactory loggerFactory, CancellationToken ct) =>
+            StagingSyncService staging, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
             try
             {
@@ -19,6 +19,12 @@ public static class DiscoveryEndpoints
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 deadline.CancelAfter(TimeSpan.FromSeconds(90));
                 var inventory = await service.ScanAsync(request.ConnectionId, deadline.Token);
+                // Persist the immutable snapshot first, then normalize it into staging.
+                // Recovery is possible with POST /api/staging/snapshots/{id}/sync.
+                var sync = await staging.SyncAsync(inventory.Id, deadline.Token);
+                loggerFactory.CreateLogger("Discovery").LogInformation(
+                    "Discovery staging synchronized SnapshotId={SnapshotId} Assets={Assets} Changed={Changed}",
+                    sync.SnapshotId, sync.Observed, sync.Added + sync.Changed);
                 loggerFactory.CreateLogger("Discovery").LogInformation(
                     "Source inventory collected InventoryId={InventoryId} ConnectionId={ConnectionId} Projects={ProjectCount} Refs={RefCount} IdentityCount={IdentityCount} Issues={IssueCount}",
                     inventory.Id, inventory.ConnectionId, inventory.Snapshot.Projects.Count,
