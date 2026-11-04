@@ -22,15 +22,15 @@ public sealed class PostgresDiscoveryRepository(AppDbContext db) : IDiscoveryRep
 
     public async Task SaveAsync(DiscoveryInventory inventory, CancellationToken ct)
     {
-        // Immutable snapshots; never update in place.
-        db.Discoveries.Add(new DiscoveryInventoryRecord
-        {
-            Id = inventory.Id,
-            ConnectionId = inventory.ConnectionId,
-            CollectedAtUtc = inventory.CollectedAtUtc,
-            Json = JsonSerializer.Serialize(inventory, Options)
-        });
-        await db.SaveChangesAsync(ct);
+        // Immutable and idempotent: replay of a job-owned snapshot ID never
+        // overwrites a committed scan, even after an abrupt worker process death.
+        // PostgreSQL's PK handles concurrent inserts without EF tracking residue.
+        var json = JsonSerializer.Serialize(inventory, Options);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO migration_discoveries (id, connection_id, collected_at_utc, inventory)
+            VALUES ({inventory.Id}, {inventory.ConnectionId}, {inventory.CollectedAtUtc}, {json}::jsonb)
+            ON CONFLICT (id) DO NOTHING
+            """, ct);
     }
 
     public async Task<DiscoveryInventory?> GetAsync(Guid id, CancellationToken ct)

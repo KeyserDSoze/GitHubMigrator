@@ -71,6 +71,76 @@ public sealed class PostgresMigrationJobRepository(AppDbContext db, TimeProvider
         return View(row);
     }
 
+    public async Task<MigrationJobView> EnqueueDiscoveryAsync(
+        Guid sourceConnectionId, Guid actorId, Guid requestId, CancellationToken ct)
+    {
+        if (sourceConnectionId == Guid.Empty || actorId == Guid.Empty || requestId == Guid.Empty)
+            throw new MigrationJobInputException("InvalidJobContext");
+        var id = Guid.NewGuid();
+        var now = UtcNow(clock);
+        var key = MigrationJobKinds.DiscoverSource + ":" +
+            sourceConnectionId.ToString("N") + ":" + requestId.ToString("N");
+        // Two independent uniqueness guarantees:
+        // (1) identical request IDs are idempotent, even after completion;
+        // (2) only one *active* Azure DevOps discovery can exist per connection.
+        // Atomic INSERT ... ON CONFLICT DO NOTHING works for both indexes.
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH inserted AS (
+                INSERT INTO migration_jobs (
+                    id, kind, snapshot_id, source_connection_id, enqueued_by, idempotency_key,
+                    state, attempts, max_attempts, available_at_utc, lease_token, lease_until_utc,
+                    created_at_utc, updated_at_utc, completed_at_utc, last_error_code, result_json)
+                VALUES ({id}, {MigrationJobKinds.DiscoverSource}, {Guid.Empty},
+                    {sourceConnectionId}, {actorId}, {key},
+                    'Queued', 0, 5, {now}, NULL, NULL, {now}, {now}, NULL, NULL, NULL)
+                ON CONFLICT DO NOTHING
+                RETURNING id
+            )
+            INSERT INTO migration_job_events (job_id, event_type, attempt, occurred_at_utc, error_code)
+            SELECT id, 'Queued', 0, {now}, NULL FROM inserted
+            """, ct);
+
+        var row = await db.MigrationJobs.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.IdempotencyKey == key, ct);
+        row ??= await db.MigrationJobs.AsNoTracking()
+            .Where(x => x.SourceConnectionId == sourceConnectionId &&
+                x.Kind == MigrationJobKinds.DiscoverSource &&
+                (x.State == MigrationJobStates.Queued || x.State == MigrationJobStates.Running))
+            .SingleOrDefaultAsync(ct);
+        if (row is null)
+            throw new MigrationJobInputException("DiscoveryEnqueueConflictRetry");
+        if (row.SourceConnectionId != sourceConnectionId || row.Kind != MigrationJobKinds.DiscoverSource)
+            throw new MigrationJobInputException("JobIdempotencyMismatch");
+        return View(row);
+    }
+
+    public async Task<bool> CheckpointSnapshotAsync(
+        MigrationJobLease lease, Guid snapshotId, CancellationToken ct)
+    {
+        if (lease.Kind != MigrationJobKinds.DiscoverSource || snapshotId != lease.Id ||
+            lease.LeaseToken == Guid.Empty || lease.Attempt < 1)
+            throw new MigrationJobInputException("InvalidDiscoveryCheckpoint");
+        var now = UtcNow(clock);
+        // A snapshot is committed in migration_discoveries before this checkpoint.
+        // The event and new snapshot ID are atomic. A reclaimed worker cannot
+        // mutate a checkpoint belonging to a newer attempt.
+        var inserted = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH saved AS (
+                UPDATE migration_jobs SET snapshot_id = {snapshotId},
+                    updated_at_utc = {now}
+                WHERE id = {lease.Id} AND source_connection_id = {lease.SourceConnectionId}
+                  AND kind = {MigrationJobKinds.DiscoverSource}
+                  AND snapshot_id = {Guid.Empty} AND state = 'Running'
+                  AND attempts = {lease.Attempt} AND lease_token = {lease.LeaseToken}
+                  AND lease_until_utc > {now}
+                RETURNING id, attempts
+            )
+            INSERT INTO migration_job_events (job_id, event_type, attempt, occurred_at_utc, error_code)
+            SELECT id, 'SnapshotSaved', attempts, {now}, NULL FROM saved
+            """, ct);
+        return inserted == 1;
+    }
+
     public async Task<MigrationJobView?> GetAsync(Guid jobId, CancellationToken ct)
     {
         var row = await db.MigrationJobs.AsNoTracking().SingleOrDefaultAsync(x => x.Id == jobId, ct);
@@ -156,8 +226,9 @@ public sealed class PostgresMigrationJobRepository(AppDbContext db, TimeProvider
 
     public Task<bool> CompleteAsync(MigrationJobLease lease, StagingSyncResult result, CancellationToken ct)
     {
-        if (result.SnapshotId != lease.SnapshotId ||
-            result.SourceConnectionId != lease.SourceConnectionId)
+        if (result.SourceConnectionId != lease.SourceConnectionId ||
+            (lease.Kind == MigrationJobKinds.StageSnapshot && result.SnapshotId != lease.SnapshotId) ||
+            (lease.Kind == MigrationJobKinds.DiscoverSource && result.SnapshotId != lease.Id))
             throw new MigrationJobInputException("JobResultSourceMismatch");
         return FinishAsync(lease, null, false, result, ct);
     }
@@ -181,11 +252,14 @@ public sealed class PostgresMigrationJobRepository(AppDbContext db, TimeProvider
         var retryAt = now.AddSeconds(seconds);
         var success = result is not null;
         var json = result is null ? null : JsonSerializer.Serialize(result);
+        var completedSnapshot = result?.SnapshotId ?? Guid.Empty;
         // Atomic compare-and-swap: an expired/stolen lease is never allowed to mark a
         // newer attempt complete. The event is inserted from UPDATE RETURNING.
         var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
             WITH finished AS (
                 UPDATE migration_jobs SET
+                    snapshot_id = CASE WHEN {success} AND kind = {MigrationJobKinds.DiscoverSource}
+                        THEN {completedSnapshot} ELSE snapshot_id END,
                     state = CASE
                         WHEN {success} THEN 'Succeeded'
                         WHEN {permanent} OR attempts >= max_attempts THEN 'Failed'
@@ -203,6 +277,8 @@ public sealed class PostgresMigrationJobRepository(AppDbContext db, TimeProvider
                 WHERE id = {lease.Id} AND lease_token = {lease.LeaseToken}
                     AND attempts = {lease.Attempt} AND state = 'Running'
                     AND lease_until_utc > {now}
+                    AND ({!success} OR kind <> {MigrationJobKinds.DiscoverSource}
+                        OR snapshot_id = {completedSnapshot})
                 RETURNING id, state, attempts
             )
             INSERT INTO migration_job_events (job_id, event_type, attempt, occurred_at_utc, error_code)

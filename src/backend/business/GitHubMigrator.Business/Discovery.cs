@@ -32,12 +32,30 @@ public sealed class DiscoveryService(
     public Task<IReadOnlyList<DiscoveryInventory>> ListAsync(CancellationToken ct) => repository.ListAsync(ct);
     public Task<DiscoveryInventory?> GetAsync(Guid id, CancellationToken ct) => repository.GetAsync(id, ct);
 
-    public async Task<DiscoveryInventory> ScanAsync(Guid connectionId, CancellationToken ct)
+    public async Task<DiscoveryInventory> ScanAsync(
+        Guid connectionId, CancellationToken ct, Guid? stableSnapshotId = null)
     {
         var connection = await connections.GetAsync(connectionId, ct)
             ?? throw new KeyNotFoundException("Connection not found");
         if (connection.Direction != ConnectionDirection.Source || !_readers.TryGetValue(connection.ProviderKey, out var reader))
             throw new ArgumentException("Connection is not a supported source.");
+
+        // A durable job uses its own job ID as the immutable snapshot ID. If a worker
+        // dies after PostgreSQL commit but before marking its checkpoint, the next
+        // attempt can resume with zero additional calls to Azure DevOps.
+        if (stableSnapshotId is { } id)
+        {
+            if (id == Guid.Empty) throw new ArgumentException("Stable snapshot ID is required.");
+            var saved = await repository.GetAsync(id, ct);
+            if (saved is not null)
+            {
+                if (saved.ConnectionId != connection.Id ||
+                    !string.Equals(saved.SourceProvider, connection.ProviderKey, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(saved.Organization, connection.Organization, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Stored snapshot does not match source connection.");
+                return saved;
+            }
+        }
         var token = await credentials.ReadAsync(connection.SecretReference, ct);
         if (string.IsNullOrWhiteSpace(token)) throw new DiscoveryProviderException("CredentialMissing");
         // Reader can only access this transient token during the operation, never through the persisted inventory.
@@ -45,6 +63,29 @@ public sealed class DiscoveryService(
         if (inventory.ConnectionId != connection.Id || inventory.SourceProvider != connection.ProviderKey ||
             inventory.Organization != connection.Organization)
             throw new InvalidOperationException("Source adapter returned an inventory for another connection.");
+        if (stableSnapshotId is { } fixedId)
+        {
+            var sourceSnapshot = inventory.Snapshot;
+            inventory = new DiscoveryInventory
+            {
+                Id = fixedId, ConnectionId = inventory.ConnectionId,
+                SourceProvider = inventory.SourceProvider, Organization = inventory.Organization,
+                CollectedAtUtc = inventory.CollectedAtUtc,
+                Snapshot = new DiscoverySnapshot
+                {
+                    SnapshotId = fixedId, SourceSystem = sourceSnapshot.SourceSystem,
+                    CollectedAt = sourceSnapshot.CollectedAt,
+                    Projects = sourceSnapshot.Projects, Identities = sourceSnapshot.Identities,
+                    AccessGrants = sourceSnapshot.AccessGrants,
+                    PermissionsComplete = sourceSnapshot.PermissionsComplete
+                },
+                Refs = inventory.Refs, Issues = inventory.Issues,
+                Completeness = inventory.Completeness, IdentitiesComplete = inventory.IdentitiesComplete,
+                PermissionsComplete = inventory.PermissionsComplete,
+                Groups = inventory.Groups, Memberships = inventory.Memberships,
+                AclEvidence = inventory.AclEvidence, SecurityCoverage = inventory.SecurityCoverage
+            };
+        }
         await repository.SaveAsync(inventory, ct);
         return inventory;
     }

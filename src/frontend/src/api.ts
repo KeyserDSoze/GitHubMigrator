@@ -9,7 +9,7 @@ export type ValidationResult = {
   isValid: boolean; code: string; authenticatedAs: string | null; permissionAssessment: string
 };
 export type MigrationJob = {
-  id: string; kind: 'StageSnapshot'; snapshotId: string; sourceConnectionId: string;
+  id: string; kind: 'StageSnapshot' | 'DiscoverSource'; snapshotId: string; sourceConnectionId: string;
   enqueuedBy: string; state: 'Queued' | 'Running' | 'Succeeded' | 'Failed';
   attempts: number; maxAttempts: number; availableAtUtc: string;
   leaseUntilUtc: string | null; createdAtUtc: string; updatedAtUtc: string;
@@ -191,6 +191,11 @@ export const api = {
   scanDiscovery: (token: string, connectionId: string) =>
     call<DiscoverySummary>('/api/discoveries', {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ connectionId })
+    }),
+  enqueueDiscoveryJob: (token: string, connectionId: string, requestId: string) =>
+    call<MigrationJob>('/api/jobs/discovery', {
+      method: 'POST', headers: withToken(token),
+      body: JSON.stringify({ connectionId, requestId })
     }),
   enqueueStagingJob: (token: string, snapshotId: string) =>
     call<MigrationJob>('/api/jobs/staging', {

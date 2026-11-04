@@ -79,7 +79,7 @@ Open **Migration plan / Piano di migrazione** after discovery. Select source rep
 
 ## F-008 durable asynchronous jobs
 
-The **Discovery** workbench can enqueue an asynchronous staging synchronization. Jobs are stored in PostgreSQL, claimed by an atomic `SKIP LOCKED` lease across workers, retried with bounded backoff and recorded in an audit ledger. Status survives restarts and is polled in the UI. Only the safe `StageSnapshot` job kind is supported; no GitHub writes or automatic plan approvals. See [durable job architecture](docs/durable-jobs.md). The original direct staging sync remains available during transition.
+The **Discovery** workbench can enqueue an asynchronous staging synchronization. Jobs are stored in PostgreSQL, claimed by an atomic `SKIP LOCKED` lease across workers, retried with bounded backoff and recorded in an audit ledger. The same queue can now run a read-only Azure DevOps discovery, checkpoint the immutable source inventory and normalize it to staging, with one active scan per source connection. Status survives restarts and is polled in the UI. Only the read-only `StageSnapshot` and `DiscoverSource` job kinds are supported; no GitHub writes or automatic plan approvals. See [durable job architecture](docs/durable-jobs.md) and [asynchronous discovery](docs/async-discovery.md). The original direct staging sync remains available during transition.
 
 ## F-013 canonical intermediate staging
 

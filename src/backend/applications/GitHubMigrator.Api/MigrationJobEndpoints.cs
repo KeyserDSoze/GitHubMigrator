@@ -25,6 +25,22 @@ public static class MigrationJobEndpoints
             catch (MigrationJobInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
         }).RequireRateLimiting("staging-sync");
 
+        routes.MapPost("/discovery", async Task<IResult> (
+            DiscoverSourceJobRequest request, ClaimsPrincipal principal,
+            MigrationJobService service, CancellationToken ct) =>
+        {
+            if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actorId))
+                return Results.Unauthorized();
+            try
+            {
+                var job = await service.EnqueueDiscoveryAsync(
+                    request.ConnectionId, actorId, request.RequestId, ct);
+                return Results.Accepted($"/api/jobs/{job.Id}", job);
+            }
+            catch (KeyNotFoundException) { return Results.NotFound(new { error = "ConnectionNotFound" }); }
+            catch (MigrationJobInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
+        }).RequireRateLimiting("discovery-queue");
+
         routes.MapGet("/{jobId:guid}", async Task<IResult> (
             Guid jobId, MigrationJobService service, CancellationToken ct) =>
         {
@@ -47,3 +63,4 @@ public static class MigrationJobEndpoints
 }
 
 public sealed record StageSnapshotJobRequest(Guid SnapshotId);
+public sealed record DiscoverSourceJobRequest(Guid ConnectionId, Guid RequestId);
