@@ -41,12 +41,14 @@ Source ACL records remain **raw evidence**, not effective GitHub grants. No toke
 - `POST /api/staging/snapshots/{snapshotId}/sync`: idempotent catalog ingestion/replay; `409 StagingSnapshotOutOfOrder` if an older snapshot was never applied after a newer one.
 - `GET /api/staging/snapshots/{snapshotId}`: persisted sync counts; 404 if not yet applied.
 - `GET /api/staging/connections/{sourceConnectionId}/summary`: latest synced snapshot, active/missing asset counts and total revisions.
+- `GET /api/staging/connections/{sourceConnectionId}/assets/{assetType}?take=50&after={lastSourceId}`: bounded keyset-paginated catalog access (`take` between 1 and 100). `items` includes source identity, fingerprint, revision, missing flag, provenance snapshot IDs and structured metadata; `nextAfter` is the next-page cursor or null. Asset types: `project`, `repository`, `ref`, `identity`, `group`, `membership`, `acl`. The composite primary key provides indexed access; callers do not have to load all source assets in memory. The view is the **current** catalog, not a historical/approved snapshot isolation view while future scans run.
+
 
 The ingest route has a separate rate limit. No endpoint sends **writes** to Azure DevOps or GitHub, and these staging routes do not send external provider requests at all.
 
 ## Scalability and current limitations
 
-**Implemented:** indexed PostgreSQL keys; batched SQL (250 rows per command, not per-object EF saves); compare-by-hash updates; transactional catalog/sync ledger; per-connection PostgreSQL transaction advisory locks; bounded snapshot size; recovery and out-of-order protection; tests with 1,200+ source refs.
+**Implemented:** indexed PostgreSQL keys; batched SQL (250 rows per command, not per-object EF saves); compare-by-hash updates; transactional catalog/sync ledger; indexed keyset pages; per-connection PostgreSQL transaction advisory locks; bounded snapshot size; recovery and out-of-order protection; tests with 1,200+ source refs.
 
 **Not implemented yet:** true provider-side delta scanning or continuous live synchronization, generic asset pagination, PostgreSQL production EF migrations replacing development bootstrap DDL, an outbox/queue, dependency-graph edges and materialized cross-asset mappings, Blob-backed immutable Git packs and LFS, imported pipelines/Boards as first-class staged objects, retention/compaction, benchmarked throughput/latency SLOs, tenant-level data isolation, write execution or automatic cutover.
 
