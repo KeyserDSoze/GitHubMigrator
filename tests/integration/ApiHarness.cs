@@ -80,6 +80,8 @@ public sealed class ApiHarness : IAsyncLifetime
                 // App constructs the actual typed readers; their outbound transport is a strict stub.
                 services.AddHttpClient<AzureDevOpsWorkloadReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => azure);
+                services.AddHttpClient<AzureDevOpsDiscoveryReader>()
+                    .ConfigurePrimaryHttpMessageHandler(() => azure);
                 services.AddHttpClient<GitHubConfigurationReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubTraceabilityReader>()
@@ -135,6 +137,22 @@ public sealed class ApiHarness : IAsyncLifetime
     private static HttpResponseMessage ReplyAzure(HttpRequestMessage req)
     {
         var path = req.RequestUri!.AbsolutePath;
+        // F-008 integration: actual Azure DevOps discovery reader, fixed-host
+        // paginated GETs, Graph users/groups and raw security evidence.
+        if (path == "/az-org/_apis/projects")
+            return Json("""{"value":[{"id":"project","name":"Project"}]}""");
+        if (path == "/az-org/_apis/projects/project")
+            return Json("""{"capabilities":{"versioncontrol":{"sourceControlType":"Git"}}}""");
+        if (path == "/az-org/project/_apis/git/repositories")
+            return Json("""{"value":[{"id":"source-git","name":"Repo"}]}""");
+        if (path == "/az-org/project/_apis/git/repositories/source-git/refs")
+            return Json("""{"value":[{"name":"refs/heads/main","objectId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}""");
+        if (path == "/az-org/_apis/graph/users")
+            return Json("""{"value":[{"descriptor":"aad.test","displayName":"Test User","mailAddress":"test@example.invalid"}]}""");
+        if (path == "/az-org/_apis/graph/groups")
+            return Json("""{"value":[]}""");
+        if (path.StartsWith("/az-org/_apis/accesscontrollists/", StringComparison.Ordinal))
+            return Json("""{"value":[]}""");
         if (path.EndsWith("/_apis/pipelines/43", StringComparison.Ordinal))
             return new(HttpStatusCode.Forbidden);
         if (path.EndsWith("/_apis/pipelines/42", StringComparison.Ordinal))
@@ -238,7 +256,8 @@ public sealed class ApiHarness : IAsyncLifetime
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Assert.Equal(HttpMethod.Get, request.Method);
-            Assert.Contains(request.RequestUri!.Host, new[] { "dev.azure.com", "api.github.com" });
+            Assert.Contains(request.RequestUri!.Host,
+                new[] { "dev.azure.com", "vssps.dev.azure.com", "api.github.com" });
             calls.Enqueue((request.Method.Method, request.RequestUri, request.Headers.Authorization?.Scheme));
             return Task.FromResult(responder(request));
         }
