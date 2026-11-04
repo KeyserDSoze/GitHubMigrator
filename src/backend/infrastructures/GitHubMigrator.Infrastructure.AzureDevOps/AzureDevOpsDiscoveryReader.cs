@@ -340,6 +340,11 @@ public sealed class AzureDevOpsDiscoveryReader(
         {
             if (!string.Equals(saved.RequestHash, requestHash, StringComparison.Ordinal))
                 throw new DiscoveryCheckpointException("CheckpointRequestMismatch");
+            // Backfill provisional observations when resuming a checkpoint
+            // written before the streaming-ref feature was deployed. Replaying
+            // the same page is idempotent and remains fenced by the new lease.
+            if (resource.StartsWith("refs:", StringComparison.Ordinal))
+                await checkpoints.SaveAsync(lease.Value, saved, ct);
             try { return new ResponsePage(JsonDocument.Parse(saved.SafePayloadJson), saved.NextContinuation); }
             catch (JsonException) { throw new DiscoveryCheckpointException("CheckpointPayloadInvalid"); }
         }
