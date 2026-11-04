@@ -1,6 +1,6 @@
 # F-008 — Durable staging jobs, leases and audit (first vertical slice)
 
-**Status:** A real PostgreSQL-backed asynchronous job engine executes *only* an already saved F-003 snapshot's F-013 normalization into the canonical staging database. It is a foundation for later migration worker types, not a code/issue publisher and **not** plan approval.
+**Status:** A real PostgreSQL-backed asynchronous job engine now supports **two read-only-to-providers job types**: `StageSnapshot` (previously saved snapshot to F-013 staging) and `DiscoverSource` (Azure DevOps discovery → immutable snapshot checkpoint → F-013 staging). It is a foundation for later migration worker types, not a code/issue publisher and **not** plan approval.
 
 ## Operator sequence
 
@@ -41,7 +41,7 @@ All endpoints require a completed first-login password change and `admin`/`super
 | GET | `/api/jobs/{jobId}/events` | Up to 100 recent audit transitions, chronological display. |
 | GET | `/api/jobs/connections/{sourceConnectionId}` | 25 latest jobs for a source connection. |
 
-A new job cannot be used to bypass F-005 approval gates, because `StageSnapshot` is the **only supported kind**. Actual GitHub writes and a general migration workflow remain unavailable.
+A new job cannot be used to bypass F-005 approval gates: the only supported kinds are `StageSnapshot` and the GET-only `DiscoverSource`. Actual GitHub writes and a general migration workflow remain unavailable.
 
 ## Tests and performance considerations
 
@@ -52,9 +52,15 @@ A new job cannot be used to bypass F-005 approval gates, because `StageSnapshot`
 
 The poller is intentionally conservative: one in-flight job per worker host and a 2-second idle polling interval. Higher throughput, heartbeat for longer jobs, backpressure, workload partitioning, observability metrics, retention/compaction and worker-only deployment are needed before high-scale rollout. **No throughput/latency SLO is claimed without load tests.**
 
+## Checkpointed source discovery (second slice)
+
+`POST /api/jobs/discovery` accepts a verified Azure DevOps source `connectionId` and a UUID `requestId`. A partial unique index prevents concurrent queued/running scans for the same source, including separate browser tabs; an identical request ID is idempotent. The worker gives each scan a stable snapshot ID equal to its job ID, commits an immutable discovery inventory, persists a lease-fenced `SnapshotSaved` checkpoint, and then stages the result. On retry, it reads that same snapshot from PostgreSQL without repeating provider calls. Scan + stage has a four-minute deadline within a five-minute lease.
+
+This is not yet *per Azure DevOps API page* checkpointing, true server-side delta collection, or scheduled auto-sync. For detailed API, safety boundaries and test coverage see [async-discovery.md](async-discovery.md).
+
 ## Follow-on slices
 
-1. Migrate synchronous discovery behind durable provider-specific collection jobs, adding bounded pagination and source delta cursors.
+1. **Implemented initial slice:** execute read-only Azure DevOps discovery in durable jobs, checkpoint the complete source snapshot, preserve existing provider pagination. Next persist individual page cursors and source delta checkpoints for large deployments.
 2. Stage pipeline definitions, Boards, dependency graph edges, normalized source/target mappings and immutable blob artifacts.
 3. Add authorization-gated plan approval and durable write job definitions with per-resource idempotency and read-after-write reconciliation.
 4. Build instrumented load tests, tenancy isolation and production EF migrations.
