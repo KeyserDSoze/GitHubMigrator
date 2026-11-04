@@ -77,6 +77,10 @@ The UI displays discovered, currently mapped and unmapped counts, unknown ACL pr
 
 Open **Migration plan / Piano di migrazione** after discovery. Select source repositories, rename GitHub targets and choose a history strategy. The admin-only preview reports invalid names, conflicting target names, incompatible TFVC strategies and explicit missing permission/membership/preflight evidence. **Draft selections can be saved and reloaded in PostgreSQL with optimistic revision checks (HTTP 409 on concurrent edits), but saving is not an approval or migration.** The separate read-only **Check GitHub targets** action detects repositories visible to the saved destination credential (GET 200), and treats GitHub 404 as ambiguous—not proof of an available name. The separate **Check GitHub organization access** action verifies the authenticated destination account's active membership and reads available org private-repo policy. Neither check proves token write/create privilege; `readyForApproval` is still always false. See [F-005 preview documentation](docs/migration-plan-preview.md).
 
+## F-008 durable asynchronous jobs
+
+The **Discovery** workbench can enqueue an asynchronous staging synchronization. Jobs are stored in PostgreSQL, claimed by an atomic `SKIP LOCKED` lease across workers, retried with bounded backoff and recorded in an audit ledger. Status survives restarts and is polled in the UI. Only the safe `StageSnapshot` job kind is supported; no GitHub writes or automatic plan approvals. See [durable job architecture](docs/durable-jobs.md). The original direct staging sync remains available during transition.
+
 ## F-013 canonical intermediate staging
 
 Each new Azure DevOps discovery now writes an immutable source snapshot and synchronizes a **normalized PostgreSQL asset catalog**. Assets receive stable source IDs, SHA-256 fingerprints, revision numbers and last-seen/changed snapshot references. The Discovery workbench displays added, changed and missing counts and allows idempotent retry. The admin API exposes indexed keyset pagination for future transform workers.
