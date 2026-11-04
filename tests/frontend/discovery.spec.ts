@@ -45,19 +45,40 @@ test('admin discovers Git/TFVC, saves snapshot and reviews partial permissions',
     direction: 'source', organization: 'demo',
     validationCode: 'Verified'
   }] }));
+  const discoveryJobId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+  const queued = {
+    id: discoveryJobId, kind: 'DiscoverSource', snapshotId: '00000000-0000-0000-0000-000000000000',
+    sourceConnectionId: connectionId, enqueuedBy: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    state: 'Queued', attempts: 0, maxAttempts: 5,
+    availableAtUtc: summary.collectedAtUtc, leaseUntilUtc: null,
+    createdAtUtc: summary.collectedAtUtc, updatedAtUtc: summary.collectedAtUtc,
+    completedAtUtc: null, lastErrorCode: null, result: null
+  };
   await page.route('**/api/discoveries', route => {
-    if (route.request().method() === 'POST') {
-      expect(route.request().postDataJSON()).toEqual({ connectionId });
-      scanRequests++;
-      return route.fulfill({ status: 201, json: summary });
-    }
-    return route.fulfill({ json: [] });
+    return route.fulfill({ json: scanRequests ? [summary] : [] });
   });
+  await page.route('**/api/jobs/discovery', route => {
+    expect(route.request().method()).toBe('POST');
+    const body = route.request().postDataJSON();
+    expect(body.connectionId).toBe(connectionId);
+    expect(body.requestId).toMatch(/^[0-9a-f-]{36}$/);
+    scanRequests++;
+    return route.fulfill({ status: 202, json: queued });
+  });
+  await page.route(`**/api/jobs/${discoveryJobId}`, route => route.fulfill({ json: {
+    ...queued, state: 'Succeeded', attempts: 1, snapshotId: id,
+    result: {
+      snapshotId: id, sourceConnectionId: connectionId,
+      sourceCollectedAtUtc: summary.collectedAtUtc, appliedAtUtc: summary.collectedAtUtc,
+      observed: 6, added: 6, changed: 0, unchanged: 0,
+      markedMissing: 0, sourceInventoryComplete: false
+    }
+  } }));
   await page.route(`**/api/discoveries/${id}`, route => route.fulfill({ json: detail }));
   await mockLogin(page, 'admin');
   await page.getByRole('button', { name: /^discovery$/i }).click();
   await expect(page.getByText(/nessun inventario salvato|no saved inventories/i).first()).toBeVisible();
-  await page.getByRole('button', { name: /avvia discovery|run discovery/i }).click();
+  await page.getByRole('button', { name: /accoda discovery|queue discovery/i }).click();
   await expect(page.getByRole('heading', { name: 'Payments' })).toBeVisible();
   await expect(page.getByText('Api', { exact: true })).toBeVisible();
   await expect(page.getByText('TFVC', { exact: true })).toBeVisible();
@@ -67,6 +88,38 @@ test('admin discovers Git/TFVC, saves snapshot and reviews partial permissions',
   await page.getByRole('button', { name: /^(avvisi di copertura|coverage warnings)$/i }).click();
   await expect(page.getByText(/PermissionsNotCollected/i)).toBeVisible();
   expect(scanRequests).toBe(1);
+});
+
+
+test('discovery worker survives page refresh while no snapshot has been saved', async ({ page }) => {
+  const discoveryJobId = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+  await page.route('**/api/connections', route => route.fulfill({ json: [{
+    id: connectionId, name: 'Demo DevOps', providerKey: 'azure-devops-services',
+    direction: 'source', organization: 'demo', validationCode: 'Verified'
+  }] }));
+  await page.route('**/api/discoveries', route => route.fulfill({ json: [] }));
+  await page.route(`**/api/jobs/connections/${connectionId}`, route => route.fulfill({ json: [{
+    id: discoveryJobId, kind: 'DiscoverSource',
+    snapshotId: '00000000-0000-0000-0000-000000000000',
+    sourceConnectionId: connectionId, state: 'Queued', attempts: 0, maxAttempts: 5,
+    availableAtUtc: summary.collectedAtUtc, leaseUntilUtc: null,
+    createdAtUtc: summary.collectedAtUtc, updatedAtUtc: summary.collectedAtUtc,
+    completedAtUtc: null, lastErrorCode: null, result: null
+  }] }));
+  await page.route(`**/api/jobs/${discoveryJobId}`, route => route.fulfill({ json: {
+    id: discoveryJobId, kind: 'DiscoverSource',
+    snapshotId: '00000000-0000-0000-0000-000000000000',
+    sourceConnectionId: connectionId, state: 'Running', attempts: 1, maxAttempts: 5,
+    availableAtUtc: summary.collectedAtUtc, leaseUntilUtc: summary.collectedAtUtc,
+    createdAtUtc: summary.collectedAtUtc, updatedAtUtc: summary.collectedAtUtc,
+    completedAtUtc: null, lastErrorCode: null, result: null
+  } }));
+  await mockLogin(page, 'admin');
+  await page.getByRole('button', { name: /^discovery$/i }).click();
+  const status = page.getByRole('status', { name: /job di staging persistente|durable staging job/i });
+  await expect(status).toContainText(/in coda|queued/i);
+  await expect(status).toContainText(/in esecuzione|running/i, { timeout: 15000 });
+  await expect(page.getByText(/nessun inventario salvato|no saved inventories/i)).toBeVisible();
 });
 
 test('regular platform user cannot discover or read snapshots', async ({ page }) => {
