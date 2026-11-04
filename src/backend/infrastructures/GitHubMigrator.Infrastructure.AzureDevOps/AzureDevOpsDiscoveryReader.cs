@@ -68,7 +68,8 @@ public sealed class AzureDevOpsDiscoveryReader(
                     capabilities.TryGetProperty("versioncontrol", out var versionControl))
                     sourceControlType = Text(versionControl, "sourceControlType");
             }
-            catch (DiscoveryProviderException)
+            catch (DiscoveryProviderException ex)
+                when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
             {
                 issues.Add(new("ProjectCapabilitiesUnavailable", projectId));
             }
