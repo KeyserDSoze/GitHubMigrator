@@ -26,7 +26,8 @@ public sealed class PostgresStreamedRefObservationTests(PostgresDraftFixture fix
         await store.SaveAsync(lease, second, default);
         Assert.Equal(new(job.Id, 2, 1_250), await store.GetAsync(job.Id, default));
         Assert.Equal(1_250, await db.DiscoveryRefObservations.CountAsync());
-        Assert.Equal(0, await db.StagingAssets.CountAsync()); // incomplete scans never mutate catalog
+        Assert.Equal(0, await db.StagingAssets.CountAsync(x =>
+            x.SourceConnectionId == job.SourceConnectionId)); // provisional scans never mutate this source catalog
 
         var sample = await db.DiscoveryRefObservations.AsNoTracking()
             .SingleAsync(x => x.JobId == job.Id && x.RepositoryId == "repo-1" &&
@@ -69,7 +70,7 @@ public sealed class PostgresStreamedRefObservationTests(PostgresDraftFixture fix
         Assert.Equal(new(job.Id, 1, 1), await store.GetAsync(job.Id, default));
         var events = await new PostgresMigrationJobRepository(db, clock)
             .EventsAsync(job.Id, default);
-        Assert.Single(events.Where(x => x.EventType == "PageSaved"));
+        Assert.Single(events, x => x.EventType == "PageSaved");
         Assert.Equal("original", JsonDocument.Parse((await db.DiscoveryRefObservations
             .SingleAsync()).PayloadJson).RootElement.GetProperty("ObjectId").GetString());
     }
