@@ -60,6 +60,8 @@ builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>(
 builder.Services.AddScoped<ConnectionService>();
 builder.Services.AddScoped<IDiscoveryRepository, PostgresDiscoveryRepository>();
 builder.Services.AddScoped<DiscoveryService>();
+builder.Services.AddScoped<IStagingRepository, PostgresStagingRepository>();
+builder.Services.AddScoped<StagingSyncService>();
 builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMappingDraftRepository>();
 builder.Services.AddScoped<IdentityMappingService>();
 builder.Services.AddScoped<WorkloadPreviewService>();
@@ -262,6 +264,7 @@ app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 
 app.MapConnectionEndpoints();
 app.MapDiscoveryEndpoints();
+app.MapStagingEndpoints();
 app.MapIdentityMappingEndpoints();
 app.MapMigrationPlanEndpoints();
 app.MapWorkloadEndpoints();
