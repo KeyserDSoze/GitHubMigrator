@@ -440,6 +440,22 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var summary = JsonDocument.Parse(await summaryResponse.Content.ReadAsStringAsync());
         Assert.Equal(3, summary.RootElement.GetProperty("activeAssets").GetInt32());
         Assert.Equal(snapshotId.ToString(), summary.RootElement.GetProperty("latestSnapshotId").GetString());
+        using var assetsRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/staging/connections/{harness.SourceConnectionId}/assets/ref?take=1");
+        assetsRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminJwt);
+        using var assetsResponse = await harness.Client.SendAsync(assetsRequest);
+        Assert.Equal(HttpStatusCode.OK, assetsResponse.StatusCode);
+        using var assets = JsonDocument.Parse(await assetsResponse.Content.ReadAsStringAsync());
+        Assert.Equal(1, assets.RootElement.GetProperty("items").GetArrayLength());
+        Assert.Equal("abc", assets.RootElement.GetProperty("items")[0]
+            .GetProperty("properties").GetProperty("ObjectId").GetString());
+
+        using var badPage = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/staging/connections/{harness.SourceConnectionId}/assets/ref?take=1001");
+        badPage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminJwt);
+        using var invalid = await harness.Client.SendAsync(badPage);
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        Assert.Contains("InvalidStagingPage", await invalid.Content.ReadAsStringAsync());
         Assert.Equal(before, harness.Calls.Count); // staging never talks to source or GitHub
     }
 
