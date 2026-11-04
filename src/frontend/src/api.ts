@@ -8,6 +8,18 @@ export type ConnectionDraft = { name: string; providerKey: string; organization:
 export type ValidationResult = {
   isValid: boolean; code: string; authenticatedAs: string | null; permissionAssessment: string
 };
+export type MigrationJob = {
+  id: string; kind: 'StageSnapshot'; snapshotId: string; sourceConnectionId: string;
+  enqueuedBy: string; state: 'Queued' | 'Running' | 'Succeeded' | 'Failed';
+  attempts: number; maxAttempts: number; availableAtUtc: string;
+  leaseUntilUtc: string | null; createdAtUtc: string; updatedAtUtc: string;
+  completedAtUtc: string | null; lastErrorCode: string | null;
+  result: StagingSyncResult | null;
+};
+export type MigrationJobEvent = {
+  id: number; jobId: string; eventType: string; attempt: number;
+  occurredAtUtc: string; errorCode: string | null;
+};
 export type StagingSyncResult = {
   snapshotId: string; sourceConnectionId: string; sourceCollectedAtUtc: string;
   appliedAtUtc: string; observed: number; added: number; changed: number;
@@ -180,6 +192,19 @@ export const api = {
     call<DiscoverySummary>('/api/discoveries', {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ connectionId })
     }),
+  enqueueStagingJob: (token: string, snapshotId: string) =>
+    call<MigrationJob>('/api/jobs/staging', {
+      method: 'POST', headers: withToken(token), body: JSON.stringify({ snapshotId })
+    }),
+  getMigrationJob: (token: string, jobId: string) =>
+    call<MigrationJob>(`/api/jobs/${encodeURIComponent(jobId)}`,
+      { headers: withToken(token) }),
+  listMigrationJobs: (token: string, sourceConnectionId: string) =>
+    call<MigrationJob[]>(`/api/jobs/connections/${encodeURIComponent(sourceConnectionId)}`,
+      { headers: withToken(token) }),
+  getMigrationJobEvents: (token: string, jobId: string) =>
+    call<MigrationJobEvent[]>(`/api/jobs/${encodeURIComponent(jobId)}/events`,
+      { headers: withToken(token) }),
   syncStagingSnapshot: (token: string, snapshotId: string) =>
     call<StagingSyncResult>(`/api/staging/snapshots/${encodeURIComponent(snapshotId)}/sync`, {
       method: 'POST', headers: withToken(token)
