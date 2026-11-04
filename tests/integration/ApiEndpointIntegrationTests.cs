@@ -551,6 +551,105 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(before, harness.Calls.Count); // no Azure DevOps/GitHub provider request
     }
 
+    [Fact]
+    public async Task Durable_discovery_job_reads_Azure_once_then_checkpoints_and_stages_immutable_snapshot()
+    {
+        var sourceId = Guid.NewGuid();
+        var secretRef = "durable-discovery-" + sourceId.ToString("N");
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database
+                .ExecuteSqlRawAsync("TRUNCATE TABLE migration_job_events, migration_jobs RESTART IDENTITY");
+            await scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>()
+                .SaveAsync(secretRef, ApiHarness.SourceToken, default);
+            await scope.ServiceProvider.GetRequiredService<IConnectionRepository>().SaveAsync(
+                new MigrationConnection(sourceId, "Async Azure DevOps", "azure-devops-services",
+                    ConnectionDirection.Source, "az-org", secretRef,
+                    DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, "Verified",
+                    "operator", "read_only"), default);
+        }
+
+        var requestId = Guid.NewGuid();
+        var payload = new { connectionId = sourceId, requestId };
+        using var unauth = await PostAsync("/api/jobs/discovery", payload);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauth.StatusCode);
+        using var denied = await PostAsync("/api/jobs/discovery", payload,
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        using var invalid = await PostAsync("/api/jobs/discovery",
+            new { connectionId = harness.DestinationConnectionId, requestId },
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        Assert.Contains("UnsupportedDiscoverySource", await invalid.Content.ReadAsStringAsync());
+
+        var admin = await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword);
+        var countBefore = harness.Calls.Count;
+        using var first = await PostAsync("/api/jobs/discovery", payload, admin);
+        Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+        using var document = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        var jobId = document.RootElement.GetProperty("id").GetGuid();
+        Assert.Equal("DiscoverSource", document.RootElement.GetProperty("kind").GetString());
+        Assert.Equal(Guid.Empty, document.RootElement.GetProperty("snapshotId").GetGuid());
+
+        using var retry = await PostAsync("/api/jobs/discovery", payload, admin);
+        Assert.Equal(HttpStatusCode.Accepted, retry.StatusCode);
+        using var repeated = JsonDocument.Parse(await retry.Content.ReadAsStringAsync());
+        Assert.Equal(jobId, repeated.RootElement.GetProperty("id").GetGuid());
+        using var parallel = await PostAsync("/api/jobs/discovery",
+            new { connectionId = sourceId, requestId = Guid.NewGuid() }, admin);
+        Assert.Equal(HttpStatusCode.Accepted, parallel.StatusCode);
+        using var second = JsonDocument.Parse(await parallel.Content.ReadAsStringAsync());
+        Assert.Equal(jobId, second.RootElement.GetProperty("id").GetGuid());
+
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+            Assert.True(await scope.ServiceProvider.GetRequiredService<MigrationJobProcessor>()
+                .RunOnceAsync(default));
+        var providerCalls = harness.Calls.ToArray().Skip(countBefore).ToArray();
+        Assert.NotEmpty(providerCalls);
+        Assert.All(providerCalls, call =>
+        {
+            Assert.Equal("GET", call.Method);
+            Assert.Contains(call.Url.Host, new[] { "dev.azure.com", "vssps.dev.azure.com" });
+            Assert.DoesNotContain(ApiHarness.SourceToken, call.Url.ToString());
+        });
+        using var get = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{jobId}");
+        get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var completed = await harness.Client.SendAsync(get);
+        Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
+        using var job = JsonDocument.Parse(await completed.Content.ReadAsStringAsync());
+        var status = job.RootElement;
+        Assert.Equal("Succeeded", status.GetProperty("state").GetString());
+        Assert.Equal(jobId, status.GetProperty("snapshotId").GetGuid());
+        Assert.Equal(sourceId, status.GetProperty("sourceConnectionId").GetGuid());
+        Assert.Equal(4, status.GetProperty("result").GetProperty("observed").GetInt32());
+
+        using var snapshot = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/discoveries/{jobId}");
+        snapshot.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var snapshotResponse = await harness.Client.SendAsync(snapshot);
+        Assert.Equal(HttpStatusCode.OK, snapshotResponse.StatusCode);
+        using var persisted = JsonDocument.Parse(await snapshotResponse.Content.ReadAsStringAsync());
+        Assert.Equal(jobId, persisted.RootElement.GetProperty("snapshot")
+            .GetProperty("snapshotId").GetGuid());
+        Assert.Equal(sourceId, persisted.RootElement.GetProperty("connectionId").GetGuid());
+
+        using var eventRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{jobId}/events");
+        eventRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var eventResponse = await harness.Client.SendAsync(eventRequest);
+        Assert.Equal(HttpStatusCode.OK, eventResponse.StatusCode);
+        using var events = JsonDocument.Parse(await eventResponse.Content.ReadAsStringAsync());
+        Assert.Equal(new[] { "Queued", "Claimed", "SnapshotSaved", "Succeeded" },
+            events.RootElement.EnumerateArray().Select(x => x.GetProperty("eventType").GetString()));
+
+        var providerReadCount = harness.Calls.Count;
+        using var replay = await PostAsync("/api/jobs/discovery", payload, admin);
+        Assert.Equal(HttpStatusCode.Accepted, replay.StatusCode);
+        using var original = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+        Assert.Equal(jobId, original.RootElement.GetProperty("id").GetGuid());
+        Assert.Equal("Succeeded", original.RootElement.GetProperty("state").GetString());
+        Assert.Equal(providerReadCount, harness.Calls.Count);
+    }
+
     private async Task<HttpResponseMessage> PostAsync(string path, object payload, string? bearer = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path)
