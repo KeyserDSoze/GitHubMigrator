@@ -28,6 +28,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<DiscoveryInventoryRecord> Discoveries => Set<DiscoveryInventoryRecord>();
     public DbSet<IdentityMappingDraftRecord> IdentityMappingDrafts => Set<IdentityMappingDraftRecord>();
     public DbSet<MigrationPlanDraftRecord> MigrationPlanDrafts => Set<MigrationPlanDraftRecord>();
+    public DbSet<StagingAssetRecord> StagingAssets => Set<StagingAssetRecord>();
+    public DbSet<StagingSnapshotSyncRecord> StagingSnapshotSyncs => Set<StagingSnapshotSyncRecord>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -86,6 +88,40 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.Revision).HasColumnName("revision");
             entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
             entity.Property(x => x.RepositoriesJson).HasColumnName("repositories_json").HasColumnType("jsonb");
+        });
+        builder.Entity<StagingAssetRecord>(entity =>
+        {
+            entity.ToTable("staging_assets");
+            entity.HasKey(x => new { x.SourceConnectionId, x.AssetType, x.SourceId });
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.AssetType).HasColumnName("asset_type").HasMaxLength(32);
+            entity.Property(x => x.SourceId).HasColumnName("source_id").HasMaxLength(1024);
+            entity.Property(x => x.ProjectId).HasColumnName("project_id").HasMaxLength(512);
+            entity.Property(x => x.Fingerprint).HasColumnName("fingerprint").HasMaxLength(64);
+            entity.Property(x => x.PayloadJson).HasColumnName("payload_json").HasColumnType("jsonb");
+            entity.Property(x => x.FirstSnapshotId).HasColumnName("first_snapshot_id");
+            entity.Property(x => x.LastSeenSnapshotId).HasColumnName("last_seen_snapshot_id");
+            entity.Property(x => x.LastChangedSnapshotId).HasColumnName("last_changed_snapshot_id");
+            entity.Property(x => x.Revision).HasColumnName("revision");
+            entity.Property(x => x.Missing).HasColumnName("missing");
+            entity.HasIndex(x => new { x.SourceConnectionId, x.LastChangedSnapshotId });
+            entity.HasIndex(x => new { x.SourceConnectionId, x.Missing });
+        });
+        builder.Entity<StagingSnapshotSyncRecord>(entity =>
+        {
+            entity.ToTable("staging_snapshot_syncs");
+            entity.HasKey(x => x.SnapshotId);
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.SourceCollectedAtUtc).HasColumnName("source_collected_at_utc");
+            entity.Property(x => x.AppliedAtUtc).HasColumnName("applied_at_utc");
+            entity.Property(x => x.Observed).HasColumnName("observed");
+            entity.Property(x => x.Added).HasColumnName("added");
+            entity.Property(x => x.Changed).HasColumnName("changed");
+            entity.Property(x => x.Unchanged).HasColumnName("unchanged");
+            entity.Property(x => x.MarkedMissing).HasColumnName("marked_missing");
+            entity.Property(x => x.SourceInventoryComplete).HasColumnName("source_inventory_complete");
+            entity.HasIndex(x => new { x.SourceConnectionId, x.SourceCollectedAtUtc });
         });
         builder.Entity<EncryptedSecretRecord>(entity =>
         {
