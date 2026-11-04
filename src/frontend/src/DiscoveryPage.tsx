@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type StagingSyncResult } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -13,6 +13,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<DiscoveryDetail | null>(null);
   const [staging, setStaging] = useState<StagingSyncResult | null>(null);
+  const [job, setJob] = useState<MigrationJob | null>(null);
   const [tab, setTab] = useState<Tab>('projects');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -34,8 +35,14 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
           setSelectedId(history[0].id);
           void Promise.all([
             api.getDiscovery(token, history[0].id),
-            api.getStagingSync(token, history[0].id).catch(() => null)
-          ]).then(([value, stage]) => { if (active) { setDetail(value); setStaging(stage); } })
+            api.getStagingSync(token, history[0].id).catch(() => null),
+            api.listMigrationJobs(token, history[0].connectionId).catch(() => [])
+          ]).then(([value, stage, jobs]) => {
+            if (active) {
+              setDetail(value); setStaging(stage);
+              setJob(jobs.find(x => x.snapshotId === history[0].id) ?? null);
+            }
+          })
             .catch(() => { if (active) setError(t('operationError')); });
         }
       }).catch(() => { if (active) setError(t('operationError')); })
@@ -44,12 +51,15 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   }, [token, isAdmin, t]);
 
   async function viewSnapshot(id: string) {
-    setSelectedId(id); setDetail(null); setStaging(null); setTab('projects'); setError('');
+    setSelectedId(id); setDetail(null); setStaging(null); setJob(null); setTab('projects'); setError('');
     try {
-      const [data, sync] = await Promise.all([
-        api.getDiscovery(token, id), api.getStagingSync(token, id).catch(() => null)
+      const data = await api.getDiscovery(token, id);
+      const [sync, jobs] = await Promise.all([
+        api.getStagingSync(token, id).catch(() => null),
+        api.listMigrationJobs(token, data.connectionId).catch(() => [] as MigrationJob[])
       ]);
       setDetail(data); setStaging(sync);
+      setJob(jobs.find(x => x.snapshotId === id) ?? null);
     } catch { setError(t('operationError')); }
   }
 
@@ -77,6 +87,31 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         ? t('stagingStale') : t('stagingError'));
     } finally { setBusy(false); }
   }
+
+  async function enqueueStagingJob() {
+    if (!selectedId) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const accepted = await api.enqueueStagingJob(token, selectedId);
+      setJob(accepted);
+      if (accepted.result) setStaging(accepted.result);
+      setNotice(t('jobAccepted'));
+    } catch { setError(t('jobQueueError')); }
+    finally { setBusy(false); }
+  }
+
+  useEffect(() => {
+    if (!job || (job.state !== 'Queued' && job.state !== 'Running')) return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void api.getMigrationJob(token, job.id).then(current => {
+        if (!active) return;
+        setJob(current);
+        if (current.state === 'Succeeded' && current.result) setStaging(current.result);
+      }).catch(() => { if (active) setError(t('jobRefreshError')); });
+    }, 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [job?.id, job?.state, token, t]);
 
   if (!isAdmin) return <section className="empty-card"><ShieldAlert size={30} /><p>{t('discoveryRequiresAdmin')}</p></section>;
 
@@ -109,10 +144,19 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         onClick={() => { void syncSnapshot(); }}>
         <RefreshCw size={16} /> {t('stagingSync')}
       </button>
+      <button className="plan-secondary" disabled={busy || loading || !selectedId} type="button"
+        onClick={() => { void enqueueStagingJob(); }}>
+        <RefreshCw size={16} /> {t('jobEnqueue')}
+      </button>
     </section>
     <div className="discovery-note">{t('discoveryNotReady')}</div>
     {error && <div className="alert" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
+    {job && <section className="notice" role="status" aria-label={t('jobStatusTitle')}>
+      <strong>{t('jobStatusTitle')}</strong> · {t('jobState' + job.state)}
+      {' · '}{job.attempts}/{job.maxAttempts} {t('jobAttempts')}
+      {job.lastErrorCode && <> · {t('jobErrorCode')}: {job.lastErrorCode}</>}
+    </section>}
     {staging && <section className="notice" role="status" aria-label={t('stagingStatus')}>
       <strong>{t('stagingStatus')}</strong> · {staging.observed} {t('stagingObserved')}
       {' · +'}{staging.added} {t('stagingAdded')}

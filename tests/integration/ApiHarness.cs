@@ -59,6 +59,8 @@ public sealed class ApiHarness : IAsyncLifetime
             ["Secrets__Provider"] = "EncryptedPostgreSql",
             ["Secrets__LocalEncryptionKey"] = Convert.ToBase64String(new byte[32]),
             ["Observability__Provider"] = "None",
+            // Integration requests control when the worker processes a job.
+            ["Jobs__Enabled"] = "false",
             ["ASPNETCORE_ENVIRONMENT"] = "Development",
             ["DOTNET_ENVIRONMENT"] = "Development"
         };

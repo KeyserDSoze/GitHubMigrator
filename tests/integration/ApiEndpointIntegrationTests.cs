@@ -9,6 +9,7 @@ using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 
 namespace GitHubMigrator.Integration.Tests;
 
@@ -457,6 +458,97 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
         Assert.Contains("InvalidStagingPage", await invalid.Content.ReadAsStringAsync());
         Assert.Equal(before, harness.Calls.Count); // staging never talks to source or GitHub
+    }
+
+    [Fact]
+    public async Task Durable_staging_job_HTTP_is_admin_only_idempotent_audited_and_worker_driven()
+    {
+        // The queue is global to the test PostgreSQL instance; isolate this
+        // HTTP test from other worker tests' intentionally abandoned leases.
+        await using (var reset = harness.Host.Services.CreateAsyncScope())
+            await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
+                .ExecuteSqlRawAsync("TRUNCATE TABLE migration_job_events, migration_jobs RESTART IDENTITY");
+        // The staging catalog is shared across API tests: use an isolated
+        // logical source connection so exact asset count assertions are stable.
+        var sourceId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<IDiscoveryRepository>().SaveAsync(
+                new DiscoveryInventory
+                {
+                    Id = snapshotId, ConnectionId = sourceId,
+                    SourceProvider = "azure-devops-services", Organization = "az-org",
+                    CollectedAtUtc = now,
+                    Snapshot = new DiscoverySnapshot
+                    {
+                        SnapshotId = snapshotId, SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                        CollectedAt = now,
+                        Projects = [new SourceProject("project", "Project", [
+                            new SourceRepository("repo", "project", "Repo", VersionControlKind.Git)])],
+                        Identities = [], AccessGrants = []
+                    },
+                    Refs = [new RepositoryRef("repo", "refs/heads/main", "sha")],
+                    Issues = [], Completeness = DiscoveryCompleteness.Partial,
+                    IdentitiesComplete = false, PermissionsComplete = false
+                }, default);
+        }
+
+        var path = "/api/jobs/staging";
+        using var anonymous = await PostAsync(path, new { snapshotId });
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var user = await PostAsync(path, new { snapshotId },
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, user.StatusCode);
+        using var pending = await PostAsync(path, new { snapshotId },
+            await harness.LoginAsync(harness.PendingName, ApiHarness.PendingPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, pending.StatusCode);
+        var admin = await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword);
+        var before = harness.Calls.Count;
+        using var first = await PostAsync(path, new { snapshotId }, admin);
+        Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+        using var firstJson = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        var id = firstJson.RootElement.GetProperty("id").GetGuid();
+        Assert.Equal("Queued", firstJson.RootElement.GetProperty("state").GetString());
+        Assert.Equal(0, firstJson.RootElement.GetProperty("attempts").GetInt32());
+        Assert.Equal($"/api/jobs/{id}", first.Headers.Location?.ToString());
+
+        using var duplicate = await PostAsync(path, new { snapshotId }, admin);
+        Assert.Equal(HttpStatusCode.Accepted, duplicate.StatusCode);
+        using var duplicateJson = JsonDocument.Parse(await duplicate.Content.ReadAsStringAsync());
+        Assert.Equal(id, duplicateJson.RootElement.GetProperty("id").GetGuid());
+
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+            Assert.True(await scope.ServiceProvider.GetRequiredService<MigrationJobProcessor>()
+                .RunOnceAsync(default));
+
+        using var jobRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{id}");
+        jobRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var job = await harness.Client.SendAsync(jobRequest);
+        Assert.Equal(HttpStatusCode.OK, job.StatusCode);
+        using var status = JsonDocument.Parse(await job.Content.ReadAsStringAsync());
+        Assert.Equal("Succeeded", status.RootElement.GetProperty("state").GetString());
+        Assert.Equal(1, status.RootElement.GetProperty("attempts").GetInt32());
+        Assert.Equal(3, status.RootElement.GetProperty("result").GetProperty("observed").GetInt32());
+
+        using var eventsRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{id}/events");
+        eventsRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var eventsResponse = await harness.Client.SendAsync(eventsRequest);
+        Assert.Equal(HttpStatusCode.OK, eventsResponse.StatusCode);
+        using var events = JsonDocument.Parse(await eventsResponse.Content.ReadAsStringAsync());
+        Assert.Equal(["Queued", "Claimed", "Succeeded"],
+            events.RootElement.EnumerateArray().Select(x => x.GetProperty("eventType").GetString()));
+
+        using var listRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/connections/{sourceId}");
+        listRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var listing = await harness.Client.SendAsync(listRequest);
+        Assert.Equal(HttpStatusCode.OK, listing.StatusCode);
+        using var list = JsonDocument.Parse(await listing.Content.ReadAsStringAsync());
+        Assert.Contains(list.RootElement.EnumerateArray(), x => x.GetProperty("id").GetGuid() == id);
+        Assert.Equal(before, harness.Calls.Count); // no Azure DevOps/GitHub provider request
     }
 
     private async Task<HttpResponseMessage> PostAsync(string path, object payload, string? bearer = null)

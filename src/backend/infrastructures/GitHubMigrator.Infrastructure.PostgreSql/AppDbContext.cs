@@ -30,6 +30,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<MigrationPlanDraftRecord> MigrationPlanDrafts => Set<MigrationPlanDraftRecord>();
     public DbSet<StagingAssetRecord> StagingAssets => Set<StagingAssetRecord>();
     public DbSet<StagingSnapshotSyncRecord> StagingSnapshotSyncs => Set<StagingSnapshotSyncRecord>();
+    public DbSet<MigrationJobRecord> MigrationJobs => Set<MigrationJobRecord>();
+    public DbSet<MigrationJobEventRecord> MigrationJobEvents => Set<MigrationJobEventRecord>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -125,6 +127,46 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.SourceInventoryComplete).HasColumnName("source_inventory_complete");
             entity.HasIndex(x => new { x.SourceConnectionId, x.SourceCollectedAtUtc })
                 .HasDatabaseName("ix_staging_snapshot_syncs_source");
+        });
+        builder.Entity<MigrationJobRecord>(entity =>
+        {
+            entity.ToTable("migration_jobs");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(40);
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.EnqueuedBy).HasColumnName("enqueued_by");
+            entity.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(160);
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(20);
+            entity.Property(x => x.Attempts).HasColumnName("attempts");
+            entity.Property(x => x.MaxAttempts).HasColumnName("max_attempts");
+            entity.Property(x => x.AvailableAtUtc).HasColumnName("available_at_utc");
+            entity.Property(x => x.LeaseToken).HasColumnName("lease_token");
+            entity.Property(x => x.LeaseUntilUtc).HasColumnName("lease_until_utc");
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.CompletedAtUtc).HasColumnName("completed_at_utc");
+            entity.Property(x => x.LastErrorCode).HasColumnName("last_error_code").HasMaxLength(70);
+            entity.Property(x => x.ResultJson).HasColumnName("result_json").HasColumnType("jsonb");
+            entity.HasIndex(x => x.IdempotencyKey).IsUnique().HasDatabaseName("ux_migration_jobs_idempotency");
+            entity.HasIndex(x => x.LeaseToken).IsUnique().HasDatabaseName("ux_migration_jobs_lease_token");
+            entity.HasIndex(x => new { x.State, x.AvailableAtUtc, x.CreatedAtUtc })
+                .HasDatabaseName("ix_migration_jobs_ready");
+            entity.HasIndex(x => new { x.SourceConnectionId, x.CreatedAtUtc })
+                .HasDatabaseName("ix_migration_jobs_source");
+        });
+        builder.Entity<MigrationJobEventRecord>(entity =>
+        {
+            entity.ToTable("migration_job_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.JobId).HasColumnName("job_id");
+            entity.Property(x => x.EventType).HasColumnName("event_type").HasMaxLength(32);
+            entity.Property(x => x.Attempt).HasColumnName("attempt");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.Property(x => x.ErrorCode).HasColumnName("error_code").HasMaxLength(70);
+            entity.HasIndex(x => new { x.JobId, x.Id }).HasDatabaseName("ix_migration_job_events_job");
         });
         builder.Entity<EncryptedSecretRecord>(entity =>
         {
