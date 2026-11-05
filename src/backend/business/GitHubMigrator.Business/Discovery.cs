@@ -67,6 +67,23 @@ public interface IDiscoveryIdentityObservationStore
     Task VerifySnapshotAsync(MigrationJobLease lease, CancellationToken ct);
 }
 
+// F-019 observations are provisional until a leased source worker verifies
+// their agreement with the immutable source snapshot. Graph security group
+// descriptors do not grant effective Azure DevOps or GitHub permissions.
+public sealed record DiscoveryGroupProgress(
+    Guid JobId, int CheckpointedGroupPages, int ObservedGroups);
+public sealed record DiscoveryGroupObservation(
+    string SourceId, string Fingerprint, System.Text.Json.JsonElement Properties);
+public sealed record DiscoveryGroupObservationPage(
+    Guid JobId, IReadOnlyList<DiscoveryGroupObservation> Items, string? NextAfter);
+public interface IDiscoveryGroupObservationStore
+{
+    Task<DiscoveryGroupProgress> GetProgressAsync(Guid jobId, CancellationToken ct);
+    Task<DiscoveryGroupObservationPage> ListAsync(
+        Guid jobId, string? after, int take, CancellationToken ct);
+    Task VerifySnapshotAsync(MigrationJobLease lease, CancellationToken ct);
+}
+
 public sealed class DiscoveryCheckpointException(string code)
     : Exception("Invalid or expired discovery page checkpoint")
 {

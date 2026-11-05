@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -16,6 +16,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [job, setJob] = useState<MigrationJob | null>(null);
   const [refProgress, setRefProgress] = useState<DiscoveryRefIngestProgress | null>(null);
   const [identityProgress, setIdentityProgress] = useState<DiscoveryIdentityProgress | null>(null);
+  const [groupProgress, setGroupProgress] = useState<DiscoveryGroupProgress | null>(null);
   const [refManifest, setRefManifest] = useState<DiscoveryRefManifest | null>(null);
   const [tab, setTab] = useState<Tab>('projects');
   const [busy, setBusy] = useState(false);
@@ -82,7 +83,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
 
   async function scan() {
     if (!sourceId) return;
-    setBusy(true); setError(''); setNotice(''); setRefProgress(null); setIdentityProgress(null);
+    setBusy(true); setError(''); setNotice(''); setRefProgress(null); setIdentityProgress(null); setGroupProgress(null);
     try {
       // Preserve the request ID after an uncertain network failure so retry
       // cannot enqueue a second scan while the first is being processed.
@@ -130,6 +131,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         }).catch(() => {}); // Status polling remains usable if progress endpoint is unavailable.
         void api.getDiscoveryIdentityProgress(token, job.id).then(progress => {
           if (active) setIdentityProgress(progress);
+        }).catch(() => {});
+        void api.getDiscoveryGroupProgress(token, job.id).then(progress => {
+          if (active) setGroupProgress(progress);
         }).catch(() => {});
       }
       void api.getMigrationJob(token, job.id).then(current => {
@@ -222,6 +226,14 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         {' · '}{identityProgress.checkpointedUserPages} {t('discoveryIdentityProgressPages')}
         {' · '}{job.state === 'Succeeded'
           ? t('discoveryIdentityProgressVerified') : t('discoveryRefProgressProvisional')}
+      </section>}
+    {job?.kind === 'DiscoverSource' && groupProgress?.jobId === job.id &&
+      <section className="notice" role="status" aria-label={t('discoveryGroupProgressTitle')}>
+        <strong>{t('discoveryGroupProgressTitle')}</strong>
+        {' · '}{groupProgress.observedGroups} {t('discoveryGroupProgressGroups')}
+        {' · '}{groupProgress.checkpointedGroupPages} {t('discoveryGroupProgressPages')}
+        {' · '}{job.state === 'Succeeded'
+          ? t('discoveryGroupProgressVerified') : t('discoveryRefProgressProvisional')}
       </section>}
     {job?.kind === 'DiscoverSource' && job.state === 'Succeeded' &&
       refManifest?.jobId === job.id &&

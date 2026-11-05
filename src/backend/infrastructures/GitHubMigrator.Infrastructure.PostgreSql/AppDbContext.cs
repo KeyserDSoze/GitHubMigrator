@@ -35,6 +35,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<DiscoveryPageCheckpointRecord> DiscoveryPageCheckpoints => Set<DiscoveryPageCheckpointRecord>();
     public DbSet<DiscoveryRefObservationRecord> DiscoveryRefObservations => Set<DiscoveryRefObservationRecord>();
     public DbSet<DiscoveryIdentityObservationRecord> DiscoveryIdentityObservations => Set<DiscoveryIdentityObservationRecord>();
+    public DbSet<DiscoveryGroupObservationRecord> DiscoveryGroupObservations => Set<DiscoveryGroupObservationRecord>();
     public DbSet<DiscoveryRefManifestRecord> DiscoveryRefManifests => Set<DiscoveryRefManifestRecord>();
     public DbSet<DiscoveryRefChunkRecord> DiscoveryRefChunks => Set<DiscoveryRefChunkRecord>();
 
@@ -201,6 +202,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.PageIndex).HasColumnName("page_index");
             entity.HasIndex(x => new { x.JobId, x.RepositoryId })
                 .HasDatabaseName("ix_discovery_ref_observations_repo");
+        });
+        builder.Entity<DiscoveryGroupObservationRecord>(entity =>
+        {
+            entity.ToTable("discovery_group_observations");
+            entity.HasKey(x => new { x.JobId, x.SourceId });
+            entity.Property(x => x.JobId).HasColumnName("job_id");
+            entity.Property(x => x.SourceId).HasColumnName("source_id").HasMaxLength(1024);
+            entity.Property(x => x.Fingerprint).HasColumnName("fingerprint").HasMaxLength(64);
+            entity.Property(x => x.PayloadJson).HasColumnName("payload_json").HasColumnType("jsonb");
+            entity.Property(x => x.ResourceKey).HasColumnName("resource_key").HasMaxLength(256);
+            entity.Property(x => x.PageIndex).HasColumnName("page_index");
         });
         builder.Entity<DiscoveryIdentityObservationRecord>(entity =>
         {

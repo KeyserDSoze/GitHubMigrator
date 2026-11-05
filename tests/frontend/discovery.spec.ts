@@ -168,6 +168,10 @@ test('discovery worker survives page refresh while no snapshot has been saved', 
     route.fulfill({ json: {
       jobId: discoveryJobId, checkpointedUserPages: 2, observedUsers: 1001
     } }));
+  await page.route(`**/api/jobs/${discoveryJobId}/group-progress`, route =>
+    route.fulfill({ json: {
+      jobId: discoveryJobId, checkpointedGroupPages: 2, observedGroups: 125
+    } }));
   await mockLogin(page, 'admin');
   await page.getByRole('button', { name: /^discovery$/i }).click();
   const status = page.getByRole('status', { name: /job di staging persistente|durable staging job/i });
@@ -185,6 +189,12 @@ test('discovery worker survives page refresh while no snapshot has been saved', 
   await expect(graph).toContainText('1001', { timeout: 15000 });
   await expect(graph).toContainText('2');
   await expect(graph).toContainText(/provvisor|provisional/i);
+  const groups = page.getByRole('status', {
+    name: /gruppi di sicurezza graph osservati in postgresql|graph security groups observed in postgresql/i
+  });
+  await expect(groups).toContainText('125', { timeout: 15000 });
+  await expect(groups).toContainText('2');
+  await expect(groups).toContainText(/provvisor|provisional/i);
 });
 
 test('regular platform user cannot discover or read snapshots', async ({ page }) => {
