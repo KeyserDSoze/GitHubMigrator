@@ -25,6 +25,11 @@ public interface IDiscoveryRefManifestStore
 {
     Task<DiscoveryRefManifest> PrepareAsync(
         MigrationJobLease lease, int expectedRefCount, CancellationToken ct);
+    // Internal reads require the live worker lease. Public manifest reads
+    // remain forbidden until the parent discovery job succeeds.
+    Task<DiscoveryRefManifest> GetPreparedAsync(MigrationJobLease lease, CancellationToken ct);
+    Task<DiscoveryRefChunkContents?> ReadPreparedChunkAsync(
+        MigrationJobLease lease, int index, CancellationToken ct);
     Task<DiscoveryRefManifest?> GetAsync(Guid jobId, CancellationToken ct);
     Task<DiscoveryRefChunkList> ListChunksAsync(
         Guid jobId, int after, int take, CancellationToken ct);
