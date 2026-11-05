@@ -30,7 +30,9 @@ public sealed class PlanInputException(string code) : Exception("Invalid migrati
 public sealed class MigrationPlanReviewService(
     IDiscoveryRepository discoveries,
     IConnectionRepository connections,
-    IIdentityMappingDraftRepository identityDrafts)
+    IIdentityMappingDraftRepository identityDrafts,
+    IIdentitySnapshotReader? identitySources = null,
+    IPlanRefEvidenceReader? refEvidence = null)
 {
     private static readonly Regex RepositoryName = new(
         @"^[A-Za-z0-9._-]{1,100}$", RegexOptions.Compiled | RegexOptions.CultureInvariant,
@@ -43,7 +45,9 @@ public sealed class MigrationPlanReviewService(
             selections.Count > 1_000)
             throw new PlanInputException("InvalidPlanContext");
 
-        var inventory = await discoveries.GetAsync(snapshotId, ct)
+        var inventory = await (identitySources is null
+            ? discoveries.GetAsync(snapshotId, ct)
+            : identitySources.GetMetadataAsync(snapshotId, ct))
             ?? throw new KeyNotFoundException("SnapshotNotFound");
         var destination = await connections.GetAsync(destinationId, ct)
             ?? throw new KeyNotFoundException("DestinationNotFound");
@@ -67,6 +71,29 @@ public sealed class MigrationPlanReviewService(
         if (mapping is not null &&
             !string.Equals(mapping.TargetOrganization, destination.Organization, StringComparison.OrdinalIgnoreCase))
             throw new PlanInputException("IdentityMappingDestinationMismatch");
+
+        if (mapping is not null && identitySources is not null && mapping.Mappings.Count > 0)
+        {
+            var mappedIds = mapping.Mappings.Select(m => m.SourceIdentityId).ToArray();
+            var matched = await identitySources.ResolveKnownAsync(snapshotId, mappedIds, ct);
+            if (matched.Count != mappedIds.Distinct(StringComparer.Ordinal).Count())
+                throw new PlanInputException("IdentityMappingSourceMismatch");
+        }
+
+        // F-014 durable scans store refs in PostgreSQL instead of the inline
+        // snapshot array. F-005 must never present an empty array as zero refs.
+        // Even historical inline snapshots use DB-side per-repository counts
+        // when the production reader is registered.
+        IReadOnlyDictionary<string, int>? refCounts = null;
+        if (selections.Any(s => s is not null && s.Include))
+        {
+            if (refEvidence is not null)
+                refCounts = await refEvidence.CountByRepositoryAsync(snapshotId, ct);
+            else if (inventory.RefsExternalized)
+                throw new PlanInputException("PlanRefEvidenceUnavailable");
+            if (refCounts is not null && refCounts.Keys.Any(id => !known.ContainsKey(id)))
+                throw new PlanInputException("PlanRefEvidenceMismatch");
+        }
 
         foreach (var input in selections)
         {
@@ -105,7 +132,9 @@ public sealed class MigrationPlanReviewService(
             }
             output.Add(new(repo.ProviderId, repo.ProjectId, repo.Name, target,
                 repo.VersionControl, input.Strategy,
-                inventory.Refs.Count(r => r.RepositoryId == repo.ProviderId), candidateLogins));
+                refCounts is null
+                    ? inventory.Refs.Count(r => r.RepositoryId == repo.ProviderId)
+                    : refCounts.GetValueOrDefault(repo.ProviderId), candidateLogins));
         }
 
         if (output.Count == 0) checks.Add(new("NoRepositoriesSelected", "blocker"));
