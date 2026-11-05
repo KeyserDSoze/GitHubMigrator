@@ -125,13 +125,13 @@ test('externalized ref snapshot displays real total without inventing zero refs 
   await page.getByRole('button', { name: /^discovery$/i }).click();
   await expect(page.getByRole('heading', { name: 'Payments' })).toBeVisible();
   await expect(page.getByText('1250', { exact: true })).toBeVisible();
-  await expect(page.getByRole('note')).toContainText(/PostgreSQL/);
+  await expect(page.getByRole('note').first()).toContainText(/PostgreSQL/);
   await expect(page.getByText(/riferimenti nel manifest postgresql|refs in postgresql manifest/i))
     .toBeVisible();
   await expect(page.getByText(/^0 (riferimenti|refs)$/i)).toHaveCount(0);
   await expect(page.getByText('1001', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: /^(identità|identities)$/i }).click();
-  await expect(page.getByRole('note')).toContainText(/PostgreSQL/);
+  await expect(page.getByRole('note').last()).toContainText(/PostgreSQL/);
   await expect(page.getByText(/1001 (utenti|users)/i)).toBeVisible();
   await expect(page.getByText(/nessuna identità restituita|no identities returned/i))
     .toHaveCount(0);
