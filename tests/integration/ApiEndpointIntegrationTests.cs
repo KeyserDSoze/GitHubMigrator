@@ -888,6 +888,28 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var invalidChunksResponse = await harness.Client.SendAsync(invalidChunksRequest);
         Assert.Equal(HttpStatusCode.BadRequest, invalidChunksResponse.StatusCode);
 
+        // F-005 must read the externally stored Git ref count: the saved
+        // discovery JSON intentionally has refs: [], not one inline ref.
+        var previewCalls = harness.Calls.Count;
+        using var planPreview = await PostAsync("/api/migration-plans/preview",
+            new {
+                snapshotId = jobId,
+                destinationConnectionId = harness.DestinationConnectionId,
+                repositories = new [] {
+                    new { sourceRepositoryId = "source-git",
+                        targetRepositoryName = "migrated-source", strategy = 0, include = true }
+                }
+            }, admin);
+        Assert.Equal(HttpStatusCode.OK, planPreview.StatusCode);
+        using var reviewedPlan = JsonDocument.Parse(
+            await planPreview.Content.ReadAsStringAsync());
+        var candidate = Assert.Single(
+            reviewedPlan.RootElement.GetProperty("repositories").EnumerateArray());
+        Assert.Equal("source-git", candidate.GetProperty("sourceRepositoryId").GetString());
+        Assert.Equal(1, candidate.GetProperty("refCount").GetInt32());
+        Assert.False(reviewedPlan.RootElement.GetProperty("readyForApproval").GetBoolean());
+        Assert.Equal(previewCalls, harness.Calls.Count); // purely database-side review
+
         var providerReadCount = harness.Calls.Count;
         using var replay = await PostAsync("/api/jobs/discovery", payload, admin);
         Assert.Equal(HttpStatusCode.Accepted, replay.StatusCode);
