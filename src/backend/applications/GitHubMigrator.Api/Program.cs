@@ -91,7 +91,13 @@ builder.Services.AddScoped<IncrementalTargetPreflightService>();
 builder.Services.AddScoped<IIncrementalOperationPlanRepository,
     PostgresIncrementalOperationPlanRepository>();
 builder.Services.AddScoped<IncrementalOperationPlanService>();
-builder.Services.AddScoped<IGitHubTargetRefEvidenceStore, PostgresGitHubTargetRefEvidenceStore>();
+builder.Services.AddScoped<PostgresGitHubTargetRefEvidenceStore>();
+builder.Services.AddScoped<IGitHubTargetRefEvidenceStore>(
+    service => service.GetRequiredService<PostgresGitHubTargetRefEvidenceStore>());
+builder.Services.AddScoped<PostgresVerifiedSourceGitRefReader>();
+builder.Services.AddScoped<IIncrementalGitRefReconciliationStore,
+    PostgresIncrementalGitRefReconciliationStore>();
+builder.Services.AddScoped<IncrementalGitRefReconciliationService>();
 builder.Services.AddScoped<GitHubTargetRefEvidenceService>();
 builder.Services.AddScoped<IncrementalPreparationProcessor>();
 builder.Services.AddHostedService<IncrementalPreparationBackgroundWorker>();
