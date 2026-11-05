@@ -79,6 +79,19 @@ export type StagingSyncResult = {
   appliedAtUtc: string; observed: number; added: number; changed: number;
   unchanged: number; markedMissing: number; sourceInventoryComplete: boolean;
 };
+export type IncrementalReview = {
+  preparationId: string; snapshotId: string; sourceConnectionId: string;
+  destinationConnectionId: string;
+  state: 'DryRunReady' | 'ApprovedForPlanning' | 'Rejected' | 'Revoked';
+  evidenceSha256: string; dryRunSha256: string;
+  itemCount: number; sensitiveItemCount: number; removalItemCount: number;
+  dryRunAtUtc: string; reviewerId: string | null; reviewedAtUtc: string | null;
+  reasonCode: string | null; sensitiveAcknowledged: boolean; isCurrent: boolean;
+};
+export type IncrementalReviewEvent = {
+  id: number; preparationId: string; eventType: string; actorId: string;
+  occurredAtUtc: string; dryRunSha256: string; reasonCode: string | null;
+};
 export type IncrementalPreparation = {
   id: string; snapshotId: string; sourceConnectionId: string;
   destinationConnectionId: string; enqueuedBy: string;
@@ -361,6 +374,33 @@ export const api = {
     }),
   getStagingSync: (token: string, snapshotId: string) =>
     call<StagingSyncResult>(`/api/staging/snapshots/${encodeURIComponent(snapshotId)}`,
+      { headers: withToken(token) }),
+  getIncrementalReview: (token: string, id: string) =>
+    call<IncrementalReview>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/review`,
+      { headers: withToken(token) }),
+  runIncrementalDryRun: (token: string, id: string) =>
+    call<IncrementalReview>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/dry-run`,
+      { method: 'POST', headers: withToken(token), body: '{}' }),
+  decideIncrementalReview: (token: string, id: string,
+      decision: 'ApproveForPlanning' | 'Reject',
+      expectedDryRunSha256: string, acknowledgeSensitive: boolean,
+      reasonCode?: string) =>
+    call<IncrementalReview>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/review/decision`,
+      { method: 'POST', headers: withToken(token),
+        body: JSON.stringify({ decision, expectedDryRunSha256,
+          acknowledgeSensitive, reasonCode: reasonCode || null }) }),
+  revokeIncrementalReview: (token: string, id: string,
+      expectedDryRunSha256: string, reasonCode: string) =>
+    call<IncrementalReview>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/review/revoke`,
+      { method: 'POST', headers: withToken(token),
+        body: JSON.stringify({ expectedDryRunSha256, reasonCode }) }),
+  listIncrementalReviewEvents: (token: string, id: string) =>
+    call<IncrementalReviewEvent[]>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/review/events`,
       { headers: withToken(token) }),
   enqueueIncrementalPreparation: (token: string, snapshotId: string,
       destinationConnectionId: string) =>

@@ -62,6 +62,78 @@ public static class IncrementalPreparationEndpoints
             { return Results.BadRequest(new { error = ex.Code }); }
         });
 
+        // F-027 dry-run is purely PostgreSQL-backed. It cannot contact,
+        // approve execution on, or write to GitHub.
+        routes.MapPost("/{id:guid}/dry-run", async Task<IResult> (
+            Guid id, ClaimsPrincipal principal,
+            IncrementalReviewService reviews, CancellationToken ct) =>
+        {
+            if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actor))
+                return Results.Unauthorized();
+            try { return Results.Ok(await reviews.DryRunAsync(id, actor, ct)); }
+            catch (KeyNotFoundException)
+            { return Results.NotFound(new { error = "PreparationNotFound" }); }
+            catch (IncrementalReviewException ex)
+            { return ReviewError(ex); }
+        }).RequireRateLimiting("incremental-review");
+
+        routes.MapGet("/{id:guid}/review", async Task<IResult> (
+            Guid id, IncrementalReviewService reviews, CancellationToken ct) =>
+        {
+            var review = await reviews.GetAsync(id, ct);
+            return review is null
+                ? Results.NotFound(new { error = "ReviewNotFound" })
+                : Results.Ok(review);
+        });
+
+        routes.MapPost("/{id:guid}/review/decision", async Task<IResult> (
+            Guid id, IncrementalReviewDecisionRequest request,
+            ClaimsPrincipal principal, IncrementalReviewService reviews,
+            CancellationToken ct) =>
+        {
+            if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actor))
+                return Results.Unauthorized();
+            if (request.Decision == "ApproveForPlanning" && !principal.IsInRole("superadmin"))
+                return Results.Forbid();
+            try
+            {
+                return Results.Ok(await reviews.DecideAsync(id, actor, request.Decision ?? "",
+                    request.ExpectedDryRunSha256 ?? "", request.AcknowledgeSensitive,
+                    request.ReasonCode, ct));
+            }
+            catch (KeyNotFoundException)
+            { return Results.NotFound(new { error = "PreparationNotFound" }); }
+            catch (IncrementalReviewException ex)
+            { return ReviewError(ex); }
+        }).RequireRateLimiting("incremental-review");
+
+        routes.MapPost("/{id:guid}/review/revoke", async Task<IResult> (
+            Guid id, RevokeIncrementalReviewRequest request,
+            ClaimsPrincipal principal, IncrementalReviewService reviews,
+            CancellationToken ct) =>
+        {
+            if (!principal.IsInRole("superadmin")) return Results.Forbid();
+            if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actor))
+                return Results.Unauthorized();
+            try
+            {
+                return Results.Ok(await reviews.RevokeAsync(id, actor,
+                    request.ExpectedDryRunSha256 ?? "", request.ReasonCode ?? "", ct));
+            }
+            catch (KeyNotFoundException)
+            { return Results.NotFound(new { error = "PreparationNotFound" }); }
+            catch (IncrementalReviewException ex)
+            { return ReviewError(ex); }
+        }).RequireRateLimiting("incremental-review");
+
+        routes.MapGet("/{id:guid}/review/events", async Task<IResult> (
+            Guid id, IncrementalReviewService reviews, CancellationToken ct) =>
+        {
+            if (await reviews.GetAsync(id, ct) is null)
+                return Results.NotFound(new { error = "ReviewNotFound" });
+            return Results.Ok(await reviews.EventsAsync(id, ct));
+        });
+
         routes.MapGet("/{id:guid}/events", async Task<IResult> (
             Guid id, IncrementalPreparationService service, CancellationToken ct) =>
         {
@@ -70,6 +142,16 @@ public static class IncrementalPreparationEndpoints
             return Results.Ok(await service.EventsAsync(id, ct));
         });
     }
+
+    private static IResult ReviewError(IncrementalReviewException ex) =>
+        ex.Code is "InvalidReviewContext" or "InvalidReviewDecision"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
 }
 
 public sealed record PrepareIncrementalRequest(Guid SnapshotId, Guid DestinationConnectionId);
+public sealed record IncrementalReviewDecisionRequest(
+    string? Decision, string? ExpectedDryRunSha256,
+    bool AcknowledgeSensitive, string? ReasonCode);
+public sealed record RevokeIncrementalReviewRequest(
+    string? ExpectedDryRunSha256, string? ReasonCode);

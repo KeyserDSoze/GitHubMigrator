@@ -83,6 +83,8 @@ builder.Services.AddScoped<MigrationJobProcessor>();
 builder.Services.AddHostedService<MigrationJobBackgroundWorker>();
 builder.Services.AddScoped<IIncrementalPreparationRepository, PostgresIncrementalPreparationRepository>();
 builder.Services.AddScoped<IncrementalPreparationService>();
+builder.Services.AddScoped<IIncrementalReviewRepository, PostgresIncrementalReviewRepository>();
+builder.Services.AddScoped<IncrementalReviewService>();
 builder.Services.AddScoped<IncrementalPreparationProcessor>();
 builder.Services.AddHostedService<IncrementalPreparationBackgroundWorker>();
 builder.Services.AddScoped<IIdentitySnapshotReader, PostgresIdentitySnapshotReader>();
@@ -191,6 +193,14 @@ builder.Services.AddRateLimiter(options =>
     options.AddFixedWindowLimiter("staging-sync", limiter =>
     {
         limiter.PermitLimit = 20;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
+    // Separate bounded budget: multi-step human review cannot exhaust the
+    // snapshot staging limiter or starve migration queues.
+    options.AddFixedWindowLimiter("incremental-review", limiter =>
+    {
+        limiter.PermitLimit = 30;
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });

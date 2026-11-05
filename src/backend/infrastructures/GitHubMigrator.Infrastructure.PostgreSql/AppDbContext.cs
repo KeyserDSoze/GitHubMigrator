@@ -37,6 +37,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<IncrementalPreparationItemRecord>();
     public DbSet<IncrementalPreparationEventRecord> IncrementalPreparationEvents =>
         Set<IncrementalPreparationEventRecord>();
+    public DbSet<IncrementalReviewRecord> IncrementalReviews =>
+        Set<IncrementalReviewRecord>();
+    public DbSet<IncrementalReviewEventRecord> IncrementalReviewEvents =>
+        Set<IncrementalReviewEventRecord>();
     public DbSet<MigrationJobRecord> MigrationJobs => Set<MigrationJobRecord>();
     public DbSet<MigrationJobEventRecord> MigrationJobEvents => Set<MigrationJobEventRecord>();
     public DbSet<DiscoveryPageCheckpointRecord> DiscoveryPageCheckpoints => Set<DiscoveryPageCheckpointRecord>();
@@ -220,6 +224,44 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => new { x.PreparationId, x.Id })
                 .HasDatabaseName("ix_incremental_preparation_events_run");
+        });
+        builder.Entity<IncrementalReviewRecord>(entity =>
+        {
+            entity.ToTable("incremental_preparation_reviews");
+            entity.HasKey(x => x.PreparationId);
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(28);
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.DryRunSha256).HasColumnName("dry_run_sha256").HasMaxLength(64);
+            entity.Property(x => x.DryRunAtUtc).HasColumnName("dry_run_at_utc");
+            entity.Property(x => x.SourceValidatedAtUtc).HasColumnName("source_validated_at_utc");
+            entity.Property(x => x.DestinationValidatedAtUtc).HasColumnName("destination_validated_at_utc");
+            entity.Property(x => x.ItemCount).HasColumnName("item_count");
+            entity.Property(x => x.SensitiveItemCount).HasColumnName("sensitive_item_count");
+            entity.Property(x => x.RemovalItemCount).HasColumnName("removal_item_count");
+            entity.Property(x => x.ReviewerId).HasColumnName("reviewer_id");
+            entity.Property(x => x.ReviewedAtUtc).HasColumnName("reviewed_at_utc");
+            entity.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(48);
+            entity.Property(x => x.SensitiveAcknowledged).HasColumnName("sensitive_acknowledged");
+            entity.HasOne<IncrementalPreparationRecord>().WithOne()
+                .HasForeignKey<IncrementalReviewRecord>(x => x.PreparationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<IncrementalReviewEventRecord>(entity =>
+        {
+            entity.ToTable("incremental_preparation_review_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.EventType).HasColumnName("event_type").HasMaxLength(28);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.Property(x => x.DryRunSha256).HasColumnName("dry_run_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(48);
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.PreparationId, x.Id })
+                .HasDatabaseName("ix_incremental_preparation_review_events");
         });
         builder.Entity<MigrationJobRecord>(entity =>
         {

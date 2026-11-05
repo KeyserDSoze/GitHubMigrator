@@ -174,7 +174,8 @@ function App() {
           </article>; })}</div>
         </>}
         {page === 'connections' && <ConnectionsPage token={session.accessToken} isAdmin={isAdmin} />}
-        {page === 'repositories' && <DiscoveryPage token={session.accessToken} isAdmin={isAdmin} />}
+        {page === 'repositories' && <DiscoveryPage token={session.accessToken} isAdmin={isAdmin}
+          isSuperAdmin={session.role === 'superadmin'} />}
         {page === 'plans' && <MigrationPlanPage token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'pipelines' && <WorkloadsPage mode="pipelines" token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'boards' && <WorkloadsPage mode="boards" token={session.accessToken} isAdmin={isAdmin} />}
