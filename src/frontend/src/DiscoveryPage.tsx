@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type StagingChangeSummary, type IncrementalPreparation, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type StagingChangeSummary, type IncrementalPreparation, type IncrementalReview, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
-export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdmin: boolean }) {
+export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: {
+  token: string; isAdmin: boolean; isSuperAdmin?: boolean;
+}) {
   const { t } = useTranslation();
   const [sources, setSources] = useState<Connection[]>([]);
   const [destinations, setDestinations] = useState<Connection[]>([]);
@@ -17,6 +19,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [staging, setStaging] = useState<StagingSyncResult | null>(null);
   const [changeSummary, setChangeSummary] = useState<StagingChangeSummary | null>(null);
   const [preparation, setPreparation] = useState<IncrementalPreparation | null>(null);
+  const [review, setReview] = useState<IncrementalReview | null>(null);
+  const [riskAcknowledged, setRiskAcknowledged] = useState(false);
+  const [reviewReason, setReviewReason] = useState('');
   const [job, setJob] = useState<MigrationJob | null>(null);
   const [refProgress, setRefProgress] = useState<DiscoveryRefIngestProgress | null>(null);
   const [identityProgress, setIdentityProgress] = useState<DiscoveryIdentityProgress | null>(null);
@@ -81,7 +86,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
 
   async function viewSnapshot(id: string) {
     setSelectedId(id); setDetail(null); setStaging(null); setJob(null); setTab('projects'); setError('');
-    setPreparation(null);
+    setPreparation(null); setReview(null); setRiskAcknowledged(false); setReviewReason('');
     try {
       const data = await api.getDiscovery(token, id);
       const [sync, jobs] = await Promise.all([
@@ -129,11 +134,40 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     try {
       const run = await api.enqueueIncrementalPreparation(token, selectedId, destinationId);
       setPreparation(run);
+      setReview(null); setRiskAcknowledged(false); setReviewReason('');
       setNotice(t('incrementalQueued'));
     } catch (e) {
       setError(e instanceof Error && e.message === 'IncrementalSnapshotSuperseded'
         ? t('incrementalSuperseded') : t('incrementalError'));
     } finally { setBusy(false); }
+  }
+
+  async function incrementalDryRun() {
+    if (!preparation || preparation.state !== 'Prepared') return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const result = await api.runIncrementalDryRun(token, preparation.id);
+      setReview(result);
+      setRiskAcknowledged(false);
+      setReviewReason('');
+      setNotice(t('incrementalDryRunVerified'));
+    } catch { setError(t('incrementalReviewError')); }
+    finally { setBusy(false); }
+  }
+
+  async function decideReview(decision: 'ApproveForPlanning' | 'Reject' | 'Revoke') {
+    if (!preparation || !review || !review.isCurrent) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const updated = decision === 'Revoke'
+        ? await api.revokeIncrementalReview(token, preparation.id,
+            review.dryRunSha256, reviewReason)
+        : await api.decideIncrementalReview(token, preparation.id, decision,
+            review.dryRunSha256, riskAcknowledged, reviewReason || undefined);
+      setReview(updated);
+      setNotice(t('incrementalReviewSaved'));
+    } catch { setError(t('incrementalReviewError')); }
+    finally { setBusy(false); }
   }
 
   async function enqueueStagingJob() {
@@ -157,6 +191,18 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         .catch(() => {});
     }, 2000);
     return () => { active = false; window.clearInterval(timer); };
+  }, [preparation?.id, preparation?.state, token]);
+
+  useEffect(() => {
+    if (!preparation || preparation.state !== 'Prepared') {
+      setReview(null);
+      return;
+    }
+    let active = true;
+    void api.getIncrementalReview(token, preparation.id)
+      .then(result => { if (active) setReview(result); })
+      .catch(() => { if (active) setReview(null); });
+    return () => { active = false; };
   }, [preparation?.id, preparation?.state, token]);
 
   useEffect(() => {
@@ -352,6 +398,63 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
       </>}
       {preparation.lastErrorCode && <> · {t('jobErrorCode')}: {preparation.lastErrorCode}</>}
     </section>}
+    {preparation?.snapshotId === selectedId &&
+      preparation.state === 'Prepared' && <section className="notice"
+        aria-label={t('incrementalReviewTitle')}>
+        <strong>{t('incrementalReviewTitle')}</strong> · {t('incrementalNoWrites')}
+        <div>
+          <button type="button" className="plan-secondary"
+            disabled={busy || review?.state === 'ApprovedForPlanning' ||
+              review?.state === 'Rejected' || review?.state === 'Revoked'}
+            onClick={() => { void incrementalDryRun(); }}>
+            {t('incrementalRunDryRun')}
+          </button>
+        </div>
+        {review && <>
+          <p>{t('incrementalReviewState')}: {review.state}
+            {' · '}{review.itemCount} {t('incrementalReviewItems')}
+            {' · '}{review.sensitiveItemCount} {t('incrementalSensitiveItems')}
+            {' · '}{review.removalItemCount} {t('incrementalRemovals')}
+          </p>
+          <p>{t('incrementalDryRunDigest')}: <code>{review.dryRunSha256.slice(0, 16)}…</code>
+            {' · '}{review.isCurrent
+              ? t('incrementalDryRunCurrent') : t('incrementalDryRunStale')}
+          </p>
+          {review.state === 'DryRunReady' && review.isCurrent && <>
+            {review.sensitiveItemCount > 0 && <label>
+              <input type="checkbox" checked={riskAcknowledged}
+                onChange={event => setRiskAcknowledged(event.target.checked)} />
+              {' '}{t('incrementalAcknowledgeSecurity')}
+            </label>}
+            <label>{t('incrementalReviewReason')}
+              <input type="text" value={reviewReason} maxLength={48}
+                placeholder={t('incrementalReasonPlaceholder')}
+                onChange={event => setReviewReason(event.target.value)} />
+            </label>
+            {isSuperAdmin && <button type="button" className="plan-secondary"
+              disabled={busy || (review.sensitiveItemCount > 0 && !riskAcknowledged)}
+              onClick={() => { void decideReview('ApproveForPlanning'); }}>
+              {t('incrementalApproveForPlanning')}
+            </button>}
+            <button type="button" className="plan-secondary"
+              disabled={busy || !/^[A-Za-z0-9]{1,48}$/.test(reviewReason)}
+              onClick={() => { void decideReview('Reject'); }}>
+              {t('incrementalReject')}
+            </button>
+          </>}
+          {review.state === 'ApprovedForPlanning' && isSuperAdmin && <>
+            <label>{t('incrementalReviewReason')}
+              <input type="text" value={reviewReason} maxLength={48}
+                onChange={event => setReviewReason(event.target.value)} />
+            </label>
+            <button type="button" className="plan-secondary"
+              disabled={busy || !/^[A-Za-z0-9]{1,48}$/.test(reviewReason)}
+              onClick={() => { void decideReview('Revoke'); }}>
+              {t('incrementalRevoke')}
+            </button>
+          </>}
+        </>}
+      </section>}
     {changeSummary?.snapshotId === selectedId && <section
       className="notice" role="status" aria-label={t('stagingChangeJournalTitle')}>
       <strong>{t('stagingChangeJournalTitle')}</strong>

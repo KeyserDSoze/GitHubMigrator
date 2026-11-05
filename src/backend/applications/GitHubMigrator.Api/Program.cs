@@ -83,6 +83,8 @@ builder.Services.AddScoped<MigrationJobProcessor>();
 builder.Services.AddHostedService<MigrationJobBackgroundWorker>();
 builder.Services.AddScoped<IIncrementalPreparationRepository, PostgresIncrementalPreparationRepository>();
 builder.Services.AddScoped<IncrementalPreparationService>();
+builder.Services.AddScoped<IIncrementalReviewRepository, PostgresIncrementalReviewRepository>();
+builder.Services.AddScoped<IncrementalReviewService>();
 builder.Services.AddScoped<IncrementalPreparationProcessor>();
 builder.Services.AddHostedService<IncrementalPreparationBackgroundWorker>();
 builder.Services.AddScoped<IIdentitySnapshotReader, PostgresIdentitySnapshotReader>();

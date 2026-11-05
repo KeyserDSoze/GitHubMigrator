@@ -1217,6 +1217,98 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             Assert.Equal(new string?[] { "Queued", "Claimed", "Prepared" }, events.RootElement
                 .EnumerateArray().Select(x => x.GetProperty("eventType").GetString()).ToArray());
         }
+        // F-027: the dry-run and review never request a provider token or
+        // perform a GitHub API call. Only a different superadmin may approve
+        // for planning; approval cannot execute the migration.
+        using var deniedDryRun = await PostAsync(
+            $"{path}/{preparationId}/dry-run", new { });
+        Assert.Equal(HttpStatusCode.Unauthorized, deniedDryRun.StatusCode);
+        using var userDryRun = await PostAsync(
+            $"{path}/{preparationId}/dry-run", new { }, user);
+        Assert.Equal(HttpStatusCode.Forbidden, userDryRun.StatusCode);
+        using var dryRun = await PostAsync(
+            $"{path}/{preparationId}/dry-run", new { }, admin);
+        Assert.Equal(HttpStatusCode.OK, dryRun.StatusCode);
+        using var dryRunBody = JsonDocument.Parse(
+            await dryRun.Content.ReadAsStringAsync());
+        var dryRunSha = dryRunBody.RootElement.GetProperty("dryRunSha256").GetString()!;
+        Assert.Equal(64, dryRunSha.Length);
+        Assert.True(dryRunBody.RootElement.GetProperty("isCurrent").GetBoolean());
+        Assert.Equal("DryRunReady", dryRunBody.RootElement.GetProperty("state").GetString());
+        Assert.Equal(3, dryRunBody.RootElement.GetProperty("itemCount").GetInt32());
+
+        using var adminApproval = await PostAsync(
+            $"{path}/{preparationId}/review/decision", new {
+                decision = "ApproveForPlanning", expectedDryRunSha256 = dryRunSha,
+                acknowledgeSensitive = false
+            }, admin);
+        Assert.Equal(HttpStatusCode.Forbidden, adminApproval.StatusCode);
+
+        var superName = "reviewer-" + Guid.NewGuid().ToString("N");
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+            var reviewer = new ApplicationUser {
+                UserName = superName, MustChangePassword = false
+            };
+            var created = await users.CreateAsync(reviewer, ApiHarness.AdminPassword);
+            Assert.True(created.Succeeded);
+            var added = await users.AddToRoleAsync(reviewer, "superadmin");
+            Assert.True(added.Succeeded);
+        }
+        var superToken = await harness.LoginAsync(superName, ApiHarness.AdminPassword);
+        using var wrongHash = await PostAsync(
+            $"{path}/{preparationId}/review/decision", new {
+                decision = "ApproveForPlanning",
+                expectedDryRunSha256 = new string('a', 64),
+                acknowledgeSensitive = false
+            }, superToken);
+        Assert.Equal(HttpStatusCode.Conflict, wrongHash.StatusCode);
+
+        using var approval = await PostAsync(
+            $"{path}/{preparationId}/review/decision", new {
+                decision = "ApproveForPlanning",
+                expectedDryRunSha256 = dryRunSha, acknowledgeSensitive = false
+            }, superToken);
+        Assert.Equal(HttpStatusCode.OK, approval.StatusCode);
+        using var approvalBody = JsonDocument.Parse(
+            await approval.Content.ReadAsStringAsync());
+        Assert.Equal("ApprovedForPlanning",
+            approvalBody.RootElement.GetProperty("state").GetString());
+        Assert.True(approvalBody.RootElement.GetProperty("isCurrent").GetBoolean());
+        using (var eventsReq = new HttpRequestMessage(HttpMethod.Get,
+            $"{path}/{preparationId}/review/events"))
+        {
+            eventsReq.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", superToken);
+            using var response = await harness.Client.SendAsync(eventsReq);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var eventsBody = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Equal(new string?[] { "DryRunReady", "ApprovedForPlanning" },
+                eventsBody.RootElement.EnumerateArray()
+                    .Select(x => x.GetProperty("eventType").GetString()).ToArray());
+        }
+
+        using var rejectAfterApproval = await PostAsync(
+            $"{path}/{preparationId}/review/decision", new {
+                decision = "Reject", expectedDryRunSha256 = dryRunSha,
+                acknowledgeSensitive = false, reasonCode = "ConflictingDecision"
+            }, superToken);
+        Assert.Equal(HttpStatusCode.Conflict, rejectAfterApproval.StatusCode);
+        using var revokedByAdmin = await PostAsync(
+            $"{path}/{preparationId}/review/revoke", new {
+                expectedDryRunSha256 = dryRunSha, reasonCode = "Withdrawn"
+            }, admin);
+        Assert.Equal(HttpStatusCode.Forbidden, revokedByAdmin.StatusCode);
+        using var revoked = await PostAsync(
+            $"{path}/{preparationId}/review/revoke", new {
+                expectedDryRunSha256 = dryRunSha, reasonCode = "Withdrawn"
+            }, superToken);
+        Assert.Equal(HttpStatusCode.OK, revoked.StatusCode);
+        using var revokedBody = JsonDocument.Parse(
+            await revoked.Content.ReadAsStringAsync());
+        Assert.Equal("Revoked", revokedBody.RootElement.GetProperty("state").GetString());
         Assert.Equal(beforeProviders, harness.Calls.Count);
     }
 
