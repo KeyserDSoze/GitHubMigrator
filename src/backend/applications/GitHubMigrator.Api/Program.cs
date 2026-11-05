@@ -91,6 +91,8 @@ builder.Services.AddScoped<IncrementalTargetPreflightService>();
 builder.Services.AddScoped<IIncrementalOperationPlanRepository,
     PostgresIncrementalOperationPlanRepository>();
 builder.Services.AddScoped<IncrementalOperationPlanService>();
+builder.Services.AddScoped<IGitHubTargetRefEvidenceStore, PostgresGitHubTargetRefEvidenceStore>();
+builder.Services.AddScoped<GitHubTargetRefEvidenceService>();
 builder.Services.AddScoped<IncrementalPreparationProcessor>();
 builder.Services.AddHostedService<IncrementalPreparationBackgroundWorker>();
 builder.Services.AddScoped<IIdentitySnapshotReader, PostgresIdentitySnapshotReader>();
@@ -104,6 +106,12 @@ builder.Services.AddTransient<IGitHubDestinationAccessReader>(s => s.GetRequired
 builder.Services.AddHttpClient<GitHubTargetRepositoryProbe>(c => c.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubTargetRepositoryProbe>(s => s.GetRequiredService<GitHubTargetRepositoryProbe>());
+builder.Services.AddHttpClient<GitHubRefObservationReader>(
+        c => c.Timeout = TimeSpan.FromSeconds(12))
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubRefObservationReader>(
+    s => s.GetRequiredService<GitHubRefObservationReader>());
 builder.Services.AddHttpClient<GitHubTraceabilityReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubTraceabilityReader>(s => s.GetRequiredService<GitHubTraceabilityReader>());

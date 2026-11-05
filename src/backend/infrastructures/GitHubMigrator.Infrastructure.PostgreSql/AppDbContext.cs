@@ -51,6 +51,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<IncrementalOperationPlanRecord>();
     public DbSet<IncrementalOperationStepRecord> IncrementalOperationSteps =>
         Set<IncrementalOperationStepRecord>();
+    public DbSet<GitHubTargetRefEvidenceRecord> GitHubTargetRefEvidence =>
+        Set<GitHubTargetRefEvidenceRecord>();
     public DbSet<IncrementalExecutionAuthorizationAttemptRecord> IncrementalExecutionAuthorizationAttempts =>
         Set<IncrementalExecutionAuthorizationAttemptRecord>();
     public DbSet<MigrationJobRecord> MigrationJobs => Set<MigrationJobRecord>();
@@ -366,6 +368,30 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ChangedRefs).HasColumnName("changed_refs");
             entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
                 .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<GitHubTargetRefEvidenceRecord>(entity =>
+        {
+            entity.ToTable("incremental_target_ref_evidence");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id").HasMaxLength(256);
+            entity.Property(x => x.TargetRepositoryName).HasColumnName("target_repository_name").HasMaxLength(100);
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(100);
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.ObservedAtUtc).HasColumnName("observed_at_utc");
+            entity.Property(x => x.DestinationValidatedAtUtc).HasColumnName("destination_validated_at_utc");
+            entity.Property(x => x.RefCount).HasColumnName("ref_count");
+            entity.Property(x => x.RefsJson).HasColumnName("refs_json").HasColumnType("jsonb");
+            entity.Property(x => x.CreatedBy).HasColumnName("created_by");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.PlanId, x.SourceRepositoryId, x.EvidenceSha256 })
+                .IsUnique().HasDatabaseName("ux_target_ref_evidence_proof");
+            entity.HasIndex(x => new { x.PlanId, x.SourceRepositoryId, x.ObservedAtUtc })
+                .HasDatabaseName("ix_target_ref_evidence_latest");
         });
         builder.Entity<IncrementalExecutionAuthorizationAttemptRecord>(entity =>
         {

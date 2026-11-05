@@ -226,6 +226,84 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 4, harness.Calls.Count);
 
+        // F-031: read-only GitHub Git refs are bound to this manifest and
+        // persisted immutably. Neither a user nor an invalid digest can GET
+        // the target provider or emit an observation.
+        var evidencePath = $"{operationalPath}/{planId}/target-ref-evidence";
+        var evidenceRequest = new {
+            expectedManifestSha256 = planSha, sourceRepositoryId = "repo-1"
+        };
+        using (var anonymousEvidence = await harness.Client.PostAsJsonAsync(
+            evidencePath, evidenceRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousEvidence.StatusCode);
+        using (var userEvidence = await PostAsAsync(
+            evidencePath, evidenceRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userEvidence.StatusCode);
+        using (var invalidDigest = await PostAsAsync(evidencePath,
+            new { expectedManifestSha256 = new string('a', 64),
+                sourceRepositoryId = "repo-1" }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, invalidDigest.StatusCode);
+        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+
+        Guid observationId;
+        using (var collected = await PostAsAsync(evidencePath, evidenceRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.OK, collected.StatusCode);
+            var body = await collected.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            using var evidenceJson = JsonDocument.Parse(body);
+            Assert.Equal(2, evidenceJson.RootElement.GetProperty("refCount").GetInt32());
+            Assert.True(evidenceJson.RootElement.GetProperty("isCurrent").GetBoolean());
+            Assert.False(evidenceJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.Equal(64, evidenceJson.RootElement.GetProperty(
+                "evidenceSha256").GetString()!.Length);
+            observationId = evidenceJson.RootElement.GetProperty("id").GetGuid();
+        }
+        var providerCalls = harness.Calls.ToArray().Skip(callsBefore + 4).ToArray();
+        Assert.Equal(2, providerCalls.Length);
+        Assert.Equal(new[] {
+            "/repos/gh-org/occupied/git/matching-refs/heads",
+            "/repos/gh-org/occupied/git/matching-refs/tags"
+        }, providerCalls.Select(x => x.Url.AbsolutePath).ToArray());
+        Assert.All(providerCalls, call => {
+            Assert.Equal("GET", call.Method);
+            Assert.Equal("api.github.com", call.Url.Host);
+        });
+
+        using (var get = new HttpRequestMessage(HttpMethod.Get, evidencePath))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var saved = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(saved.RootElement.EnumerateArray());
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            evidencePath + "/" + observationId + "?take=1"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var saved = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(saved.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal("refs/heads/main",
+                saved.RootElement.GetProperty("items")[0].GetProperty("name").GetString());
+            Assert.Equal("refs/heads/main",
+                saved.RootElement.GetProperty("nextAfter").GetString());
+            Assert.False(saved.RootElement.GetProperty("evidence")
+                .GetProperty("readyForExecution").GetBoolean());
+        }
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.GitHubTargetRefEvidence.AsNoTracking()
+                .CountAsync(x => x.PlanId == planId));
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())
@@ -243,7 +321,7 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             using var stale = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
             Assert.False(stale.RootElement.GetProperty("isCurrent").GetBoolean());
         }
-        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
         using (var get = new HttpRequestMessage(HttpMethod.Get,
             $"{operationalPath}/{planId}"))
         {
@@ -254,6 +332,35 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             Assert.False(stale.RootElement.GetProperty("isCurrent").GetBoolean());
             Assert.False(stale.RootElement.GetProperty("readyForExecution").GetBoolean());
         }
+        using (var get = new HttpRequestMessage(HttpMethod.Get, evidencePath))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var stale = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.False(stale.RootElement[0].GetProperty("isCurrent").GetBoolean());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // A same-row mutation that preserves a plausible JSON shape but
+        // changes the recorded count must fail SHA/metadata verification.
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.GitHubTargetRefEvidence
+                .Where(x => x.Id == observationId)
+                .ExecuteUpdateAsync(set => set.SetProperty(x => x.RefCount, 3));
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            evidencePath + "/" + observationId + "?take=50"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("RefEvidenceIntegrityFailed",
+                await response.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
     }
 
     private async Task<HttpResponseMessage> PostAsAsync(

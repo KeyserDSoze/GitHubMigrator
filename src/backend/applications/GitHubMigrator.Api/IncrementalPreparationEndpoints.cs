@@ -219,6 +219,67 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-031: GET-only GitHub Git-data collection for a current F-029
+        // mapping. The only POST side effect is immutable PostgreSQL evidence.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/target-ref-evidence",
+            async Task<IResult> (Guid id, Guid planId,
+                CollectTargetRefEvidenceRequest request, ClaimsPrincipal principal,
+                GitHubTargetRefEvidenceService evidence, CancellationToken ct) =>
+            {
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                        out var actor)) return Results.Unauthorized();
+                try
+                {
+                    return Results.Ok(await evidence.CollectAsync(
+                        id, planId, request.SourceRepositoryId ?? "", actor,
+                        request.ExpectedManifestSha256 ?? "", ct));
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "OperationPlanNotFound" }); }
+                catch (GitHubRefObservationException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return TargetRefEvidenceError(ex); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("external");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/target-ref-evidence",
+            async Task<IResult> (Guid id, Guid planId,
+                GitHubTargetRefEvidenceService evidence, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await evidence.ListAsync(id, planId, ct)); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return TargetRefEvidenceError(ex); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/target-ref-evidence/{observationId:guid}",
+            async Task<IResult> (Guid id, Guid planId, Guid observationId,
+                string? after, int? take, GitHubTargetRefEvidenceService evidence,
+                CancellationToken ct) =>
+            {
+                try
+                {
+                    var page = await evidence.PageAsync(id, planId, observationId,
+                        after, take ?? 50, ct);
+                    return page is null
+                        ? Results.NotFound(new { error = "TargetRefEvidenceNotFound" })
+                        : Results.Ok(page);
+                }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return TargetRefEvidenceError(ex); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/execution-authorization",
             async Task<IResult> (Guid id, Guid planId,
                 AuthorizeOperationPlanRequest request, ClaimsPrincipal principal,
@@ -278,6 +339,12 @@ public static class IncrementalPreparationEndpoints
         });
     }
 
+    private static IResult TargetRefEvidenceError(
+        GitHubTargetRefEvidenceException ex) =>
+        ex.Code is "InvalidRefEvidenceRequest" or "InvalidRefEvidencePage"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
+
     private static IResult OperationPlanError(IncrementalOperationPlanException ex) =>
         ex.Code is "InvalidOperationPlanRequest" or
             "InvalidExecutionAuthorizationRequest" or
@@ -302,3 +369,6 @@ public sealed record LiveTargetPreflightRequest(
 public sealed record CreateOperationPlanRequest(string? ExpectedPreflightSha256);
 public sealed record AuthorizeOperationPlanRequest(
     string? ExpectedManifestSha256, bool AcknowledgeBlockedOperations);
+
+public sealed record CollectTargetRefEvidenceRequest(
+    string? ExpectedManifestSha256, string? SourceRepositoryId);
