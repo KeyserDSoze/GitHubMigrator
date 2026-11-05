@@ -50,6 +50,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 builder.Services.AddScoped<JwtIssuer>();
 builder.Services.AddScoped<MigrationPlanner>();
+builder.Services.AddScoped<IPlanRefEvidenceReader, PostgresPlanRefEvidenceReader>();
 builder.Services.AddScoped<MigrationPlanReviewService>();
 builder.Services.AddScoped<IMigrationPlanDraftRepository, PostgresMigrationPlanDraftRepository>();
 builder.Services.AddScoped<MigrationPlanDraftService>();
