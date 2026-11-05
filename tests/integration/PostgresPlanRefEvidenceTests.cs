@@ -148,7 +148,7 @@ public sealed class PostgresPlanRefEvidenceTests(PostgresDraftFixture fixture)
                 value = group.Select(r => new { name = r.Name, objectId = r.ObjectId })
             });
             await pages.SaveAsync(new(lease.Id, lease.LeaseToken, lease.Attempt),
-                new DiscoveryPageCheckpoint(job.Id, "refs:" + group.Key, 0,
+                new DiscoveryPageCheckpoint(id, "refs:" + group.Key, 0,
                     new string('a', 64), payload, null, clock.GetUtcNow()), default);
         }
         var manifests = new PostgresDiscoveryRefManifestStore(db, clock);
