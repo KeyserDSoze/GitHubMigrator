@@ -126,6 +126,56 @@ public static class IncrementalPreparationEndpoints
             { return ReviewError(ex); }
         }).RequireRateLimiting("incremental-review");
 
+        // F-028: explicitly requested, fixed-host GitHub GET probes.
+        // The result can only be Blocked/Unverified, never executable.
+        routes.MapPost("/{id:guid}/target-preflight", async Task<IResult> (
+            Guid id, LiveTargetPreflightRequest request, ClaimsPrincipal principal,
+            IncrementalTargetPreflightService service, CancellationToken ct) =>
+        {
+            if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor))
+                return Results.Unauthorized();
+            try
+            {
+                return Results.Ok(await service.CheckAsync(id, actor,
+                    request.ExpectedReviewSha256 ?? "",
+                    request.Repositories, ct));
+            }
+            catch (KeyNotFoundException)
+            { return Results.NotFound(new { error = "PreparationNotFound" }); }
+            catch (PlanInputException ex)
+            { return Results.BadRequest(new { error = ex.Code }); }
+            catch (IncrementalTargetPreflightException ex)
+                when (ex.Code is "InvalidTargetPreflightRequest" or
+                    "InvalidTargetRepositorySelection" or
+                    "InvalidTargetPreflightEvidence")
+            { return Results.BadRequest(new { error = ex.Code }); }
+            catch (IncrementalTargetPreflightException ex)
+            { return Results.Conflict(new { error = ex.Code }); }
+        }).RequireRateLimiting("external");
+
+        routes.MapGet("/{id:guid}/target-preflight", async Task<IResult> (
+            Guid id, IncrementalTargetPreflightService service, CancellationToken ct) =>
+        {
+            try
+            {
+                var result = await service.GetAsync(id, ct);
+                return result is null
+                    ? Results.NotFound(new { error = "TargetPreflightNotFound" })
+                    : Results.Ok(result);
+            }
+            catch (IncrementalTargetPreflightException ex)
+            { return Results.Conflict(new { error = ex.Code }); }
+        });
+
+        routes.MapGet("/{id:guid}/target-preflight/events", async Task<IResult> (
+            Guid id, IncrementalTargetPreflightService service, CancellationToken ct) =>
+        {
+            if (await service.GetAsync(id, ct) is null)
+                return Results.NotFound(new { error = "TargetPreflightNotFound" });
+            return Results.Ok(await service.EventsAsync(id, ct));
+        });
+
         routes.MapGet("/{id:guid}/review/events", async Task<IResult> (
             Guid id, IncrementalReviewService reviews, CancellationToken ct) =>
         {
@@ -155,3 +205,5 @@ public sealed record IncrementalReviewDecisionRequest(
     bool AcknowledgeSensitive, string? ReasonCode);
 public sealed record RevokeIncrementalReviewRequest(
     string? ExpectedDryRunSha256, string? ReasonCode);
+public sealed record LiveTargetPreflightRequest(
+    string? ExpectedReviewSha256, IReadOnlyList<PlanSelectionInput>? Repositories);

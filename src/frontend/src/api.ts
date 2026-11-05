@@ -79,6 +79,18 @@ export type StagingSyncResult = {
   appliedAtUtc: string; observed: number; added: number; changed: number;
   unchanged: number; markedMissing: number; sourceInventoryComplete: boolean;
 };
+export type IncrementalTargetPreflight = {
+  preparationId: string; snapshotId: string; destinationConnectionId: string;
+  organization: string; reviewSha256: string; evidenceSha256: string;
+  checkedAtUtc: string; revision: number; state: 'Blocked' | 'Unverified';
+  membershipStatus: string; membershipRole: string; privateRepositoryPolicy: string;
+  checkedRepositories: number; visibleCollisions: number; uncertainRepositories: number;
+  membershipVerified: boolean; repositoryCreatePermissionVerified: boolean;
+  targetAvailabilityVerified: boolean; readyForExecution: boolean;
+  isCurrent: boolean;
+  repositories: { sourceRepositoryId: string; targetRepositoryName: string;
+    historyStrategy: string; status: string }[];
+};
 export type IncrementalReview = {
   preparationId: string; snapshotId: string; sourceConnectionId: string;
   destinationConnectionId: string;
@@ -374,6 +386,17 @@ export const api = {
     }),
   getStagingSync: (token: string, snapshotId: string) =>
     call<StagingSyncResult>(`/api/staging/snapshots/${encodeURIComponent(snapshotId)}`,
+      { headers: withToken(token) }),
+  runLiveTargetPreflight: (token: string, id: string, expectedReviewSha256: string,
+      repositories: { sourceRepositoryId: string; targetRepositoryName: string;
+        strategy: number; include: boolean }[]) =>
+    call<IncrementalTargetPreflight>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/target-preflight`,
+      { method: 'POST', headers: withToken(token),
+        body: JSON.stringify({ expectedReviewSha256, repositories }) }),
+  getLiveTargetPreflight: (token: string, id: string) =>
+    call<IncrementalTargetPreflight>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/target-preflight`,
       { headers: withToken(token) }),
   getIncrementalReview: (token: string, id: string) =>
     call<IncrementalReview>(
