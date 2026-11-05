@@ -88,9 +88,9 @@ public sealed class PostgresDiscoveryRefManifestStore(AppDbContext db, TimeProvi
             // All ref observations are FK-bound to committed source pages.
             // Enforce a complete count before constructing the immutable
             // ordered chunks. Partial/failed source scans never reach here.
-            var observed = await db.DiscoveryRefObservations.AsNoTracking()
+            var observedRows = await db.DiscoveryRefObservations.AsNoTracking()
                 .CountAsync(x => x.JobId == lease.Id, ct);
-            if (observed != expectedRefCount)
+            if (observedRows != expectedRefCount)
                 throw new DiscoveryRefManifestException("RefManifestSnapshotMismatch");
         }
         else
