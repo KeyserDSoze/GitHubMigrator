@@ -95,7 +95,8 @@ public sealed class MigrationJobService(
 
 public sealed class MigrationJobProcessor(
     IMigrationJobRepository jobs, StagingSyncService staging,
-    DiscoveryService? discovery = null, IDiscoveryRefManifestStore? refManifests = null)
+    DiscoveryService? discovery = null, IDiscoveryRefManifestStore? refManifests = null,
+    IDiscoveryIdentityObservationStore? identityObservations = null)
 {
     // Lease > execution deadline, ensuring normal slow work cannot run past its lease.
     // An abrupt process death is recovered after the lease expires by another worker.
@@ -139,6 +140,13 @@ public sealed class MigrationJobProcessor(
                     !await jobs.CheckpointSnapshotAsync(lease, snapshotId, work.Token))
                     return true; // ownership lost; the new lease is responsible
             }
+            // Verify the Graph identity evidence before any canonical staging
+            // writes. A failed/partial provider scan cannot silently disagree
+            // with its already committed immutable snapshot.
+            if (lease.Kind == MigrationJobKinds.DiscoverSource && identityObservations is not null)
+                await identityObservations.VerifySnapshotAsync(
+                    lease with { SnapshotId = snapshotId }, work.Token);
+
             // Prepare a bounded-memory, immutable chunk manifest before the
             // canonical staging commit. It remains invisible until the job
             // itself succeeds. Retrying a prepared manifest is idempotent.
