@@ -44,6 +44,20 @@ Feature: Durable and verifiable migration execution
     And raw ACL allow and deny masks are preserved without unrecognized fields
     And effective GitHub permissions remain unverified
 
+  Scenario: Graph user pages are checkpointed and observed transactionally
+    Given a leased Azure DevOps discovery worker reading multiple Graph user pages
+    When each sanitized page is committed into PostgreSQL
+    Then only allowlisted identity metadata is stored as SHA-256 observations
+    And saved Graph pages can be replayed without duplicate audit events
+    And conflicting descriptors roll back the entire new page and its batches
+
+  Scenario: Identity source evidence must match the immutable snapshot before staging
+    Given an immutable source snapshot and Graph user observations bound to its job
+    When the worker reconciles the source snapshot and the user observations
+    Then a missing or changed descriptor, name, email or legacy descriptor blocks staging
+    And no Graph observation is interpreted as verified effective access
+    And identity drafts continue to use the complete legacy snapshot until paginated consumers are implemented
+
   Scenario: Durable Azure DevOps source discovery avoids collecting all Git refs in RAM
     Given a leased discovery worker reading more than one Azure DevOps refs page
     When each page is committed into PostgreSQL with its immutable checkpoint
