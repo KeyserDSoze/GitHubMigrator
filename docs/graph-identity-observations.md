@@ -35,6 +35,10 @@ The Discovery UI polls the progress data beside the Git ref counters. It calls o
 - Real ASP.NET/JWT/PostgreSQL integration: live mocked-Azure GET-only source discovery persists observations, checks the post-success paginated route's RBAC, and verifies fingerprint parity against finalized staging.
 - Playwright: the queued worker's provisional identity progress is visible beside existing Git refs without suggesting approved grants.
 
+## Subsequent F-018 implementation
+
+Leased Azure DevOps workers now externalize their full Graph user lists into PostgreSQL, replacing the inline snapshot list with `identitiesExternalized: true` and an exact `identityCount`. F-004 and F-005 use the F-016/F-017 paged database readers, and F-013 stages identity observations in bounded 250-row batches with fail-closed page/observation verification. See [externalized Graph identities](externalized-graph-identities.md).
+
 ## Limits and next increments
 
 Graph users still accumulate into the legacy `DiscoverySnapshot.Identities` dictionary and JSONB snapshot so F-004 identity mapping, F-005 previews, and the existing completeness checks retain their original behavior. **This is not constant-memory identity discovery.**
