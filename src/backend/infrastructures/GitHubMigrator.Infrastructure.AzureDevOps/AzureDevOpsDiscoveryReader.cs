@@ -29,7 +29,7 @@ public sealed class AzureDevOpsDiscoveryReader(
         DiscoveryLeaseContext lease, CancellationToken ct)
     {
         if (lease.JobId == Guid.Empty || lease.LeaseToken == Guid.Empty ||
-            lease.Attempt < 1 || checkpoints is null)
+            lease.Attempt < 1 || checkpoints is not IDiscoveryIdentityObservationStore)
             throw new DiscoveryCheckpointException("InvalidDiscoveryLeaseContext");
         return DiscoverCoreAsync(connectionId, organization, accessToken, lease, ct);
     }
@@ -49,6 +49,7 @@ public sealed class AzureDevOpsDiscoveryReader(
         var references = new List<RepositoryRef>();
         var refCount = 0;
         var identities = new List<SourceIdentity>();
+        var identityCount = 0;
         var root = $"https://dev.azure.com/{Uri.EscapeDataString(organization)}";
         var graphRoot = $"https://vssps.dev.azure.com/{Uri.EscapeDataString(organization)}";
 
@@ -146,6 +147,10 @@ public sealed class AzureDevOpsDiscoveryReader(
         try
         {
             identities.AddRange(await ReadUsersAsync(graphRoot, accessToken, issues, lease, ct));
+            identityCount = lease is { } active
+                ? (await ((IDiscoveryIdentityObservationStore)checkpoints!)
+                    .GetProgressAsync(active.JobId, ct)).ObservedUsers
+                : identities.Count;
             if (issues.Any(x => x.Code is "GraphUsersTruncated")) identitiesComplete = false;
         }
         catch (DiscoveryProviderException ex)
@@ -168,7 +173,7 @@ public sealed class AzureDevOpsDiscoveryReader(
             SourceSystem = SourceSystemKind.AzureDevOpsServices,
             CollectedAt = timestamp,
             Projects = projects,
-            Identities = identities,
+            Identities = lease is null ? identities : [],
             AccessGrants = [],
             PermissionsComplete = false
         };
@@ -183,6 +188,8 @@ public sealed class AzureDevOpsDiscoveryReader(
             Refs = lease is null ? references : [],
             RefsExternalized = lease is not null,
             RefCount = refCount,
+            IdentitiesExternalized = lease is not null,
+            IdentityCount = identityCount,
             Issues = issues,
             Completeness = DiscoveryCompleteness.Partial,
             IdentitiesComplete = identitiesComplete,
@@ -278,7 +285,12 @@ public sealed class AzureDevOpsDiscoveryReader(
         string graphRoot, string token, List<DiscoveryIssue> issues,
         DiscoveryLeaseContext? lease, CancellationToken ct)
     {
-        var users = new Dictionary<string, SourceIdentity>(StringComparer.Ordinal);
+        // Leased jobs do not collect Graph identity records in memory.
+        // Each page has already committed its sanitized observations and
+        // checkpoint under the same PostgreSQL transaction.
+        Dictionary<string, SourceIdentity>? users =
+            lease is null ? new(StringComparer.Ordinal) : null;
+        var observed = 0;
         string? continuation = null;
         var seen = new HashSet<string>();
         for (var page = 0; page < MaxPages; page++)
@@ -293,16 +305,21 @@ public sealed class AzureDevOpsDiscoveryReader(
             {
                 var id = Text(entry, "descriptor");
                 if (string.IsNullOrWhiteSpace(id)) continue;
-                users[id] = new SourceIdentity(id, Text(entry, "displayName") ?? id,
-                    Text(entry, "mailAddress"), Text(entry, "legacyDescriptor"));
+                if (users is not null)
+                    users[id] = new SourceIdentity(id, Text(entry, "displayName") ?? id,
+                        Text(entry, "mailAddress"), Text(entry, "legacyDescriptor"));
             }
-            if (users.Count >= MaxUsers) { issues.Add(new("GraphUsersTruncated")); break; }
-            if (string.IsNullOrEmpty(response.Continuation)) return users.Values.ToArray();
+            observed = lease is { } active
+                ? (await ((IDiscoveryIdentityObservationStore)checkpoints!)
+                    .GetProgressAsync(active.JobId, ct)).ObservedUsers
+                : users!.Count;
+            if (observed >= MaxUsers) { issues.Add(new("GraphUsersTruncated")); break; }
+            if (string.IsNullOrEmpty(response.Continuation)) return users?.Values.ToArray() ?? [];
             if (!seen.Add(response.Continuation)) { issues.Add(new("GraphUsersTruncated")); break; }
             continuation = response.Continuation;
             if (page == MaxPages - 1) issues.Add(new("GraphUsersTruncated"));
         }
-        return users.Values.ToArray();
+        return users?.Values.ToArray() ?? [];
     }
 
     private async Task<ResponsePage> GetCheckpointedProjectCapabilitiesAsync(
