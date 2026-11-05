@@ -30,7 +30,7 @@ The design extends the stable whole-snapshot checkpoint in [asynchronous discove
 Membership pages use the opaque `X-MS-ContinuationToken` and are persisted separately. A repeated cursor produces `MembershipsPaginationIncomplete` and prevents a false complete-coverage claim. These are **direct edges only**, not transitive membership or effective authorization.
 | `security-acl:{sha256}` | `/_apis/accesscontrollists/{GitNamespace}` | `token`, `inheritPermissions`, `acesDictionary` containing *only* descriptor, allow/deny masks |
 
-The source reader retains its limits of 30 pages per project/ref/user collection, 2,000 projects, 30,000 refs per repository and 15,000 users. The security reader adds at most **20 group pages and 20 direct-membership pages per group**, with global bounds of 1,000 groups and 20,000 membership edges. Repeated Graph continuation tokens or caps mark membership coverage **incomplete**, never verified.  Per-page checkpoint payloads are bounded to 1 MiB of UTF-8 metadata. Project, ref and user metadata is still collected in memory until the final source snapshot is saved. **This is page-level replay, not full streaming ingest.**
+The source reader retains its limits of 30 pages per project/ref/user collection, 2,000 projects, 30,000 refs per repository and 15,000 users. The security reader adds at most **20 group pages and 20 direct-membership pages per group**, with global bounds of 1,000 groups and 20,000 membership edges. Repeated Graph continuation tokens or caps mark membership coverage **incomplete**, never verified.  Per-page checkpoint payloads are bounded to 1 MiB of UTF-8 metadata. Project, user and security metadata still accumulate in memory, but leased source Git refs now stream into PostgreSQL and are represented by an externalized ref count in the source snapshot. **This is partial streaming ingest, not full end-to-end constant-memory discovery.**
 
 ## Data integrity, authorization and recovery
 
@@ -52,7 +52,7 @@ The source reader retains its limits of 30 pages per project/ref/user collection
 
 ## Per-page normalized Git ref observations (F-014)
 
-Source Git ref pages now also produce normalized **provisional** PostgreSQL observations, committed atomically with each page checkpoint. The new admin-only per-job progress endpoint shows the saved page/ref counts; the canonical F-013 catalog changes only after the complete snapshot has been accepted. See [F-014 implementation and limits](streamed-ref-observations.md). Collection still builds the full immutable inventory in memory at the end.
+Source Git ref pages now also produce normalized **provisional** PostgreSQL observations, committed atomically with each page checkpoint. The new admin-only per-job progress endpoint shows the saved page/ref counts; the canonical F-013 catalog changes only after the complete snapshot has been accepted. See [F-014 implementation and limits](streamed-ref-observations.md). Collection still builds the other source asset families in memory at the end; leased Git refs are no longer accumulated into a full source array.
 
 ## Not yet implemented — scalability roadmap
 
