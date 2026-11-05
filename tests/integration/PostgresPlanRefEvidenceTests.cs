@@ -57,13 +57,24 @@ public sealed class PostgresPlanRefEvidenceTests(PostgresDraftFixture fixture)
     {
         await using var db = fixture.NewContext();
         var source = Guid.NewGuid();
-        var jobs = new PostgresMigrationJobRepository(db, TimeProvider.System);
-        var queued = await jobs.EnqueueDiscoveryAsync(source, Guid.NewGuid(), Guid.NewGuid(), default);
-        await SaveSnapshotAsync(db, queued.Id, source, [],
+        // A deliberately unfinished job should not be claimable by another
+        // test worker in the shared PostgreSQL integration fixture.
+        var queuedId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        db.MigrationJobs.Add(new MigrationJobRecord {
+            Id = queuedId, SnapshotId = queuedId, SourceConnectionId = source,
+            Kind = MigrationJobKinds.DiscoverSource, State = MigrationJobStates.Running,
+            EnqueuedBy = Guid.NewGuid(), IdempotencyKey = "f017-incomplete:" + queuedId,
+            Attempts = 1, LeaseToken = Guid.NewGuid(),
+            LeaseUntilUtc = now.AddHours(1), AvailableAtUtc = now,
+            CreatedAtUtc = now, UpdatedAtUtc = now
+        });
+        await db.SaveChangesAsync();
+        await SaveSnapshotAsync(db, queuedId, source, [],
             externalized: true, expected: 1);
         var reader = new PostgresPlanRefEvidenceReader(db);
         var ex = await Assert.ThrowsAsync<PlanInputException>(() =>
-            reader.CountByRepositoryAsync(queued.Id, default));
+            reader.CountByRepositoryAsync(queuedId, default));
         Assert.Equal("PlanRefEvidenceUnavailable", ex.Code);
     }
 
@@ -116,6 +127,9 @@ public sealed class PostgresPlanRefEvidenceTests(PostgresDraftFixture fixture)
         await SaveSnapshotAsync(db, job.Id, source, refs,
             externalized: true, expected: refs.Length);
         Assert.True(await jobs.CheckpointSnapshotAsync(lease, job.Id, default));
+        // ClaimAsync starts before the source snapshot exists. Stage only with
+        // the new persisted snapshot ID owned by the same fenced worker.
+        lease = lease with { SnapshotId = job.Id };
         var pages = new PostgresDiscoveryPageCheckpointStore(db, clock);
         foreach (var group in refs.GroupBy(r => r.RepositoryId))
         {
