@@ -144,7 +144,10 @@ public sealed class MigrationJobProcessor(
             if (lease.Kind == MigrationJobKinds.DiscoverSource && refManifests is not null)
                 await refManifests.PrepareAsync(lease, expectedRefs, work.Token);
 
-            var result = await staging.SyncAsync(snapshotId, work.Token);
+            var result = lease.Kind == MigrationJobKinds.DiscoverSource && refManifests is not null
+                ? await staging.SyncUsingRefManifestAsync(
+                    lease with { SnapshotId = snapshotId }, work.Token)
+                : await staging.SyncAsync(snapshotId, work.Token);
             await jobs.CompleteAsync(lease, result, shutdown);
         }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
