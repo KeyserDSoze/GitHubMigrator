@@ -665,8 +665,10 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                 var ace = entry.Value;
                 if (ace.ValueKind != JsonValueKind.Object ||
                     !ace.TryGetProperty("allow", out var allowValue) ||
+                    allowValue.ValueKind != JsonValueKind.Number ||
                     !allowValue.TryGetInt64(out var allowMask) ||
                     !ace.TryGetProperty("deny", out var denyValue) ||
+                    denyValue.ValueKind != JsonValueKind.Number ||
                     !denyValue.TryGetInt64(out var denyMask))
                     throw new DiscoveryCheckpointException("InvalidAclObservation");
                 var descriptor = GetText(ace, "descriptor") ?? entry.Name;
