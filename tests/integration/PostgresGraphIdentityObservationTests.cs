@@ -123,10 +123,10 @@ public sealed class PostgresGraphIdentityObservationTests(PostgresDraftFixture f
              new("aad.user-0002", "Person 2", "user2@example.invalid", "legacy.2")]);
         Assert.True(await new PostgresMigrationJobRepository(db, clock)
             .CheckpointSnapshotAsync(new MigrationJobLease(
-                lease.JobId, MigrationJobKinds.DiscoverSource, job.SourceConnectionId,
-                lease.LeaseToken, lease.Attempt, job.Id), job.Id, default));
-        var worker = new MigrationJobLease(job.Id, MigrationJobKinds.DiscoverSource,
-            job.SourceConnectionId, lease.LeaseToken, lease.Attempt, job.Id);
+                lease.JobId, job.Id, job.SourceConnectionId,
+                MigrationJobKinds.DiscoverSource, lease.LeaseToken, lease.Attempt), job.Id, default));
+        var worker = new MigrationJobLease(job.Id, job.Id, job.SourceConnectionId,
+            MigrationJobKinds.DiscoverSource, lease.LeaseToken, lease.Attempt);
         await store.VerifySnapshotAsync(worker, default);
         Assert.Equal(2, (await store.GetProgressAsync(job.Id, default)).ObservedUsers);
         Assert.Equal(1, (await new PostgresMigrationJobRepository(db, clock)
