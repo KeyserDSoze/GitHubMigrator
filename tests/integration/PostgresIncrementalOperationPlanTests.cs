@@ -215,8 +215,11 @@ public sealed class PostgresIncrementalOperationPlanTests(PostgresDraftFixture f
     private static IncrementalTargetPreflightEvidence Evidence(Seed seed, TimeProvider clock) =>
         new(seed.Run.Id, seed.Run.SnapshotId, seed.Run.SourceConnectionId,
             seed.Run.DestinationConnectionId, Guid.NewGuid(), "gh-org",
-            seed.Review.DryRunSha256, seed.Run.CreatedAtUtc,
-            seed.Run.CreatedAtUtc,
+            seed.Review.DryRunSha256,
+            DateTimeOffset.FromUnixTimeMilliseconds(
+                seed.Run.CreatedAtUtc.ToUnixTimeMilliseconds()),
+            DateTimeOffset.FromUnixTimeMilliseconds(
+                seed.Run.CreatedAtUtc.ToUnixTimeMilliseconds()),
             DateTimeOffset.FromUnixTimeMilliseconds(clock.GetUtcNow().ToUnixTimeMilliseconds()),
             "Active", "Owner", "AllowedForMembers",
             [
