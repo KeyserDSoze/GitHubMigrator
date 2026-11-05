@@ -58,6 +58,22 @@ Feature: Durable and verifiable migration execution
     And no Graph observation is interpreted as verified effective access
     And identity drafts continue to use the complete legacy snapshot until paginated consumers are implemented
 
+  Scenario: Durable Graph users are externalized into PostgreSQL instead of a source identity list
+    Given a leased discovery worker reading two Graph user pages
+    When the source page is persisted with its normalized identity observations
+    Then the source reader does not retain all user records in memory
+    And the immutable snapshot has an explicit identity count and an empty inline identity array
+    And a partial Graph scope never becomes an authoritative empty user inventory
+    And the worker verifies original page metadata before staging
+
+  Scenario: Externalized Graph identities are staged in bounded source-scoped transactions
+    Given a successful verified Graph source scan with more than 1000 identities
+    When the leased worker commits canonical PostgreSQL staging
+    Then it processes no more than 250 normalized identity observations at once
+    And all identity assets retain the existing F-013 fingerprint, revision and missing semantics
+    And a fingerprint mismatch rolls back the full project, identity and ref transaction
+    And legacy manual staging refuses the externalized snapshot instead of treating identities as deleted
+
   Scenario: Durable Azure DevOps source discovery avoids collecting all Git refs in RAM
     Given a leased discovery worker reading more than one Azure DevOps refs page
     When each page is committed into PostgreSQL with its immutable checkpoint
