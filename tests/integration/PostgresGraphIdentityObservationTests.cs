@@ -176,7 +176,9 @@ public sealed class PostgresGraphIdentityObservationTests(PostgresDraftFixture f
             new PostgresStagingRepository(db, clock, manifest, pages));
         var error = await Assert.ThrowsAsync<DiscoveryCheckpointException>(() =>
             stage.SyncUsingRefManifestAsync(lease, default));
-        Assert.Equal("IdentityObservationIntegrityFailed", error.Code);
+        // The cached Graph page replay detects the altered fingerprint even
+        // before staging starts; it must fail closed with no catalog writes.
+        Assert.Equal("IdentityObservationConflict", error.Code);
         Assert.Equal(0, await db.StagingAssets.AsNoTracking()
             .CountAsync(x => x.SourceConnectionId == job.SourceConnectionId));
         Assert.Null(await stage.GetSyncAsync(job.Id, default));
@@ -326,13 +328,24 @@ public sealed class PostgresGraphIdentityObservationTests(PostgresDraftFixture f
         EnqueueAndClaimAsync(TimeProvider clock)
     {
         await using var db = fixture.NewContext();
+        // Isolate test workers from unrelated queued migration jobs sharing
+        // this PostgreSQL fixture. We need the active lease, not queue ranking.
         var jobs = new PostgresMigrationJobRepository(db, clock);
-        var job = await jobs.EnqueueDiscoveryAsync(
-            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), default);
-        var lease = (await jobs.ClaimAsync(Guid.NewGuid(),
-            TimeSpan.FromMinutes(3), default))!;
-        Assert.Equal(job.Id, lease.Id);
-        return (job, new(lease.Id, lease.LeaseToken, lease.Attempt));
+        var id = Guid.NewGuid();
+        var token = Guid.NewGuid();
+        var source = Guid.NewGuid();
+        var now = clock.GetUtcNow();
+        db.MigrationJobs.Add(new MigrationJobRecord {
+            Id = id, SourceConnectionId = source, SnapshotId = Guid.Empty,
+            Kind = MigrationJobKinds.DiscoverSource, State = MigrationJobStates.Running,
+            Attempts = 1, EnqueuedBy = Guid.NewGuid(),
+            IdempotencyKey = "f018-graph-test:" + id,
+            LeaseToken = token, LeaseUntilUtc = now.AddMinutes(3),
+            AvailableAtUtc = now, CreatedAtUtc = now, UpdatedAtUtc = now
+        });
+        await db.SaveChangesAsync();
+        var job = (await jobs.GetAsync(id, default))!;
+        return (job, new(id, token, 1));
     }
 
     private async Task ResetAsync()
