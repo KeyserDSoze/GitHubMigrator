@@ -51,6 +51,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<IncrementalOperationPlanRecord>();
     public DbSet<IncrementalOperationStepRecord> IncrementalOperationSteps =>
         Set<IncrementalOperationStepRecord>();
+    public DbSet<GitSourceBundleEvidenceRecord> GitSourceBundleEvidence =>
+        Set<GitSourceBundleEvidenceRecord>();
     public DbSet<GitTransferWorkpackRecord> GitTransferWorkpacks =>
         Set<GitTransferWorkpackRecord>();
     public DbSet<GitTransferWorkpackEventRecord> GitTransferWorkpackEvents =>
@@ -374,6 +376,28 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ChangedRefs).HasColumnName("changed_refs");
             entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
                 .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<GitSourceBundleEvidenceRecord>(entity =>
+        {
+            entity.ToTable("git_source_bundle_evidence");
+            entity.HasKey(x => x.WorkpackId);
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.ReconciliationId).HasColumnName("reconciliation_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id").HasMaxLength(256);
+            entity.Property(x => x.SourceEvidenceSha256).HasColumnName("source_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReconciliationSha256).HasColumnName("reconciliation_sha256").HasMaxLength(64);
+            entity.Property(x => x.BundleFileName).HasColumnName("bundle_file_name").HasMaxLength(40);
+            entity.Property(x => x.BundleSha256).HasColumnName("bundle_sha256").HasMaxLength(64);
+            entity.Property(x => x.BundleBytes).HasColumnName("bundle_bytes");
+            entity.Property(x => x.RefCount).HasColumnName("ref_count");
+            entity.Property(x => x.AcquiredAtUtc).HasColumnName("acquired_at_utc");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<GitTransferWorkpackRecord>().WithOne()
+                .HasForeignKey<GitSourceBundleEvidenceRecord>(x => x.WorkpackId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<IncrementalGitRefReconciliationRecord>().WithMany()
+                .HasForeignKey(x => x.ReconciliationId).OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<GitTransferWorkpackRecord>(entity =>
         {

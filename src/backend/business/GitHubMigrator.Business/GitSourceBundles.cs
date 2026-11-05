@@ -91,6 +91,17 @@ public sealed class GitSourceBundleService(
             source.SnapshotId != plan.SnapshotId)
             throw new GitSourceBundleException("BundleSourceEvidenceMismatch");
 
+        var existing = await store.GetAsync(
+            preparationId, planId, workpackId, ct);
+        if (existing is not null)
+        {
+            if (!existing.IsCurrent ||
+                existing.ReconciliationSha256 != expectedReconciliationSha256 ||
+                existing.SourceEvidenceSha256 != source.SourceEvidenceSha256)
+                throw new GitSourceBundleException("BundleProofMismatch");
+            return existing;
+        }
+
         var artifact = await acquirer.AcquireAsync(new(
             workpackId, plan.SourceConnectionId, pack.SourceRepositoryId,
             pack.ReconciliationSha256, source.SourceEvidenceSha256,

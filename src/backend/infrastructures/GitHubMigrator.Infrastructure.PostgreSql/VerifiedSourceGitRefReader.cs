@@ -11,6 +11,7 @@ namespace GitHubMigrator.Infrastructure.PostgreSql;
 // table. The read occurs inside the caller's source-locked transaction.
 public sealed class PostgresVerifiedSourceGitRefReader(
     AppDbContext db, IDiscoveryRefManifestStore manifests)
+    : IVerifiedSourceGitRefReader
 {
     public async Task<VerifiedSourceGitRefs> ReadAsync(
         IncrementalOperationPlan plan, string sourceRepositoryId,

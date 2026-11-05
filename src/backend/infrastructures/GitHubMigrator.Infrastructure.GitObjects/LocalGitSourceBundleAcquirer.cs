@@ -206,10 +206,12 @@ public sealed class LocalGitSourceBundleAcquirer(
         proc.StartInfo.ArgumentList.Add("--git-dir=" + bareRepo);
         foreach (var argument in arguments)
             proc.StartInfo.ArgumentList.Add(argument);
+        var started = false;
         try
         {
             if (!proc.Start())
                 throw new GitSourceBundleException("GitProcessUnavailable");
+            started = true;
             var stdout = ReadBoundedAsync(proc.StandardOutput, deadline.Token);
             var stderr = ReadBoundedAsync(proc.StandardError, deadline.Token);
             while (!proc.HasExited)
@@ -233,7 +235,7 @@ public sealed class LocalGitSourceBundleAcquirer(
         { throw new GitSourceBundleException("GitProcessUnavailable"); }
         finally
         {
-            if (!proc.HasExited)
+            if (started && !proc.HasExited)
             {
                 try { proc.Kill(entireProcessTree: true); }
                 catch (InvalidOperationException) { }
