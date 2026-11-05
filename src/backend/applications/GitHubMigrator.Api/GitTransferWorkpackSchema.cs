@@ -59,5 +59,35 @@ public static class GitTransferWorkpackSchema
             CREATE INDEX IF NOT EXISTS ix_git_transfer_workpack_events
                 ON git_transfer_workpack_events(workpack_id, id);
             """, ct);
+        // EnsureCreated() creates EF-mapped tables before this additive SQL.
+        // CREATE TABLE IF NOT EXISTS alone does not retrofit CHECKs. The
+        // mandatory hardened constraint must exist on BOTH fresh and old DBs.
+        // Existing unsafe records intentionally prevent startup (fail closed).
+        await db.Database.ExecuteSqlRawAsync("""
+            DO $f034$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid = 'git_transfer_workpacks'::regclass
+                      AND conname = 'ck_git_transfer_workpack_safety'
+                ) THEN
+                    ALTER TABLE git_transfer_workpacks
+                    ADD CONSTRAINT ck_git_transfer_workpack_safety
+                    CHECK (
+                        ready_for_execution = false
+                        AND state IN ('Queued','Running','Blocked','Failed')
+                        AND phase IN ('EvidencePending','EvidenceChecked','WriteBlocked')
+                        AND attempts BETWEEN 0 AND 5 AND max_attempts = 5
+                        AND ((state = 'Blocked') = (phase = 'WriteBlocked'))
+                        AND ((state = 'Running') = (lease_token IS NOT NULL))
+                        AND ((lease_token IS NULL) = (lease_until_utc IS NULL))
+                        AND (state <> 'Blocked' OR
+                            (blocked_at_utc IS NOT NULL AND
+                             last_error_code = 'DestinationWritesNotAuthorized'))
+                    );
+                END IF;
+            END
+            $f034$;
+            """, ct);
     }
 }
