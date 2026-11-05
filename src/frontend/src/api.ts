@@ -79,6 +79,25 @@ export type StagingSyncResult = {
   appliedAtUtc: string; observed: number; added: number; changed: number;
   unchanged: number; markedMissing: number; sourceInventoryComplete: boolean;
 };
+export type IncrementalPreparation = {
+  id: string; snapshotId: string; sourceConnectionId: string;
+  destinationConnectionId: string; enqueuedBy: string;
+  state: 'Queued' | 'Running' | 'Prepared' | 'Failed';
+  attempts: number; maxAttempts: number; availableAtUtc: string;
+  leaseUntilUtc: string | null; createdAtUtc: string;
+  updatedAtUtc: string; preparedAtUtc: string | null;
+  lastErrorCode: string | null; itemCount: number;
+  sensitiveItemCount: number; evidenceSha256: string | null;
+};
+export type IncrementalPreparationItemPage = {
+  preparationId: string;
+  items: {
+    assetType: string; sourceId: string; changeKind: string;
+    previousFingerprint: string | null; currentFingerprint: string | null;
+    revision: number; reviewCategory: string; reviewState: 'NeedsReview';
+  }[];
+  nextAfterType: string | null; nextAfterId: string | null;
+};
 export type StagingChangeSummary = {
   snapshotId: string; sourceConnectionId: string;
   added: number; changed: number; restored: number; missing: number; total: number;
@@ -342,6 +361,24 @@ export const api = {
     }),
   getStagingSync: (token: string, snapshotId: string) =>
     call<StagingSyncResult>(`/api/staging/snapshots/${encodeURIComponent(snapshotId)}`,
+      { headers: withToken(token) }),
+  enqueueIncrementalPreparation: (token: string, snapshotId: string,
+      destinationConnectionId: string) =>
+    call<IncrementalPreparation>('/api/incremental-preparations', {
+      method: 'POST', headers: withToken(token),
+      body: JSON.stringify({ snapshotId, destinationConnectionId })
+    }),
+  getIncrementalPreparation: (token: string, id: string) =>
+    call<IncrementalPreparation>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}`,
+      { headers: withToken(token) }),
+  listIncrementalPreparationItems: (token: string, id: string,
+      afterType?: string | null, afterId?: string | null, take = 25) =>
+    call<IncrementalPreparationItemPage>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/items?take=${take}` +
+      (afterType && afterId
+        ? `&afterType=${encodeURIComponent(afterType)}&afterId=${encodeURIComponent(afterId)}`
+        : ''),
       { headers: withToken(token) }),
   getStagingChangeSummary: (token: string, snapshotId: string) =>
     call<StagingChangeSummary>(
