@@ -10,7 +10,7 @@
 | 3 | F-004 Identity mapping | F-003 | Map GitHub logins, inherited access and orphan warnings | Planned |
 | 4 | F-005 Migration plan/preview | F-003/F-004 | Repo selection, renaming, permission/destination previews and approval | **Preview, versioned drafts, target collision probes and destination self-membership/policy review; approval pending** |
 | 4.5 | **F-013 Canonical staging and incremental sync** | F-003 | Indexed per-asset PostgreSQL catalog, SHA-256 deltas, idempotent source snapshot sync | **First working slice; provider delta polling and graph pending** |
-| 4.6 | **F-014 Incremental ref observations** | F-008/F-013 | Git ref metadata persisted transactionally per page, provisional progress and source hash compatibility | **Per-page ingest + immutable 250-ref manifests and bounded reads implemented; constant-memory full scan pending** |
+| 4.6 | **F-014 Incremental ref observations** | F-008/F-013 | Git ref metadata persisted transactionally per page, provisional progress and source hash compatibility | **Per-page ingest + immutable 250-ref manifests + chunk-driven canonical staging implemented; source-side streaming pending** |
 | 5 | **F-008 Durable job execution** | F-013 (staging); F-005 (future writes) | PostgreSQL leased workers, retries, idempotency and audit | **Staging + Azure DevOps discovery jobs + source/repository/Graph/security-evidence checkpoints implemented; GitHub writes blocked pending approval** |
 | 6 | F-006 Native Git migration | F-005/F-008 | Mirror branches, tags and history; compare refs/SHAs | Planned |
 | 7 | F-007 TFVC conversion | F-005/F-008 | Best-effort changesets/branches conversion and evidence report | Research |
