@@ -44,6 +44,14 @@ Feature: Durable and verifiable migration execution
     And raw ACL allow and deny masks are preserved without unrecognized fields
     And effective GitHub permissions remain unverified
 
+  Scenario: Git ref staging consumes manifest chunks without a second full ref array
+    Given a completed source inventory with 1250 Git refs and verified persisted chunks
+    When the durable source worker normalizes the snapshot into PostgreSQL
+    Then the staging projection excludes the large refs JSON array
+    And each verified chunk is applied in batches of no more than 250 refs
+    And the saved catalog retains the existing F-013 revision and missing semantics
+    And a failed chunk or expired lease rolls back the entire staging transaction
+
   Scenario: Complete source ref manifest can be consumed in bounded verified chunks
     Given an immutable source snapshot and source ref pages saved under an active lease
     When the worker prepares its chunk manifest before committing the staging catalog
