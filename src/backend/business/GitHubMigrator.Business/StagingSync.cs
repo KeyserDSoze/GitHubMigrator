@@ -32,6 +32,9 @@ public interface IStagingRepository
     Task<StagingSyncResult> ApplyAsync(DiscoveryInventory inventory,
         IReadOnlyList<StagingAssetInput> assets, IReadOnlySet<string> completeTypes,
         CancellationToken ct);
+    Task<StagingSyncResult> ApplyWithRefManifestAsync(DiscoveryInventory slimInventory,
+        IReadOnlyList<StagingAssetInput> nonRefAssets, IReadOnlySet<string> completeTypes,
+        MigrationJobLease lease, CancellationToken ct);
     Task<StagingSyncResult?> GetSyncAsync(Guid snapshotId, CancellationToken ct);
     Task<StagingCatalogSummary> GetSummaryAsync(Guid sourceConnectionId, CancellationToken ct);
     Task<StagingAssetPage> ListAssetsAsync(Guid sourceConnectionId, string assetType,
@@ -166,6 +169,27 @@ public sealed class StagingSyncService(IDiscoveryRepository discoveries, IStagin
         if (take is < 1 or > 100 || (after?.Length ?? 0) > 1024)
             throw new StagingSyncInputException("InvalidStagingPage");
         return staging.ListAssetsAsync(connectionId, assetType, after, take, ct);
+    }
+
+    public async Task<StagingSyncResult> SyncUsingRefManifestAsync(
+        MigrationJobLease lease, CancellationToken ct)
+    {
+        if (lease.Kind != MigrationJobKinds.DiscoverSource ||
+            lease.Id == Guid.Empty || lease.Id != lease.SnapshotId ||
+            lease.SourceConnectionId == Guid.Empty ||
+            discoveries is not IDiscoveryWithoutRefsRepository slim)
+            throw new StagingSyncInputException("InvalidManifestSyncContext");
+        var inventory = await slim.GetWithoutRefsAsync(lease.Id, ct)
+            ?? throw new KeyNotFoundException("SnapshotNotFound");
+        if (inventory.Id != lease.Id || inventory.ConnectionId != lease.SourceConnectionId ||
+            inventory.Snapshot.SnapshotId != lease.Id || inventory.Refs.Count != 0)
+            throw new StagingSyncInputException("InvalidManifestSyncContext");
+
+        // All non-ref types retain existing F-013 canonical normalization;
+        // ref rows are read separately, one integrity-checked chunk at a time.
+        var normalized = StagingAssetNormalizer.Normalize(inventory);
+        return await staging.ApplyWithRefManifestAsync(
+            inventory, normalized.Assets, normalized.CompleteTypes, lease, ct);
     }
 
     public async Task<StagingSyncResult> SyncAsync(Guid snapshotId, CancellationToken ct)

@@ -155,6 +155,55 @@ public sealed class PostgresDiscoveryRefManifestStore(AppDbContext db, TimeProvi
         return Manifest(record);
     }
 
+    private async Task ValidateWorkerLeaseAsync(MigrationJobLease lease, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        if (lease.Id == Guid.Empty || lease.LeaseToken == Guid.Empty ||
+            lease.Kind != MigrationJobKinds.DiscoverSource || lease.Attempt < 1 ||
+            lease.SnapshotId != lease.Id ||
+            !await db.MigrationJobs.AsNoTracking().AnyAsync(job =>
+                job.Id == lease.Id &&
+                job.SourceConnectionId == lease.SourceConnectionId &&
+                job.Kind == MigrationJobKinds.DiscoverSource &&
+                job.SnapshotId == lease.Id &&
+                job.State == MigrationJobStates.Running &&
+                job.Attempts == lease.Attempt &&
+                job.LeaseToken == lease.LeaseToken &&
+                job.LeaseUntilUtc > now, ct))
+            throw new DiscoveryRefManifestException("DiscoveryLeaseLost");
+    }
+
+    public async Task<DiscoveryRefManifest> GetPreparedAsync(
+        MigrationJobLease lease, CancellationToken ct)
+    {
+        await ValidateWorkerLeaseAsync(lease, ct);
+        var manifest = await db.DiscoveryRefManifests.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.JobId == lease.Id &&
+                x.SourceConnectionId == lease.SourceConnectionId, ct)
+            ?? throw new DiscoveryRefManifestException("RefManifestUnavailable");
+        var descriptors = await db.DiscoveryRefChunks.AsNoTracking()
+            .Where(x => x.JobId == lease.Id).OrderBy(x => x.Index)
+            .Select(x => new { x.Index, x.AssetCount, x.Sha256 }).ToArrayAsync(ct);
+        if (descriptors.Length != manifest.ChunkCount ||
+            manifest.ChunkSize != ChunkSize ||
+            descriptors.Sum(x => x.AssetCount) != manifest.AssetCount ||
+            descriptors.Where((x, i) => x.Index != i ||
+                x.AssetCount is < 1 or > ChunkSize ||
+                x.Sha256.Length != 64).Any() ||
+            RootDigest(descriptors.Select(x => x.Sha256)) != manifest.RootSha256)
+            throw new DiscoveryRefManifestException("RefManifestIntegrityFailed");
+        return Manifest(manifest);
+    }
+
+    public async Task<DiscoveryRefChunkContents?> ReadPreparedChunkAsync(
+        MigrationJobLease lease, int index, CancellationToken ct)
+    {
+        await ValidateWorkerLeaseAsync(lease, ct);
+        if (index < 0)
+            throw new DiscoveryRefManifestException("InvalidRefChunkIndex");
+        return await ReadChunkCoreAsync(lease.Id, index, ct);
+    }
+
     public async Task<DiscoveryRefManifest?> GetAsync(Guid jobId, CancellationToken ct)
     {
         var row = await db.DiscoveryRefManifests.AsNoTracking()
@@ -187,6 +236,12 @@ public sealed class PostgresDiscoveryRefManifestStore(AppDbContext db, TimeProvi
             throw new DiscoveryRefManifestException("InvalidRefChunkIndex");
         if (await GetAsync(jobId, ct) is null)
             throw new DiscoveryRefManifestException("RefManifestUnavailable");
+        return await ReadChunkCoreAsync(jobId, index, ct);
+    }
+
+    private async Task<DiscoveryRefChunkContents?> ReadChunkCoreAsync(
+        Guid jobId, int index, CancellationToken ct)
+    {
         var chunk = await db.DiscoveryRefChunks.AsNoTracking()
             .SingleOrDefaultAsync(x => x.JobId == jobId && x.Index == index, ct);
         if (chunk is null) return null;

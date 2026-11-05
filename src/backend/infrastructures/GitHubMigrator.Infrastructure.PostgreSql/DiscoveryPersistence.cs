@@ -13,7 +13,8 @@ public sealed class DiscoveryInventoryRecord
     public string Json { get; set; } = "{}";
 }
 
-public sealed class PostgresDiscoveryRepository(AppDbContext db) : IDiscoveryRepository
+public sealed class PostgresDiscoveryRepository(AppDbContext db)
+    : IDiscoveryRepository, IDiscoveryWithoutRefsRepository
 {
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
@@ -31,6 +32,19 @@ public sealed class PostgresDiscoveryRepository(AppDbContext db) : IDiscoveryRep
             VALUES ({inventory.Id}, {inventory.ConnectionId}, {inventory.CollectedAtUtc}, {json}::jsonb)
             ON CONFLICT (id) DO NOTHING
             """, ct);
+    }
+
+    public async Task<DiscoveryInventory?> GetWithoutRefsAsync(Guid id, CancellationToken ct)
+    {
+        if (id == Guid.Empty) return null;
+        // Avoid transferring or materializing the potentially huge refs array
+        // in the worker when the canonical catalog will read ref chunks by key.
+        var json = await db.Database.SqlQuery<string>($"""
+            SELECT jsonb_set(inventory, ARRAY['refs'], '[]'::jsonb)::text AS "Value"
+            FROM migration_discoveries
+            WHERE id = {id}
+            """).FirstOrDefaultAsync(ct);
+        return json is null ? null : JsonSerializer.Deserialize<DiscoveryInventory>(json, Options);
     }
 
     public async Task<DiscoveryInventory?> GetAsync(Guid id, CancellationToken ct)

@@ -34,13 +34,33 @@ public sealed class StagingSnapshotSyncRecord
     public bool SourceInventoryComplete { get; set; }
 }
 
-public sealed class PostgresStagingRepository(AppDbContext db, TimeProvider clock) : IStagingRepository
+public sealed class PostgresStagingRepository(
+    AppDbContext db, TimeProvider clock, IDiscoveryRefManifestStore? manifests = null)
+    : IStagingRepository
 {
     private const int BatchSize = 250;
 
-    public async Task<StagingSyncResult> ApplyAsync(DiscoveryInventory inventory,
+    public Task<StagingSyncResult> ApplyAsync(DiscoveryInventory inventory,
         IReadOnlyList<StagingAssetInput> assets, IReadOnlySet<string> completeTypes,
-        CancellationToken ct)
+        CancellationToken ct) =>
+        ApplyCoreAsync(inventory, assets, completeTypes, null, ct);
+
+    public Task<StagingSyncResult> ApplyWithRefManifestAsync(
+        DiscoveryInventory slimInventory, IReadOnlyList<StagingAssetInput> nonRefAssets,
+        IReadOnlySet<string> completeTypes, MigrationJobLease lease, CancellationToken ct)
+    {
+        if (lease.Kind != MigrationJobKinds.DiscoverSource ||
+            lease.Id != slimInventory.Id || lease.SnapshotId != lease.Id ||
+            lease.SourceConnectionId != slimInventory.ConnectionId ||
+            slimInventory.Refs.Count != 0 ||
+            nonRefAssets.Any(x => x.AssetType == "ref") || manifests is null)
+            throw new StagingSyncInputException("InvalidManifestSyncContext");
+        return ApplyCoreAsync(slimInventory, nonRefAssets, completeTypes, lease, ct);
+    }
+
+    private async Task<StagingSyncResult> ApplyCoreAsync(
+        DiscoveryInventory inventory, IReadOnlyList<StagingAssetInput> assets,
+        IReadOnlySet<string> completeTypes, MigrationJobLease? lease, CancellationToken ct)
     {
         if (inventory.Id != inventory.Snapshot.SnapshotId ||
             assets.Count > StagingAssetNormalizer.MaxAssetsPerSnapshot)
@@ -70,41 +90,46 @@ public sealed class PostgresStagingRepository(AppDbContext db, TimeProvider cloc
         if (mostRecent is not null && inventory.CollectedAtUtc <= mostRecent)
             throw new StagingStaleSnapshotException();
 
-        // One SQL upsert for each bounded JSONB batch; no per-asset database round trips.
-        // Revisions advance only for actual fingerprint changes or reappearing missing assets.
+        // Retain all existing F-013 semantics for non-ref assets. Ref chunks
+        // are read only from a prepared, lease-fenced manifest, one block at a
+        // time; no full Git ref array or normalized ref dictionary in .NET.
+        var prepared = lease is null ? null :
+            await manifests!.GetPreparedAsync(lease, ct);
+        if (prepared is not null &&
+            (prepared.SourceConnectionId != inventory.ConnectionId ||
+             prepared.JobId != inventory.Id ||
+             prepared.AssetCount + assets.Count > StagingAssetNormalizer.MaxAssetsPerSnapshot))
+            throw new StagingSyncInputException("InvalidManifestSyncContext");
+
         for (var i = 0; i < assets.Count; i += BatchSize)
+            await UpsertBatchAsync(inventory, assets.Skip(i).Take(BatchSize).ToArray(), ct);
+
+        if (prepared is not null)
         {
-            var batch = JsonSerializer.Serialize(assets.Skip(i).Take(BatchSize)
-                .Select(x => new { asset_type = x.AssetType, source_id = x.SourceId,
-                    project_id = x.ProjectId, fingerprint = x.Fingerprint,
-                    payload_json = x.PayloadJson }));
-            await db.Database.ExecuteSqlInterpolatedAsync($"""
-                WITH incoming AS (
-                    SELECT * FROM jsonb_to_recordset({batch}::jsonb) AS items(
-                        asset_type text, source_id text, project_id text,
-                        fingerprint text, payload_json text)
-                )
-                INSERT INTO staging_assets (
-                    source_connection_id, asset_type, source_id, project_id, fingerprint,
-                    payload_json, first_snapshot_id, last_seen_snapshot_id,
-                    last_changed_snapshot_id, revision, missing)
-                SELECT {inventory.ConnectionId}, asset_type, source_id, project_id, fingerprint,
-                    payload_json::jsonb, {inventory.Id}, {inventory.Id}, {inventory.Id}, 1, false
-                FROM incoming
-                ON CONFLICT (source_connection_id, asset_type, source_id) DO UPDATE SET
-                    project_id = EXCLUDED.project_id,
-                    fingerprint = EXCLUDED.fingerprint,
-                    payload_json = CASE WHEN staging_assets.fingerprint IS DISTINCT FROM EXCLUDED.fingerprint
-                        THEN EXCLUDED.payload_json ELSE staging_assets.payload_json END,
-                    last_seen_snapshot_id = EXCLUDED.last_seen_snapshot_id,
-                    last_changed_snapshot_id = CASE WHEN
-                        staging_assets.fingerprint IS DISTINCT FROM EXCLUDED.fingerprint OR staging_assets.missing
-                        THEN EXCLUDED.last_changed_snapshot_id ELSE staging_assets.last_changed_snapshot_id END,
-                    revision = staging_assets.revision + CASE WHEN
-                        staging_assets.fingerprint IS DISTINCT FROM EXCLUDED.fingerprint OR staging_assets.missing
-                        THEN 1 ELSE 0 END,
-                    missing = false
-                """, ct);
+            var processed = 0;
+            for (var index = 0; index < prepared.ChunkCount; index++)
+            {
+                var verified = await manifests!.ReadPreparedChunkAsync(lease!, index, ct)
+                    ?? throw new DiscoveryRefManifestException("RefManifestIntegrityFailed");
+                var batch = new List<StagingAssetInput>(verified.Items.Count);
+                foreach (var item in verified.Items)
+                {
+                    using var identity = JsonDocument.Parse(item.SourceId);
+                    var normalized = StagingAssetNormalizer.NormalizeRef(
+                        item.RepositoryId, identity.RootElement[1].GetString()!,
+                        item.Properties.GetProperty("ObjectId").GetString()!);
+                    if (normalized.SourceId != item.SourceId ||
+                        normalized.Fingerprint != item.Fingerprint)
+                        throw new DiscoveryRefManifestException("RefManifestIntegrityFailed");
+                    batch.Add(normalized);
+                }
+                if (batch.Count != verified.Chunk.AssetCount)
+                    throw new DiscoveryRefManifestException("RefManifestIntegrityFailed");
+                await UpsertBatchAsync(inventory, batch, ct);
+                processed += batch.Count;
+            }
+            if (processed != prepared.AssetCount)
+                throw new DiscoveryRefManifestException("RefManifestIntegrityFailed");
         }
 
         if (completeTypes.Count > 0)
@@ -144,14 +169,58 @@ public sealed class PostgresStagingRepository(AppDbContext db, TimeProvider cloc
             // PostgreSQL timestamptz uses microseconds; normalize BEFORE returning
             // so the first request and all idempotent replays serialize identically.
             SourceCollectedAtUtc = PostgreSqlTimestamp(inventory.CollectedAtUtc),
-            AppliedAtUtc = PostgreSqlTimestamp(clock.GetUtcNow()), Observed = assets.Count,
-            Added = added, Changed = changed, Unchanged = assets.Count - added - changed,
+            AppliedAtUtc = PostgreSqlTimestamp(clock.GetUtcNow()),
+            Observed = assets.Count + (prepared?.AssetCount ?? 0),
+            Added = added, Changed = changed,
+            Unchanged = assets.Count + (prepared?.AssetCount ?? 0) - added - changed,
             MarkedMissing = missing, SourceInventoryComplete = fullyCovered
         };
         db.StagingSnapshotSyncs.Add(saved);
         await db.SaveChangesAsync(ct);
+        // Fencing is checked *after* all chunk work and before commit. A stale
+        // source worker cannot finalize a canonical catalog transaction.
+        if (lease is not null)
+            await manifests!.GetPreparedAsync(lease, ct);
         await transaction.CommitAsync(ct);
         return ToResult(saved);
+    }
+
+    private Task<int> UpsertBatchAsync(
+        DiscoveryInventory inventory, IReadOnlyList<StagingAssetInput> assets, CancellationToken ct)
+    {
+        if (assets.Count is < 1 or > BatchSize)
+            throw new StagingSyncInputException("InvalidStagingBatch");
+        var batch = JsonSerializer.Serialize(assets.Select(x =>
+            new { asset_type = x.AssetType, source_id = x.SourceId,
+                project_id = x.ProjectId, fingerprint = x.Fingerprint,
+                payload_json = x.PayloadJson }));
+        return db.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH incoming AS (
+                SELECT * FROM jsonb_to_recordset({batch}::jsonb) AS items(
+                    asset_type text, source_id text, project_id text,
+                    fingerprint text, payload_json text)
+            )
+            INSERT INTO staging_assets (
+                source_connection_id, asset_type, source_id, project_id, fingerprint,
+                payload_json, first_snapshot_id, last_seen_snapshot_id,
+                last_changed_snapshot_id, revision, missing)
+            SELECT {inventory.ConnectionId}, asset_type, source_id, project_id, fingerprint,
+                payload_json::jsonb, {inventory.Id}, {inventory.Id}, {inventory.Id}, 1, false
+            FROM incoming
+            ON CONFLICT (source_connection_id, asset_type, source_id) DO UPDATE SET
+                project_id = EXCLUDED.project_id,
+                fingerprint = EXCLUDED.fingerprint,
+                payload_json = CASE WHEN staging_assets.fingerprint IS DISTINCT FROM EXCLUDED.fingerprint
+                    THEN EXCLUDED.payload_json ELSE staging_assets.payload_json END,
+                last_seen_snapshot_id = EXCLUDED.last_seen_snapshot_id,
+                last_changed_snapshot_id = CASE WHEN
+                    staging_assets.fingerprint IS DISTINCT FROM EXCLUDED.fingerprint OR staging_assets.missing
+                    THEN EXCLUDED.last_changed_snapshot_id ELSE staging_assets.last_changed_snapshot_id END,
+                revision = staging_assets.revision + CASE WHEN
+                    staging_assets.fingerprint IS DISTINCT FROM EXCLUDED.fingerprint OR staging_assets.missing
+                    THEN 1 ELSE 0 END,
+                missing = false
+            """, ct);
     }
 
     public async Task<StagingSyncResult?> GetSyncAsync(Guid snapshotId, CancellationToken ct)

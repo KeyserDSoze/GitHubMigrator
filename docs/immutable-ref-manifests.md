@@ -49,6 +49,10 @@ There is no provider access on these GET routes and no way to use them to approv
 - Full ASP.NET + PostgreSQL: the live Azure DevOps source scan generates a manifest, checks JWT/RBAC, retrieves a verified chunk and never contacts external providers on manifest reads.
 - Playwright: the Discovery page shows the completed manifest after the asynchronous scan.
 
+## Canonical staging consumer (next slice)
+
+The durable `DiscoverSource` worker now **consumes this manifest directly** to update the F-013 canonical staging catalog. PostgreSQL strips the full refs array before returning the source snapshot to the staging service; each 250-ref chunk is read, reverified and UPSERTed under one source-scoped transaction with non-ref assets. See [canonical staging from chunks](canonical-staging-from-ref-chunks.md).
+
 ## Limitations
 
 **Full end-to-end constant-memory discovery is not yet implemented.** The Azure DevOps reader still creates the complete `DiscoveryInventory` and the legacy F-013 staging normalizer still loads the snapshot and all normalizable assets in RAM. Manifest *preparation and reading* are bounded by chunk size, but the workflow as a whole is not. Also, manifests currently cover **Git refs only**, not repository/TFVC history, Boards, pipeline definitions, ACLs, or blobs.
