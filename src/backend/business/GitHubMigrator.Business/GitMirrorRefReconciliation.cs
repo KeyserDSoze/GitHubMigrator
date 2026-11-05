@@ -193,13 +193,13 @@ public static class GitMirrorRefReconciler
               name.StartsWith("refs/tags/", StringComparison.Ordinal)) ||
             name.Contains("..", StringComparison.Ordinal) ||
             name.Contains("@{", StringComparison.Ordinal) ||
-            name.EndsWith('.', StringComparison.Ordinal))
+            name.EndsWith(".", StringComparison.Ordinal))
             return false;
 
         foreach (var segment in name.Split('/'))
         {
-            if (segment.Length == 0 || segment.StartsWith('.', StringComparison.Ordinal) ||
-                segment.StartsWith('-', StringComparison.Ordinal) ||
+            if (segment.Length == 0 || segment.StartsWith(".", StringComparison.Ordinal) ||
+                segment.StartsWith("-", StringComparison.Ordinal) ||
                 segment.EndsWith(".lock", StringComparison.OrdinalIgnoreCase))
                 return false;
         }
