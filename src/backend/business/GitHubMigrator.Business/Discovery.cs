@@ -84,6 +84,13 @@ public interface IDiscoveryGroupObservationStore
     Task VerifySnapshotAsync(MigrationJobLease lease, CancellationToken ct);
 }
 
+// F-020 verifies raw, direct Graph membership edges against immutable
+// PostgreSQL page checkpoints. It does not calculate effective permissions.
+public interface IDiscoveryMembershipEvidenceVerifier
+{
+    Task VerifyMembershipsAsync(MigrationJobLease lease, CancellationToken ct);
+}
+
 public sealed class DiscoveryCheckpointException(string code)
     : Exception("Invalid or expired discovery page checkpoint")
 {

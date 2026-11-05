@@ -21,7 +21,8 @@ public sealed class DiscoveryPageCheckpointRecord
 // the lease. Every committed page is immutable and individually resumable.
 public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimeProvider clock)
     : IDiscoveryPageCheckpointStore, IDiscoveryRefIngestProgress,
-      IDiscoveryIdentityObservationStore, IDiscoveryGroupObservationStore
+      IDiscoveryIdentityObservationStore, IDiscoveryGroupObservationStore,
+      IDiscoveryMembershipEvidenceVerifier
 {
     private const int MaxPageBytes = 1_048_576;
     private const int MaxResourceLength = 256;
@@ -364,6 +365,121 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
             """).SingleAsync(ct);
         if (mismatch)
             throw new DiscoveryCheckpointException("GroupSnapshotMismatch");
+    }
+
+    // F-020: Compare the immutable direct-membership snapshot with only the
+    // allowlisted source pages that were committed under a discovery lease.
+    // The source reader drops unrelated containers and deduplicates edges;
+    // SQL applies precisely those rules without loading the graph in .NET.
+    public async Task VerifyMembershipsAsync(MigrationJobLease lease, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        if (lease.Id == Guid.Empty || lease.LeaseToken == Guid.Empty ||
+            lease.Kind != MigrationJobKinds.DiscoverSource ||
+            lease.SnapshotId != lease.Id ||
+            !await db.MigrationJobs.AsNoTracking().AnyAsync(x =>
+                x.Id == lease.Id &&
+                x.SourceConnectionId == lease.SourceConnectionId &&
+                x.SnapshotId == lease.Id &&
+                x.Kind == MigrationJobKinds.DiscoverSource &&
+                x.State == MigrationJobStates.Running &&
+                x.Attempts == lease.Attempt &&
+                x.LeaseToken == lease.LeaseToken && x.LeaseUntilUtc > now, ct))
+            throw new DiscoveryCheckpointException("DiscoveryLeaseLost");
+
+        // Hash the expected group-scoped resource key in PostgreSQL (sha256
+        // is built into PostgreSQL 17), matching the adapter's 40-hex prefix.
+        // Count/membership equality alone would miss missing *empty* group
+        // pages, swapped edges, and incomplete continuation chains.
+        var mismatch = await db.Database.SqlQuery<bool>($"""
+            WITH source_snapshot AS (
+                SELECT inventory FROM migration_discoveries
+                WHERE id = {lease.Id} AND connection_id = {lease.SourceConnectionId}
+            ),
+            coverage AS (
+                SELECT
+                    COALESCE((inventory -> 'securityCoverage' ->> 'groupsComplete')::boolean, false)
+                        AS groups_complete,
+                    COALESCE((inventory -> 'securityCoverage' ->> 'membershipsComplete')::boolean, false)
+                        AS memberships_complete
+                FROM source_snapshot
+            ),
+            expected_groups AS (
+                SELECT g.descriptor,
+                    'security-members:' ||
+                        left(encode(sha256(convert_to(g.descriptor, 'UTF8')), 'hex'), 40)
+                        AS resource_key
+                FROM source_snapshot s
+                CROSS JOIN LATERAL jsonb_to_recordset(s.inventory -> 'groups')
+                    AS g(descriptor text)
+                WHERE NULLIF(btrim(g.descriptor), '') IS NOT NULL
+            ),
+            pages AS (
+                SELECT p.resource_key, p.page_index, p.next_continuation,
+                    p.safe_payload_json
+                FROM discovery_page_checkpoints p
+                WHERE p.job_id = {lease.Id} AND p.resource_key LIKE 'security-members:%'
+            ),
+            page_sequence AS (
+                SELECT g.resource_key, count(p.page_index) AS page_count,
+                    min(p.page_index) AS first_page, max(p.page_index) AS last_page,
+                    count(p.page_index) FILTER (WHERE p.next_continuation IS NULL)
+                        AS terminal_count,
+                    max(p.page_index) FILTER (WHERE p.next_continuation IS NULL)
+                        AS terminal_page
+                FROM expected_groups g
+                LEFT JOIN pages p ON p.resource_key = g.resource_key
+                GROUP BY g.resource_key
+            ),
+            saved AS (
+                SELECT m."groupDescriptor" AS group_descriptor,
+                    m."memberDescriptor" AS member_descriptor
+                FROM source_snapshot s
+                CROSS JOIN LATERAL jsonb_to_recordset(s.inventory -> 'memberships')
+                    AS m("groupDescriptor" text, "memberDescriptor" text)
+            ),
+            observed AS (
+                SELECT DISTINCT e."containerDescriptor" AS group_descriptor,
+                    e."memberDescriptor" AS member_descriptor
+                FROM pages p
+                JOIN expected_groups g ON g.resource_key = p.resource_key
+                CROSS JOIN LATERAL jsonb_to_recordset(
+                    CASE WHEN jsonb_typeof(p.safe_payload_json -> 'value') = 'array'
+                        THEN p.safe_payload_json -> 'value' ELSE '[]'::jsonb END)
+                    AS e("containerDescriptor" text, "memberDescriptor" text)
+                WHERE e."containerDescriptor" = g.descriptor
+                    AND NULLIF(btrim(e."memberDescriptor"), '') IS NOT NULL
+            ),
+            differences AS (
+                (SELECT * FROM saved EXCEPT ALL SELECT * FROM observed)
+                UNION ALL
+                (SELECT * FROM observed EXCEPT ALL SELECT * FROM saved)
+            )
+            SELECT (
+                NOT EXISTS (SELECT 1 FROM source_snapshot)
+                OR EXISTS (
+                    SELECT 1 FROM pages p LEFT JOIN expected_groups g
+                        ON g.resource_key = p.resource_key
+                    WHERE g.resource_key IS NULL
+                        OR jsonb_typeof(p.safe_payload_json -> 'value') IS DISTINCT FROM 'array'
+                )
+                OR EXISTS (SELECT 1 FROM differences)
+                OR EXISTS (
+                    SELECT 1 FROM coverage c
+                    WHERE c.memberships_complete AND NOT c.groups_complete
+                )
+                OR EXISTS (
+                    SELECT 1 FROM page_sequence seq CROSS JOIN coverage c
+                    WHERE c.memberships_complete
+                        AND (seq.page_count = 0 OR seq.first_page <> 0
+                            OR seq.last_page + 1 <> seq.page_count
+                            OR seq.terminal_count <> 1
+                            OR seq.terminal_page <> seq.last_page)
+                )
+            ) AS "Value"
+            """).SingleAsync(ct);
+        if (mismatch)
+            throw new DiscoveryCheckpointException("MembershipSnapshotMismatch");
     }
 
     private async Task IngestIdentityPageAsync(

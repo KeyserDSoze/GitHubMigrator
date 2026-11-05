@@ -97,7 +97,8 @@ public sealed class MigrationJobProcessor(
     IMigrationJobRepository jobs, StagingSyncService staging,
     DiscoveryService? discovery = null, IDiscoveryRefManifestStore? refManifests = null,
     IDiscoveryIdentityObservationStore? identityObservations = null,
-    IDiscoveryGroupObservationStore? groupObservations = null)
+    IDiscoveryGroupObservationStore? groupObservations = null,
+    IDiscoveryMembershipEvidenceVerifier? membershipEvidence = null)
 {
     // Lease > execution deadline, ensuring normal slow work cannot run past its lease.
     // An abrupt process death is recovered after the lease expires by another worker.
@@ -152,6 +153,12 @@ public sealed class MigrationJobProcessor(
             // snapshot. No source evidence here asserts effective rights.
             if (lease.Kind == MigrationJobKinds.DiscoverSource && groupObservations is not null)
                 await groupObservations.VerifySnapshotAsync(
+                    lease with { SnapshotId = snapshotId }, work.Token);
+
+            // Only direct, checkpointed Graph membership edges may reach the
+            // canonical staging transaction. No effective access is inferred.
+            if (lease.Kind == MigrationJobKinds.DiscoverSource && membershipEvidence is not null)
+                await membershipEvidence.VerifyMembershipsAsync(
                     lease with { SnapshotId = snapshotId }, work.Token);
 
             // Prepare a bounded-memory, immutable chunk manifest before the
