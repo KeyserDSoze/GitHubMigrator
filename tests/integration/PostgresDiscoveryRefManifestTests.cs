@@ -95,7 +95,7 @@ public sealed class PostgresDiscoveryRefManifestTests(PostgresDraftFixture fixtu
         var manifest = new PostgresDiscoveryRefManifestStore(db, clock);
         var error = await Assert.ThrowsAsync<DiscoveryRefManifestException>(() =>
             manifest.PrepareAsync(lease, refs.Length, default));
-        Assert.Equal("RefManifestCountMismatch", error.Code);
+        Assert.Equal("RefManifestSnapshotMismatch", error.Code);
         Assert.Null(await manifest.GetAsync(job.Id, default));
         Assert.Empty(await db.DiscoveryRefChunks.ToArrayAsync());
         Assert.Empty(await db.DiscoveryRefManifests.ToArrayAsync());
