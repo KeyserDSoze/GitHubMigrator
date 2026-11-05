@@ -36,7 +36,8 @@ public sealed class StagingSnapshotSyncRecord
 
 public sealed class PostgresStagingRepository(
     AppDbContext db, TimeProvider clock, IDiscoveryRefManifestStore? manifests = null,
-    IDiscoveryIdentityObservationStore? identities = null)
+    IDiscoveryIdentityObservationStore? identities = null,
+    IDiscoveryMembershipEvidenceVerifier? memberships = null)
     : IStagingRepository
 {
     private const int BatchSize = 250;
@@ -45,7 +46,8 @@ public sealed class PostgresStagingRepository(
         IReadOnlyList<StagingAssetInput> assets, IReadOnlySet<string> completeTypes,
         CancellationToken ct)
     {
-        if (inventory.RefsExternalized || inventory.IdentitiesExternalized)
+        if (inventory.RefsExternalized || inventory.IdentitiesExternalized ||
+            inventory.MembershipsExternalized)
             throw new StagingSyncInputException("ExternalizedSnapshotRequiresManifest");
         return ApplyCoreAsync(inventory, assets, completeTypes, null, ct);
     }
@@ -60,8 +62,12 @@ public sealed class PostgresStagingRepository(
             slimInventory.Refs.Count != 0 ||
             (nonRefAssets.Any(x => x.AssetType == "ref") ||
                 (slimInventory.IdentitiesExternalized &&
-                    nonRefAssets.Any(x => x.AssetType == "identity"))) ||
-            manifests is null || (slimInventory.IdentitiesExternalized && identities is null))
+                    nonRefAssets.Any(x => x.AssetType == "identity")) ||
+                (slimInventory.MembershipsExternalized &&
+                    nonRefAssets.Any(x => x.AssetType == "membership"))) ||
+            manifests is null ||
+            (slimInventory.IdentitiesExternalized && identities is null) ||
+            (slimInventory.MembershipsExternalized && memberships is null)
             throw new StagingSyncInputException("InvalidManifestSyncContext");
 
         // Verify both Graph pages and their normalized PostgreSQL observations
@@ -72,6 +78,13 @@ public sealed class PostgresStagingRepository(
                 slimInventory.IdentityCount is < 0 or > 15_000)
                 throw new StagingSyncInputException("InvalidManifestSyncContext");
             await identities!.VerifySnapshotAsync(lease, ct);
+        }
+        if (slimInventory.MembershipsExternalized)
+        {
+            if (slimInventory.Memberships.Count != 0 ||
+                slimInventory.MembershipCount is < 0 or > 20_000)
+                throw new StagingSyncInputException("InvalidManifestSyncContext");
+            await memberships!.VerifyMembershipsAsync(lease, ct);
         }
         return await ApplyCoreAsync(slimInventory, nonRefAssets, completeTypes, lease, ct);
     }
@@ -117,7 +130,8 @@ public sealed class PostgresStagingRepository(
             (prepared.SourceConnectionId != inventory.ConnectionId ||
              prepared.JobId != inventory.Id ||
              prepared.AssetCount + assets.Count +
-                (inventory.IdentitiesExternalized ? inventory.IdentityCount : 0) >
+                (inventory.IdentitiesExternalized ? inventory.IdentityCount : 0) +
+                (inventory.MembershipsExternalized ? inventory.MembershipCount : 0) >
                     StagingAssetNormalizer.MaxAssetsPerSnapshot))
             throw new StagingSyncInputException("InvalidManifestSyncContext");
 
@@ -183,6 +197,52 @@ public sealed class PostgresStagingRepository(
             }
             if (stagedIdentityCount != inventory.IdentityCount)
                 throw new DiscoveryCheckpointException("IdentityObservationIntegrityFailed");
+        }
+
+        var stagedMembershipCount = 0;
+        if (inventory.MembershipsExternalized)
+        {
+            // Keyset page by the (job_id, source_id) PK. No large membership
+            // list or .NET dictionary exists anywhere in this source worker.
+            string? cursor = null;
+            while (true)
+            {
+                var query = db.DiscoveryMembershipObservations.AsNoTracking()
+                    .Where(x => x.JobId == inventory.Id);
+                if (cursor is not null)
+                    query = query.Where(x => string.Compare(x.SourceId, cursor) > 0);
+                var rows = await query.OrderBy(x => x.SourceId)
+                    .Take(BatchSize).ToArrayAsync(ct);
+                if (rows.Length == 0) break;
+                var batch = new List<StagingAssetInput>(rows.Length);
+                foreach (var row in rows)
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(row.PayloadJson);
+                        var group = doc.RootElement.GetProperty("GroupDescriptor").GetString();
+                        var member = doc.RootElement.GetProperty("MemberDescriptor").GetString();
+                        var asset = StagingAssetNormalizer.NormalizeMembership(group!, member!);
+                        if (row.GroupDescriptor != group ||
+                            row.SourceId != asset.SourceId ||
+                            row.Fingerprint != asset.Fingerprint)
+                            throw new DiscoveryCheckpointException("MembershipObservationIntegrityFailed");
+                        batch.Add(asset);
+                    }
+                    catch (Exception ex) when (ex is JsonException or InvalidOperationException
+                        or KeyNotFoundException or StagingSyncInputException)
+                    {
+                        throw new DiscoveryCheckpointException("MembershipObservationIntegrityFailed");
+                    }
+                }
+                await UpsertBatchAsync(inventory, batch, ct);
+                stagedMembershipCount += rows.Length;
+                if (stagedMembershipCount > inventory.MembershipCount)
+                    throw new DiscoveryCheckpointException("MembershipObservationIntegrityFailed");
+                cursor = rows[^1].SourceId;
+            }
+            if (stagedMembershipCount != inventory.MembershipCount)
+                throw new DiscoveryCheckpointException("MembershipObservationIntegrityFailed");
         }
 
         if (prepared is not null)
@@ -251,10 +311,11 @@ public sealed class PostgresStagingRepository(
             // so the first request and all idempotent replays serialize identically.
             SourceCollectedAtUtc = PostgreSqlTimestamp(inventory.CollectedAtUtc),
             AppliedAtUtc = PostgreSqlTimestamp(clock.GetUtcNow()),
-            Observed = assets.Count + (prepared?.AssetCount ?? 0) + stagedIdentityCount,
+            Observed = assets.Count + (prepared?.AssetCount ?? 0) +
+                stagedIdentityCount + stagedMembershipCount,
             Added = added, Changed = changed,
             Unchanged = assets.Count + (prepared?.AssetCount ?? 0) +
-                stagedIdentityCount - added - changed,
+                stagedIdentityCount + stagedMembershipCount - added - changed,
             MarkedMissing = missing, SourceInventoryComplete = fullyCovered
         };
         db.StagingSnapshotSyncs.Add(saved);

@@ -196,6 +196,8 @@ public sealed class AzureDevOpsDiscoveryReader(
             PermissionsComplete = false,
             Groups = security.Groups,
             Memberships = security.Memberships,
+            MembershipsExternalized = security.MembershipsExternalized,
+            MembershipCount = security.MembershipCount,
             AclEvidence = security.Acls,
             SecurityCoverage = security.Coverage
         };

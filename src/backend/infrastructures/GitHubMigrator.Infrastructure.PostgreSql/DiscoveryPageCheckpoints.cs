@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using GitHubMigrator.Business;
@@ -100,6 +102,8 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
             await IngestIdentityPageAsync(stored, ct);
         else if (stored.ResourceKey == "security-groups")
             await IngestGroupPageAsync(stored, ct);
+        else if (stored.ResourceKey.StartsWith("security-members:", StringComparison.Ordinal))
+            await IngestMembershipPageAsync(stored, ct);
 
         // Fencing must hold at commit time as well, even when a very large
         // source page took longer than expected to normalize and persist.
@@ -367,10 +371,121 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
             throw new DiscoveryCheckpointException("GroupSnapshotMismatch");
     }
 
-    // F-020: Compare the immutable direct-membership snapshot with only the
-    // allowlisted source pages that were committed under a discovery lease.
-    // The source reader drops unrelated containers and deduplicates edges;
-    // SQL applies precisely those rules without loading the graph in .NET.
+    // Persist raw direct membership evidence atomically with its checkpoint.
+    // Unrelated Graph containers and invalid edges are ignored exactly as the
+    // source reader does; matching edges use the canonical staging-v1 hash.
+    private async Task IngestMembershipPageAsync(
+        DiscoveryPageCheckpoint page, CancellationToken ct)
+    {
+        using var doc = JsonDocument.Parse(page.SafePayloadJson);
+        if (!doc.RootElement.TryGetProperty("value", out var entries) ||
+            entries.ValueKind != JsonValueKind.Array || entries.GetArrayLength() > 20_000)
+            throw new DiscoveryCheckpointException("InvalidMembershipObservation");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var assets = new List<(StagingAssetInput Asset, string Group)>();
+        foreach (var entry in entries.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object)
+                throw new DiscoveryCheckpointException("InvalidMembershipObservation");
+            var group = GetText(entry, "containerDescriptor");
+            var member = GetText(entry, "memberDescriptor");
+            if (string.IsNullOrWhiteSpace(group) || string.IsNullOrWhiteSpace(member))
+                continue;
+            var key = "security-members:" +
+                Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(group)))[..40];
+            if (!string.Equals(key, page.ResourceKey, StringComparison.Ordinal))
+                continue; // Only direct membership for this requested Graph group.
+            StagingAssetInput asset;
+            try { asset = StagingAssetNormalizer.NormalizeMembership(group, member); }
+            catch (StagingSyncInputException)
+            {
+                throw new DiscoveryCheckpointException("InvalidMembershipObservation");
+            }
+            if (seen.Add(asset.SourceId))
+                assets.Add((asset, group)); // provider duplicate edges are idempotent
+        }
+
+        const int batchSize = 250;
+        for (var i = 0; i < assets.Count; i += batchSize)
+        {
+            var part = assets.Skip(i).Take(batchSize).ToArray();
+            var json = JsonSerializer.Serialize(part.Select(x => new {
+                source_id = x.Asset.SourceId,
+                group_descriptor = x.Group,
+                fingerprint = x.Asset.Fingerprint,
+                payload_json = x.Asset.PayloadJson
+            }));
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                WITH incoming AS (
+                    SELECT * FROM jsonb_to_recordset({json}::jsonb)
+                    AS items(source_id text, group_descriptor text,
+                        fingerprint text, payload_json text)
+                )
+                INSERT INTO discovery_membership_observations (
+                    job_id, source_id, group_descriptor, fingerprint, payload_json,
+                    resource_key, page_index)
+                SELECT {page.JobId}, source_id, group_descriptor, fingerprint,
+                    payload_json::jsonb, {page.ResourceKey}, {page.PageIndex}
+                FROM incoming
+                ON CONFLICT (job_id, source_id) DO NOTHING
+                """, ct);
+
+            var ids = part.Select(x => x.Asset.SourceId).ToArray();
+            var persisted = await db.DiscoveryMembershipObservations.AsNoTracking()
+                .Where(x => x.JobId == page.JobId && ids.Contains(x.SourceId))
+                .Select(x => new { x.SourceId, x.GroupDescriptor, x.Fingerprint })
+                .ToArrayAsync(ct);
+            if (persisted.Length != part.Length ||
+                persisted.Any(row => !part.Any(x =>
+                    row.SourceId == x.Asset.SourceId &&
+                    row.GroupDescriptor == x.Group &&
+                    row.Fingerprint == x.Asset.Fingerprint)))
+                throw new DiscoveryCheckpointException("MembershipObservationConflict");
+        }
+
+        if (await db.DiscoveryMembershipObservations.AsNoTracking()
+            .CountAsync(x => x.JobId == page.JobId, ct) > 20_000)
+            throw new DiscoveryCheckpointException("MembershipObservationLimit");
+    }
+
+    public async Task<DiscoveryMembershipProgress> GetProgressAsync(
+        Guid jobId, CancellationToken ct)
+    {
+        if (jobId == Guid.Empty)
+            throw new DiscoveryCheckpointException("InvalidCheckpointKey");
+        var pages = await db.DiscoveryPageCheckpoints.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId &&
+                x.ResourceKey.StartsWith("security-members:"), ct);
+        var edges = await db.DiscoveryMembershipObservations.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId, ct);
+        return new(jobId, pages, edges);
+    }
+
+    public async Task<DiscoveryMembershipObservationPage> ListAsync(
+        Guid jobId, string? after, int take, CancellationToken ct)
+    {
+        if (jobId == Guid.Empty || take is < 1 or > 100 ||
+            (after?.Length ?? 0) > 1024 || (after?.Any(char.IsControl) ?? false))
+            throw new DiscoveryCheckpointException("InvalidMembershipObservationPage");
+        var query = db.DiscoveryMembershipObservations.AsNoTracking()
+            .Where(x => x.JobId == jobId);
+        if (after is not null)
+            query = query.Where(x => string.Compare(x.SourceId, after) > 0);
+        var rows = await query.OrderBy(x => x.SourceId)
+            .Take(take + 1).ToArrayAsync(ct);
+        var items = rows.Take(take).Select(x => {
+            using var doc = JsonDocument.Parse(x.PayloadJson);
+            return new DiscoveryMembershipObservation(
+                x.SourceId, x.GroupDescriptor,
+                doc.RootElement.GetProperty("MemberDescriptor").GetString()!,
+                x.Fingerprint);
+        }).ToArray();
+        return new(jobId, items, rows.Length > take ? items[^1].SourceId : null);
+    }
+
+    // F-021: fail-closed source-vs-PostgreSQL reconciliation before staging.
+    // Legacy inline snapshots still compare with their raw source checkpoints.
     public async Task VerifyMembershipsAsync(MigrationJobLease lease, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
@@ -387,10 +502,19 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                 x.LeaseToken == lease.LeaseToken && x.LeaseUntilUtc > now, ct))
             throw new DiscoveryCheckpointException("DiscoveryLeaseLost");
 
-        // Hash the expected group-scoped resource key in PostgreSQL (sha256
-        // is built into PostgreSQL 17), matching the adapter's 40-hex prefix.
-        // Count/membership equality alone would miss missing *empty* group
-        // pages, swapped edges, and incomplete continuation chains.
+        // Backfill checkpoints written before F-021 under the CURRENT lease:
+        // no provider re-read and no duplicate PageSaved audit event.
+        var cached = await db.DiscoveryPageCheckpoints.AsNoTracking()
+            .Where(x => x.JobId == lease.Id &&
+                x.ResourceKey.StartsWith("security-members:"))
+            .OrderBy(x => x.ResourceKey).ThenBy(x => x.PageIndex).ToArrayAsync(ct);
+        foreach (var page in cached)
+            await SaveAsync(new(lease.Id, lease.LeaseToken, lease.Attempt),
+                ToCheckpoint(page), ct);
+
+        // Database-side comparison keeps source edge evidence out of the
+        // worker's heap. Complete coverage additionally requires even empty
+        // groups to have a contiguous, terminated page chain.
         var mismatch = await db.Database.SqlQuery<bool>($"""
             WITH source_snapshot AS (
                 SELECT inventory FROM migration_discoveries
@@ -401,7 +525,13 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                     COALESCE((inventory -> 'securityCoverage' ->> 'groupsComplete')::boolean, false)
                         AS groups_complete,
                     COALESCE((inventory -> 'securityCoverage' ->> 'membershipsComplete')::boolean, false)
-                        AS memberships_complete
+                        AS memberships_complete,
+                    COALESCE((inventory ->> 'membershipsExternalized')::boolean, false)
+                        AS externalized,
+                    COALESCE((inventory ->> 'membershipCount')::integer, -1)
+                        AS expected_count,
+                    COALESCE(jsonb_array_length(inventory -> 'memberships'), 0)
+                        AS inline_count
                 FROM source_snapshot
             ),
             expected_groups AS (
@@ -450,10 +580,20 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                 WHERE e."containerDescriptor" = g.descriptor
                     AND NULLIF(btrim(e."memberDescriptor"), '') IS NOT NULL
             ),
-            differences AS (
-                (SELECT * FROM saved EXCEPT ALL SELECT * FROM observed)
+            persisted AS (
+                SELECT group_descriptor,
+                    payload_json ->> 'MemberDescriptor' AS member_descriptor
+                FROM discovery_membership_observations WHERE job_id = {lease.Id}
+            ),
+            expected AS (
+                SELECT * FROM saved WHERE NOT (SELECT externalized FROM coverage)
                 UNION ALL
-                (SELECT * FROM observed EXCEPT ALL SELECT * FROM saved)
+                SELECT * FROM persisted WHERE (SELECT externalized FROM coverage)
+            ),
+            differences AS (
+                (SELECT * FROM expected EXCEPT ALL SELECT * FROM observed)
+                UNION ALL
+                (SELECT * FROM observed EXCEPT ALL SELECT * FROM expected)
             )
             SELECT (
                 NOT EXISTS (SELECT 1 FROM source_snapshot)
@@ -467,6 +607,9 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                 OR EXISTS (
                     SELECT 1 FROM coverage c
                     WHERE c.memberships_complete AND NOT c.groups_complete
+                        OR c.externalized AND (c.inline_count <> 0
+                            OR c.expected_count < 0 OR c.expected_count > 20_000
+                            OR c.expected_count <> (SELECT count(*) FROM persisted))
                 )
                 OR EXISTS (
                     SELECT 1 FROM page_sequence seq CROSS JOIN coverage c

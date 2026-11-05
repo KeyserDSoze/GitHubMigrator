@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -17,6 +17,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [refProgress, setRefProgress] = useState<DiscoveryRefIngestProgress | null>(null);
   const [identityProgress, setIdentityProgress] = useState<DiscoveryIdentityProgress | null>(null);
   const [groupProgress, setGroupProgress] = useState<DiscoveryGroupProgress | null>(null);
+  const [membershipProgress, setMembershipProgress] = useState<DiscoveryMembershipProgress | null>(null);
   const [refManifest, setRefManifest] = useState<DiscoveryRefManifest | null>(null);
   const [tab, setTab] = useState<Tab>('projects');
   const [busy, setBusy] = useState(false);
@@ -83,7 +84,8 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
 
   async function scan() {
     if (!sourceId) return;
-    setBusy(true); setError(''); setNotice(''); setRefProgress(null); setIdentityProgress(null); setGroupProgress(null);
+    setBusy(true); setError(''); setNotice(''); setRefProgress(null);
+    setIdentityProgress(null); setGroupProgress(null); setMembershipProgress(null);
     try {
       // Preserve the request ID after an uncertain network failure so retry
       // cannot enqueue a second scan while the first is being processed.
@@ -134,6 +136,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         }).catch(() => {});
         void api.getDiscoveryGroupProgress(token, job.id).then(progress => {
           if (active) setGroupProgress(progress);
+        }).catch(() => {});
+        void api.getDiscoveryMembershipProgress(token, job.id).then(progress => {
+          if (active) setMembershipProgress(progress);
         }).catch(() => {});
       }
       void api.getMigrationJob(token, job.id).then(current => {
@@ -226,6 +231,14 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         {' · '}{identityProgress.checkpointedUserPages} {t('discoveryIdentityProgressPages')}
         {' · '}{job.state === 'Succeeded'
           ? t('discoveryIdentityProgressVerified') : t('discoveryRefProgressProvisional')}
+      </section>}
+    {job?.kind === 'DiscoverSource' && membershipProgress?.jobId === job.id &&
+      <section className="notice" role="status" aria-label={t('discoveryMemberships')}>
+        <strong>{t('discoveryMemberships')}</strong>
+        {' · '}{membershipProgress.observedMemberships}
+        {' · '}{membershipProgress.checkpointedMembershipPages} {t('discoveryRefProgressPages')}
+        {' · '}{job.state === 'Succeeded'
+          ? t('discoveryGroupProgressVerified') : t('discoveryRefProgressProvisional')}
       </section>}
     {job?.kind === 'DiscoverSource' && groupProgress?.jobId === job.id &&
       <section className="notice" role="status" aria-label={t('discoveryGroupProgressTitle')}>
@@ -331,10 +344,17 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
             </div>
             <h3>{t('discoveryGroups')}</h3>
             {groups.length === 0 && <p className="muted">{t('discoveryNoSecurity')}</p>}
+            {detail.membershipsExternalized && <p className="muted">
+              {t('discoveryMemberships')}: {detail.membershipCount ?? 0}
+              {' · '}{t('discoveryExternalMembershipsNotice')}
+            </p>}
             {groups.slice(0, 100).map(group => <div className="discovery-security-group" key={group.descriptor}>
               <strong>{group.displayName}</strong>
               <small>{group.legacyDescriptor || group.descriptor}</small>
-              <span>{memberships.filter(x => x.groupDescriptor === group.descriptor).length} {t('discoveryMemberships').toLowerCase()}</span>
+              <span>{detail.membershipsExternalized
+                ? t('discoveryMemberships') + ' · PostgreSQL'
+                : memberships.filter(x => x.groupDescriptor === group.descriptor).length +
+                    ' ' + t('discoveryMemberships').toLowerCase()}</span>
               <ul>{memberships.filter(x => x.groupDescriptor === group.descriptor).slice(0, 30).map(edge =>
                 <li key={edge.memberDescriptor}>{displayMember(edge.memberDescriptor)}</li>)}</ul>
             </div>)}

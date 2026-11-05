@@ -86,8 +86,17 @@ public interface IDiscoveryGroupObservationStore
 
 // F-020 verifies raw, direct Graph membership edges against immutable
 // PostgreSQL page checkpoints. It does not calculate effective permissions.
+public sealed record DiscoveryMembershipProgress(
+    Guid JobId, int CheckpointedMembershipPages, int ObservedMemberships);
+public sealed record DiscoveryMembershipObservation(
+    string SourceId, string GroupDescriptor, string MemberDescriptor, string Fingerprint);
+public sealed record DiscoveryMembershipObservationPage(
+    Guid JobId, IReadOnlyList<DiscoveryMembershipObservation> Items, string? NextAfter);
 public interface IDiscoveryMembershipEvidenceVerifier
 {
+    Task<DiscoveryMembershipProgress> GetProgressAsync(Guid jobId, CancellationToken ct);
+    Task<DiscoveryMembershipObservationPage> ListAsync(
+        Guid jobId, string? after, int take, CancellationToken ct);
     Task VerifyMembershipsAsync(MigrationJobLease lease, CancellationToken ct);
 }
 
@@ -170,6 +179,12 @@ public sealed class DiscoveryService(
              inventory.IdentityCount > 15_000))
             throw new InvalidOperationException(
                 "Externalized identities require a durable job-owned source snapshot.");
+        if (inventory.MembershipsExternalized &&
+            (checkpointLease is null || stableSnapshotId is null ||
+             inventory.Memberships.Count != 0 ||
+             inventory.MembershipCount is < 0 or > 20_000))
+            throw new InvalidOperationException(
+                "Externalized memberships require a durable job-owned source snapshot.");
         if (stableSnapshotId is { } fixedId)
         {
             var sourceSnapshot = inventory.Snapshot;
@@ -193,6 +208,8 @@ public sealed class DiscoveryService(
                 Completeness = inventory.Completeness, IdentitiesComplete = inventory.IdentitiesComplete,
                 PermissionsComplete = inventory.PermissionsComplete,
                 Groups = inventory.Groups, Memberships = inventory.Memberships,
+                MembershipsExternalized = inventory.MembershipsExternalized,
+                MembershipCount = inventory.MembershipCount,
                 AclEvidence = inventory.AclEvidence, SecurityCoverage = inventory.SecurityCoverage
             };
         }
