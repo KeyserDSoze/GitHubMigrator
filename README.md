@@ -81,6 +81,10 @@ Open **Migration plan / Piano di migrazione** after discovery. Select source rep
 
 The **Discovery** workbench can enqueue an asynchronous staging synchronization. Jobs are stored in PostgreSQL, claimed by an atomic `SKIP LOCKED` lease across workers, retried with bounded backoff and recorded in an audit ledger. The same queue can now run a read-only Azure DevOps discovery, checkpoint the immutable source inventory and normalize it to staging, with one active scan per source connection. Status survives restarts and is polled in the UI. Only the read-only `StageSnapshot` and `DiscoverSource` job kinds are supported; no GitHub writes or automatic plan approvals. See [durable job architecture](docs/durable-jobs.md), [asynchronous discovery](docs/async-discovery.md) and [granular source, repository and security-evidence checkpoints](docs/durable-discovery-pages.md). The original direct staging sync remains available during transition.
 
+## F-017 snapshot-bound F-005 plan evidence
+
+F-005 now reads source identity metadata and Git ref counts from **the selected immutable PostgreSQL snapshot**, rather than interpreting empty inline ref arrays in durable discovery as zero source refs. New source jobs require completed sealed manifests and a bidirectional source-page/observation identity-and-OID check; historical inline snapshots use bounded SQL JSONB aggregation. Every preview remains **read-only and not approved**. See [plan snapshot evidence](docs/plan-snapshot-evidence.md).
+
 ## F-016 paged F-004 identity mapping
 
 The F-004 reviewer now validates, counts and pages source identities directly in PostgreSQL against the chosen **immutable snapshot** instead of reading all identities into .NET. Successful source jobs use reconciled F-015 Graph observations; legacy snapshots use bounded JSONB queries. The mapping editor loads 100 users per page and preserves edits from other pages when saving the full revisioned draft. Raw ACL evidence remains unresolved and **no GitHub grants/approvals are enabled**. F-005 and upstream source collection still use inline identities. See [F-016 design and tests](docs/paged-identity-mapping.md).

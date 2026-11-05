@@ -64,6 +64,28 @@ public sealed class MigrationPlanReviewServiceTests
     }
 
     [Fact]
+    public async Task Externalized_refs_cannot_be_reported_as_zero_without_snapshot_evidence()
+    {
+        var (original, snapshot, destination) = Fixture();
+        var externalized = new DiscoveryInventory {
+            Id = snapshot.Id, ConnectionId = snapshot.ConnectionId,
+            SourceProvider = snapshot.SourceProvider, Organization = snapshot.Organization,
+            CollectedAtUtc = snapshot.CollectedAtUtc, Snapshot = snapshot.Snapshot,
+            Refs = [], RefsExternalized = true, RefCount = 2, Issues = [],
+            Completeness = snapshot.Completeness, IdentitiesComplete = snapshot.IdentitiesComplete,
+            PermissionsComplete = snapshot.PermissionsComplete
+        };
+        var service = new MigrationPlanReviewService(new FakeDiscovery(externalized),
+            new FakeConnections(destination),
+            new FakeMappings(new IdentityMappingDraft(snapshot.Id, destination.Id, "gh-org",
+                1, DateTimeOffset.UtcNow, [])));
+        var error = await Assert.ThrowsAsync<PlanInputException>(() =>
+            service.PreviewAsync(snapshot.Id, destination.Id,
+                [new("git-1", "target", HistoryStrategy.GitMirror)], default));
+        Assert.Equal("PlanRefEvidenceUnavailable", error.Code);
+    }
+
+    [Fact]
     public async Task Verified_source_evidence_only_yields_candidate_logins_not_real_github_grants()
     {
         var (service, snapshot, destination) = Fixture(verifiedPermissions: true);
