@@ -58,8 +58,9 @@ public sealed class PostgresStagingRepository(
             lease.Id != slimInventory.Id || lease.SnapshotId != lease.Id ||
             lease.SourceConnectionId != slimInventory.ConnectionId ||
             slimInventory.Refs.Count != 0 ||
-            nonRefAssets.Any(x => x.AssetType == "ref" || x.AssetType == "identity") &&
-                slimInventory.IdentitiesExternalized ||
+            (nonRefAssets.Any(x => x.AssetType == "ref") ||
+                (slimInventory.IdentitiesExternalized &&
+                    nonRefAssets.Any(x => x.AssetType == "identity"))) ||
             manifests is null || (slimInventory.IdentitiesExternalized && identities is null))
             throw new StagingSyncInputException("InvalidManifestSyncContext");
 
