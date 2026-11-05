@@ -198,6 +198,11 @@ public sealed class StagingSyncService(IDiscoveryRepository discoveries, IStagin
             throw new StagingSyncInputException("InvalidStagingSnapshot");
         var inventory = await discoveries.GetAsync(snapshotId, ct)
             ?? throw new KeyNotFoundException("SnapshotNotFound");
+        // A metadata-only source snapshot is not an empty repository ref
+        // inventory. Legacy manual staging must never silently normalize it
+        // as zero refs or persist a false authoritative sync result.
+        if (inventory.RefsExternalized)
+            throw new StagingSyncInputException("ExternalizedSnapshotRequiresManifest");
         var normalized = StagingAssetNormalizer.Normalize(inventory);
         return await staging.ApplyAsync(inventory, normalized.Assets, normalized.CompleteTypes, ct);
     }
