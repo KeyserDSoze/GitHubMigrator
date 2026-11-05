@@ -53,3 +53,29 @@ Feature: Reviewable identity mapping drafts (F-004)
     Given a regular platform user
     When they attempt to read or save a mapping draft
     Then the API forbids the operation
+
+  Scenario: Thousands of source identities are reviewed via bounded pages
+    Given an immutable snapshot with 1205 Graph users and verified PostgreSQL observations
+    When an administrator reads F-004 preview and browses source users
+    Then identities are fetched in pages of at most 100, bound to the snapshot ID
+    And total mapped, unmapped and unresolved ACL counts are correct
+    And Graph source evidence never implies verified GitHub membership or grants
+
+  Scenario: Saving a draft after changing pages preserves earlier mappings
+    Given an administrator maps one identity on the first source page
+    And maps another identity on a later page
+    When the administrator saves the current draft
+    Then both mappings are submitted with the same revision
+    And earlier page mappings are not silently removed
+
+  Scenario: Corrupt completed-source observations are rejected
+    Given a completed discovery job with a source identity snapshot
+    When observed descriptors or source metadata diverge even with equal row counts
+    Then F-004 refuses the source with IdentitySourceMismatch
+    And no draft is silently approved or source user treated as missing
+
+  Scenario: Pre-F-015 legacy snapshots remain reviewable
+    Given an immutable discovery snapshot with inline identities and no Graph observations
+    When an administrator requests a bounded source user page
+    Then PostgreSQL reads only that page from the inline JSONB source
+    And it does not substitute identities from a newer unrelated snapshot
