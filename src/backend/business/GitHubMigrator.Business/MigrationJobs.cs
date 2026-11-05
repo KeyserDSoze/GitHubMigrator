@@ -131,7 +131,8 @@ public sealed class MigrationJobProcessor(
                 var snapshot = await discovery.ScanAsync(lease.SourceConnectionId, work.Token, lease.Id,
                     new DiscoveryLeaseContext(lease.Id, lease.LeaseToken, lease.Attempt));
                 snapshotId = snapshot.Id;
-                expectedRefs = snapshot.Refs.Count;
+                expectedRefs = snapshot.RefsExternalized
+                    ? snapshot.RefCount : snapshot.Refs.Count;
                 if (snapshotId != lease.Id || snapshot.ConnectionId != lease.SourceConnectionId)
                     throw new MigrationJobInputException("DiscoveryJobSourceMismatch");
                 if (lease.SnapshotId == Guid.Empty &&
