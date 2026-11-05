@@ -88,7 +88,8 @@ export type DiscoverySummary = {
   completeness: 'complete' | 'partial'; projectCount: number; repositoryCount: number;
   refCount: number; refsExternalized?: boolean; identityCount: number;
   identitiesExternalized?: boolean; issueCount: number;
-  groupCount?: number; membershipCount?: number; membershipsExternalized?: boolean;
+  groupCount?: number; groupsExternalized?: boolean;
+  membershipCount?: number; membershipsExternalized?: boolean;
   aclEntryCount?: number; aclsExternalized?: boolean;
   securityCoverage?: SecurityCoverage;
   identitiesComplete: boolean; permissionsComplete: boolean;
@@ -116,7 +117,8 @@ export type DiscoveryDetail = {
   refsExternalized?: boolean; refCount?: number;
   identitiesExternalized?: boolean; identityCount?: number;
   issues: { code: string; projectId: string | null; repositoryId: string | null }[];
-  groups?: SecurityGroup[]; memberships?: SecurityMembership[];
+  groups?: SecurityGroup[]; groupsExternalized?: boolean; groupCount?: number;
+  memberships?: SecurityMembership[];
   membershipsExternalized?: boolean; membershipCount?: number;
   aclEvidence?: AclEvidence[]; aclsExternalized?: boolean; aclCount?: number;
   securityCoverage?: SecurityCoverage;

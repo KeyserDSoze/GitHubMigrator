@@ -195,6 +195,11 @@ public sealed class DiscoveryService(
              inventory.IdentityCount > 15_000))
             throw new InvalidOperationException(
                 "Externalized identities require a durable job-owned source snapshot.");
+        if (inventory.GroupsExternalized &&
+            (checkpointLease is null || stableSnapshotId is null ||
+             inventory.Groups.Count != 0 || inventory.GroupCount is < 0 or > 1_000))
+            throw new InvalidOperationException(
+                "Externalized groups require a durable job-owned source snapshot.");
         if (inventory.MembershipsExternalized &&
             (checkpointLease is null || stableSnapshotId is null ||
              inventory.Memberships.Count != 0 ||
@@ -229,7 +234,10 @@ public sealed class DiscoveryService(
                 IdentityCount = inventory.IdentityCount, Issues = inventory.Issues,
                 Completeness = inventory.Completeness, IdentitiesComplete = inventory.IdentitiesComplete,
                 PermissionsComplete = inventory.PermissionsComplete,
-                Groups = inventory.Groups, Memberships = inventory.Memberships,
+                Groups = inventory.Groups,
+                GroupsExternalized = inventory.GroupsExternalized,
+                GroupCount = inventory.GroupCount,
+                Memberships = inventory.Memberships,
                 MembershipsExternalized = inventory.MembershipsExternalized,
                 MembershipCount = inventory.MembershipCount,
                 AclEvidence = inventory.AclEvidence, SecurityCoverage = inventory.SecurityCoverage,

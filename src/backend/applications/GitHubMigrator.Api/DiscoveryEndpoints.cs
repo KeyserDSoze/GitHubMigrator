@@ -67,7 +67,8 @@ public static class DiscoveryEndpoints
         identityCount = x.IdentitiesExternalized
             ? x.IdentityCount : x.Snapshot.Identities.Count,
         x.IdentitiesExternalized,
-        groupCount = x.Groups.Count,
+        groupCount = x.GroupsExternalized ? x.GroupCount : x.Groups.Count,
+        x.GroupsExternalized,
         membershipCount = x.MembershipsExternalized
             ? x.MembershipCount : x.Memberships.Count,
         x.MembershipsExternalized,

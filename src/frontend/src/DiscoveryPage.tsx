@@ -292,6 +292,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     {summary?.identitiesExternalized && <p className="muted" role="note">
       {t('discoveryExternalIdentitiesNotice')}
     </p>}
+    {summary?.groupsExternalized && <p className="muted" role="note">
+      {t('discoveryExternalGroupsNotice')}
+    </p>}
     {summary && <div className="discovery-notice"><ShieldAlert size={17} />
       <span>{t('discoveryPartial')}. {t('discoveryPermissionWarning')}</span>
     </div>}
@@ -356,7 +359,12 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
               <span>{t('discoveryAcls')}: {detail.securityCoverage?.aclsCollected ? t('discoveryCollected') : t('discoveryUnverified')}</span>
             </div>
             <h3>{t('discoveryGroups')}</h3>
-            {groups.length === 0 && <p className="muted">{t('discoveryNoSecurity')}</p>}
+            {detail.groupsExternalized
+              ? <p className="muted" role="note">
+                  {t('discoveryExternalGroupsNotice')} {' '}
+                  {detail.groupCount ?? 0} {t('discoveryGroups').toLowerCase()}.
+                </p>
+              : groups.length === 0 && <p className="muted">{t('discoveryNoSecurity')}</p>}
             {detail.membershipsExternalized && <p className="muted">
               {t('discoveryMemberships')}: {detail.membershipCount ?? 0}
               {' · '}{t('discoveryExternalMembershipsNotice')}

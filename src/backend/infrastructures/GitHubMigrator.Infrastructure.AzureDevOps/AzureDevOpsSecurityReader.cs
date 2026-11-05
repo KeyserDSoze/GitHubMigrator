@@ -14,7 +14,8 @@ public sealed record SecurityEvidenceResult(
     IReadOnlyList<RepositoryAclEvidence> Acls,
     IReadOnlyList<DiscoveryIssue> Issues,
     DiscoveryCoverage Coverage, int MembershipCount = 0, bool MembershipsExternalized = false,
-    int AclCount = 0, bool AclsExternalized = false);
+    int AclCount = 0, bool AclsExternalized = false,
+    int GroupCount = 0, bool GroupsExternalized = false);
 
 // Fixed-host read-only security evidence, not a target access policy or an effective rights calculator.
 // Git namespace: 2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87; GenericRead=2, Contribute=4.
@@ -35,6 +36,8 @@ public sealed class AzureDevOpsSecurityReader(
         CancellationToken ct, DiscoveryLeaseContext? lease = null)
     {
         var groups = new List<DiscoveryGroup>();
+        var groupStore = checkpoints as IDiscoveryGroupObservationStore;
+        var externalizeGroups = lease is not null && groupStore is not null;
         var edges = new List<DiscoveryMembership>();
         // Leased production scans use PostgreSQL membership observations.
         // Legacy/checkpoint-only readers retain their inline representation.
@@ -98,6 +101,13 @@ public sealed class AzureDevOpsSecurityReader(
 
         var distinctGroups = groups.DistinctBy(g => g.Descriptor).ToArray();
         if (distinctGroups.Length > MaxGroups) membershipsComplete = false;
+        // The group names/descriptors are required for membership traversal
+        // but must not be serialized into a durable source snapshot.
+        var observedGroupCount = externalizeGroups
+            ? (await groupStore!.GetProgressAsync(lease!.Value.JobId, ct)).ObservedGroups
+            : distinctGroups.Length;
+        if (observedGroupCount > MaxGroups)
+            throw new DiscoveryCheckpointException("GroupObservationLimit");
         foreach (var group in distinctGroups.Take(MaxGroups))
         {
             ct.ThrowIfCancellationRequested();
@@ -230,11 +240,12 @@ public sealed class AzureDevOpsSecurityReader(
         observedAces = externalizeAcls
             ? (await aclStore!.GetProgressAsync(lease!.Value.JobId, ct)).ObservedAces
             : acls.Count;
-        return new SecurityEvidenceResult(distinctGroups,
+        return new SecurityEvidenceResult(externalizeGroups ? [] : distinctGroups,
             externalize ? [] : edges.Distinct().ToArray(),
             externalizeAcls ? [] : acls.Take(MaxAclEntries).ToArray(), issues,
             new(groupsComplete, membershipsComplete, aclsCollected, false),
-            observedMemberships, externalize, observedAces, externalizeAcls);
+            observedMemberships, externalize, observedAces, externalizeAcls,
+            observedGroupCount, externalizeGroups);
     }
 
     private async Task<IReadOnlyList<AclRow>> ReadAclAsync(string root, string token, string securityToken,

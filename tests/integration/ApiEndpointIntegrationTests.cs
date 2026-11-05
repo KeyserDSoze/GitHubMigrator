@@ -746,6 +746,9 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.True(persisted.RootElement.GetProperty("membershipsExternalized").GetBoolean());
         Assert.Equal(0, persisted.RootElement.GetProperty("membershipCount").GetInt32());
         Assert.Empty(persisted.RootElement.GetProperty("memberships").EnumerateArray());
+        Assert.True(persisted.RootElement.GetProperty("groupsExternalized").GetBoolean());
+        Assert.Equal(0, persisted.RootElement.GetProperty("groupCount").GetInt32());
+        Assert.Empty(persisted.RootElement.GetProperty("groups").EnumerateArray());
         Assert.True(persisted.RootElement.GetProperty("aclsExternalized").GetBoolean());
         Assert.Equal(0, persisted.RootElement.GetProperty("aclCount").GetInt32());
         Assert.Empty(persisted.RootElement.GetProperty("aclEvidence").EnumerateArray());
@@ -764,6 +767,9 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             Assert.True(storedJson.RootElement.GetProperty("membershipsExternalized").GetBoolean());
             Assert.Equal(0, storedJson.RootElement.GetProperty("membershipCount").GetInt32());
             Assert.Empty(storedJson.RootElement.GetProperty("memberships").EnumerateArray());
+            Assert.True(storedJson.RootElement.GetProperty("groupsExternalized").GetBoolean());
+            Assert.Equal(0, storedJson.RootElement.GetProperty("groupCount").GetInt32());
+            Assert.Empty(storedJson.RootElement.GetProperty("groups").EnumerateArray());
             Assert.True(storedJson.RootElement.GetProperty("aclsExternalized").GetBoolean());
             Assert.Equal(0, storedJson.RootElement.GetProperty("aclCount").GetInt32());
             Assert.Empty(storedJson.RootElement.GetProperty("aclEvidence").EnumerateArray());
@@ -783,6 +789,8 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(1, currentSummary.GetProperty("identityCount").GetInt32());
         Assert.True(currentSummary.GetProperty("membershipsExternalized").GetBoolean());
         Assert.Equal(0, currentSummary.GetProperty("membershipCount").GetInt32());
+        Assert.True(currentSummary.GetProperty("groupsExternalized").GetBoolean());
+        Assert.Equal(0, currentSummary.GetProperty("groupCount").GetInt32());
         Assert.True(currentSummary.GetProperty("aclsExternalized").GetBoolean());
         Assert.Equal(0, currentSummary.GetProperty("aclEntryCount").GetInt32());
 

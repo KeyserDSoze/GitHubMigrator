@@ -40,7 +40,8 @@ public sealed class PostgresStagingRepository(
     AppDbContext db, TimeProvider clock, IDiscoveryRefManifestStore? manifests = null,
     IDiscoveryIdentityObservationStore? identities = null,
     IDiscoveryMembershipEvidenceVerifier? memberships = null,
-    IDiscoveryAclEvidenceStore? acls = null)
+    IDiscoveryAclEvidenceStore? acls = null,
+    IDiscoveryGroupObservationStore? groups = null)
     : IStagingRepository
 {
     private const int BatchSize = 250;
@@ -50,7 +51,8 @@ public sealed class PostgresStagingRepository(
         CancellationToken ct)
     {
         if (inventory.RefsExternalized || inventory.IdentitiesExternalized ||
-            inventory.MembershipsExternalized || inventory.AclsExternalized)
+            inventory.MembershipsExternalized || inventory.AclsExternalized ||
+            inventory.GroupsExternalized)
             throw new StagingSyncInputException("ExternalizedSnapshotRequiresManifest");
         return ApplyCoreAsync(inventory, assets, completeTypes, null, ct);
     }
@@ -69,11 +71,14 @@ public sealed class PostgresStagingRepository(
                 (slimInventory.MembershipsExternalized &&
                     nonRefAssets.Any(x => x.AssetType == "membership")) ||
                 (slimInventory.AclsExternalized &&
-                    nonRefAssets.Any(x => x.AssetType == "acl"))) ||
+                    nonRefAssets.Any(x => x.AssetType == "acl")) ||
+                (slimInventory.GroupsExternalized &&
+                    nonRefAssets.Any(x => x.AssetType == "group"))) ||
             manifests is null ||
             (slimInventory.IdentitiesExternalized && identities is null) ||
             (slimInventory.MembershipsExternalized && memberships is null) ||
-            (slimInventory.AclsExternalized && acls is null))
+            (slimInventory.AclsExternalized && acls is null) ||
+            (slimInventory.GroupsExternalized && groups is null))
             throw new StagingSyncInputException("InvalidManifestSyncContext");
 
         // Verify both Graph pages and their normalized PostgreSQL observations
@@ -98,6 +103,13 @@ public sealed class PostgresStagingRepository(
                 slimInventory.AclCount is < 0 or > 30_000)
                 throw new StagingSyncInputException("InvalidManifestSyncContext");
             await acls!.VerifySnapshotAsync(lease, ct);
+        }
+        if (slimInventory.GroupsExternalized)
+        {
+            if (slimInventory.Groups.Count != 0 ||
+                slimInventory.GroupCount is < 0 or > 1_000)
+                throw new StagingSyncInputException("InvalidManifestSyncContext");
+            await groups!.VerifySnapshotAsync(lease, ct);
         }
         return await ApplyCoreAsync(slimInventory, nonRefAssets, completeTypes, lease, ct);
     }
@@ -144,12 +156,61 @@ public sealed class PostgresStagingRepository(
              prepared.JobId != inventory.Id ||
              prepared.AssetCount + assets.Count +
                 (inventory.IdentitiesExternalized ? inventory.IdentityCount : 0) +
-                (inventory.MembershipsExternalized ? inventory.MembershipCount : 0) >
+                (inventory.MembershipsExternalized ? inventory.MembershipCount : 0) +
+                (inventory.GroupsExternalized ? inventory.GroupCount : 0) >
                     StagingAssetNormalizer.MaxAssetsPerSnapshot))
             throw new StagingSyncInputException("InvalidManifestSyncContext");
 
         for (var i = 0; i < assets.Count; i += BatchSize)
             await UpsertBatchAsync(inventory, assets.Skip(i).Take(BatchSize).ToArray(), ct);
+
+        var stagedGroupCount = 0;
+        if (inventory.GroupsExternalized)
+        {
+            // Group names are only retained while traversing the source Graph.
+            // Canonical staging imports the F-019 observations by keyset from
+            // PostgreSQL and recomputes every F-013 SHA before each UPSERT.
+            string? cursor = null;
+            while (true)
+            {
+                var query = db.DiscoveryGroupObservations.AsNoTracking()
+                    .Where(x => x.JobId == inventory.Id);
+                if (cursor is not null)
+                    query = query.Where(x => string.Compare(x.SourceId, cursor) > 0);
+                var rows = await query.OrderBy(x => x.SourceId)
+                    .Take(BatchSize).ToArrayAsync(ct);
+                if (rows.Length == 0) break;
+                var batch = new List<StagingAssetInput>(rows.Length);
+                foreach (var row in rows)
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(row.PayloadJson);
+                        var root = doc.RootElement;
+                        var name = root.GetProperty("DisplayName").GetString();
+                        var legacy = root.GetProperty("LegacyDescriptor").ValueKind == JsonValueKind.Null
+                            ? null : root.GetProperty("LegacyDescriptor").GetString();
+                        var normalized = StagingAssetNormalizer.NormalizeGroup(
+                            row.SourceId, name!, legacy);
+                        if (row.Fingerprint != normalized.Fingerprint)
+                            throw new DiscoveryCheckpointException("GroupObservationIntegrityFailed");
+                        batch.Add(normalized);
+                    }
+                    catch (Exception ex) when (ex is JsonException or InvalidOperationException
+                        or KeyNotFoundException or StagingSyncInputException)
+                    {
+                        throw new DiscoveryCheckpointException("GroupObservationIntegrityFailed");
+                    }
+                }
+                await UpsertBatchAsync(inventory, batch, ct);
+                stagedGroupCount += rows.Length;
+                if (stagedGroupCount > inventory.GroupCount)
+                    throw new DiscoveryCheckpointException("GroupObservationIntegrityFailed");
+                cursor = rows[^1].SourceId;
+            }
+            if (stagedGroupCount != inventory.GroupCount)
+                throw new DiscoveryCheckpointException("GroupObservationIntegrityFailed");
+        }
 
         var stagedIdentityCount = 0;
         if (inventory.IdentitiesExternalized)
@@ -431,10 +492,12 @@ public sealed class PostgresStagingRepository(
             SourceCollectedAtUtc = PostgreSqlTimestamp(inventory.CollectedAtUtc),
             AppliedAtUtc = PostgreSqlTimestamp(clock.GetUtcNow()),
             Observed = assets.Count + (prepared?.AssetCount ?? 0) +
-                stagedIdentityCount + stagedMembershipCount + stagedAclCount,
+                stagedIdentityCount + stagedMembershipCount + stagedAclCount +
+                stagedGroupCount,
             Added = added, Changed = changed,
             Unchanged = assets.Count + (prepared?.AssetCount ?? 0) +
-                stagedIdentityCount + stagedMembershipCount + stagedAclCount - added - changed,
+                stagedIdentityCount + stagedMembershipCount + stagedAclCount +
+                stagedGroupCount - added - changed,
             MarkedMissing = missing, SourceInventoryComplete = fullyCovered
         };
         db.StagingSnapshotSyncs.Add(saved);
