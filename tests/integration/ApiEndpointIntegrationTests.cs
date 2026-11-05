@@ -688,6 +688,16 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var second = JsonDocument.Parse(await parallel.Content.ReadAsStringAsync());
         Assert.Equal(jobId, second.RootElement.GetProperty("id").GetGuid());
 
+        // Even while raw ACL pages may be saved, their descriptors/masks must
+        // not be exposed before the successful, verified discovery result.
+        using (var pendingAcls = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/acls?take=50"))
+        {
+            pendingAcls.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(pendingAcls);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        }
+
         // A manifest may be prepared during a scan but must never be published
         // to callers before the durable discovery job reports success.
         using (var pendingManifest = new HttpRequestMessage(HttpMethod.Get,
@@ -799,6 +809,34 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             Assert.Equal(HttpStatusCode.BadRequest, reply.StatusCode);
         }
 
+        using var anonymousAcls = await harness.Client.GetAsync($"/api/jobs/{jobId}/acls");
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousAcls.StatusCode);
+        using (var counts = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/acl-progress"))
+        {
+            counts.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(counts);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var progress = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(2, progress.RootElement.GetProperty("checkpointedAclPages").GetInt32());
+            Assert.Equal(0, progress.RootElement.GetProperty("observedAces").GetInt32());
+        }
+        using (var listing = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/acls?take=50"))
+        {
+            listing.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(listing);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var page = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Empty(page.RootElement.GetProperty("items").EnumerateArray());
+        }
+        using (var badPage = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/acls?take=101"))
+        {
+            badPage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(badPage);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
         using var eventRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{jobId}/events");
         eventRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
         using var eventResponse = await harness.Client.SendAsync(eventRequest);

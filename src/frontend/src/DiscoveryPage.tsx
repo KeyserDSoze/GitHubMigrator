@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -18,6 +18,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [identityProgress, setIdentityProgress] = useState<DiscoveryIdentityProgress | null>(null);
   const [groupProgress, setGroupProgress] = useState<DiscoveryGroupProgress | null>(null);
   const [membershipProgress, setMembershipProgress] = useState<DiscoveryMembershipProgress | null>(null);
+  const [aclProgress, setAclProgress] = useState<DiscoveryAclProgress | null>(null);
   const [refManifest, setRefManifest] = useState<DiscoveryRefManifest | null>(null);
   const [tab, setTab] = useState<Tab>('projects');
   const [busy, setBusy] = useState(false);
@@ -86,6 +87,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     if (!sourceId) return;
     setBusy(true); setError(''); setNotice(''); setRefProgress(null);
     setIdentityProgress(null); setGroupProgress(null); setMembershipProgress(null);
+    setAclProgress(null);
     try {
       // Preserve the request ID after an uncertain network failure so retry
       // cannot enqueue a second scan while the first is being processed.
@@ -139,6 +141,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         }).catch(() => {});
         void api.getDiscoveryMembershipProgress(token, job.id).then(progress => {
           if (active) setMembershipProgress(progress);
+        }).catch(() => {});
+        void api.getDiscoveryAclProgress(token, job.id).then(progress => {
+          if (active) setAclProgress(progress);
         }).catch(() => {});
       }
       void api.getMigrationJob(token, job.id).then(current => {
@@ -231,6 +236,14 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         {' · '}{identityProgress.checkpointedUserPages} {t('discoveryIdentityProgressPages')}
         {' · '}{job.state === 'Succeeded'
           ? t('discoveryIdentityProgressVerified') : t('discoveryRefProgressProvisional')}
+      </section>}
+    {job?.kind === 'DiscoverSource' && aclProgress?.jobId === job.id &&
+      <section className="notice" role="status" aria-label={t('discoveryAclProgressTitle')}>
+        <strong>{t('discoveryAclProgressTitle')}</strong>
+        {' · '}{aclProgress.observedAces} {t('discoveryAclProgressAces')}
+        {' · '}{aclProgress.checkpointedAclPages} {t('discoveryRefProgressPages')}
+        {' · '}{job.state === 'Succeeded'
+          ? t('discoveryGroupProgressVerified') : t('discoveryRefProgressProvisional')}
       </section>}
     {job?.kind === 'DiscoverSource' && membershipProgress?.jobId === job.id &&
       <section className="notice" role="status" aria-label={t('discoveryMemberships')}>

@@ -98,7 +98,8 @@ public sealed class MigrationJobProcessor(
     DiscoveryService? discovery = null, IDiscoveryRefManifestStore? refManifests = null,
     IDiscoveryIdentityObservationStore? identityObservations = null,
     IDiscoveryGroupObservationStore? groupObservations = null,
-    IDiscoveryMembershipEvidenceVerifier? membershipEvidence = null)
+    IDiscoveryMembershipEvidenceVerifier? membershipEvidence = null,
+    IDiscoveryAclEvidenceStore? aclEvidence = null)
 {
     // Lease > execution deadline, ensuring normal slow work cannot run past its lease.
     // An abrupt process death is recovered after the lease expires by another worker.
@@ -159,6 +160,13 @@ public sealed class MigrationJobProcessor(
             // canonical staging transaction. No effective access is inferred.
             if (lease.Kind == MigrationJobKinds.DiscoverSource && membershipEvidence is not null)
                 await membershipEvidence.VerifyMembershipsAsync(
+                    lease with { SnapshotId = snapshotId }, work.Token);
+
+            // Verify raw Azure DevOps ACL checkpoint provenance, including
+            // per-scope coverage, before importing canonical catalog records.
+            // Never infer effective permissions from allow/deny masks.
+            if (lease.Kind == MigrationJobKinds.DiscoverSource && aclEvidence is not null)
+                await aclEvidence.VerifySnapshotAsync(
                     lease with { SnapshotId = snapshotId }, work.Token);
 
             // Prepare a bounded-memory, immutable chunk manifest before the

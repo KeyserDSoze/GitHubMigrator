@@ -24,7 +24,7 @@ public sealed class DiscoveryPageCheckpointRecord
 public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimeProvider clock)
     : IDiscoveryPageCheckpointStore, IDiscoveryRefIngestProgress,
       IDiscoveryIdentityObservationStore, IDiscoveryGroupObservationStore,
-      IDiscoveryMembershipEvidenceVerifier
+      IDiscoveryMembershipEvidenceVerifier, IDiscoveryAclEvidenceStore
 {
     private const int MaxPageBytes = 1_048_576;
     private const int MaxResourceLength = 256;
@@ -104,6 +104,8 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
             await IngestGroupPageAsync(stored, ct);
         else if (stored.ResourceKey.StartsWith("security-members:", StringComparison.Ordinal))
             await IngestMembershipPageAsync(stored, ct);
+        else if (stored.ResourceKey.StartsWith("security-acl:", StringComparison.Ordinal))
+            await IngestAclPageAsync(stored, ct);
 
         // Fencing must hold at commit time as well, even when a very large
         // source page took longer than expected to normalize and persist.
@@ -623,6 +625,283 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
             """).SingleAsync(ct);
         if (mismatch)
             throw new DiscoveryCheckpointException("MembershipSnapshotMismatch");
+    }
+
+    // Source ACLs are observations only. Every ACE is stored under the same
+    // PostgreSQL transaction and live lease as its sanitized source checkpoint.
+    // The hash uses canonical normalized allow/deny/inheritance data, not a
+    // provider-supplied raw response or arbitrary extension fields.
+    private async Task IngestAclPageAsync(
+        DiscoveryPageCheckpoint page, CancellationToken ct)
+    {
+        if (page.PageIndex != 0)
+            throw new DiscoveryCheckpointException("InvalidAclObservation");
+        using var doc = JsonDocument.Parse(page.SafePayloadJson);
+        if (!doc.RootElement.TryGetProperty("value", out var values) ||
+            values.ValueKind != JsonValueKind.Array)
+            throw new DiscoveryCheckpointException("InvalidAclObservation");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var rows = new List<(string SourceId, string Token, string Descriptor,
+            string Fingerprint, string Payload)>();
+        foreach (var acl in values.EnumerateArray())
+        {
+            if (acl.ValueKind != JsonValueKind.Object ||
+                !acl.TryGetProperty("token", out var tokenValue) ||
+                tokenValue.ValueKind != JsonValueKind.String ||
+                !acl.TryGetProperty("inheritPermissions", out var inheritValue) ||
+                inheritValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                !acl.TryGetProperty("acesDictionary", out var dictionary) ||
+                dictionary.ValueKind != JsonValueKind.Object)
+                throw new DiscoveryCheckpointException("InvalidAclObservation");
+            var token = tokenValue.GetString()!;
+            if (string.IsNullOrWhiteSpace(token) || token.Length > 512 ||
+                page.ResourceKey != "security-acl:" +
+                    Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(token)))[..40])
+                throw new DiscoveryCheckpointException("InvalidAclObservation");
+
+            foreach (var entry in dictionary.EnumerateObject())
+            {
+                var ace = entry.Value;
+                if (ace.ValueKind != JsonValueKind.Object ||
+                    !ace.TryGetProperty("allow", out var allowValue) ||
+                    !allowValue.TryGetInt64(out var allowMask) ||
+                    !ace.TryGetProperty("deny", out var denyValue) ||
+                    !denyValue.TryGetInt64(out var denyMask))
+                    throw new DiscoveryCheckpointException("InvalidAclObservation");
+                var descriptor = GetText(ace, "descriptor") ?? entry.Name;
+                if (!string.Equals(descriptor, entry.Name, StringComparison.Ordinal) ||
+                    string.IsNullOrWhiteSpace(descriptor) || descriptor.Length > 512)
+                    throw new DiscoveryCheckpointException("InvalidAclObservation");
+                var sourceId = JsonSerializer.Serialize(new[] { token, descriptor });
+                if (sourceId.Length > 1024 || !seen.Add(sourceId))
+                    throw new DiscoveryCheckpointException("InvalidAclObservation");
+                var payload = JsonSerializer.Serialize(new {
+                    AllowMask = allowMask, DenyMask = denyMask,
+                    InheritPermissions = inheritValue.ValueKind == JsonValueKind.True
+                });
+                var fingerprint = Convert.ToHexStringLower(SHA256.HashData(
+                    Encoding.UTF8.GetBytes("acl-observation-v1\n" + payload)));
+                rows.Add((sourceId, token, descriptor, fingerprint, payload));
+                if (rows.Count > 30_000)
+                    throw new DiscoveryCheckpointException("AclObservationLimit");
+            }
+        }
+
+        const int batchSize = 250;
+        for (var i = 0; i < rows.Count; i += batchSize)
+        {
+            var part = rows.Skip(i).Take(batchSize).ToArray();
+            var batch = JsonSerializer.Serialize(part.Select(x => new {
+                source_id = x.SourceId, security_token = x.Token,
+                security_descriptor = x.Descriptor, fingerprint = x.Fingerprint,
+                payload_json = x.Payload
+            }));
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                WITH incoming AS (
+                    SELECT * FROM jsonb_to_recordset({batch}::jsonb)
+                    AS r(source_id text, security_token text, security_descriptor text,
+                        fingerprint text, payload_json text)
+                )
+                INSERT INTO discovery_acl_observations (
+                    job_id, source_id, security_token, security_descriptor,
+                    fingerprint, payload_json, resource_key, page_index)
+                SELECT {page.JobId}, source_id, security_token, security_descriptor,
+                    fingerprint, payload_json::jsonb, {page.ResourceKey}, {page.PageIndex}
+                FROM incoming
+                ON CONFLICT (job_id, source_id) DO NOTHING
+                """, ct);
+            var ids = part.Select(x => x.SourceId).ToArray();
+            var persisted = await db.DiscoveryAclObservations.AsNoTracking()
+                .Where(x => x.JobId == page.JobId && ids.Contains(x.SourceId))
+                .Select(x => new { x.SourceId, x.SecurityToken, x.SecurityDescriptor,
+                    x.Fingerprint, x.ResourceKey, x.PageIndex }).ToArrayAsync(ct);
+            if (persisted.Length != part.Length ||
+                persisted.Any(row => !part.Any(x =>
+                    x.SourceId == row.SourceId && x.Token == row.SecurityToken &&
+                    x.Descriptor == row.SecurityDescriptor &&
+                    x.Fingerprint == row.Fingerprint &&
+                    row.ResourceKey == page.ResourceKey && row.PageIndex == page.PageIndex)))
+                throw new DiscoveryCheckpointException("AclObservationConflict");
+        }
+        if (await db.DiscoveryAclObservations.AsNoTracking()
+            .CountAsync(x => x.JobId == page.JobId, ct) > 30_000)
+            throw new DiscoveryCheckpointException("AclObservationLimit");
+    }
+
+    async Task<DiscoveryAclProgress> IDiscoveryAclEvidenceStore.GetProgressAsync(
+        Guid jobId, CancellationToken ct)
+    {
+        if (jobId == Guid.Empty)
+            throw new DiscoveryCheckpointException("InvalidCheckpointKey");
+        var pages = await db.DiscoveryPageCheckpoints.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId &&
+                x.ResourceKey.StartsWith("security-acl:"), ct);
+        var aces = await db.DiscoveryAclObservations.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId, ct);
+        return new(jobId, pages, aces);
+    }
+
+    async Task<DiscoveryAclObservationPage> IDiscoveryAclEvidenceStore.ListAsync(
+        Guid jobId, string? after, int take, CancellationToken ct)
+    {
+        if (jobId == Guid.Empty || take is < 1 or > 100 ||
+            (after?.Length ?? 0) > 1024 || (after?.Any(char.IsControl) ?? false))
+            throw new DiscoveryCheckpointException("InvalidAclObservationPage");
+        var query = db.DiscoveryAclObservations.AsNoTracking().Where(x => x.JobId == jobId);
+        if (after is not null)
+            query = query.Where(x => string.Compare(x.SourceId, after) > 0);
+        var rows = await query.OrderBy(x => x.SourceId).Take(take + 1).ToArrayAsync(ct);
+        var items = rows.Take(take).Select(x => new DiscoveryAclObservation(
+            x.SourceId, x.SecurityToken, x.SecurityDescriptor, x.Fingerprint,
+            JsonSerializer.Deserialize<JsonElement>(x.PayloadJson))).ToArray();
+        return new(jobId, items, rows.Length > take ? items[^1].SourceId : null);
+    }
+
+    async Task IDiscoveryAclEvidenceStore.VerifySnapshotAsync(
+        MigrationJobLease lease, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        if (lease.Id == Guid.Empty || lease.LeaseToken == Guid.Empty ||
+            lease.Kind != MigrationJobKinds.DiscoverSource ||
+            lease.SnapshotId != lease.Id ||
+            !await db.MigrationJobs.AsNoTracking().AnyAsync(x =>
+                x.Id == lease.Id && x.SourceConnectionId == lease.SourceConnectionId &&
+                x.SnapshotId == lease.Id && x.Kind == MigrationJobKinds.DiscoverSource &&
+                x.State == MigrationJobStates.Running && x.Attempts == lease.Attempt &&
+                x.LeaseToken == lease.LeaseToken && x.LeaseUntilUtc > now, ct))
+            throw new DiscoveryCheckpointException("DiscoveryLeaseLost");
+
+        // Backfill pre-F-022 checkpoints under the active lease. Replaying a
+        // valid page neither performs a provider GET nor duplicates PageSaved.
+        var pages = await db.DiscoveryPageCheckpoints.AsNoTracking()
+            .Where(x => x.JobId == lease.Id &&
+                x.ResourceKey.StartsWith("security-acl:"))
+            .OrderBy(x => x.ResourceKey).ThenBy(x => x.PageIndex).ToArrayAsync(ct);
+        foreach (var page in pages)
+            await SaveAsync(new(lease.Id, lease.LeaseToken, lease.Attempt),
+                ToCheckpoint(page), ct);
+
+        var mismatch = await db.Database.SqlQuery<bool>($"""
+            WITH source_snapshot AS (
+                SELECT inventory FROM migration_discoveries
+                WHERE id = {lease.Id} AND connection_id = {lease.SourceConnectionId}
+            ),
+            coverage AS (
+                SELECT COALESCE((inventory -> 'securityCoverage' ->> 'aclsCollected')::boolean,
+                    false) AS complete FROM source_snapshot
+            ),
+            git_repos AS (
+                SELECT p.project ->> 'providerId' AS project_id,
+                    r.repo ->> 'providerId' AS repo_id
+                FROM source_snapshot s
+                CROSS JOIN LATERAL jsonb_array_elements(
+                    COALESCE(s.inventory -> 'snapshot' -> 'projects', '[]'::jsonb))
+                    AS p(project)
+                CROSS JOIN LATERAL jsonb_array_elements(
+                    COALESCE(p.project -> 'repositories', '[]'::jsonb)) AS r(repo)
+                WHERE r.repo ->> 'versionControl' IN ('0', 'Git')
+            ),
+            tokens AS (
+                SELECT DISTINCT 'repoV2/' || project_id AS token FROM git_repos
+                UNION
+                SELECT 'repoV2/' || project_id || '/' || repo_id FROM git_repos
+            ),
+            expected_keys AS (
+                SELECT 'security-acl:' ||
+                    left(encode(sha256(convert_to(token, 'UTF8')), 'hex'), 40)
+                    AS resource_key FROM tokens
+            ),
+            saved_pages AS (
+                SELECT p.resource_key, p.page_index, p.safe_payload_json,
+                    p.next_continuation
+                FROM discovery_page_checkpoints p
+                WHERE p.job_id = {lease.Id} AND p.resource_key LIKE 'security-acl:%'
+            ),
+            acl_entries AS (
+                SELECT p.resource_key, p.page_index, acl.item ->> 'token' AS security_token,
+                    COALESCE(ace.value ->> 'descriptor', ace.key) AS security_descriptor,
+                    (ace.value ->> 'allow')::bigint AS allow_mask,
+                    (ace.value ->> 'deny')::bigint AS deny_mask,
+                    (acl.item ->> 'inheritPermissions')::boolean AS inherit_permissions
+                FROM saved_pages p
+                CROSS JOIN LATERAL jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(p.safe_payload_json -> 'value') = 'array'
+                        THEN p.safe_payload_json -> 'value' ELSE '[]'::jsonb END)
+                    AS acl(item)
+                CROSS JOIN LATERAL jsonb_each(
+                    CASE WHEN jsonb_typeof(acl.item -> 'acesDictionary') = 'object'
+                        THEN acl.item -> 'acesDictionary' ELSE '{}'::jsonb END)
+                    AS ace(key, value)
+            ),
+            page_rows AS (
+                SELECT security_token, security_descriptor, allow_mask,
+                    deny_mask, inherit_permissions FROM acl_entries
+            ),
+            persisted AS (
+                SELECT security_token, security_descriptor,
+                    (payload_json ->> 'AllowMask')::bigint AS allow_mask,
+                    (payload_json ->> 'DenyMask')::bigint AS deny_mask,
+                    (payload_json ->> 'InheritPermissions')::boolean AS inherit_permissions
+                FROM discovery_acl_observations WHERE job_id = {lease.Id}
+            ),
+            snapshot_rows AS (
+                SELECT DISTINCT a."securityToken" AS security_token,
+                    a."securityDescriptor" AS security_descriptor,
+                    a."allowMask" AS allow_mask, a."denyMask" AS deny_mask,
+                    a."inheritPermissions" AS inherit_permissions
+                FROM source_snapshot s
+                CROSS JOIN LATERAL jsonb_to_recordset(s.inventory -> 'aclEvidence')
+                    AS a("securityToken" text, "securityDescriptor" text,
+                        "allowMask" bigint, "denyMask" bigint, "inheritPermissions" boolean)
+            ),
+            differences AS (
+                (SELECT * FROM page_rows EXCEPT ALL SELECT * FROM persisted)
+                UNION ALL
+                (SELECT * FROM persisted EXCEPT ALL SELECT * FROM page_rows)
+                UNION ALL
+                (SELECT * FROM snapshot_rows EXCEPT ALL SELECT * FROM persisted)
+                UNION ALL
+                (SELECT * FROM persisted EXCEPT ALL SELECT * FROM snapshot_rows)
+            )
+            SELECT (
+                NOT EXISTS (SELECT 1 FROM source_snapshot)
+                OR EXISTS (SELECT 1 FROM differences)
+                OR EXISTS (
+                    SELECT 1 FROM saved_pages p
+                    LEFT JOIN expected_keys e ON p.resource_key = e.resource_key
+                    WHERE e.resource_key IS NULL OR p.page_index <> 0
+                        OR p.next_continuation IS NOT NULL
+                        OR jsonb_typeof(p.safe_payload_json -> 'value') IS DISTINCT FROM 'array'
+                )
+                OR EXISTS (
+                    SELECT 1 FROM saved_pages p
+                    CROSS JOIN LATERAL jsonb_array_elements(
+                        CASE WHEN jsonb_typeof(p.safe_payload_json -> 'value') = 'array'
+                            THEN p.safe_payload_json -> 'value' ELSE '[]'::jsonb END)
+                        AS acl(item)
+                    WHERE jsonb_typeof(acl.item -> 'acesDictionary') IS DISTINCT FROM 'object'
+                        OR 'security-acl:' || left(encode(sha256(
+                            convert_to(COALESCE(acl.item ->> 'token', ''), 'UTF8')), 'hex'), 40)
+                            <> p.resource_key
+                )
+                OR EXISTS (
+                    SELECT 1 FROM discovery_acl_observations o
+                    WHERE o.job_id = {lease.Id} AND
+                        (o.page_index <> 0 OR o.resource_key <> 'security-acl:' ||
+                            left(encode(sha256(convert_to(o.security_token, 'UTF8')),
+                                'hex'), 40))
+                )
+                OR EXISTS (
+                    SELECT 1 FROM coverage c WHERE c.complete AND
+                        EXISTS (SELECT 1 FROM expected_keys e LEFT JOIN saved_pages p
+                            ON p.resource_key = e.resource_key
+                            WHERE p.resource_key IS NULL)
+                )
+            ) AS "Value"
+            """).SingleAsync(ct);
+        if (mismatch)
+            throw new DiscoveryCheckpointException("AclSnapshotMismatch");
     }
 
     private async Task IngestIdentityPageAsync(

@@ -261,10 +261,12 @@ public sealed class AzureDevOpsSecurityReader(
         return items;
     }
 
-    private static bool CanBackfillMembershipResource(
+    private static bool CanBackfillSecurityResource(
         string resource, IDiscoveryPageCheckpointStore? store) =>
-        resource.StartsWith("security-members:", StringComparison.Ordinal) &&
-        store is IDiscoveryMembershipEvidenceVerifier;
+        (resource.StartsWith("security-members:", StringComparison.Ordinal) &&
+            store is IDiscoveryMembershipEvidenceVerifier) ||
+        (resource.StartsWith("security-acl:", StringComparison.Ordinal) &&
+            store is IDiscoveryAclEvidenceStore);
 
     private static string Hash(string value) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..40];
@@ -282,7 +284,7 @@ public sealed class AzureDevOpsSecurityReader(
         {
             if (!string.Equals(requestHash, existing.RequestHash, StringComparison.Ordinal))
                 throw new DiscoveryCheckpointException("CheckpointRequestMismatch");
-            if (CanBackfillMembershipResource(resource, checkpoints))
+            if (CanBackfillSecurityResource(resource, checkpoints))
                 await checkpoints.SaveAsync(lease.Value, existing, ct);
             try { return new JsonPage(JsonDocument.Parse(existing.SafePayloadJson), existing.NextContinuation); }
             catch (JsonException) { throw new DiscoveryCheckpointException("CheckpointPayloadInvalid"); }
