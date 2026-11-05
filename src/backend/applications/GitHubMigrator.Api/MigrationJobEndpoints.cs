@@ -91,6 +91,38 @@ public static class MigrationJobEndpoints
             }
         });
 
+        routes.MapGet("/{jobId:guid}/membership-progress", async Task<IResult> (
+            Guid jobId, MigrationJobService service,
+            IDiscoveryMembershipEvidenceVerifier memberships, CancellationToken ct) =>
+        {
+            var job = await service.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            return Results.Ok(await memberships.GetProgressAsync(jobId, ct));
+        });
+
+        routes.MapGet("/{jobId:guid}/memberships", async Task<IResult> (
+            Guid jobId, string? after, int? take, MigrationJobService service,
+            IDiscoveryMembershipEvidenceVerifier memberships, CancellationToken ct) =>
+        {
+            var job = await service.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            if (job.State != MigrationJobStates.Succeeded)
+                return Results.Conflict(new { error = "DiscoveryNotCompleted" });
+            try
+            {
+                return Results.Ok(await memberships.ListAsync(jobId, after, take ?? 50, ct));
+            }
+            catch (DiscoveryCheckpointException ex)
+                when (ex.Code == "InvalidMembershipObservationPage")
+            {
+                return Results.BadRequest(new { error = ex.Code });
+            }
+        });
+
         routes.MapGet("/{jobId:guid}/identity-progress", async Task<IResult> (
             Guid jobId, MigrationJobService service,
             IDiscoveryIdentityObservationStore observations, CancellationToken ct) =>

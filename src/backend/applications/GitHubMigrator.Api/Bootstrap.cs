@@ -165,6 +165,23 @@ public static class Bootstrap
                     REFERENCES discovery_page_checkpoints(job_id, resource_key, page_index)
                     ON DELETE CASCADE
             );
+            -- Direct Graph membership observations, checkpoint-provenanced.
+            -- This is raw evidence, not effective GitHub/Azure access.
+            CREATE TABLE IF NOT EXISTS discovery_membership_observations (
+                job_id uuid NOT NULL REFERENCES migration_jobs(id) ON DELETE CASCADE,
+                source_id varchar(1024) NOT NULL,
+                group_descriptor varchar(1024) NOT NULL,
+                fingerprint varchar(64) NOT NULL,
+                payload_json jsonb NOT NULL,
+                resource_key varchar(256) NOT NULL,
+                page_index integer NOT NULL,
+                PRIMARY KEY (job_id, source_id),
+                FOREIGN KEY (job_id, resource_key, page_index)
+                    REFERENCES discovery_page_checkpoints(job_id, resource_key, page_index)
+                    ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS ix_discovery_membership_observations_group
+                ON discovery_membership_observations(job_id, group_descriptor);
             CREATE TABLE IF NOT EXISTS discovery_identity_observations (
                 job_id uuid NOT NULL REFERENCES migration_jobs(id) ON DELETE CASCADE,
                 source_id varchar(1024) NOT NULL,

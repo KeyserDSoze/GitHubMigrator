@@ -554,7 +554,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         // HTTP test from other worker tests' intentionally abandoned leases.
         await using (var reset = harness.Host.Services.CreateAsyncScope())
             await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_membership_observations, discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
         // The staging catalog is shared across API tests: use an isolated
         // logical source connection so exact asset count assertions are stable.
         var sourceId = Guid.NewGuid();
@@ -646,7 +646,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         await using (var scope = harness.Host.Services.CreateAsyncScope())
         {
             await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_membership_observations, discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
             await scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>()
                 .SaveAsync(secretRef, ApiHarness.SourceToken, default);
             await scope.ServiceProvider.GetRequiredService<IConnectionRepository>().SaveAsync(
@@ -733,6 +733,9 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(0, persisted.RootElement.GetProperty("refs").GetArrayLength());
         Assert.True(persisted.RootElement.GetProperty("identitiesExternalized").GetBoolean());
         Assert.Equal(1, persisted.RootElement.GetProperty("identityCount").GetInt32());
+        Assert.True(persisted.RootElement.GetProperty("membershipsExternalized").GetBoolean());
+        Assert.Equal(0, persisted.RootElement.GetProperty("membershipCount").GetInt32());
+        Assert.Empty(persisted.RootElement.GetProperty("memberships").EnumerateArray());
         Assert.Empty(persisted.RootElement.GetProperty("snapshot")
             .GetProperty("identities").EnumerateArray());
         await using (var scope = harness.Host.Services.CreateAsyncScope())
@@ -745,6 +748,9 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             Assert.Empty(storedJson.RootElement.GetProperty("refs").EnumerateArray());
             Assert.True(storedJson.RootElement.GetProperty("identitiesExternalized").GetBoolean());
             Assert.Equal(1, storedJson.RootElement.GetProperty("identityCount").GetInt32());
+            Assert.True(storedJson.RootElement.GetProperty("membershipsExternalized").GetBoolean());
+            Assert.Equal(0, storedJson.RootElement.GetProperty("membershipCount").GetInt32());
+            Assert.Empty(storedJson.RootElement.GetProperty("memberships").EnumerateArray());
             Assert.Empty(storedJson.RootElement.GetProperty("snapshot")
                 .GetProperty("identities").EnumerateArray());
         }
@@ -759,6 +765,39 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.True(currentSummary.GetProperty("refsExternalized").GetBoolean());
         Assert.True(currentSummary.GetProperty("identitiesExternalized").GetBoolean());
         Assert.Equal(1, currentSummary.GetProperty("identityCount").GetInt32());
+        Assert.True(currentSummary.GetProperty("membershipsExternalized").GetBoolean());
+        Assert.Equal(0, currentSummary.GetProperty("membershipCount").GetInt32());
+
+        // Admin-only source membership pages cannot be read before success
+        // and an empty externalized Graph set must not invent membership grants.
+        using var anonymousMemberships = await harness.Client.GetAsync(
+            $"/api/jobs/{jobId}/memberships");
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousMemberships.StatusCode);
+        using (var progressQuery = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/membership-progress"))
+        {
+            progressQuery.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(progressQuery);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var json = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.Equal(0, json.RootElement.GetProperty("observedMemberships").GetInt32());
+        }
+        using (var membersQuery = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/memberships?take=50"))
+        {
+            membersQuery.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(membersQuery);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var json = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.Empty(json.RootElement.GetProperty("items").EnumerateArray());
+        }
+        using (var invalidMembers = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/memberships?take=101"))
+        {
+            invalidMembers.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(invalidMembers);
+            Assert.Equal(HttpStatusCode.BadRequest, reply.StatusCode);
+        }
 
         using var eventRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{jobId}/events");
         eventRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);

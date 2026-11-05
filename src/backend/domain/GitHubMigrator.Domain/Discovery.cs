@@ -45,6 +45,9 @@ public sealed class DiscoveryInventory
     // Optional to preserve deserialization of snapshots produced before security discovery.
     public IReadOnlyList<DiscoveryGroup> Groups { get; init; } = [];
     public IReadOnlyList<DiscoveryMembership> Memberships { get; init; } = [];
+    // An externalized list is NOT evidence of zero direct group memberships.
+    public bool MembershipsExternalized { get; init; }
+    public int MembershipCount { get; init; }
     public IReadOnlyList<RepositoryAclEvidence> AclEvidence { get; init; } = [];
     public DiscoveryCoverage SecurityCoverage { get; init; } = new(false, false, false, false);
 }

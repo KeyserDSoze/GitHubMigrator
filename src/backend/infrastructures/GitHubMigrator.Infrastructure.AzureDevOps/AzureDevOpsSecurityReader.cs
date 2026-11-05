@@ -13,7 +13,7 @@ public sealed record SecurityEvidenceResult(
     IReadOnlyList<DiscoveryMembership> Memberships,
     IReadOnlyList<RepositoryAclEvidence> Acls,
     IReadOnlyList<DiscoveryIssue> Issues,
-    DiscoveryCoverage Coverage);
+    DiscoveryCoverage Coverage, int MembershipCount = 0, bool MembershipsExternalized = false);
 
 // Fixed-host read-only security evidence, not a target access policy or an effective rights calculator.
 // Git namespace: 2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87; GenericRead=2, Contribute=4.
@@ -35,6 +35,11 @@ public sealed class AzureDevOpsSecurityReader(
     {
         var groups = new List<DiscoveryGroup>();
         var edges = new List<DiscoveryMembership>();
+        // Leased production scans use PostgreSQL membership observations.
+        // Legacy/checkpoint-only readers retain their inline representation.
+        var membershipStore = checkpoints as IDiscoveryMembershipEvidenceVerifier;
+        var externalize = lease is not null && membershipStore is not null;
+        var observedMemberships = 0;
         var acls = new List<RepositoryAclEvidence>();
         var issues = new List<DiscoveryIssue>();
         bool groupsComplete = true, membershipsComplete = true, aclsCollected = true;
@@ -92,7 +97,7 @@ public sealed class AzureDevOpsSecurityReader(
         foreach (var group in distinctGroups.Take(MaxGroups))
         {
             ct.ThrowIfCancellationRequested();
-            if (edges.Count >= MaxMembershipEdges)
+            if (observedMemberships >= MaxMembershipEdges)
             {
                 membershipsComplete = false;
                 issues.Add(new("MembershipsTruncated"));
@@ -116,11 +121,15 @@ public sealed class AzureDevOpsSecurityReader(
                         var container = Text(membership, "containerDescriptor");
                         var member = Text(membership, "memberDescriptor");
                         // Reject unrelated edges and never infer transitive membership.
-                        if (string.Equals(container, group.Descriptor, StringComparison.Ordinal) &&
+                        if (!externalize &&
+                            string.Equals(container, group.Descriptor, StringComparison.Ordinal) &&
                             !string.IsNullOrWhiteSpace(member))
                             edges.Add(new(container, member));
                     }
-                    if (edges.Count >= MaxMembershipEdges)
+                    observedMemberships = externalize
+                        ? (await membershipStore!.GetProgressAsync(lease!.Value.JobId, ct)).ObservedMemberships
+                        : edges.Distinct().Count();
+                    if (observedMemberships >= MaxMembershipEdges)
                     {
                         membershipsComplete = false;
                         issues.Add(new("MembershipsTruncated"));
@@ -143,12 +152,15 @@ public sealed class AzureDevOpsSecurityReader(
                 issues.Add(new("MembershipsUnavailable:" + ex.Code));
             }
         }
-        if (edges.Count > MaxMembershipEdges)
+        if (!externalize && edges.Count > MaxMembershipEdges)
         {
             edges = edges.Take(MaxMembershipEdges).ToList();
             membershipsComplete = false;
             issues.Add(new("MembershipsTruncated"));
         }
+        observedMemberships = externalize
+            ? (await membershipStore!.GetProgressAsync(lease!.Value.JobId, ct)).ObservedMemberships
+            : edges.Distinct().Count();
 
         // Collect the project-level ACL and each Git repository ACL separately. The service may
         // return 0 ACEs at a token even where permissions inherit from another scope/group.
@@ -208,9 +220,11 @@ public sealed class AzureDevOpsSecurityReader(
 
         // Never assert effective authorization from raw ACE masks: nested identity groups,
         // deny precedence, branch scopes and external directory membership can change results.
-        return new SecurityEvidenceResult(distinctGroups, edges.Distinct().ToArray(),
+        return new SecurityEvidenceResult(distinctGroups,
+            externalize ? [] : edges.Distinct().ToArray(),
             acls.Take(MaxAclEntries).ToArray(), issues,
-            new(groupsComplete, membershipsComplete, aclsCollected, false));
+            new(groupsComplete, membershipsComplete, aclsCollected, false),
+            observedMemberships, externalize);
     }
 
     private async Task<IReadOnlyList<AclRow>> ReadAclAsync(string root, string token, string securityToken,
@@ -247,6 +261,11 @@ public sealed class AzureDevOpsSecurityReader(
         return items;
     }
 
+    private static bool CanBackfillMembershipResource(
+        string resource, IDiscoveryPageCheckpointStore? store) =>
+        resource.StartsWith("security-members:", StringComparison.Ordinal) &&
+        store is IDiscoveryMembershipEvidenceVerifier;
+
     private static string Hash(string value) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..40];
 
@@ -263,6 +282,8 @@ public sealed class AzureDevOpsSecurityReader(
         {
             if (!string.Equals(requestHash, existing.RequestHash, StringComparison.Ordinal))
                 throw new DiscoveryCheckpointException("CheckpointRequestMismatch");
+            if (CanBackfillMembershipResource(resource, checkpoints))
+                await checkpoints.SaveAsync(lease.Value, existing, ct);
             try { return new JsonPage(JsonDocument.Parse(existing.SafePayloadJson), existing.NextContinuation); }
             catch (JsonException) { throw new DiscoveryCheckpointException("CheckpointPayloadInvalid"); }
         }

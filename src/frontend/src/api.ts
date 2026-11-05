@@ -32,6 +32,15 @@ export type DiscoveryGroupObservationPage = {
     properties: { DisplayName: string; LegacyDescriptor: string | null } }[];
   nextAfter: string | null;
 };
+export type DiscoveryMembershipProgress = {
+  jobId: string; checkpointedMembershipPages: number; observedMemberships: number;
+};
+export type DiscoveryMembershipObservationPage = {
+  jobId: string;
+  items: { sourceId: string; groupDescriptor: string;
+    memberDescriptor: string; fingerprint: string }[];
+  nextAfter: string | null;
+};
 export type DiscoveryIdentityProgress = {
   jobId: string; checkpointedUserPages: number; observedUsers: number;
 };
@@ -70,7 +79,8 @@ export type DiscoverySummary = {
   completeness: 'complete' | 'partial'; projectCount: number; repositoryCount: number;
   refCount: number; refsExternalized?: boolean; identityCount: number;
   identitiesExternalized?: boolean; issueCount: number;
-  groupCount?: number; membershipCount?: number; aclEntryCount?: number;
+  groupCount?: number; membershipCount?: number; membershipsExternalized?: boolean;
+  aclEntryCount?: number;
   securityCoverage?: SecurityCoverage;
   identitiesComplete: boolean; permissionsComplete: boolean;
 };
@@ -98,6 +108,7 @@ export type DiscoveryDetail = {
   identitiesExternalized?: boolean; identityCount?: number;
   issues: { code: string; projectId: string | null; repositoryId: string | null }[];
   groups?: SecurityGroup[]; memberships?: SecurityMembership[];
+  membershipsExternalized?: boolean; membershipCount?: number;
   aclEvidence?: AclEvidence[]; securityCoverage?: SecurityCoverage;
   identitiesComplete: boolean; permissionsComplete: boolean;
 };
@@ -262,6 +273,14 @@ export const api = {
   listDiscoveryGroupObservations: (token: string, jobId: string, after?: string, take = 50) =>
     call<DiscoveryGroupObservationPage>(
       `/api/jobs/${encodeURIComponent(jobId)}/groups?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  getDiscoveryMembershipProgress: (token: string, jobId: string) =>
+    call<DiscoveryMembershipProgress>(`/api/jobs/${encodeURIComponent(jobId)}/membership-progress`,
+      { headers: withToken(token) }),
+  listDiscoveryMembershipObservations: (token: string, jobId: string, after?: string, take = 50) =>
+    call<DiscoveryMembershipObservationPage>(
+      `/api/jobs/${encodeURIComponent(jobId)}/memberships?take=${take}` +
         (after ? `&after=${encodeURIComponent(after)}` : ''),
       { headers: withToken(token) }),
   getDiscoveryIdentityProgress: (token: string, jobId: string) =>
