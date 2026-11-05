@@ -35,6 +35,10 @@ No `StageSnapshot` job or legacy direct `POST /api/staging/sync` behavior is cha
 - PostgreSQL: expired worker cannot publish the canonical catalog.
 - Existing .NET, API/JWT/PostgreSQL, Playwright and Terraform CI continue to execute.
 
+## Source-side Git ref externalization (next slice)
+
+The leased Azure DevOps reader now **does not accumulate the full ref list**. It counts refs while committing page observations into PostgreSQL, then saves only `refsExternalized: true`, the actual `refCount` and `refs: []` in the source snapshot. The manifest builds from persisted observations and the stage consumes bounded blocks exactly as documented here. Legacy inline snapshots continue to verify full ID/OID multisets. See [externalized source refs](externalized-source-refs.md).
+
 ## Remaining scalability work
 
 This **does not yet achieve constant-memory *source discovery***. The Azure DevOps reader still accumulates the full inventory and the original snapshot is stored as one JSONB document. Other asset families are still normalized in memory during staging. We have removed the large Git ref array from the **second (staging) half** of a successful durable discovery, not from the provider-side collection.
