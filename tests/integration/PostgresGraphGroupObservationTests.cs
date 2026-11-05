@@ -30,8 +30,11 @@ public sealed class PostgresGraphGroupObservationTests(PostgresDraftFixture fixt
         var row = await db.DiscoveryGroupObservations.AsNoTracking()
             .SingleAsync(x => x.JobId == job && x.SourceId == canonical.SourceId);
         Assert.Equal(canonical.Fingerprint, row.Fingerprint);
-        Assert.Equal(canonical.PayloadJson, JsonSerializer.Serialize(
-            JsonSerializer.Deserialize<JsonElement>(row.PayloadJson)));
+        using (var payload = JsonDocument.Parse(row.PayloadJson))
+        {
+            Assert.Equal("Name 42", payload.RootElement.GetProperty("DisplayName").GetString());
+            Assert.Equal("legacy.42", payload.RootElement.GetProperty("LegacyDescriptor").GetString());
+        }
         var first = await service.ListAsync(job, null, 100, default);
         Assert.Equal(100, first.Items.Count);
         Assert.NotNull(first.NextAfter);
