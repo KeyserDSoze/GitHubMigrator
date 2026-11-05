@@ -30,6 +30,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<MigrationPlanDraftRecord> MigrationPlanDrafts => Set<MigrationPlanDraftRecord>();
     public DbSet<StagingAssetRecord> StagingAssets => Set<StagingAssetRecord>();
     public DbSet<StagingSnapshotSyncRecord> StagingSnapshotSyncs => Set<StagingSnapshotSyncRecord>();
+    public DbSet<StagingAssetChangeRecord> StagingAssetChanges => Set<StagingAssetChangeRecord>();
     public DbSet<MigrationJobRecord> MigrationJobs => Set<MigrationJobRecord>();
     public DbSet<MigrationJobEventRecord> MigrationJobEvents => Set<MigrationJobEventRecord>();
     public DbSet<DiscoveryPageCheckpointRecord> DiscoveryPageCheckpoints => Set<DiscoveryPageCheckpointRecord>();
@@ -135,8 +136,24 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.Unchanged).HasColumnName("unchanged");
             entity.Property(x => x.MarkedMissing).HasColumnName("marked_missing");
             entity.Property(x => x.SourceInventoryComplete).HasColumnName("source_inventory_complete");
+            entity.Property(x => x.JournalVersion).HasColumnName("journal_version").HasDefaultValue(0);
             entity.HasIndex(x => new { x.SourceConnectionId, x.SourceCollectedAtUtc })
                 .HasDatabaseName("ix_staging_snapshot_syncs_source");
+        });
+        builder.Entity<StagingAssetChangeRecord>(entity =>
+        {
+            entity.ToTable("staging_asset_changes");
+            entity.HasKey(x => new { x.SnapshotId, x.AssetType, x.SourceId });
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.AssetType).HasColumnName("asset_type").HasMaxLength(32);
+            entity.Property(x => x.SourceId).HasColumnName("source_id").HasMaxLength(1024);
+            entity.Property(x => x.Kind).HasColumnName("change_kind").HasMaxLength(12);
+            entity.Property(x => x.PreviousFingerprint).HasColumnName("previous_fingerprint").HasMaxLength(64);
+            entity.Property(x => x.CurrentFingerprint).HasColumnName("current_fingerprint").HasMaxLength(64);
+            entity.Property(x => x.Revision).HasColumnName("revision");
+            entity.HasIndex(x => new { x.SourceConnectionId, x.SnapshotId, x.Kind })
+                .HasDatabaseName("ix_staging_asset_changes_source_kind");
         });
         builder.Entity<MigrationJobRecord>(entity =>
         {

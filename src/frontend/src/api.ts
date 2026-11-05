@@ -79,6 +79,19 @@ export type StagingSyncResult = {
   appliedAtUtc: string; observed: number; added: number; changed: number;
   unchanged: number; markedMissing: number; sourceInventoryComplete: boolean;
 };
+export type StagingChangeSummary = {
+  snapshotId: string; sourceConnectionId: string;
+  added: number; changed: number; restored: number; missing: number; total: number;
+};
+export type StagingChangePage = {
+  snapshotId: string; assetType: string;
+  items: {
+    assetType: string; sourceId: string; kind: 'Added' | 'Changed' | 'Restored' | 'Missing';
+    previousFingerprint: string | null; currentFingerprint: string | null;
+    revision: number;
+  }[];
+  nextAfter: string | null;
+};
 export type StagingCatalogSummary = {
   sourceConnectionId: string; latestSnapshotId: string | null; lastSyncAtUtc: string | null;
   activeAssets: number; missingAssets: number; totalRevisions: number;
@@ -329,6 +342,16 @@ export const api = {
     }),
   getStagingSync: (token: string, snapshotId: string) =>
     call<StagingSyncResult>(`/api/staging/snapshots/${encodeURIComponent(snapshotId)}`,
+      { headers: withToken(token) }),
+  getStagingChangeSummary: (token: string, snapshotId: string) =>
+    call<StagingChangeSummary>(
+      `/api/staging/snapshots/${encodeURIComponent(snapshotId)}/change-summary`,
+      { headers: withToken(token) }),
+  listStagingChanges: (token: string, snapshotId: string, assetType: string,
+      after?: string | null, take = 50) =>
+    call<StagingChangePage>(
+      `/api/staging/snapshots/${encodeURIComponent(snapshotId)}/changes/${encodeURIComponent(assetType)}?take=${take}` +
+      (after ? `&after=${encodeURIComponent(after)}` : ''),
       { headers: withToken(token) }),
   getStagingSummary: (token: string, connectionId: string) =>
     call<StagingCatalogSummary>(`/api/staging/connections/${encodeURIComponent(connectionId)}/summary`,

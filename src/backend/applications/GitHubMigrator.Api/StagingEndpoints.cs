@@ -37,6 +37,45 @@ public static class StagingEndpoints
             return state is null ? Results.NotFound(new { error = "StagingSyncNotFound" }) : Results.Ok(state);
         });
 
+        // Immutable per-snapshot delta evidence. Never take target-side
+        // migration actions from these raw, unreviewed change records.
+        routes.MapGet("/snapshots/{snapshotId:guid}/change-summary",
+            async Task<IResult> (Guid snapshotId, StagingSyncService service,
+                CancellationToken ct) =>
+        {
+            try
+            {
+                var summary = await service.GetChangeSummaryAsync(snapshotId, ct);
+                return summary is null
+                    ? Results.NotFound(new { error = "StagingSyncNotFound" })
+                    : Results.Ok(summary);
+            }
+            catch (StagingSyncInputException ex)
+            { return Results.BadRequest(new { error = ex.Code }); }
+            catch (StagingChangeJournalUnavailableException)
+            { return Results.Conflict(new { error = "StagingChangeJournalUnavailable" }); }
+            catch (StagingChangeIntegrityException)
+            { return Results.Conflict(new { error = "StagingChangeIntegrityFailed" }); }
+        });
+
+        routes.MapGet("/snapshots/{snapshotId:guid}/changes/{assetType}",
+            async Task<IResult> (Guid snapshotId, string assetType, string? after, int? take,
+                StagingSyncService service, CancellationToken ct) =>
+        {
+            try
+            {
+                var page = await service.ListChangesAsync(
+                    snapshotId, assetType, after, take ?? 50, ct);
+                return page is null
+                    ? Results.NotFound(new { error = "StagingSyncNotFound" })
+                    : Results.Ok(page);
+            }
+            catch (StagingSyncInputException ex)
+            { return Results.BadRequest(new { error = ex.Code }); }
+            catch (StagingChangeJournalUnavailableException)
+            { return Results.Conflict(new { error = "StagingChangeJournalUnavailable" }); }
+        });
+
         routes.MapGet("/connections/{connectionId:guid}/assets/{assetType}", async Task<IResult> (
             Guid connectionId, string assetType, string? after, int? take,
             StagingSyncService service, CancellationToken ct) =>
