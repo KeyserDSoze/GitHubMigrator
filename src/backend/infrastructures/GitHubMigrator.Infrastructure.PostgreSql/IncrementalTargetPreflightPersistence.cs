@@ -114,6 +114,13 @@ public sealed class PostgresIncrementalTargetPreflightRepository(
         {
             await db.IncrementalTargetProbes.Where(x =>
                 x.PreparationId == evidence.PreparationId).ExecuteDeleteAsync(ct);
+            // ExecuteDelete bypasses EF's change tracker. Explicitly detach
+            // previous probes before attaching new entities with identical
+            // composite keys; otherwise a retry on the same scoped DbContext
+            // can fail even though PostgreSQL has already deleted the rows.
+            foreach (var previous in db.IncrementalTargetProbes.Local
+                .Where(x => x.PreparationId == evidence.PreparationId).ToArray())
+                db.Entry(previous).State = EntityState.Detached;
         }
         await db.SaveChangesAsync(ct);
         db.IncrementalTargetProbes.AddRange(evidence.Repositories.Select(x =>
