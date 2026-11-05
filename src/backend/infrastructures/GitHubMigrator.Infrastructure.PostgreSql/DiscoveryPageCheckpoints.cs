@@ -334,9 +334,67 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
         if (!exists)
             throw new DiscoveryCheckpointException("IdentitySnapshotMismatch");
 
-        // Validate both directions using PostgreSQL set difference, rather
-        // than assuming successful pagination means all identities were
-        // retained. No full identity list crosses the DB/process boundary.
+        var snapshotInfo = await db.Database.SqlQuery<string>($"""
+            SELECT jsonb_build_object(
+                'external', COALESCE((inventory ->> 'identitiesExternalized')::boolean, false),
+                'count', COALESCE((inventory ->> 'identityCount')::integer, -1),
+                'inline', jsonb_array_length(inventory -> 'snapshot' -> 'identities'),
+                'complete', COALESCE((inventory ->> 'identitiesComplete')::boolean, false)
+            )::text AS "Value"
+            FROM migration_discoveries WHERE id = {lease.Id}
+            """).SingleAsync(ct);
+        using var info = JsonDocument.Parse(snapshotInfo);
+        var external = info.RootElement.GetProperty("external").GetBoolean();
+        if (external)
+        {
+            var expected = info.RootElement.GetProperty("count").GetInt32();
+            var inline = info.RootElement.GetProperty("inline").GetInt32();
+            if (expected is < 0 or > 15_000 || inline != 0 ||
+                await db.DiscoveryIdentityObservations.AsNoTracking()
+                    .CountAsync(x => x.JobId == lease.Id, ct) != expected)
+                throw new DiscoveryCheckpointException("IdentitySnapshotMismatch");
+
+            var pageCount = await db.DiscoveryPageCheckpoints.AsNoTracking()
+                .CountAsync(x => x.JobId == lease.Id && x.ResourceKey == "graph-users", ct);
+            if (pageCount == 0 && info.RootElement.GetProperty("complete").GetBoolean())
+                throw new DiscoveryCheckpointException("IdentitySnapshotMismatch");
+
+            // Verify the exact sanitized Graph page evidence, rather than
+            // trusting a snapshot count or a provisional record in isolation.
+            // SQL handles even very large source pages without a user list in .NET.
+            var pageMismatch = await db.Database.SqlQuery<bool>($"""
+                WITH page_users AS (
+                    SELECT DISTINCT item ->> 'descriptor' AS descriptor,
+                        COALESCE(item ->> 'displayName', item ->> 'descriptor') AS display_name,
+                        item ->> 'mailAddress' AS email,
+                        item ->> 'legacyDescriptor' AS legacy
+                    FROM discovery_page_checkpoints p
+                    CROSS JOIN LATERAL jsonb_array_elements(
+                        p.safe_payload_json -> 'value') AS item
+                    WHERE p.job_id = {lease.Id} AND p.resource_key = 'graph-users'
+                        AND NULLIF(btrim(item ->> 'descriptor'), '') IS NOT NULL
+                ),
+                observed AS (
+                    SELECT source_id AS descriptor,
+                        payload_json ->> 'DisplayName' AS display_name,
+                        payload_json ->> 'Email' AS email,
+                        payload_json ->> 'LegacyDescriptor' AS legacy
+                    FROM discovery_identity_observations WHERE job_id = {lease.Id}
+                ),
+                differences AS (
+                    (SELECT * FROM page_users EXCEPT ALL SELECT * FROM observed)
+                    UNION ALL
+                    (SELECT * FROM observed EXCEPT ALL SELECT * FROM page_users)
+                )
+                SELECT EXISTS(SELECT 1 FROM differences) AS "Value"
+                """).SingleAsync(ct);
+            if (pageMismatch)
+                throw new DiscoveryCheckpointException("IdentitySnapshotMismatch");
+            return;
+        }
+
+        // Legacy inline identities still use the original bidirectional
+        // snapshot/observation evidence check.
         var mismatch = await db.Database.SqlQuery<bool>($"""
             WITH saved AS (
                 SELECT i."providerId" AS descriptor, i."displayName" AS display_name,
