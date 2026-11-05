@@ -107,8 +107,11 @@ test('admin discovers Git/TFVC, saves snapshot and reviews partial permissions',
 
 
 test('externalized ref snapshot displays real total without inventing zero refs per repo', async ({ page }) => {
-  const compact = { ...summary, refsExternalized: true, refCount: 1250 };
-  const external = { ...detail, refs: [], refsExternalized: true, refCount: 1250 };
+  const compact = { ...summary, refsExternalized: true, refCount: 1250,
+    identitiesExternalized: true, identityCount: 1001 };
+  const external = { ...detail, refs: [], refsExternalized: true, refCount: 1250,
+    identitiesExternalized: true, identityCount: 1001,
+    snapshot: { ...detail.snapshot, identities: [] } };
   await page.route('**/api/connections', route => route.fulfill({ json: [{
     id: connectionId, name: 'Demo DevOps', providerKey: 'azure-devops-services',
     direction: 'source', organization: 'demo', validationCode: 'Verified'
@@ -126,6 +129,12 @@ test('externalized ref snapshot displays real total without inventing zero refs 
   await expect(page.getByText(/riferimenti nel manifest postgresql|refs in postgresql manifest/i))
     .toBeVisible();
   await expect(page.getByText(/^0 (riferimenti|refs)$/i)).toHaveCount(0);
+  await expect(page.getByText('1001', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /^(identità|identities)$/i }).click();
+  await expect(page.getByRole('note')).toContainText(/PostgreSQL/);
+  await expect(page.getByText(/1001 (utenti|users)/i)).toBeVisible();
+  await expect(page.getByText(/nessuna identità restituita|no identities returned/i))
+    .toHaveCount(0);
 });
 
 test('discovery worker survives page refresh while no snapshot has been saved', async ({ page }) => {
