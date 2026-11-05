@@ -98,6 +98,13 @@ public sealed class PostgresDiscoveryRefManifestTests(PostgresDraftFixture fixtu
         Assert.True(saved.RefsExternalized);
         Assert.Equal(1250, saved.RefCount);
         Assert.Empty(saved.Refs);
+        var legacy = new StagingSyncService(new PostgresDiscoveryRepository(db),
+            new PostgresStagingRepository(db, clock));
+        var refusal = await Assert.ThrowsAsync<StagingSyncInputException>(() =>
+            legacy.SyncAsync(job.Id, default));
+        Assert.Equal("ExternalizedSnapshotRequiresManifest", refusal.Code);
+        Assert.Empty(await db.StagingSnapshotSyncs.AsNoTracking()
+            .Where(x => x.SnapshotId == job.Id).ToArrayAsync());
         var pages = new PostgresDiscoveryPageCheckpointStore(db, clock);
         await pages.SaveAsync(new(lease.Id, lease.LeaseToken, lease.Attempt),
             Page(job.Id, 0, refs.Take(1000), "opaque-next"), default);
