@@ -129,7 +129,7 @@ export default function RefReconciliationPage({
     setObservationId(targetEvidence.filter(x => x.sourceRepositoryId === repositoryId)
       .find(x => x.isCurrent)?.id ??
       targetEvidence.find(x => x.sourceRepositoryId === repositoryId)?.id ?? '');
-  }, [repositoryId, targetEvidence]);
+  }, [repositoryId]);
 
   async function capture() {
     if (!preparation || !activePlan?.isCurrent || !selectedMapping || busy) return;
@@ -207,7 +207,7 @@ export default function RefReconciliationPage({
         <Search size={16} /> {t('refOpenPreparation')}
       </button>
       {preparation && <button type="button" className="secondary-button"
-        disabled={loading || !!busy} onClick={() => { void refresh(preparation.id, planId); }}>
+        disabled={loading || !!busy || !planId} onClick={() => { void refresh(preparation.id, planId); }}>
         <RefreshCw size={16} /> {t('refRefresh')}
       </button>}
     </form>
