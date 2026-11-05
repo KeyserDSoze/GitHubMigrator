@@ -70,6 +70,30 @@ public sealed class PostgresDiscoveryRefManifestStore(AppDbContext db, TimeProvi
         if (!snapshotExists || savedRefs != expectedRefCount)
             throw new DiscoveryRefManifestException("RefManifestSnapshotMismatch");
 
+        // Count equality alone cannot detect one ref silently replaced with
+        // another. Compare the canonical snapshot's entire (repo,name,OID)
+        // multiset with the provisional observations in PostgreSQL, without
+        // deserializing the snapshot's ref array into process memory.
+        var mismatch = await db.Database.SqlQuery<bool>($"""
+            SELECT EXISTS (
+                SELECT 1 FROM (
+                    SELECT r."repositoryId", r.name, r."objectId"
+                    FROM migration_discoveries d
+                    CROSS JOIN LATERAL jsonb_to_recordset(d.inventory -> 'refs')
+                    AS r("repositoryId" text, name text, "objectId" text)
+                    WHERE d.id = {lease.Id}
+                    EXCEPT ALL
+                    SELECT o.source_id::jsonb ->> 0, o.source_id::jsonb ->> 1,
+                        o.payload_json ->> 'ObjectId'
+                    FROM discovery_ref_observations o
+                    WHERE o.job_id = {lease.Id}
+                ) differences
+                LIMIT 1
+            ) AS "Value"
+            """).SingleAsync(ct);
+        if (mismatch)
+            throw new DiscoveryRefManifestException("RefManifestSnapshotMismatch");
+
         var existing = await db.DiscoveryRefManifests.AsNoTracking()
             .SingleOrDefaultAsync(x => x.JobId == lease.Id, ct);
         if (existing is not null)
