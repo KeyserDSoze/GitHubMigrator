@@ -81,6 +81,10 @@ builder.Services.AddScoped<IMigrationJobRepository, PostgresMigrationJobReposito
 builder.Services.AddScoped<MigrationJobService>();
 builder.Services.AddScoped<MigrationJobProcessor>();
 builder.Services.AddHostedService<MigrationJobBackgroundWorker>();
+builder.Services.AddScoped<IIncrementalPreparationRepository, PostgresIncrementalPreparationRepository>();
+builder.Services.AddScoped<IncrementalPreparationService>();
+builder.Services.AddScoped<IncrementalPreparationProcessor>();
+builder.Services.AddHostedService<IncrementalPreparationBackgroundWorker>();
 builder.Services.AddScoped<IIdentitySnapshotReader, PostgresIdentitySnapshotReader>();
 builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMappingDraftRepository>();
 builder.Services.AddScoped<IdentityMappingService>();
@@ -299,6 +303,7 @@ app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 app.MapConnectionEndpoints();
 app.MapDiscoveryEndpoints();
 app.MapStagingEndpoints();
+app.MapIncrementalPreparationEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
 app.MapMigrationPlanEndpoints();

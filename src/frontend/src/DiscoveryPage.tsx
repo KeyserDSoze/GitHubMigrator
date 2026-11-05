@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type StagingChangeSummary, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type StagingChangeSummary, type IncrementalPreparation, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
 export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdmin: boolean }) {
   const { t } = useTranslation();
   const [sources, setSources] = useState<Connection[]>([]);
+  const [destinations, setDestinations] = useState<Connection[]>([]);
+  const [destinationId, setDestinationId] = useState('');
   const [sourceId, setSourceId] = useState('');
   const [summaries, setSummaries] = useState<DiscoverySummary[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<DiscoveryDetail | null>(null);
   const [staging, setStaging] = useState<StagingSyncResult | null>(null);
   const [changeSummary, setChangeSummary] = useState<StagingChangeSummary | null>(null);
+  const [preparation, setPreparation] = useState<IncrementalPreparation | null>(null);
   const [job, setJob] = useState<MigrationJob | null>(null);
   const [refProgress, setRefProgress] = useState<DiscoveryRefIngestProgress | null>(null);
   const [identityProgress, setIdentityProgress] = useState<DiscoveryIdentityProgress | null>(null);
@@ -37,6 +40,11 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         const available = connections.filter(c =>
           c.providerKey === 'azure-devops-services' && c.direction === 'source');
         setSources(available);
+        const targets = connections.filter(c =>
+          c.providerKey === 'github-enterprise-cloud' &&
+          c.direction === 'destination' && c.validationCode === 'Verified');
+        setDestinations(targets);
+        setDestinationId(targets[0]?.id ?? '');
         if (available.length) {
           setSourceId(available[0].id);
           // Recover queued/running discovery state even if no snapshot exists yet.
@@ -73,6 +81,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
 
   async function viewSnapshot(id: string) {
     setSelectedId(id); setDetail(null); setStaging(null); setJob(null); setTab('projects'); setError('');
+    setPreparation(null);
     try {
       const data = await api.getDiscovery(token, id);
       const [sync, jobs] = await Promise.all([
@@ -114,6 +123,19 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     } finally { setBusy(false); }
   }
 
+  async function prepareIncremental() {
+    if (!selectedId || !destinationId || !staging) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const run = await api.enqueueIncrementalPreparation(token, selectedId, destinationId);
+      setPreparation(run);
+      setNotice(t('incrementalQueued'));
+    } catch (e) {
+      setError(e instanceof Error && e.message === 'IncrementalSnapshotSuperseded'
+        ? t('incrementalSuperseded') : t('incrementalError'));
+    } finally { setBusy(false); }
+  }
+
   async function enqueueStagingJob() {
     if (!selectedId) return;
     setBusy(true); setError(''); setNotice('');
@@ -125,6 +147,17 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     } catch { setError(t('jobQueueError')); }
     finally { setBusy(false); }
   }
+
+  useEffect(() => {
+    if (!preparation || (preparation.state !== 'Queued' && preparation.state !== 'Running')) return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void api.getIncrementalPreparation(token, preparation.id)
+        .then(value => { if (active) setPreparation(value); })
+        .catch(() => {});
+    }, 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [preparation?.id, preparation?.state, token]);
 
   useEffect(() => {
     if (!job || (job.state !== 'Queued' && job.state !== 'Running')) return;
@@ -228,6 +261,20 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         onClick={() => { void enqueueStagingJob(); }}>
         <RefreshCw size={16} /> {t('jobEnqueue')}
       </button>
+      <label>{t('incrementalTarget')}
+        <select value={destinationId} aria-label={t('incrementalTarget')}
+          onChange={e => setDestinationId(e.target.value)}>
+          {!destinations.length && <option value="">{t('incrementalNoTarget')}</option>}
+          {destinations.map(c => <option key={c.id} value={c.id}>
+            {c.name} · {c.organization}
+          </option>)}
+        </select>
+      </label>
+      <button className="plan-secondary" type="button"
+        disabled={busy || loading || !staging || !selectedId || !destinationId}
+        onClick={() => { void prepareIncremental(); }}>
+        <CheckCircle2 size={16} /> {t('incrementalPrepare')}
+      </button>
     </section>
     <div className="discovery-note">{t('discoveryNotReady')}</div>
     {error && <div className="alert" role="alert">{error}</div>}
@@ -290,6 +337,20 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
       {' · ~'}{staging.changed} {t('stagingChanged')}
       {' · '}{staging.markedMissing} {t('stagingMissing')}
       {' · '}{staging.sourceInventoryComplete ? t('stagingCoverageComplete') : t('stagingCoveragePartial')}
+    </section>}
+    {preparation?.snapshotId === selectedId && <section
+      className="notice" role="status" aria-label={t('incrementalStatusTitle')}>
+      <strong>{t('incrementalStatusTitle')}</strong> ·
+      {' '}{preparation.state === 'Prepared'
+        ? t('incrementalPrepared') : preparation.state === 'Failed'
+          ? t('incrementalFailed') : t('incrementalInProgress')}
+      {' · '}{preparation.attempts}/{preparation.maxAttempts} {t('jobAttempts')}
+      {preparation.state === 'Prepared' && <>
+        {' · '}{preparation.itemCount} {t('incrementalReviewItems')}
+        {' · '}{preparation.sensitiveItemCount} {t('incrementalSensitiveItems')}
+        {' · '}{t('incrementalDigest')} {preparation.evidenceSha256?.slice(0, 12)}…
+      </>}
+      {preparation.lastErrorCode && <> · {t('jobErrorCode')}: {preparation.lastErrorCode}</>}
     </section>}
     {changeSummary?.snapshotId === selectedId && <section
       className="notice" role="status" aria-label={t('stagingChangeJournalTitle')}>

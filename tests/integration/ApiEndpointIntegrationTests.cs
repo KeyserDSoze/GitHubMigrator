@@ -1100,6 +1100,126 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(providerReadCount, harness.Calls.Count);
     }
 
+    [Fact]
+    public async Task F026_incremental_preparation_is_idempotent_RBAC_protected_and_never_calls_providers()
+    {
+        var source = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await new PostgresConnectionRepository(db).SaveAsync(
+                new(source, "Incremental Source", "azure-devops-services",
+                    ConnectionDirection.Source, "az-org", "no-secret-in-preparation",
+                    now, now, "Verified", "test", "read_only"), default);
+            var inventory = new DiscoveryInventory {
+                Id = snapshotId, ConnectionId = source,
+                SourceProvider = "azure-devops-services", Organization = "az-org",
+                CollectedAtUtc = now.AddMinutes(-4),
+                Snapshot = new DiscoverySnapshot {
+                    SnapshotId = snapshotId,
+                    SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                    CollectedAt = now.AddMinutes(-4),
+                    Projects = [new SourceProject("project", "Project",
+                        [new SourceRepository("repo-1", "project", "Repo",
+                            VersionControlKind.Git)])],
+                    Identities = [], AccessGrants = []
+                },
+                Refs = [new RepositoryRef("repo-1", "refs/heads/main", "sha")],
+                Issues = [], Completeness = DiscoveryCompleteness.Partial,
+                IdentitiesComplete = false, PermissionsComplete = false
+            };
+            var normalized = StagingAssetNormalizer.Normalize(inventory);
+            Assert.Equal(3, (await new PostgresStagingRepository(db, TimeProvider.System)
+                .ApplyAsync(inventory, normalized.Assets, normalized.CompleteTypes, default)).Added);
+        }
+        var payload = new {
+            snapshotId,
+            destinationConnectionId = harness.DestinationConnectionId
+        };
+        var path = "/api/incremental-preparations";
+        var admin = await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword);
+        var user = await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword);
+        var beforeProviders = harness.Calls.Count;
+
+        using var unauthorized = await PostAsync(path, payload);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
+        using var forbidden = await PostAsync(path, payload, user);
+        Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+        using var accepted = await PostAsync(path, payload, admin);
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+        using var first = JsonDocument.Parse(await accepted.Content.ReadAsStringAsync());
+        var preparationId = first.RootElement.GetProperty("id").GetGuid();
+        Assert.Equal("Queued", first.RootElement.GetProperty("state").GetString());
+
+        using var replay = await PostAsync(path, payload, admin);
+        Assert.Equal(HttpStatusCode.Accepted, replay.StatusCode);
+        using var duplicate = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+        Assert.Equal(preparationId, duplicate.RootElement.GetProperty("id").GetGuid());
+
+        using (var beforeQuery = new HttpRequestMessage(HttpMethod.Get,
+            $"{path}/{preparationId}/items"))
+        {
+            beforeQuery.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(beforeQuery);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("PreparationNotReady", await response.Content.ReadAsStringAsync());
+        }
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var processor = scope.ServiceProvider
+                .GetRequiredService<IncrementalPreparationProcessor>();
+            Assert.True(await processor.RunOnceAsync(default));
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{path}/{preparationId}"))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var view = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("Prepared", view.RootElement.GetProperty("state").GetString());
+            Assert.Equal(3, view.RootElement.GetProperty("itemCount").GetInt32());
+            Assert.Equal(0, view.RootElement.GetProperty("sensitiveItemCount").GetInt32());
+            Assert.Equal(64, view.RootElement.GetProperty("evidenceSha256").GetString()!.Length);
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{path}/{preparationId}/items?take=50"))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var page = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(3, page.RootElement.GetProperty("items").GetArrayLength());
+            foreach (var item in page.RootElement.GetProperty("items").EnumerateArray())
+            {
+                Assert.Equal("NeedsReview", item.GetProperty("reviewState").GetString());
+                Assert.Equal("Added", item.GetProperty("changeKind").GetString());
+                Assert.Equal(JsonValueKind.Null, item.GetProperty("previousFingerprint").ValueKind);
+            }
+            Assert.Equal(JsonValueKind.Null, page.RootElement.GetProperty("nextAfterType").ValueKind);
+        }
+        using (var invalid = new HttpRequestMessage(HttpMethod.Get,
+            $"{path}/{preparationId}/items?take=101"))
+        {
+            invalid.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(invalid);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+        using (var eventsRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"{path}/{preparationId}/events"))
+        {
+            eventsRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(eventsRequest);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var events = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(["Queued", "Claimed", "Prepared"], events.RootElement
+                .EnumerateArray().Select(x => x.GetProperty("eventType").GetString()).ToArray());
+        }
+        Assert.Equal(beforeProviders, harness.Calls.Count);
+    }
+
     private async Task<HttpResponseMessage> PostAsync(string path, object payload, string? bearer = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path)

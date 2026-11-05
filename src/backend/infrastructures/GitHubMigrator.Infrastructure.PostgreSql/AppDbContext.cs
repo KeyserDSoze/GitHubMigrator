@@ -31,6 +31,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<StagingAssetRecord> StagingAssets => Set<StagingAssetRecord>();
     public DbSet<StagingSnapshotSyncRecord> StagingSnapshotSyncs => Set<StagingSnapshotSyncRecord>();
     public DbSet<StagingAssetChangeRecord> StagingAssetChanges => Set<StagingAssetChangeRecord>();
+    public DbSet<IncrementalPreparationRecord> IncrementalPreparations =>
+        Set<IncrementalPreparationRecord>();
+    public DbSet<IncrementalPreparationItemRecord> IncrementalPreparationItems =>
+        Set<IncrementalPreparationItemRecord>();
+    public DbSet<IncrementalPreparationEventRecord> IncrementalPreparationEvents =>
+        Set<IncrementalPreparationEventRecord>();
     public DbSet<MigrationJobRecord> MigrationJobs => Set<MigrationJobRecord>();
     public DbSet<MigrationJobEventRecord> MigrationJobEvents => Set<MigrationJobEventRecord>();
     public DbSet<DiscoveryPageCheckpointRecord> DiscoveryPageCheckpoints => Set<DiscoveryPageCheckpointRecord>();
@@ -154,6 +160,66 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.Revision).HasColumnName("revision");
             entity.HasIndex(x => new { x.SourceConnectionId, x.SnapshotId, x.Kind })
                 .HasDatabaseName("ix_staging_asset_changes_source_kind");
+        });
+        builder.Entity<IncrementalPreparationRecord>(entity =>
+        {
+            entity.ToTable("incremental_preparations");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.DestinationConnectionId).HasColumnName("destination_connection_id");
+            entity.Property(x => x.EnqueuedBy).HasColumnName("enqueued_by");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(24);
+            entity.Property(x => x.Attempts).HasColumnName("attempts");
+            entity.Property(x => x.MaxAttempts).HasColumnName("max_attempts");
+            entity.Property(x => x.AvailableAtUtc).HasColumnName("available_at_utc");
+            entity.Property(x => x.LeaseToken).HasColumnName("lease_token");
+            entity.Property(x => x.LeaseUntilUtc).HasColumnName("lease_until_utc");
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.PreparedAtUtc).HasColumnName("prepared_at_utc");
+            entity.Property(x => x.LastErrorCode).HasColumnName("last_error_code").HasMaxLength(70);
+            entity.Property(x => x.ItemCount).HasColumnName("item_count");
+            entity.Property(x => x.SensitiveItemCount).HasColumnName("sensitive_item_count");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.HasIndex(x => new { x.SnapshotId, x.DestinationConnectionId })
+                .IsUnique().HasDatabaseName("ux_incremental_preparations_pair");
+            entity.HasIndex(x => new { x.State, x.AvailableAtUtc, x.CreatedAtUtc })
+                .HasDatabaseName("ix_incremental_preparations_ready");
+            entity.HasOne<StagingSnapshotSyncRecord>().WithMany()
+                .HasForeignKey(x => x.SnapshotId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<IncrementalPreparationItemRecord>(entity =>
+        {
+            entity.ToTable("incremental_preparation_items");
+            entity.HasKey(x => new { x.PreparationId, x.AssetType, x.SourceId });
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.AssetType).HasColumnName("asset_type").HasMaxLength(32);
+            entity.Property(x => x.SourceId).HasColumnName("source_id").HasMaxLength(1024);
+            entity.Property(x => x.ChangeKind).HasColumnName("change_kind").HasMaxLength(12);
+            entity.Property(x => x.PreviousFingerprint).HasColumnName("previous_fingerprint").HasMaxLength(64);
+            entity.Property(x => x.CurrentFingerprint).HasColumnName("current_fingerprint").HasMaxLength(64);
+            entity.Property(x => x.Revision).HasColumnName("revision");
+            entity.Property(x => x.ReviewCategory).HasColumnName("review_category").HasMaxLength(20);
+            entity.Property(x => x.ReviewState).HasColumnName("review_state").HasMaxLength(20);
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<IncrementalPreparationEventRecord>(entity =>
+        {
+            entity.ToTable("incremental_preparation_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.EventType).HasColumnName("event_type").HasMaxLength(30);
+            entity.Property(x => x.Attempt).HasColumnName("attempt");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.Property(x => x.ErrorCode).HasColumnName("error_code").HasMaxLength(70);
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.PreparationId, x.Id })
+                .HasDatabaseName("ix_incremental_preparation_events_run");
         });
         builder.Entity<MigrationJobRecord>(entity =>
         {
