@@ -31,6 +31,11 @@ public sealed class DiscoveryInventory
     // these optional properties and retain the previous inline semantics.
     public bool RefsExternalized { get; init; }
     public int RefCount { get; init; }
+    // Only durable, lease-fenced scans can externalize Graph users. A zero
+    // inline Snapshot.Identities collection is *not* proof of zero source
+    // identities when this marker is set. Older snapshots default to false.
+    public bool IdentitiesExternalized { get; init; }
+    public int IdentityCount { get; init; }
     public required IReadOnlyList<DiscoveryIssue> Issues { get; init; }
     public required DiscoveryCompleteness Completeness { get; init; }
     // Granular coverage flag prevents calling missing Graph scope an empty identity inventory.
