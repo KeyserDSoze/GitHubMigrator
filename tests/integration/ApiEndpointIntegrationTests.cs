@@ -1170,7 +1170,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         {
             var processor = scope.ServiceProvider
                 .GetRequiredService<IncrementalPreparationProcessor>();
-            Assert.True(await processor.RunOnceAsync(default));
+            Assert.True(await processor.RunOnceAsync(default, source));
         }
         using (var request = new HttpRequestMessage(HttpMethod.Get,
             $"{path}/{preparationId}"))
@@ -1214,7 +1214,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             using var response = await harness.Client.SendAsync(eventsRequest);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             using var events = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            Assert.Equal(["Queued", "Claimed", "Prepared"], events.RootElement
+            Assert.Equal(new string?[] { "Queued", "Claimed", "Prepared" }, events.RootElement
                 .EnumerateArray().Select(x => x.GetProperty("eventType").GetString()).ToArray());
         }
         Assert.Equal(beforeProviders, harness.Calls.Count);

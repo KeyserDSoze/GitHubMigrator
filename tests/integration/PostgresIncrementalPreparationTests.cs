@@ -36,8 +36,8 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
                 service.ListItemsAsync(run.Id, null, null, 100, default))).Code);
         var processor = new IncrementalPreparationProcessor(
             new PostgresIncrementalPreparationRepository(db, clock));
-        Assert.True(await processor.RunOnceAsync(default));
-        Assert.False(await processor.RunOnceAsync(default));
+        Assert.True(await processor.RunOnceAsync(default, source));
+        Assert.False(await processor.RunOnceAsync(default, source));
         var ready = await service.GetAsync(run.Id, default);
         Assert.NotNull(ready);
         Assert.Equal(IncrementalPreparationStates.Prepared, ready.State);
@@ -94,15 +94,16 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         await StageAsync(db, clock, scan);
         var run = await NewService(db, clock).EnqueueAsync(scan.Id, target, Guid.NewGuid(), default);
         var queue = new PostgresIncrementalPreparationRepository(db, clock);
-        var first = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default);
+        var first = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
         Assert.NotNull(first);
+        Assert.Equal(run.Id, first.Id);
         // The real stale-token protection returns a typed error with no writes.
         Assert.Equal("IncrementalLeaseLost", (await Assert.ThrowsAsync<IncrementalPreparationException>(
             () => queue.PrepareAsync(first with { LeaseToken = Guid.NewGuid() }, default))).Code);
         Assert.True(await queue.FailAsync(first, "TransientDatabaseFailure", false, default));
-        Assert.Null(await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default));
+        Assert.Null(await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source));
         clock.Advance(TimeSpan.FromSeconds(11));
-        var second = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default);
+        var second = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
         Assert.NotNull(second);
         Assert.Equal(2, second.Attempt);
         Assert.Equal("IncrementalLeaseLost",
@@ -129,10 +130,11 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         await StageAsync(db, clock, scan);
         var queue = new PostgresIncrementalPreparationRepository(db, clock);
         var run = await queue.EnqueueAsync(scan.Id, source, destination, Guid.NewGuid(), default);
-        var one = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default);
+        var one = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
         Assert.NotNull(one);
+        Assert.Equal(run.Id, one.Id);
         clock.Advance(TimeSpan.FromMinutes(6));
-        var two = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default);
+        var two = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
         Assert.NotNull(two);
         Assert.Equal(one.Id, two.Id);
         Assert.NotEqual(one.LeaseToken, two.LeaseToken);
@@ -160,8 +162,9 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         var queue = new PostgresIncrementalPreparationRepository(db, clock);
         var run = await queue.EnqueueAsync(a.Id, source, destination, Guid.NewGuid(), default);
         await StageAsync(db, clock, b);
-        var lease = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default);
+        var lease = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
         Assert.NotNull(lease);
+        Assert.Equal(run.Id, lease.Id);
         Assert.Equal("IncrementalSnapshotSuperseded",
             (await Assert.ThrowsAsync<IncrementalPreparationException>(() =>
                 queue.PrepareAsync(lease, default))).Code);
@@ -192,7 +195,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
             DELETE FROM staging_asset_changes
             WHERE snapshot_id = {scan.Id} AND asset_type = {"ref"}
             """);
-        Assert.True(await new IncrementalPreparationProcessor(queue).RunOnceAsync(default));
+        Assert.True(await new IncrementalPreparationProcessor(queue).RunOnceAsync(default, source));
         var failed = await queue.GetAsync(run.Id, default);
         Assert.Equal("Failed", failed!.State);
         Assert.Equal("IncrementalJournalMismatch", failed.LastErrorCode);
@@ -219,7 +222,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         await StageAsync(db, clock, second);
         var queue = new PostgresIncrementalPreparationRepository(db, clock);
         var run = await queue.EnqueueAsync(second.Id, source, destination, Guid.NewGuid(), default);
-        Assert.True(await new IncrementalPreparationProcessor(queue).RunOnceAsync(default));
+        Assert.True(await new IncrementalPreparationProcessor(queue).RunOnceAsync(default, source));
         var prepared = await queue.GetAsync(run.Id, default);
         Assert.Equal(0, prepared!.ItemCount);
         Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(Array.Empty<byte>())), prepared.EvidenceSha256);
@@ -267,9 +270,9 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
                 second.EnqueueAsync(scan.Id, source, destination, Guid.NewGuid(), default));
             Assert.Equal(pair[0].Id, pair[1].Id);
             var leases = await Task.WhenAll(
-                first.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default),
-                second.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default));
-            Assert.Single(leases.Where(x => x is not null));
+                first.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source),
+                second.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source));
+            Assert.Single(leases, x => x is not null);
             var claimed = leases.Single(x => x is not null)!;
             var owner = leases[0] is null ? second : first;
             Assert.True(await owner.PrepareAsync(claimed, default));

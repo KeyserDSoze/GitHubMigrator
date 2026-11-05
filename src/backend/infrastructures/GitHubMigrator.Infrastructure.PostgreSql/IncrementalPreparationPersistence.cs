@@ -114,7 +114,8 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
     }
 
     public async Task<IncrementalPreparationLease?> ClaimAsync(
-        Guid token, TimeSpan duration, CancellationToken ct)
+        Guid token, TimeSpan duration, CancellationToken ct,
+        Guid sourceConnectionId = default)
     {
         if (token == Guid.Empty || duration <= TimeSpan.Zero ||
             duration > TimeSpan.FromMinutes(5))
@@ -131,6 +132,8 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
                     updated_at_utc = {now}, lease_token = NULL, lease_until_utc = NULL
                 WHERE state = 'Running' AND lease_until_utc <= {now}
                   AND attempts >= max_attempts
+                  AND ({sourceConnectionId} = {Guid.Empty}
+                      OR source_connection_id = {sourceConnectionId})
                 RETURNING id, attempts
             )
             INSERT INTO incremental_preparation_events (
@@ -151,6 +154,8 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
                     OR (state = 'Running' AND lease_until_utc <= {now})
                 )
                 AND attempts < max_attempts
+                AND ({sourceConnectionId} = {Guid.Empty}
+                    OR source_connection_id = {sourceConnectionId})
                 ORDER BY available_at_utc, created_at_utc, id
                 FOR UPDATE SKIP LOCKED LIMIT 1
             )

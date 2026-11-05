@@ -53,7 +53,8 @@ public interface IIncrementalPreparationRepository
         Guid id, string? afterType, string? afterId, int take, CancellationToken ct);
     Task<IReadOnlyList<IncrementalPreparationEvent>> EventsAsync(Guid id, CancellationToken ct);
     Task<IncrementalPreparationLease?> ClaimAsync(
-        Guid token, TimeSpan duration, CancellationToken ct);
+        Guid token, TimeSpan duration, CancellationToken ct,
+        Guid sourceConnectionId = default);
     Task<bool> PrepareAsync(IncrementalPreparationLease lease, CancellationToken ct);
     Task<bool> FailAsync(
         IncrementalPreparationLease lease, string errorCode, bool permanent, CancellationToken ct);
@@ -129,9 +130,11 @@ public sealed class IncrementalPreparationProcessor(IIncrementalPreparationRepos
     public static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan ExecutionDeadline = TimeSpan.FromSeconds(90);
 
-    public async Task<bool> RunOnceAsync(CancellationToken shutdown)
+    public async Task<bool> RunOnceAsync(CancellationToken shutdown,
+        Guid sourceConnectionId = default)
     {
-        var lease = await repository.ClaimAsync(Guid.NewGuid(), LeaseDuration, shutdown);
+        var lease = await repository.ClaimAsync(
+            Guid.NewGuid(), LeaseDuration, shutdown, sourceConnectionId);
         if (lease is null) return false;
         try
         {
