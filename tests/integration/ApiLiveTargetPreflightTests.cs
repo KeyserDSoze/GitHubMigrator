@@ -447,11 +447,11 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             var body = await accepted.Content.ReadAsStringAsync();
             Assert.DoesNotContain(ApiHarness.SourceToken, body);
             Assert.DoesNotContain(ApiHarness.TargetToken, body);
-            using var json = JsonDocument.Parse(body);
-            workId = json.RootElement.GetProperty("id").GetGuid();
-            Assert.Equal("Queued", json.RootElement.GetProperty("state").GetString());
-            Assert.Equal("EvidencePending", json.RootElement.GetProperty("phase").GetString());
-            Assert.False(json.RootElement.GetProperty("readyForExecution").GetBoolean());
+            using var workJson = JsonDocument.Parse(body);
+            workId = workJson.RootElement.GetProperty("id").GetGuid();
+            Assert.Equal("Queued", workJson.RootElement.GetProperty("state").GetString());
+            Assert.Equal("EvidencePending", workJson.RootElement.GetProperty("phase").GetString());
+            Assert.False(workJson.RootElement.GetProperty("readyForExecution").GetBoolean());
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
         await using (var firstReplica = harness.Host.Services.CreateAsyncScope())
@@ -474,7 +474,7 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             var claims = await Task.WhenAll(
                 jobs1.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(2), default),
                 jobs2.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(2), default));
-            var firstLease = Assert.Single(claims.Where(x => x is not null))!;
+            var firstLease = Assert.Single(claims, x => x is not null)!;
             Assert.Equal(workId, firstLease.Id);
             Assert.Equal(1, firstLease.Attempt);
             Assert.Equal("EvidencePending", firstLease.Phase);
@@ -510,12 +510,12 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             read.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
             using var reply = await harness.Client.SendAsync(read);
             Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
-            using var json = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
-            Assert.Equal("Blocked", json.RootElement.GetProperty("state").GetString());
-            Assert.Equal("WriteBlocked", json.RootElement.GetProperty("phase").GetString());
+            using var workJson = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.Equal("Blocked", workJson.RootElement.GetProperty("state").GetString());
+            Assert.Equal("WriteBlocked", workJson.RootElement.GetProperty("phase").GetString());
             Assert.Equal("DestinationWritesNotAuthorized",
-                json.RootElement.GetProperty("lastErrorCode").GetString());
-            Assert.False(json.RootElement.GetProperty("readyForExecution").GetBoolean());
+                workJson.RootElement.GetProperty("lastErrorCode").GetString());
+            Assert.False(workJson.RootElement.GetProperty("readyForExecution").GetBoolean());
         }
         using (var read = new HttpRequestMessage(HttpMethod.Get,
             $"{operationalPath}/{planId}/transfer-workpacks/{workId}/events"))
@@ -523,9 +523,9 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             read.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
             using var reply = await harness.Client.SendAsync(read);
             Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
-            using var json = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            using var workJson = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
             Assert.Equal(new[] { "Queued", "Claimed", "EvidenceChecked",
-                "Claimed", "WriteBlocked" }, json.RootElement.EnumerateArray()
+                "Claimed", "WriteBlocked" }, workJson.RootElement.EnumerateArray()
                 .Select(x => x.GetProperty("type").GetString()).ToArray());
         }
         await using (var scope = harness.Host.Services.CreateAsyncScope())
