@@ -5,8 +5,9 @@ import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
-export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: {
+export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false, onViewReconciliation }: {
   token: string; isAdmin: boolean; isSuperAdmin?: boolean;
+  onViewReconciliation?: (preparationId: string, planId: string) => void;
 }) {
   const { t } = useTranslation();
   const [sources, setSources] = useState<Connection[]>([]);
@@ -599,6 +600,10 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
               ? t('incrementalDryRunCurrent') : t('incrementalDryRunStale')}
           </p>
           <p>{t('operationPlanBlockers')}: {operationPlan.blockers.join(', ')}</p>
+          {preparation && onViewReconciliation && <button type="button" className="plan-secondary"
+            onClick={() => onViewReconciliation(preparation.id, operationPlan.id)}>
+            {t('refOpenWorkbench')}
+          </button>}
           <details>
             <summary>{t('operationPlanSteps')}</summary>
             <ol>{operationPlan.steps.map(s => <li key={s.ordinal}>
