@@ -10,8 +10,8 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-003 | Discovery projects, Git/TFVC, Graph users/groups/memberships and Git ACL evidence | **Read-only evidence implemented**; effective permission validation pending |
 | F-004 | Per-snapshot GitHub identity mapping drafts and coverage preview | **Initial review-only implementation**; account/membership verification and effective grants pending |
 | F-005 | Select repositories, rename GitHub targets and review safety blockers | **Preview, versioned drafts, GET-only target existence and destination self-membership/policy review implemented**; token create rights and approval pending |
-| F-006 | Mirror Git history (all refs/branches/tags) and verify | Planned |
-| F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
+| F-006 | Mirror Git history (all refs/branches/tags) and verify | Execution pending; F-030 adds only a read-only branch/tag OID comparison core |
+| F-030 | Deterministic, provenance-bound Git branch/tag reconciliation | Business logic + xUnit implemented; no live ref collector, writes or API |\n| F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
 | F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |
 | F-010 | Boards work-item issue drafts + ID-specific GitHub object reconciliation | **Review MVP implemented**; issue creation and link patching pending |
