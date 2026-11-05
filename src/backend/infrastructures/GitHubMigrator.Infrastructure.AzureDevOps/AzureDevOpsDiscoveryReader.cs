@@ -43,7 +43,11 @@ public sealed class AzureDevOpsDiscoveryReader(
             throw new ArgumentException("Invalid source connection.");
         var issues = new List<DiscoveryIssue>();
         var projects = new List<SourceProject>();
+        // Only synchronous/legacy requests materialize refs in .NET memory.
+        // Leased discovery jobs persist every ref page into PostgreSQL and
+        // return only an exact count + externalized inventory marker.
         var references = new List<RepositoryRef>();
+        var refCount = 0;
         var identities = new List<SourceIdentity>();
         var root = $"https://dev.azure.com/{Uri.EscapeDataString(organization)}";
         var graphRoot = $"https://vssps.dev.azure.com/{Uri.EscapeDataString(organization)}";
@@ -87,8 +91,9 @@ public sealed class AzureDevOpsDiscoveryReader(
                     sourceRepositories.Add(new(repoId, projectId, repoName, VersionControlKind.Git));
                     try
                     {
-                        var refs = await ReadRefsAsync(projectUri, repoId, accessToken, issues, lease, ct);
-                        references.AddRange(refs);
+                        refCount = checked(refCount + await ReadRefsAsync(
+                            projectUri, repoId, accessToken, issues, lease,
+                            lease is null ? references : null, ct));
                     }
                     catch (DiscoveryProviderException ex)
                         when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
@@ -175,7 +180,9 @@ public sealed class AzureDevOpsDiscoveryReader(
             Organization = organization,
             CollectedAtUtc = timestamp,
             Snapshot = snapshot,
-            Refs = references,
+            Refs = lease is null ? references : [],
+            RefsExternalized = lease is not null,
+            RefCount = refCount,
             Issues = issues,
             Completeness = DiscoveryCompleteness.Partial,
             IdentitiesComplete = identitiesComplete,
@@ -224,11 +231,11 @@ public sealed class AzureDevOpsDiscoveryReader(
         return items;
     }
 
-    private async Task<IReadOnlyList<RepositoryRef>> ReadRefsAsync(
+    private async Task<int> ReadRefsAsync(
         string projectUri, string repoId, string token, List<DiscoveryIssue> issues,
-        DiscoveryLeaseContext? lease, CancellationToken ct)
+        DiscoveryLeaseContext? lease, List<RepositoryRef>? collect, CancellationToken ct)
     {
-        var refs = new List<RepositoryRef>();
+        var observed = 0;
         var seen = new HashSet<string>();
         string? continuation = null;
         for (var page = 0; page < MaxPages; page++)
@@ -238,20 +245,33 @@ public sealed class AzureDevOpsDiscoveryReader(
                 url += $"&continuationToken={Uri.EscapeDataString(continuation)}";
             using var response = await GetPageAsync(url, token, lease,
                 "refs:" + repoId, page, ["name", "objectId"], ct);
+            // No per-repository or cross-repository ref list in the leased
+            // worker. Each response page is bounded (1,000 entries) and has
+            // already been atomically normalized into PostgreSQL.
             foreach (var entry in Items(response.Json))
             {
                 var name = Text(entry, "name");
                 var sha = Text(entry, "objectId");
-                if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(sha))
-                    refs.Add(new(repoId, name, sha));
+                if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(sha)) continue;
+                observed++;
+                collect?.Add(new(repoId, name, sha));
             }
-            if (refs.Count >= MaxRefsPerRepository) { issues.Add(new("RefsTruncated", RepositoryId: repoId)); break; }
-            if (string.IsNullOrEmpty(response.Continuation)) return refs;
-            if (!seen.Add(response.Continuation)) { issues.Add(new("RefsPaginationLoop", RepositoryId: repoId)); break; }
+            if (observed >= MaxRefsPerRepository)
+            {
+                issues.Add(new("RefsTruncated", RepositoryId: repoId));
+                break;
+            }
+            if (string.IsNullOrEmpty(response.Continuation)) return observed;
+            if (!seen.Add(response.Continuation))
+            {
+                issues.Add(new("RefsPaginationLoop", RepositoryId: repoId));
+                break;
+            }
             continuation = response.Continuation;
-            if (page == MaxPages - 1) issues.Add(new("RefsTruncated", RepositoryId: repoId));
+            if (page == MaxPages - 1)
+                issues.Add(new("RefsTruncated", RepositoryId: repoId));
         }
-        return refs;
+        return observed;
     }
 
     private async Task<IReadOnlyList<SourceIdentity>> ReadUsersAsync(
