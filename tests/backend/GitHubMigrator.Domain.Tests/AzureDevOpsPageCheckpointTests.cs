@@ -80,6 +80,60 @@ public sealed class AzureDevOpsPageCheckpointTests
     }
 
     [Fact]
+    public async Task Graph_page_two_retry_reuses_first_1000_users_without_materializing_identity_inventory()
+    {
+        var lease = new DiscoveryLeaseContext(Guid.NewGuid(), Guid.NewGuid(), 1);
+        var store = new FakePageStore();
+        var calls = new Dictionary<string, int>(StringComparer.Ordinal);
+        var users = string.Join(",", Enumerable.Range(0, 1000).Select(i =>
+            $$"""{"descriptor":"aad.user-{{i:0000}}","displayName":"Person {{i}}","unsafeToken":"DO_NOT_SAVE"}"""));
+        using var http = new HttpClient(new Stub(req =>
+        {
+            var url = req.RequestUri!;
+            var path = url.AbsolutePath;
+            var key = path + (url.Query.Contains("continuationToken", StringComparison.Ordinal)
+                ? "#next" : "#first");
+            calls[key] = calls.GetValueOrDefault(key) + 1;
+            if (path.EndsWith("/_apis/projects"))
+                return Json("""{"value":[]}""");
+            if (path.EndsWith("/_apis/graph/users"))
+            {
+                if (key.EndsWith("#next", StringComparison.Ordinal))
+                {
+                    if (calls[key] == 1) throw new HttpRequestException("transient");
+                    return Json("""{"value":[{"descriptor":"aad.user-1000","displayName":"Last"}]}""");
+                }
+                var result = Json("{\"value\":[" + users + "]}");
+                result.Headers.Add("X-MS-ContinuationToken", "next");
+                return result;
+            }
+            if (path.EndsWith("/_apis/graph/groups") ||
+                path.Contains("/_apis/accesscontrollists/"))
+                return Json("""{"value":[]}""");
+            throw new Xunit.Sdk.XunitException("Unexpected GET " + path);
+        }));
+        var reader = new AzureDevOpsDiscoveryReader(http, TimeProvider.System, store);
+        var source = Guid.NewGuid();
+        var first = await Assert.ThrowsAsync<DiscoveryProviderException>(() =>
+            reader.DiscoverWithCheckpointsAsync(source, "test-org", "PAT", lease, default));
+        Assert.Equal("ProviderUnavailable", first.Code);
+        Assert.NotNull(await store.GetAsync(lease.JobId, "graph-users", 0, default));
+        Assert.Null(await store.GetAsync(lease.JobId, "graph-users", 1, default));
+        Assert.DoesNotContain("DO_NOT_SAVE",
+            string.Join(" ", store.Items.Select(x => x.SafePayloadJson)));
+
+        var inventory = await reader.DiscoverWithCheckpointsAsync(
+            source, "test-org", "PAT", lease, default);
+        Assert.True(inventory.IdentitiesExternalized);
+        Assert.Equal(1001, inventory.IdentityCount);
+        Assert.Empty(inventory.Snapshot.Identities);
+        Assert.True(inventory.IdentitiesComplete);
+        Assert.Equal(1, calls["/test-org/_apis/graph/users#first"]);
+        Assert.Equal(2, calls["/test-org/_apis/graph/users#next"]);
+        Assert.Equal(2, store.Items.Count(x => x.ResourceKey == "graph-users"));
+    }
+
+    [Fact]
     public async Task Project_page_two_retry_reuses_first_100_project_rows_and_skip_cursor()
     {
         var lease = new DiscoveryLeaseContext(Guid.NewGuid(), Guid.NewGuid(), 1);
