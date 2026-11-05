@@ -32,6 +32,15 @@ export type DiscoveryGroupObservationPage = {
     properties: { DisplayName: string; LegacyDescriptor: string | null } }[];
   nextAfter: string | null;
 };
+export type DiscoveryAclProgress = {
+  jobId: string; checkpointedAclPages: number; observedAces: number;
+};
+export type DiscoveryAclObservationPage = {
+  jobId: string;
+  items: { sourceId: string; securityToken: string; securityDescriptor: string;
+    fingerprint: string; properties: { AllowMask: number; DenyMask: number; InheritPermissions: boolean } }[];
+  nextAfter: string | null;
+};
 export type DiscoveryMembershipProgress = {
   jobId: string; checkpointedMembershipPages: number; observedMemberships: number;
 };
@@ -273,6 +282,14 @@ export const api = {
   listDiscoveryGroupObservations: (token: string, jobId: string, after?: string, take = 50) =>
     call<DiscoveryGroupObservationPage>(
       `/api/jobs/${encodeURIComponent(jobId)}/groups?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  getDiscoveryAclProgress: (token: string, jobId: string) =>
+    call<DiscoveryAclProgress>(`/api/jobs/${encodeURIComponent(jobId)}/acl-progress`,
+      { headers: withToken(token) }),
+  listDiscoveryAclObservations: (token: string, jobId: string, after?: string, take = 50) =>
+    call<DiscoveryAclObservationPage>(
+      `/api/jobs/${encodeURIComponent(jobId)}/acls?take=${take}` +
         (after ? `&after=${encodeURIComponent(after)}` : ''),
       { headers: withToken(token) }),
   getDiscoveryMembershipProgress: (token: string, jobId: string) =>

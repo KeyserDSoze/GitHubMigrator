@@ -100,6 +100,22 @@ public interface IDiscoveryMembershipEvidenceVerifier
     Task VerifyMembershipsAsync(MigrationJobLease lease, CancellationToken ct);
 }
 
+// F-022: bounded, sanitized Azure DevOps raw ACL observations. These are
+// source evidence only, never effective rights or destination grants.
+public sealed record DiscoveryAclProgress(Guid JobId, int CheckpointedAclPages, int ObservedAces);
+public sealed record DiscoveryAclObservation(
+    string SourceId, string SecurityToken, string SecurityDescriptor, string Fingerprint,
+    System.Text.Json.JsonElement Properties);
+public sealed record DiscoveryAclObservationPage(
+    Guid JobId, IReadOnlyList<DiscoveryAclObservation> Items, string? NextAfter);
+public interface IDiscoveryAclEvidenceStore
+{
+    Task<DiscoveryAclProgress> GetProgressAsync(Guid jobId, CancellationToken ct);
+    Task<DiscoveryAclObservationPage> ListAsync(
+        Guid jobId, string? after, int take, CancellationToken ct);
+    Task VerifySnapshotAsync(MigrationJobLease lease, CancellationToken ct);
+}
+
 public sealed class DiscoveryCheckpointException(string code)
     : Exception("Invalid or expired discovery page checkpoint")
 {

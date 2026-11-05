@@ -182,6 +182,24 @@ public static class Bootstrap
             );
             CREATE INDEX IF NOT EXISTS ix_discovery_membership_observations_group
                 ON discovery_membership_observations(job_id, group_descriptor);
+            -- Sanitized Azure DevOps raw ACL evidence. These masks never imply
+            -- effective rights or destination GitHub grants.
+            CREATE TABLE IF NOT EXISTS discovery_acl_observations (
+                job_id uuid NOT NULL REFERENCES migration_jobs(id) ON DELETE CASCADE,
+                source_id varchar(1024) NOT NULL,
+                security_token varchar(512) NOT NULL,
+                security_descriptor varchar(512) NOT NULL,
+                fingerprint varchar(64) NOT NULL,
+                payload_json jsonb NOT NULL,
+                resource_key varchar(256) NOT NULL,
+                page_index integer NOT NULL,
+                PRIMARY KEY (job_id, source_id),
+                FOREIGN KEY (job_id, resource_key, page_index)
+                    REFERENCES discovery_page_checkpoints(job_id, resource_key, page_index)
+                    ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS ix_discovery_acl_observations_token
+                ON discovery_acl_observations(job_id, security_token);
             CREATE TABLE IF NOT EXISTS discovery_identity_observations (
                 job_id uuid NOT NULL REFERENCES migration_jobs(id) ON DELETE CASCADE,
                 source_id varchar(1024) NOT NULL,

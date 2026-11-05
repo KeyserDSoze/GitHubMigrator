@@ -554,7 +554,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         // HTTP test from other worker tests' intentionally abandoned leases.
         await using (var reset = harness.Host.Services.CreateAsyncScope())
             await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_membership_observations, discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_acl_observations, discovery_membership_observations, discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
         // The staging catalog is shared across API tests: use an isolated
         // logical source connection so exact asset count assertions are stable.
         var sourceId = Guid.NewGuid();
@@ -646,7 +646,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         await using (var scope = harness.Host.Services.CreateAsyncScope())
         {
             await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_membership_observations, discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_acl_observations, discovery_membership_observations, discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
             await scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>()
                 .SaveAsync(secretRef, ApiHarness.SourceToken, default);
             await scope.ServiceProvider.GetRequiredService<IConnectionRepository>().SaveAsync(
@@ -687,6 +687,16 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(HttpStatusCode.Accepted, parallel.StatusCode);
         using var second = JsonDocument.Parse(await parallel.Content.ReadAsStringAsync());
         Assert.Equal(jobId, second.RootElement.GetProperty("id").GetGuid());
+
+        // Even while raw ACL pages may be saved, their descriptors/masks must
+        // not be exposed before the successful, verified discovery result.
+        using (var pendingAcls = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/acls?take=50"))
+        {
+            pendingAcls.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(pendingAcls);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        }
 
         // A manifest may be prepared during a scan but must never be published
         // to callers before the durable discovery job reports success.
@@ -799,6 +809,34 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             Assert.Equal(HttpStatusCode.BadRequest, reply.StatusCode);
         }
 
+        using var anonymousAcls = await harness.Client.GetAsync($"/api/jobs/{jobId}/acls");
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousAcls.StatusCode);
+        using (var counts = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/acl-progress"))
+        {
+            counts.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(counts);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var aclStatus = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(2, aclStatus.RootElement.GetProperty("checkpointedAclPages").GetInt32());
+            Assert.Equal(0, aclStatus.RootElement.GetProperty("observedAces").GetInt32());
+        }
+        using (var listing = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/acls?take=50"))
+        {
+            listing.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(listing);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var page = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Empty(page.RootElement.GetProperty("items").EnumerateArray());
+        }
+        using (var badPage = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/acls?take=101"))
+        {
+            badPage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(badPage);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
         using var eventRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{jobId}/events");
         eventRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
         using var eventResponse = await harness.Client.SendAsync(eventRequest);
