@@ -13,7 +13,8 @@ public sealed record SecurityEvidenceResult(
     IReadOnlyList<DiscoveryMembership> Memberships,
     IReadOnlyList<RepositoryAclEvidence> Acls,
     IReadOnlyList<DiscoveryIssue> Issues,
-    DiscoveryCoverage Coverage, int MembershipCount = 0, bool MembershipsExternalized = false);
+    DiscoveryCoverage Coverage, int MembershipCount = 0, bool MembershipsExternalized = false,
+    int AclCount = 0, bool AclsExternalized = false);
 
 // Fixed-host read-only security evidence, not a target access policy or an effective rights calculator.
 // Git namespace: 2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87; GenericRead=2, Contribute=4.
@@ -41,6 +42,9 @@ public sealed class AzureDevOpsSecurityReader(
         var externalize = lease is not null && membershipStore is not null;
         var observedMemberships = 0;
         var acls = new List<RepositoryAclEvidence>();
+        var aclStore = checkpoints as IDiscoveryAclEvidenceStore;
+        var externalizeAcls = lease is not null && aclStore is not null;
+        var observedAces = 0;
         var issues = new List<DiscoveryIssue>();
         bool groupsComplete = true, membershipsComplete = true, aclsCollected = true;
         var graphRoot = $"https://vssps.dev.azure.com/{Uri.EscapeDataString(organization)}";
@@ -208,23 +212,29 @@ public sealed class AzureDevOpsSecurityReader(
                     aclsCollected = false;
                     issues.Add(new("RepositoryAclUnavailable:" + ex.Code, project.ProviderId, repository.ProviderId));
                 }
-                if (acls.Count >= MaxAclEntries)
+                observedAces = externalizeAcls
+                    ? (await aclStore!.GetProgressAsync(lease!.Value.JobId, ct)).ObservedAces
+                    : acls.Count;
+                if (observedAces >= MaxAclEntries)
                 {
                     aclsCollected = false;
                     issues.Add(new("AclEntriesTruncated", project.ProviderId, repository.ProviderId));
                     break;
                 }
             }
-            if (acls.Count >= MaxAclEntries) break;
+            if (observedAces >= MaxAclEntries) break;
         }
 
         // Never assert effective authorization from raw ACE masks: nested identity groups,
         // deny precedence, branch scopes and external directory membership can change results.
+        observedAces = externalizeAcls
+            ? (await aclStore!.GetProgressAsync(lease!.Value.JobId, ct)).ObservedAces
+            : acls.Count;
         return new SecurityEvidenceResult(distinctGroups,
             externalize ? [] : edges.Distinct().ToArray(),
-            acls.Take(MaxAclEntries).ToArray(), issues,
+            externalizeAcls ? [] : acls.Take(MaxAclEntries).ToArray(), issues,
             new(groupsComplete, membershipsComplete, aclsCollected, false),
-            observedMemberships, externalize);
+            observedMemberships, externalize, observedAces, externalizeAcls);
     }
 
     private async Task<IReadOnlyList<AclRow>> ReadAclAsync(string root, string token, string securityToken,
@@ -233,6 +243,11 @@ public sealed class AzureDevOpsSecurityReader(
         var url = $"{root}/_apis/accesscontrollists/{GitNamespace}?token={Uri.EscapeDataString(securityToken)}&api-version=7.1";
         using var response = await ReadCheckpointedAsync(
             url, token, lease, "security-acl:" + Hash(securityToken), 0, "acls", ct);
+        // Sanitization and the canonical ACE/schema check already occurred
+        // atomically in the leased PostgreSQL checkpoint SaveAsync. Do not
+        // build a large per-token ACE list in the discovery worker.
+        if (lease is not null && checkpoints is IDiscoveryAclEvidenceStore)
+            return [];
         var items = new List<AclRow>();
         foreach (var acl in Values(response.Document))
         {
