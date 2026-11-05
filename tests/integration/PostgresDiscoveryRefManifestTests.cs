@@ -165,6 +165,33 @@ public sealed class PostgresDiscoveryRefManifestTests(PostgresDraftFixture fixtu
     }
 
     [Fact]
+    public async Task Changed_payload_without_changing_fingerprint_fails_verified_chunk_read()
+    {
+        await ResetAsync();
+        await using var db = fixture.NewContext();
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        var refs = new[] { new RepositoryRef("repo-1", "refs/heads/main", "real") };
+        var (job, lease) = await PrepareJobAsync(db, clock, refs);
+        await new PostgresDiscoveryPageCheckpointStore(db, clock).SaveAsync(
+            new(lease.Id, lease.LeaseToken, lease.Attempt), Page(job.Id, 0, refs, null), default);
+        var manifests = new PostgresDiscoveryRefManifestStore(db, clock);
+        await manifests.PrepareAsync(lease, 1, default);
+        Assert.True(await new PostgresMigrationJobRepository(db, clock)
+            .CompleteAsync(lease, Result(job, 1), default));
+        var before = await manifests.ReadChunkAsync(job.Id, 0, default);
+        Assert.NotNull(before);
+        // Same ID and stored digest, but an unexpected payload now contradicts
+        // its fingerprint; hashes of descriptors alone cannot detect this.
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE discovery_ref_observations SET payload_json = {"{\"ObjectId\":\"fake\"}"}::jsonb
+            WHERE job_id = {job.Id}
+            """);
+        var failure = await Assert.ThrowsAsync<DiscoveryRefManifestException>(() =>
+            manifests.ReadChunkAsync(job.Id, 0, default));
+        Assert.Equal("RefManifestIntegrityFailed", failure.Code);
+    }
+
+    [Fact]
     public async Task Empty_snapshot_has_a_stable_root_and_no_chunks()
     {
         await ResetAsync();
