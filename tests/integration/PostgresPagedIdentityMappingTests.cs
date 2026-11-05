@@ -163,9 +163,11 @@ public sealed class PostgresPagedIdentityMappingTests(PostgresDraftFixture fixtu
         // read-only draft, not permission proof: current F-015 verification
         // would have refused the worker. Guard future reader tampering too.
         var reader = new PostgresIdentitySnapshotReader(db);
-        var result = await reader.ListAsync(snapshot, null, 100, default);
-        Assert.Single(result.Items);
-        Assert.Equal("aad.tampered", result.Items[0].SourceIdentityId);
+        var failure = await Assert.ThrowsAsync<MappingInputException>(() =>
+            reader.ListAsync(snapshot, null, 100, default));
+        Assert.Equal("IdentitySourceMismatch", failure.Code);
+        Assert.Equal(0, await db.IdentityMappingDrafts.AsNoTracking()
+            .CountAsync(x => x.SnapshotId == snapshot));
     }
 
     private static async Task SaveSnapshotAsync(
