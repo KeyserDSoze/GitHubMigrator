@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using GitHubMigrator.Business;
 using GitHubMigrator.Infrastructure.AzureDevOps;
 
@@ -65,6 +66,9 @@ public sealed class AzureDevOpsPageCheckpointTests
         Assert.Empty(result.Refs); // leased workers never retain the full ref list
         Assert.True(result.RefsExternalized);
         Assert.Equal(1001, result.RefCount);
+        Assert.True(result.IdentitiesExternalized);
+        Assert.Empty(result.Snapshot.Identities);
+        Assert.Equal(1, result.IdentityCount);
         Assert.Single(result.Snapshot.Projects);
         Assert.True(result.IdentitiesComplete);
         Assert.Equal(1, calls["/test-org/_apis/projects#start"]);
@@ -198,10 +202,36 @@ public sealed class AzureDevOpsPageCheckpointTests
         Assert.Equal(0, calls);
     }
 
-    private sealed class FakePageStore : IDiscoveryPageCheckpointStore
+    private sealed class FakePageStore : IDiscoveryPageCheckpointStore, IDiscoveryIdentityObservationStore
     {
         private readonly Dictionary<(Guid, string, int), DiscoveryPageCheckpoint> _rows = [];
         public IReadOnlyCollection<DiscoveryPageCheckpoint> Items => _rows.Values;
+
+        public Task<DiscoveryIdentityProgress> GetProgressAsync(Guid job, CancellationToken ct)
+        {
+            var pages = _rows.Values.Where(x =>
+                x.JobId == job && x.ResourceKey == "graph-users").ToArray();
+            var known = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var page in pages)
+            {
+                using var parsed = JsonDocument.Parse(page.SafePayloadJson);
+                foreach (var item in parsed.RootElement.GetProperty("value").EnumerateArray())
+                {
+                    if (item.TryGetProperty("descriptor", out var id) &&
+                        id.ValueKind == JsonValueKind.String &&
+                        !string.IsNullOrWhiteSpace(id.GetString()))
+                        known.Add(id.GetString()!);
+                }
+            }
+            return Task.FromResult(new DiscoveryIdentityProgress(job, pages.Length, known.Count));
+        }
+
+        public Task<DiscoveryIdentityObservationPage> ListAsync(
+            Guid job, string? after, int take, CancellationToken ct) =>
+            throw new NotSupportedException("Reader tests only use page-count evidence");
+
+        public Task VerifySnapshotAsync(MigrationJobLease lease, CancellationToken ct) =>
+            throw new NotSupportedException("Reader tests do not finalize staging");
         public Task<DiscoveryPageCheckpoint?> GetAsync(
             Guid job, string resource, int page, CancellationToken ct) =>
             Task.FromResult(_rows.GetValueOrDefault((job, resource, page)));
