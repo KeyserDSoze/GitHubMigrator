@@ -74,12 +74,27 @@ test('admin discovers Git/TFVC, saves snapshot and reviews partial permissions',
       markedMissing: 0, sourceInventoryComplete: false
     }
   } }));
+  await page.route(`**/api/jobs/connections/${connectionId}`, route =>
+    route.fulfill({ json: scanRequests ? [{
+      ...queued, state: 'Succeeded', attempts: 1, snapshotId: id
+    }] : [] }));
+  await page.route(`**/api/jobs/${discoveryJobId}/ref-manifest`, route =>
+    route.fulfill({ json: {
+      jobId: discoveryJobId, sourceConnectionId: connectionId,
+      assetCount: 2, chunkSize: 250, chunkCount: 1,
+      rootSha256: 'a'.repeat(64), preparedAtUtc: summary.collectedAtUtc
+    } }));
   await page.route(`**/api/discoveries/${id}`, route => route.fulfill({ json: detail }));
   await mockLogin(page, 'admin');
   await page.getByRole('button', { name: /^discovery$/i }).click();
   await expect(page.getByText(/nessun inventario salvato|no saved inventories/i).first()).toBeVisible();
   await page.getByRole('button', { name: /accoda discovery|queue discovery/i }).click();
   await expect(page.getByRole('heading', { name: 'Payments' })).toBeVisible();
+  const manifest = page.getByRole('status', {
+    name: /manifest immutabile dei riferimenti git|immutable git ref manifest/i
+  });
+  await expect(manifest).toContainText('2');
+  await expect(manifest).toContainText('1');
   await expect(page.getByText('Api', { exact: true })).toBeVisible();
   await expect(page.getByText('TFVC', { exact: true })).toBeVisible();
   await expect(page.getByText(/permessi effettivi|effective repository permissions/i).first()).toBeVisible();
