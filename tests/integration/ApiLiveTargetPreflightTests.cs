@@ -371,6 +371,24 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             Assert.Equal(reconciliationSha,
                 body.RootElement.GetProperty("reconciliationSha256").GetString());
         }
+        // Separate dependency-injection scopes simulate independent API
+        // replicas replaying the same current digest under the DB lock.
+        await using (var replicaOne = harness.Host.Services.CreateAsyncScope())
+        await using (var replicaTwo = harness.Host.Services.CreateAsyncScope())
+        {
+            var one = replicaOne.ServiceProvider.GetRequiredService<
+                IncrementalGitRefReconciliationService>();
+            var two = replicaTwo.ServiceProvider.GetRequiredService<
+                IncrementalGitRefReconciliationService>();
+            var results = await Task.WhenAll(
+                one.CreateAsync(prepId, planId, "repo-1", observationId,
+                    planSha, targetRefSha, Guid.NewGuid(), default),
+                two.CreateAsync(prepId, planId, "repo-1", observationId,
+                    planSha, targetRefSha, Guid.NewGuid(), default));
+            Assert.Equal(diffId, results[0].Id);
+            Assert.Equal(diffId, results[1].Id);
+            Assert.Equal(reconciliationSha, results[0].ReconciliationSha256);
+        }
         using (var get = new HttpRequestMessage(HttpMethod.Get, diffPath))
         {
             get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
