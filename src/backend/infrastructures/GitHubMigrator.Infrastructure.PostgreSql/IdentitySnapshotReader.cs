@@ -54,6 +54,38 @@ public sealed class PostgresIdentitySnapshotReader(AppDbContext db) : IIdentityS
             """).SingleOrDefaultAsync(ct);
         if (expected != count)
             throw new MappingInputException("IdentitySourceMismatch");
+        // A count match is insufficient: a post-success modification could
+        // replace a descriptor or its metadata while preserving row counts.
+        // Compare both immutable snapshot and page-provenanced observations in
+        // PostgreSQL before using them for F-004 review or draft validation.
+        var mismatch = await db.Database.SqlQuery<bool>($"""
+            WITH saved AS (
+                SELECT i."providerId" AS id, i."displayName" AS display_name,
+                    i.email, i."legacyDescriptor" AS legacy
+                FROM migration_discoveries d
+                CROSS JOIN LATERAL jsonb_to_recordset(
+                    d.inventory -> 'snapshot' -> 'identities')
+                    AS i("providerId" text, "displayName" text,
+                        email text, "legacyDescriptor" text)
+                WHERE d.id = {snapshotId}
+            ),
+            observed AS (
+                SELECT source_id AS id,
+                    payload_json ->> 'DisplayName' AS display_name,
+                    payload_json ->> 'Email' AS email,
+                    payload_json ->> 'LegacyDescriptor' AS legacy
+                FROM discovery_identity_observations
+                WHERE job_id = {snapshotId}
+            ),
+            differences AS (
+                (SELECT * FROM saved EXCEPT ALL SELECT * FROM observed)
+                UNION ALL
+                (SELECT * FROM observed EXCEPT ALL SELECT * FROM saved)
+            )
+            SELECT EXISTS(SELECT 1 FROM differences) AS "Value"
+            """).SingleAsync(ct);
+        if (mismatch)
+            throw new MappingInputException("IdentitySourceMismatch");
         return true;
     }
 
