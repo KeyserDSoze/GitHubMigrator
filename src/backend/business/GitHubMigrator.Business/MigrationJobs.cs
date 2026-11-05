@@ -96,7 +96,8 @@ public sealed class MigrationJobService(
 public sealed class MigrationJobProcessor(
     IMigrationJobRepository jobs, StagingSyncService staging,
     DiscoveryService? discovery = null, IDiscoveryRefManifestStore? refManifests = null,
-    IDiscoveryIdentityObservationStore? identityObservations = null)
+    IDiscoveryIdentityObservationStore? identityObservations = null,
+    IDiscoveryGroupObservationStore? groupObservations = null)
 {
     // Lease > execution deadline, ensuring normal slow work cannot run past its lease.
     // An abrupt process death is recovered after the lease expires by another worker.
@@ -145,6 +146,12 @@ public sealed class MigrationJobProcessor(
             // with its already committed immutable snapshot.
             if (lease.Kind == MigrationJobKinds.DiscoverSource && identityObservations is not null)
                 await identityObservations.VerifySnapshotAsync(
+                    lease with { SnapshotId = snapshotId }, work.Token);
+
+            // Raw Graph group records must agree with the immutable source
+            // snapshot. No source evidence here asserts effective rights.
+            if (lease.Kind == MigrationJobKinds.DiscoverSource && groupObservations is not null)
+                await groupObservations.VerifySnapshotAsync(
                     lease with { SnapshotId = snapshotId }, work.Token);
 
             // Prepare a bounded-memory, immutable chunk manifest before the
