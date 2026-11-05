@@ -85,6 +85,58 @@ public sealed class PostgresDiscoveryRefManifestTests(PostgresDraftFixture fixtu
     }
 
     [Fact]
+    public async Task Externalized_snapshot_with_1250_refs_seals_five_chunks_without_inline_ref_array()
+    {
+        await ResetAsync();
+        await using var db = fixture.NewContext();
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        var refs = Enumerable.Range(0, 1250).Select(i =>
+            new RepositoryRef("repo-1", $"refs/heads/feature-{i:0000}", $"oid-{i}")).ToArray();
+        var (job, lease) = await PrepareJobAsync(db, clock, refs, externalized: true);
+        var saved = await new PostgresDiscoveryRepository(db).GetAsync(job.Id, default);
+        Assert.NotNull(saved);
+        Assert.True(saved.RefsExternalized);
+        Assert.Equal(1250, saved.RefCount);
+        Assert.Empty(saved.Refs);
+        var pages = new PostgresDiscoveryPageCheckpointStore(db, clock);
+        await pages.SaveAsync(new(lease.Id, lease.LeaseToken, lease.Attempt),
+            Page(job.Id, 0, refs.Take(1000), "opaque-next"), default);
+        await pages.SaveAsync(new(lease.Id, lease.LeaseToken, lease.Attempt),
+            Page(job.Id, 1, refs.Skip(1000), null), default);
+        var manifest = new PostgresDiscoveryRefManifestStore(db, clock);
+        var prepared = await manifest.PrepareAsync(lease, saved.RefCount, default);
+        Assert.Equal(1250, prepared.AssetCount);
+        Assert.Equal(5, prepared.ChunkCount);
+        Assert.Equal(64, prepared.RootSha256.Length);
+        Assert.Null(await manifest.GetAsync(job.Id, default));
+        var staged = await new StagingSyncService(new PostgresDiscoveryRepository(db),
+            new PostgresStagingRepository(db, clock, manifest))
+            .SyncUsingRefManifestAsync(lease with { SnapshotId = lease.Id }, default);
+        Assert.Equal(1252, staged.Observed); // project + repository + 1250 refs
+        Assert.True(await new PostgresMigrationJobRepository(db, clock)
+            .CompleteAsync(lease, Result(job, staged.Observed), default));
+        Assert.NotNull(await manifest.GetAsync(job.Id, default));
+        var lastChunk = await manifest.ReadChunkAsync(job.Id, 4, default);
+        Assert.NotNull(lastChunk);
+        Assert.Equal(250, lastChunk.Items.Count);
+    }
+
+    [Fact]
+    public async Task Externalized_snapshot_cannot_seal_if_checkpointed_ref_is_missing()
+    {
+        await ResetAsync();
+        await using var db = fixture.NewContext();
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        var refs = new[] { new RepositoryRef("repo-1", "refs/heads/main", "sha") };
+        var (job, lease) = await PrepareJobAsync(db, clock, refs, externalized: true);
+        var manifest = new PostgresDiscoveryRefManifestStore(db, clock);
+        var error = await Assert.ThrowsAsync<DiscoveryRefManifestException>(() =>
+            manifest.PrepareAsync(lease, 1, default));
+        Assert.Equal("RefManifestSnapshotMismatch", error.Code);
+        Assert.Empty(await db.DiscoveryRefManifests.ToArrayAsync());
+    }
+
+    [Fact]
     public async Task Missing_observation_rejects_manifest_without_leaking_partial_data()
     {
         await ResetAsync();
@@ -223,7 +275,8 @@ public sealed class PostgresDiscoveryRefManifestTests(PostgresDraftFixture fixtu
             DateTimeOffset.UtcNow, count, count, 0, 0, 0, false);
 
     private static async Task<(MigrationJobView, MigrationJobLease)> PrepareJobAsync(
-        AppDbContext db, TimeProvider clock, RepositoryRef[] refs)
+        AppDbContext db, TimeProvider clock, RepositoryRef[] refs,
+        bool externalized = false)
     {
         var repo = new PostgresMigrationJobRepository(db, clock);
         var source = Guid.NewGuid();
@@ -244,7 +297,10 @@ public sealed class PostgresDiscoveryRefManifestTests(PostgresDraftFixture fixtu
                     new SourceRepository("repo-1", "p1", "Repo", VersionControlKind.Git)])],
                 Identities = [], AccessGrants = []
             },
-            Refs = refs, Issues = [], Completeness = DiscoveryCompleteness.Partial,
+            Refs = externalized ? [] : refs,
+            RefsExternalized = externalized,
+            RefCount = externalized ? refs.Length : 0,
+            Issues = [], Completeness = DiscoveryCompleteness.Partial,
             IdentitiesComplete = false, PermissionsComplete = false
         };
         await new PostgresDiscoveryRepository(db).SaveAsync(snapshot, default);
