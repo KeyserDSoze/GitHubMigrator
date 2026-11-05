@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
@@ -37,7 +39,8 @@ public sealed class StagingSnapshotSyncRecord
 public sealed class PostgresStagingRepository(
     AppDbContext db, TimeProvider clock, IDiscoveryRefManifestStore? manifests = null,
     IDiscoveryIdentityObservationStore? identities = null,
-    IDiscoveryMembershipEvidenceVerifier? memberships = null)
+    IDiscoveryMembershipEvidenceVerifier? memberships = null,
+    IDiscoveryAclEvidenceStore? acls = null)
     : IStagingRepository
 {
     private const int BatchSize = 250;
@@ -47,7 +50,7 @@ public sealed class PostgresStagingRepository(
         CancellationToken ct)
     {
         if (inventory.RefsExternalized || inventory.IdentitiesExternalized ||
-            inventory.MembershipsExternalized)
+            inventory.MembershipsExternalized || inventory.AclsExternalized)
             throw new StagingSyncInputException("ExternalizedSnapshotRequiresManifest");
         return ApplyCoreAsync(inventory, assets, completeTypes, null, ct);
     }
@@ -64,10 +67,13 @@ public sealed class PostgresStagingRepository(
                 (slimInventory.IdentitiesExternalized &&
                     nonRefAssets.Any(x => x.AssetType == "identity")) ||
                 (slimInventory.MembershipsExternalized &&
-                    nonRefAssets.Any(x => x.AssetType == "membership"))) ||
+                    nonRefAssets.Any(x => x.AssetType == "membership")) ||
+                (slimInventory.AclsExternalized &&
+                    nonRefAssets.Any(x => x.AssetType == "acl"))) ||
             manifests is null ||
             (slimInventory.IdentitiesExternalized && identities is null) ||
-            (slimInventory.MembershipsExternalized && memberships is null))
+            (slimInventory.MembershipsExternalized && memberships is null) ||
+            (slimInventory.AclsExternalized && acls is null))
             throw new StagingSyncInputException("InvalidManifestSyncContext");
 
         // Verify both Graph pages and their normalized PostgreSQL observations
@@ -85,6 +91,13 @@ public sealed class PostgresStagingRepository(
                 slimInventory.MembershipCount is < 0 or > 20_000)
                 throw new StagingSyncInputException("InvalidManifestSyncContext");
             await memberships!.VerifyMembershipsAsync(lease, ct);
+        }
+        if (slimInventory.AclsExternalized)
+        {
+            if (slimInventory.AclEvidence.Count != 0 ||
+                slimInventory.AclCount is < 0 or > 30_000)
+                throw new StagingSyncInputException("InvalidManifestSyncContext");
+            await acls!.VerifySnapshotAsync(lease, ct);
         }
         return await ApplyCoreAsync(slimInventory, nonRefAssets, completeTypes, lease, ct);
     }
@@ -245,6 +258,112 @@ public sealed class PostgresStagingRepository(
                 throw new DiscoveryCheckpointException("MembershipObservationIntegrityFailed");
         }
 
+
+        var stagedAclCount = 0;
+        if (inventory.AclsExternalized)
+        {
+            // Only repository identifiers/scopes are kept in memory (bounded
+            // by the source project inventory). No ACE array is materialized.
+            // A project-scope ACE is deliberately projected to every Git
+            // repository in the project, exactly as the legacy F-013 reader.
+            var scopes = new Dictionary<string, List<(string RepoId, string Scope)>>(
+                StringComparer.Ordinal);
+            void Bind(string token, string repositoryId, string scope)
+            {
+                if (!scopes.TryGetValue(token, out var bindings))
+                    scopes.Add(token, bindings = []);
+                bindings.Add((repositoryId, scope));
+            }
+            foreach (var project in inventory.Snapshot.Projects)
+                foreach (var repository in project.Repositories.Where(r =>
+                    r.VersionControl == VersionControlKind.Git))
+                {
+                    if (repository.ProjectId != project.ProviderId)
+                        throw new StagingSyncInputException("RepositoryProjectMismatch");
+                    var token = "repoV2/" + project.ProviderId;
+                    Bind(token, repository.ProviderId, "project");
+                    Bind(token + "/" + repository.ProviderId, repository.ProviderId, "repository");
+                }
+
+            var rawCount = 0;
+            var batch = new List<StagingAssetInput>(BatchSize);
+            async Task FlushAsync()
+            {
+                if (batch.Count == 0) return;
+                await UpsertBatchAsync(inventory, batch.ToArray(), ct);
+                batch.Clear();
+            }
+
+            string? cursor = null;
+            while (true)
+            {
+                var query = db.DiscoveryAclObservations.AsNoTracking()
+                    .Where(x => x.JobId == inventory.Id);
+                if (cursor is not null)
+                    query = query.Where(x => string.Compare(x.SourceId, cursor) > 0);
+                var rows = await query.OrderBy(x => x.SourceId)
+                    .Take(BatchSize).ToArrayAsync(ct);
+                if (rows.Length == 0) break;
+
+                foreach (var row in rows)
+                {
+                    try
+                    {
+                        using var data = JsonDocument.Parse(row.PayloadJson);
+                        var properties = data.RootElement;
+                        var allow = properties.GetProperty("AllowMask").GetInt64();
+                        var deny = properties.GetProperty("DenyMask").GetInt64();
+                        var inherit = properties.GetProperty("InheritPermissions").GetBoolean();
+                        var normalized = JsonSerializer.Serialize(new {
+                            AllowMask = allow, DenyMask = deny, InheritPermissions = inherit
+                        });
+                        var fingerprint = Convert.ToHexStringLower(SHA256.HashData(
+                            Encoding.UTF8.GetBytes("acl-observation-v1\n" + normalized)));
+                        var sourceId = JsonSerializer.Serialize(new[] {
+                            row.SecurityToken, row.SecurityDescriptor
+                        });
+                        if (row.SourceId != sourceId || row.Fingerprint != fingerprint ||
+                            !scopes.TryGetValue(row.SecurityToken, out var targets))
+                            throw new DiscoveryCheckpointException("AclObservationIntegrityFailed");
+
+                        // Expansion can exceed the raw observation count, so
+                        // account for each repository-scoped result separately.
+                        foreach (var target in targets)
+                        {
+                            var acl = new RepositoryAclEvidence(target.RepoId,
+                                row.SecurityToken, row.SecurityDescriptor,
+                                allow, deny, inherit, target.Scope);
+                            batch.Add(StagingAssetNormalizer.NormalizeAcl(acl));
+                            stagedAclCount++;
+                            var projected = (long)assets.Count + (prepared?.AssetCount ?? 0) +
+                                (inventory.IdentitiesExternalized ? inventory.IdentityCount : 0) +
+                                (inventory.MembershipsExternalized ? inventory.MembershipCount : 0) +
+                                stagedAclCount;
+                            if (projected > StagingAssetNormalizer.MaxAssetsPerSnapshot)
+                                throw new StagingSyncInputException("StagingAssetLimit");
+                            if (batch.Count == BatchSize)
+                                await FlushAsync();
+                        }
+                        rawCount++;
+                        if (rawCount > inventory.AclCount)
+                            throw new DiscoveryCheckpointException("AclObservationIntegrityFailed");
+                    }
+                    catch (Exception ex) when (ex is JsonException or InvalidOperationException
+                        or KeyNotFoundException or StagingSyncInputException)
+                    {
+                        if (ex is StagingSyncInputException input &&
+                            input.Code == "StagingAssetLimit")
+                            throw;
+                        throw new DiscoveryCheckpointException("AclObservationIntegrityFailed");
+                    }
+                }
+                cursor = rows[^1].SourceId;
+            }
+            if (rawCount != inventory.AclCount)
+                throw new DiscoveryCheckpointException("AclObservationIntegrityFailed");
+            await FlushAsync();
+        }
+
         if (prepared is not null)
         {
             var processed = 0;
@@ -312,10 +431,10 @@ public sealed class PostgresStagingRepository(
             SourceCollectedAtUtc = PostgreSqlTimestamp(inventory.CollectedAtUtc),
             AppliedAtUtc = PostgreSqlTimestamp(clock.GetUtcNow()),
             Observed = assets.Count + (prepared?.AssetCount ?? 0) +
-                stagedIdentityCount + stagedMembershipCount,
+                stagedIdentityCount + stagedMembershipCount + stagedAclCount,
             Added = added, Changed = changed,
             Unchanged = assets.Count + (prepared?.AssetCount ?? 0) +
-                stagedIdentityCount + stagedMembershipCount - added - changed,
+                stagedIdentityCount + stagedMembershipCount + stagedAclCount - added - changed,
             MarkedMissing = missing, SourceInventoryComplete = fullyCovered
         };
         db.StagingSnapshotSyncs.Add(saved);

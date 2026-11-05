@@ -71,7 +71,8 @@ public static class DiscoveryEndpoints
         membershipCount = x.MembershipsExternalized
             ? x.MembershipCount : x.Memberships.Count,
         x.MembershipsExternalized,
-        aclEntryCount = x.AclEvidence.Count,
+        aclEntryCount = x.AclsExternalized ? x.AclCount : x.AclEvidence.Count,
+        x.AclsExternalized,
         x.SecurityCoverage,
         issueCount = x.Issues.Count,
         x.IdentitiesComplete, x.PermissionsComplete

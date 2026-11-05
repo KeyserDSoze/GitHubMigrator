@@ -126,6 +126,29 @@ public static class StagingAssetNormalizer
         return new("membership", sourceId, null, fingerprint, payload);
     }
 
+    // Preserve the exact F-013 natural key and fingerprint for a repository-
+    // scoped raw ACE, whether it came from inline or externalized evidence.
+    public static StagingAssetInput NormalizeAcl(RepositoryAclEvidence acl)
+    {
+        if (string.IsNullOrWhiteSpace(acl.RepositoryId) ||
+            string.IsNullOrWhiteSpace(acl.SecurityToken) ||
+            string.IsNullOrWhiteSpace(acl.SecurityDescriptor) ||
+            acl.Scope is not ("project" or "repository"))
+            throw new StagingSyncInputException("InvalidStagingAssetId");
+        var sourceId = JsonSerializer.Serialize(new[] { acl.RepositoryId,
+            acl.SecurityToken, acl.SecurityDescriptor, acl.Scope });
+        if (sourceId.Length > 1024)
+            throw new StagingSyncInputException("InvalidStagingAssetId");
+        var payload = JsonSerializer.Serialize(new {
+            acl.AllowMask, acl.DenyMask, acl.InheritPermissions
+        });
+        if (payload.Length > 65_536)
+            throw new StagingSyncInputException("StagingAssetTooLarge");
+        var fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+            "staging-v1\nacl\n" + payload)));
+        return new("acl", sourceId, null, fingerprint, payload);
+    }
+
     public static (IReadOnlyList<StagingAssetInput> Assets, IReadOnlySet<string> CompleteTypes)
         Normalize(DiscoveryInventory inventory)
     {
@@ -199,9 +222,13 @@ public static class StagingAssetNormalizer
                 throw new StagingSyncInputException("StagingAssetLimit");
         }
         foreach (var acl in inventory.AclEvidence)
-            Add("acl", JsonSerializer.Serialize(new[] { acl.RepositoryId, acl.SecurityToken,
-                acl.SecurityDescriptor, acl.Scope }), null,
-                new { acl.AllowMask, acl.DenyMask, acl.InheritPermissions });
+        {
+            var asset = NormalizeAcl(acl);
+            if (!assets.TryAdd(("acl", asset.SourceId), asset))
+                throw new StagingSyncInputException("DuplicateStagingAsset");
+            if (assets.Count > MaxAssetsPerSnapshot)
+                throw new StagingSyncInputException("StagingAssetLimit");
+        }
 
         // Never report absent data as deleted when its source coverage was partial.
         var complete = new HashSet<string>(StringComparer.Ordinal);
@@ -274,7 +301,7 @@ public sealed class StagingSyncService(IDiscoveryRepository discoveries, IStagin
         // inventory. Legacy manual staging must never silently normalize it
         // as zero refs or persist a false authoritative sync result.
         if (inventory.RefsExternalized || inventory.IdentitiesExternalized ||
-            inventory.MembershipsExternalized)
+            inventory.MembershipsExternalized || inventory.AclsExternalized)
             throw new StagingSyncInputException("ExternalizedSnapshotRequiresManifest");
         var normalized = StagingAssetNormalizer.Normalize(inventory);
         return await staging.ApplyAsync(inventory, normalized.Assets, normalized.CompleteTypes, ct);

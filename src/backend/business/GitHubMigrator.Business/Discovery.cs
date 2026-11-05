@@ -201,6 +201,12 @@ public sealed class DiscoveryService(
              inventory.MembershipCount is < 0 or > 20_000))
             throw new InvalidOperationException(
                 "Externalized memberships require a durable job-owned source snapshot.");
+        if (inventory.AclsExternalized &&
+            (checkpointLease is null || stableSnapshotId is null ||
+             inventory.AclEvidence.Count != 0 ||
+             inventory.AclCount is < 0 or > 30_000))
+            throw new InvalidOperationException(
+                "Externalized ACLs require a durable job-owned source snapshot.");
         if (stableSnapshotId is { } fixedId)
         {
             var sourceSnapshot = inventory.Snapshot;
@@ -226,7 +232,8 @@ public sealed class DiscoveryService(
                 Groups = inventory.Groups, Memberships = inventory.Memberships,
                 MembershipsExternalized = inventory.MembershipsExternalized,
                 MembershipCount = inventory.MembershipCount,
-                AclEvidence = inventory.AclEvidence, SecurityCoverage = inventory.SecurityCoverage
+                AclEvidence = inventory.AclEvidence, SecurityCoverage = inventory.SecurityCoverage,
+                AclsExternalized = inventory.AclsExternalized, AclCount = inventory.AclCount
             };
         }
         await repository.SaveAsync(inventory, ct);

@@ -373,7 +373,12 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
             </div>)}
             {groups.length > 100 && <p className="muted">{t('discoveryListCapped')}</p>}
             <h3>{t('discoveryAcls')}</h3>
-            {acls.length === 0 && <p className="muted">{t('discoveryNoSecurity')}</p>}
+            {detail.aclsExternalized && <p className="muted" role="note">
+              {t('discoveryExternalAclsNotice')}
+              {' '}{detail.aclCount ?? 0} {t('discoveryAclProgressAces')}.
+            </p>}
+            {acls.length === 0 && !detail.aclsExternalized &&
+              <p className="muted">{t('discoveryNoSecurity')}</p>}
             {acls.slice(0, 150).map((entry, i) => {
               const repo = detail.snapshot.projects.flatMap(p => p.repositories).find(r => r.providerId === entry.repositoryId);
               return <div className="discovery-acl-row" key={i}>

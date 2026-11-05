@@ -49,5 +49,10 @@ public sealed class DiscoveryInventory
     public bool MembershipsExternalized { get; init; }
     public int MembershipCount { get; init; }
     public IReadOnlyList<RepositoryAclEvidence> AclEvidence { get; init; } = [];
+    // Leased Graph/Git ACL discovery saves each distinct raw ACE in an
+    // indexed, checkpoint-provenanced PostgreSQL observation. When true,
+    // empty AclEvidence is not evidence of zero source ACL entries.
+    public bool AclsExternalized { get; init; }
+    public int AclCount { get; init; }
     public DiscoveryCoverage SecurityCoverage { get; init; } = new(false, false, false, false);
 }

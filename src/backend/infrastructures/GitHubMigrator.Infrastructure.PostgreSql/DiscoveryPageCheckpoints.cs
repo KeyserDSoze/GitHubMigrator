@@ -790,8 +790,16 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                 WHERE id = {lease.Id} AND connection_id = {lease.SourceConnectionId}
             ),
             coverage AS (
-                SELECT COALESCE((inventory -> 'securityCoverage' ->> 'aclsCollected')::boolean,
-                    false) AS complete FROM source_snapshot
+                SELECT
+                    COALESCE((inventory -> 'securityCoverage' ->> 'aclsCollected')::boolean,
+                        false) AS complete,
+                    COALESCE((inventory ->> 'aclsExternalized')::boolean, false)
+                        AS externalized,
+                    COALESCE((inventory ->> 'aclCount')::integer, -1)
+                        AS expected_count,
+                    COALESCE(jsonb_array_length(inventory -> 'aclEvidence'), 0)
+                        AS inline_count
+                FROM source_snapshot
             ),
             git_repos AS (
                 SELECT p.project ->> 'providerId' AS project_id,
@@ -862,12 +870,22 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                 UNION ALL
                 (SELECT * FROM persisted EXCEPT ALL SELECT * FROM page_rows)
                 UNION ALL
-                (SELECT * FROM snapshot_rows EXCEPT ALL SELECT * FROM persisted)
+                (SELECT * FROM snapshot_rows
+                    WHERE NOT (SELECT externalized FROM coverage)
+                    EXCEPT ALL SELECT * FROM persisted
+                    WHERE NOT (SELECT externalized FROM coverage))
                 UNION ALL
-                (SELECT * FROM persisted EXCEPT ALL SELECT * FROM snapshot_rows)
+                (SELECT * FROM persisted
+                    WHERE NOT (SELECT externalized FROM coverage)
+                    EXCEPT ALL SELECT * FROM snapshot_rows
+                    WHERE NOT (SELECT externalized FROM coverage))
             )
             SELECT (
                 NOT EXISTS (SELECT 1 FROM source_snapshot)
+                OR EXISTS (SELECT 1 FROM coverage c WHERE c.externalized AND
+                    (c.inline_count <> 0 OR c.expected_count < 0 OR
+                        c.expected_count > 30_000 OR
+                        c.expected_count <> (SELECT count(*) FROM persisted)))
                 OR EXISTS (SELECT 1 FROM differences)
                 OR EXISTS (
                     SELECT 1 FROM saved_pages p

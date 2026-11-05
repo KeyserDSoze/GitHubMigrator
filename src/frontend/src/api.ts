@@ -89,7 +89,7 @@ export type DiscoverySummary = {
   refCount: number; refsExternalized?: boolean; identityCount: number;
   identitiesExternalized?: boolean; issueCount: number;
   groupCount?: number; membershipCount?: number; membershipsExternalized?: boolean;
-  aclEntryCount?: number;
+  aclEntryCount?: number; aclsExternalized?: boolean;
   securityCoverage?: SecurityCoverage;
   identitiesComplete: boolean; permissionsComplete: boolean;
 };
@@ -118,7 +118,8 @@ export type DiscoveryDetail = {
   issues: { code: string; projectId: string | null; repositoryId: string | null }[];
   groups?: SecurityGroup[]; memberships?: SecurityMembership[];
   membershipsExternalized?: boolean; membershipCount?: number;
-  aclEvidence?: AclEvidence[]; securityCoverage?: SecurityCoverage;
+  aclEvidence?: AclEvidence[]; aclsExternalized?: boolean; aclCount?: number;
+  securityCoverage?: SecurityCoverage;
   identitiesComplete: boolean; permissionsComplete: boolean;
 };
 export type IdentityMap = { sourceIdentityId: string; gitHubLogin: string };

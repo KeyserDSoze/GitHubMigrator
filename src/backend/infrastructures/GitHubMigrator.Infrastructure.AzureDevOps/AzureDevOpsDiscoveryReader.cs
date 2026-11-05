@@ -199,6 +199,8 @@ public sealed class AzureDevOpsDiscoveryReader(
             MembershipsExternalized = security.MembershipsExternalized,
             MembershipCount = security.MembershipCount,
             AclEvidence = security.Acls,
+            AclsExternalized = security.AclsExternalized,
+            AclCount = security.AclCount,
             SecurityCoverage = security.Coverage
         };
     }
