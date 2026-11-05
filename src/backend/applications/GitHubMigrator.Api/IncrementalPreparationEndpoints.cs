@@ -351,6 +351,98 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-034: enqueue an evidence-only durable transfer workpack. No
+        // endpoint can authorize a Git push, target write or deletion.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/ref-reconciliations/{reconciliationId:guid}/transfer-workpacks",
+            async Task<IResult> (Guid id, Guid planId, Guid reconciliationId,
+                CreateGitTransferWorkpackRequest request, ClaimsPrincipal principal,
+                GitTransferWorkpackService service, CancellationToken ct) =>
+            {
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor)) return Results.Unauthorized();
+                try
+                {
+                    var pack = await service.EnqueueAsync(
+                        id, planId, reconciliationId,
+                        request.ExpectedManifestSha256 ?? "",
+                        request.ExpectedReconciliationSha256 ?? "",
+                        actor, ct);
+                    return Results.Accepted(
+                        $"/api/incremental-preparations/{id}/operation-plans/{planId}/transfer-workpacks/{pack.Id}", pack);
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "TransferEvidenceNotFound" }); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("incremental-review");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks",
+            async Task<IResult> (Guid id, Guid planId,
+                GitTransferWorkpackService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.ListAsync(id, planId, ct)); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                GitTransferWorkpackService service, CancellationToken ct) =>
+            {
+                try
+                {
+                    var pack = await service.GetAsync(id, planId, workpackId, ct);
+                    return pack is null
+                        ? Results.NotFound(new { error = "TransferWorkpackNotFound" })
+                        : Results.Ok(pack);
+                }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/events",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                GitTransferWorkpackService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.EventsAsync(id, planId, workpackId, ct)); }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "TransferWorkpackNotFound" }); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/execution-authorization",
             async Task<IResult> (Guid id, Guid planId,
                 AuthorizeOperationPlanRequest request, ClaimsPrincipal principal,
@@ -410,6 +502,11 @@ public static class IncrementalPreparationEndpoints
         });
     }
 
+    private static IResult TransferWorkpackError(GitTransferWorkpackException ex) =>
+        ex.Code == "InvalidTransferWorkpackRequest"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
+
     private static IResult ReconciliationError(
         IncrementalGitRefReconciliationException ex) =>
         ex.Code is "InvalidReconciliationRequest" or "InvalidReconciliationPage"
@@ -453,3 +550,6 @@ public sealed record CollectTargetRefEvidenceRequest(
 public sealed record CreateGitRefReconciliationRequest(
     string? ExpectedManifestSha256, string? SourceRepositoryId,
     Guid TargetObservationId, string? ExpectedTargetEvidenceSha256);
+
+public sealed record CreateGitTransferWorkpackRequest(
+    string? ExpectedManifestSha256, string? ExpectedReconciliationSha256);
