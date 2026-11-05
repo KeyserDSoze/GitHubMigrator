@@ -62,7 +62,9 @@ public sealed class AzureDevOpsPageCheckpointTests
 
         var result = await reader.DiscoverWithCheckpointsAsync(
             source, "test-org", "TEST-PAT", lease, default);
-        Assert.Equal(1001, result.Refs.Count);
+        Assert.Empty(result.Refs); // leased workers never retain the full ref list
+        Assert.True(result.RefsExternalized);
+        Assert.Equal(1001, result.RefCount);
         Assert.Single(result.Snapshot.Projects);
         Assert.True(result.IdentitiesComplete);
         Assert.Equal(1, calls["/test-org/_apis/projects#start"]);
@@ -114,6 +116,9 @@ public sealed class AzureDevOpsPageCheckpointTests
         var inventory = await reader.DiscoverWithCheckpointsAsync(
             Guid.NewGuid(), "test-org", "PAT", lease, default);
         Assert.Equal(101, inventory.Snapshot.Projects.Count);
+        Assert.True(inventory.RefsExternalized);
+        Assert.Empty(inventory.Refs);
+        Assert.Equal(0, inventory.RefCount);
         Assert.Equal(1, calls["/test-org/_apis/projects#first"]);
         Assert.Equal(2, calls["/test-org/_apis/projects#second"]);
         Assert.Equal(2, store.Items.Count(x => x.ResourceKey == "projects"));
@@ -157,7 +162,9 @@ public sealed class AzureDevOpsPageCheckpointTests
 
         var completed = await reader.DiscoverWithCheckpointsAsync(source, "az-org", "PAT", lease, default);
         Assert.Single(completed.Snapshot.Projects[0].Repositories);
-        Assert.Single(completed.Refs);
+        Assert.Empty(completed.Refs);
+        Assert.True(completed.RefsExternalized);
+        Assert.Equal(1, completed.RefCount);
         Assert.Equal(1, requests["/az-org/_apis/projects"]);
         Assert.Equal(1, requests["/az-org/_apis/projects/p1"]);
         Assert.Equal(2, requests["/az-org/p1/_apis/git/repositories"]);
