@@ -51,6 +51,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<IncrementalOperationPlanRecord>();
     public DbSet<IncrementalOperationStepRecord> IncrementalOperationSteps =>
         Set<IncrementalOperationStepRecord>();
+    public DbSet<GitTransferWorkpackRecord> GitTransferWorkpacks =>
+        Set<GitTransferWorkpackRecord>();
+    public DbSet<GitTransferWorkpackEventRecord> GitTransferWorkpackEvents =>
+        Set<GitTransferWorkpackEventRecord>();
     public DbSet<IncrementalGitRefReconciliationRecord> IncrementalGitRefReconciliations =>
         Set<IncrementalGitRefReconciliationRecord>();
     public DbSet<GitHubTargetRefEvidenceRecord> GitHubTargetRefEvidence =>
@@ -370,6 +374,61 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ChangedRefs).HasColumnName("changed_refs");
             entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
                 .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<GitTransferWorkpackRecord>(entity =>
+        {
+            entity.ToTable("git_transfer_workpacks");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.ReconciliationId).HasColumnName("reconciliation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id").HasMaxLength(256);
+            entity.Property(x => x.TargetRepositoryName).HasColumnName("target_repository_name").HasMaxLength(100);
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReconciliationSha256).HasColumnName("reconciliation_sha256").HasMaxLength(64);
+            entity.Property(x => x.TargetEvidenceSha256).HasColumnName("target_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.CreatedBy).HasColumnName("created_by");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(16);
+            entity.Property(x => x.Phase).HasColumnName("phase").HasMaxLength(24);
+            entity.Property(x => x.Attempts).HasColumnName("attempts");
+            entity.Property(x => x.MaxAttempts).HasColumnName("max_attempts");
+            entity.Property(x => x.AvailableAtUtc).HasColumnName("available_at_utc");
+            entity.Property(x => x.LeaseToken).HasColumnName("lease_token");
+            entity.Property(x => x.LeaseUntilUtc).HasColumnName("lease_until_utc");
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.BlockedAtUtc).HasColumnName("blocked_at_utc");
+            entity.Property(x => x.LastErrorCode).HasColumnName("last_error_code").HasMaxLength(70);
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<IncrementalGitRefReconciliationRecord>().WithMany()
+                .HasForeignKey(x => x.ReconciliationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => x.ReconciliationId).IsUnique()
+                .HasDatabaseName("ux_git_transfer_workpack_reconciliation");
+            entity.HasIndex(x => x.LeaseToken).IsUnique()
+                .HasDatabaseName("ux_git_transfer_workpack_lease");
+            entity.HasIndex(x => new { x.State, x.AvailableAtUtc, x.CreatedAtUtc })
+                .HasDatabaseName("ix_git_transfer_workpack_claim");
+            entity.HasIndex(x => new { x.PlanId, x.CreatedAtUtc })
+                .HasDatabaseName("ix_git_transfer_workpack_plan");
+        });
+        builder.Entity<GitTransferWorkpackEventRecord>(entity =>
+        {
+            entity.ToTable("git_transfer_workpack_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(24);
+            entity.Property(x => x.Phase).HasColumnName("phase").HasMaxLength(24);
+            entity.Property(x => x.Attempt).HasColumnName("attempt");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.Property(x => x.ErrorCode).HasColumnName("error_code").HasMaxLength(70);
+            entity.HasOne<GitTransferWorkpackRecord>().WithMany()
+                .HasForeignKey(x => x.WorkpackId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.WorkpackId, x.Id })
+                .HasDatabaseName("ix_git_transfer_workpack_events");
         });
         builder.Entity<IncrementalGitRefReconciliationRecord>(entity =>
         {

@@ -14,7 +14,9 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-030 | Deterministic, provenance-bound Git branch/tag reconciliation | Business logic + xUnit implemented; not an executor |
 | F-031 | Live GitHub branch/tag ref evidence with immutable PostgreSQL proof | GET-only adapter + audit/paged API implemented; destination writes blocked |
 | F-032 | Snapshot-bound Azure DevOps ↔ GitHub branch/tag reconciliation | F-014/F-031 proofs joined in immutable PostgreSQL, compared by F-030, HTTP history/paging; no writes |
-| F-033 | Read-only React Git ref evidence and reconciliation workbench | Admin UI for F-029/F-031/F-032, safe capture/compare, immutable history, paginated decisions and Playwright tests; no execution |\n| F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
+| F-033 | Read-only React Git ref evidence and reconciliation workbench | Admin UI for F-029/F-031/F-032, safe capture/compare, immutable history, paginated decisions and Playwright tests; no execution |
+| F-034 | Durable, resumable Git transfer preparation workpacks | PostgreSQL lease-fenced evidence checkpoints, audit events, hard denied write barrier; no Git executor |
+| F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
 | F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |
 | F-010 | Boards work-item issue drafts + ID-specific GitHub object reconciliation | **Review MVP implemented**; issue creation and link patching pending |
