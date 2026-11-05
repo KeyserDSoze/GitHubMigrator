@@ -1,4 +1,18 @@
 Feature: Select and approve repository migration plan
+  Scenario: Externalized Git refs are counted from sealed PostgreSQL source evidence
+    Given a successful leased discovery whose snapshot externalizes Git ref arrays
+    And a matching immutable source-page manifest exists
+    When the operator previews a selected repository
+    Then its ref count comes from the same snapshot's verified PostgreSQL observations
+    And altered page or object-ID evidence blocks preview instead of returning zero refs
+    And no GitHub target permission or repository is created
+
+  Scenario: Legacy source snapshots remain supported
+    Given an immutable snapshot with inline Git refs and no externalized manifest
+    When the operator previews a selected repository
+    Then PostgreSQL groups only that snapshot's historical JSONB ref records
+    And the plan never substitutes the newer canonical source connection catalog
+
   Scenario: Select repositories and rename targets
     Given a discovery snapshot contains multiple projects and repositories
     When an operator includes one repository and changes its destination name
