@@ -817,9 +817,9 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             counts.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
             using var response = await harness.Client.SendAsync(counts);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            using var progress = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            Assert.Equal(2, progress.RootElement.GetProperty("checkpointedAclPages").GetInt32());
-            Assert.Equal(0, progress.RootElement.GetProperty("observedAces").GetInt32());
+            using var aclStatus = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(2, aclStatus.RootElement.GetProperty("checkpointedAclPages").GetInt32());
+            Assert.Equal(0, aclStatus.RootElement.GetProperty("observedAces").GetInt32());
         }
         using (var listing = new HttpRequestMessage(HttpMethod.Get,
             $"/api/jobs/{jobId}/acls?take=50"))
