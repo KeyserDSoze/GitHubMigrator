@@ -70,6 +70,23 @@ public static class StagingAssetNormalizer
         return new("ref", sourceId, null, fingerprint, payload);
     }
 
+    // Graph identity observations must use exactly the same source identity,
+    // payload schema and SHA as finalized canonical F-013 identity assets.
+    public static StagingAssetInput NormalizeIdentity(
+        string descriptor, string displayName, string? email, string? legacyDescriptor)
+    {
+        if (string.IsNullOrWhiteSpace(descriptor) || descriptor.Length > 1024)
+            throw new StagingSyncInputException("InvalidStagingAssetId");
+        var payload = JsonSerializer.Serialize(new {
+            DisplayName = displayName, Email = email, LegacyDescriptor = legacyDescriptor
+        });
+        if (payload.Length > 65_536)
+            throw new StagingSyncInputException("StagingAssetTooLarge");
+        var fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+            "staging-v1\nidentity\n" + payload)));
+        return new("identity", descriptor, null, fingerprint, payload);
+    }
+
     public static (IReadOnlyList<StagingAssetInput> Assets, IReadOnlySet<string> CompleteTypes)
         Normalize(DiscoveryInventory inventory)
     {
@@ -118,9 +135,14 @@ public static class StagingAssetNormalizer
                 throw new StagingSyncInputException("StagingAssetLimit");
         }
         foreach (var identity in inventory.Snapshot.Identities)
-            Add("identity", identity.ProviderId, null, new {
-                identity.DisplayName, identity.Email, identity.LegacyDescriptor
-            });
+        {
+            var asset = NormalizeIdentity(identity.ProviderId, identity.DisplayName,
+                identity.Email, identity.LegacyDescriptor);
+            if (!assets.TryAdd(("identity", asset.SourceId), asset))
+                throw new StagingSyncInputException("DuplicateStagingAsset");
+            if (assets.Count > MaxAssetsPerSnapshot)
+                throw new StagingSyncInputException("StagingAssetLimit");
+        }
         foreach (var group in inventory.Groups)
             Add("group", group.Descriptor, null, new { group.DisplayName, group.LegacyDescriptor });
         foreach (var edge in inventory.Memberships)
