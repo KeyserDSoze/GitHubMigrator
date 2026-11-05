@@ -93,6 +93,40 @@ public sealed class PostgresVerifiedSourceGitRefReaderTests(PostgresDraftFixture
         Assert.Equal("RefManifestIntegrityFailed", failure.Code);
     }
 
+    [Fact]
+    public async Task Partial_inline_snapshots_cannot_claim_target_only_refs_are_absent()
+    {
+        await using var db = fixture.NewContext();
+        var clock = new FixedClock(DateTimeOffset.UtcNow);
+        var sourceId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        var inventory = new DiscoveryInventory {
+            Id = snapshotId, ConnectionId = sourceId,
+            SourceProvider = "azure-devops-services", Organization = "az-org",
+            CollectedAtUtc = clock.GetUtcNow(),
+            Snapshot = new DiscoverySnapshot {
+                SnapshotId = snapshotId, SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                CollectedAt = clock.GetUtcNow(),
+                Projects = [new SourceProject("project", "Project", [
+                    new SourceRepository("repo-1", "project", "One", VersionControlKind.Git)
+                ])], Identities = [], AccessGrants = []
+            },
+            Refs = [new RepositoryRef("repo-1", "refs/heads/main",
+                new string('a', 40))],
+            Issues = [], Completeness = DiscoveryCompleteness.Partial,
+            IdentitiesComplete = false, PermissionsComplete = false
+        };
+        await new PostgresDiscoveryRepository(db).SaveAsync(inventory, default);
+        var normalized = StagingAssetNormalizer.Normalize(inventory);
+        await new PostgresStagingRepository(db, clock)
+            .ApplyAsync(inventory, normalized.Assets, normalized.CompleteTypes, default);
+        var reader = new PostgresVerifiedSourceGitRefReader(db,
+            new PostgresDiscoveryRefManifestStore(db, clock));
+        var failure = await Assert.ThrowsAsync<IncrementalGitRefReconciliationException>(() =>
+            reader.ReadAsync(FakePlan(snapshotId, sourceId), "repo-1", default));
+        Assert.Equal("SourceRefCoverageUnverified", failure.Code);
+    }
+
     private static IncrementalOperationPlan FakePlan(Guid snapshot, Guid connection) =>
         new(Guid.NewGuid(), Guid.NewGuid(), snapshot, connection, Guid.NewGuid(),
             "gh-org", new string('a', 64), new string('b', 64),
