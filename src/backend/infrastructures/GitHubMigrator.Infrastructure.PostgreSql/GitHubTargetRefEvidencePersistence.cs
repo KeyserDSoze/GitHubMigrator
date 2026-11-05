@@ -153,6 +153,22 @@ public sealed class PostgresGitHubTargetRefEvidenceStore(
             items.Length > take ? page[^1].Name : null);
     }
 
+    // Internal F-032 access: one complete, SHA-verified immutable target
+    // observation, never an unvalidated request-body ref list.
+    public async Task<(GitHubTargetRefEvidenceView View,
+        GitHubRefObservation Observation)?> ReadVerifiedSnapshotAsync(
+        Guid preparationId, Guid planId, Guid observationId,
+        CancellationToken ct)
+    {
+        var plan = await new PostgresIncrementalOperationPlanRepository(db, clock)
+            .GetAsync(preparationId, planId, ct);
+        if (plan is null) return null;
+        var row = await db.GitHubTargetRefEvidence.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == observationId && x.PlanId == planId, ct);
+        if (row is null) return null;
+        return (await ViewAsync(row, ct, plan), ParseVerified(row));
+    }
+
     private async Task<GitHubTargetRefEvidenceView> ViewAsync(
         GitHubTargetRefEvidenceRecord row, CancellationToken ct,
         IncrementalOperationPlan? knownPlan = null)
