@@ -59,6 +59,40 @@ public static class MigrationJobEndpoints
             return Results.Ok(await observations.GetAsync(jobId, ct));
         });
 
+        routes.MapGet("/{jobId:guid}/identity-progress", async Task<IResult> (
+            Guid jobId, MigrationJobService service,
+            IDiscoveryIdentityObservationStore observations, CancellationToken ct) =>
+        {
+            var job = await service.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            return Results.Ok(await observations.GetProgressAsync(jobId, ct));
+        });
+
+        routes.MapGet("/{jobId:guid}/identities", async Task<IResult> (
+            Guid jobId, string? after, int? take, MigrationJobService service,
+            IDiscoveryIdentityObservationStore observations, CancellationToken ct) =>
+        {
+            var job = await service.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            // Descriptors, display names and addresses must not be exposed
+            // as an apparent verified inventory before discovery completes.
+            if (job.State != MigrationJobStates.Succeeded)
+                return Results.Conflict(new { error = "DiscoveryNotCompleted" });
+            try
+            {
+                return Results.Ok(await observations.ListAsync(jobId, after, take ?? 50, ct));
+            }
+            catch (DiscoveryCheckpointException ex)
+                when (ex.Code == "InvalidIdentityObservationPage")
+            {
+                return Results.BadRequest(new { error = ex.Code });
+            }
+        });
+
         routes.MapGet("/{jobId:guid}/ref-manifest", async Task<IResult> (
             Guid jobId, MigrationJobService jobs,
             IDiscoveryRefManifestStore manifests, CancellationToken ct) =>
