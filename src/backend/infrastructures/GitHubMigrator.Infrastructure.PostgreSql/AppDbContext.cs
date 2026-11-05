@@ -41,6 +41,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<IncrementalReviewRecord>();
     public DbSet<IncrementalReviewEventRecord> IncrementalReviewEvents =>
         Set<IncrementalReviewEventRecord>();
+    public DbSet<IncrementalTargetPreflightRecord> IncrementalTargetPreflights =>
+        Set<IncrementalTargetPreflightRecord>();
+    public DbSet<IncrementalTargetProbeRecord> IncrementalTargetProbes =>
+        Set<IncrementalTargetProbeRecord>();
+    public DbSet<IncrementalTargetPreflightEventRecord> IncrementalTargetPreflightEvents =>
+        Set<IncrementalTargetPreflightEventRecord>();
     public DbSet<MigrationJobRecord> MigrationJobs => Set<MigrationJobRecord>();
     public DbSet<MigrationJobEventRecord> MigrationJobEvents => Set<MigrationJobEventRecord>();
     public DbSet<DiscoveryPageCheckpointRecord> DiscoveryPageCheckpoints => Set<DiscoveryPageCheckpointRecord>();
@@ -262,6 +268,57 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => new { x.PreparationId, x.Id })
                 .HasDatabaseName("ix_incremental_preparation_review_events");
+        });
+        builder.Entity<IncrementalTargetPreflightRecord>(entity =>
+        {
+            entity.ToTable("incremental_target_preflights");
+            entity.HasKey(x => x.PreparationId);
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(100);
+            entity.Property(x => x.ReviewSha256).HasColumnName("review_sha256").HasMaxLength(64);
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.CheckedAtUtc).HasColumnName("checked_at_utc");
+            entity.Property(x => x.Revision).HasColumnName("revision");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(20);
+            entity.Property(x => x.MembershipStatus).HasColumnName("membership_status").HasMaxLength(28);
+            entity.Property(x => x.MembershipRole).HasColumnName("membership_role").HasMaxLength(20);
+            entity.Property(x => x.PrivateRepositoryPolicy).HasColumnName("private_repository_policy").HasMaxLength(32);
+            entity.Property(x => x.SourceValidatedAtUtc).HasColumnName("source_validated_at_utc");
+            entity.Property(x => x.DestinationValidatedAtUtc).HasColumnName("destination_validated_at_utc");
+            entity.Property(x => x.RepositoryCount).HasColumnName("repository_count");
+            entity.Property(x => x.VisibleCollisions).HasColumnName("visible_collisions");
+            entity.Property(x => x.UncertainRepositories).HasColumnName("uncertain_repositories");
+            entity.HasOne<IncrementalPreparationRecord>().WithOne()
+                .HasForeignKey<IncrementalTargetPreflightRecord>(x => x.PreparationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<IncrementalTargetProbeRecord>(entity =>
+        {
+            entity.ToTable("incremental_target_preflight_probes");
+            entity.HasKey(x => new { x.PreparationId, x.SourceRepositoryId });
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id").HasMaxLength(256);
+            entity.Property(x => x.TargetRepositoryName).HasColumnName("target_repository_name").HasMaxLength(100);
+            entity.Property(x => x.HistoryStrategy).HasColumnName("history_strategy").HasMaxLength(40);
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(28);
+            entity.HasOne<IncrementalTargetPreflightRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<IncrementalTargetPreflightEventRecord>(entity =>
+        {
+            entity.ToTable("incremental_target_preflight_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.CheckedAtUtc).HasColumnName("checked_at_utc");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(20);
+            entity.Property(x => x.Revision).HasColumnName("revision");
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.PreparationId, x.Id })
+                .HasDatabaseName("ix_incremental_target_preflight_events");
         });
         builder.Entity<MigrationJobRecord>(entity =>
         {

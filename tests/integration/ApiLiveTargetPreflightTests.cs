@@ -1,0 +1,183 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
+using GitHubMigrator.Business;
+using GitHubMigrator.Domain;
+using GitHubMigrator.Infrastructure.PostgreSql;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace GitHubMigrator.Integration.Tests;
+
+// ASP.NET, JWT, PostgreSQL, encrypted PAT store and actual GitHub GET adapters.
+// Only provider HTTP responses are stubbed by the existing strict GET-only
+// ApiHarness handler (fixed api.github.com, no redirection or writes).
+public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
+    : IClassFixture<ApiHarness>
+{
+    [Fact]
+    public async Task F028_GET_only_preflight_is_review_gated_RBAC_scoped_and_never_executable()
+    {
+        var snapshotId = Guid.NewGuid();
+        var source = harness.SourceConnectionId;
+        var target = harness.DestinationConnectionId;
+        var now = DateTimeOffset.UtcNow;
+        Guid prepId;
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var snapshot = new DiscoveryInventory {
+                Id = snapshotId, ConnectionId = source,
+                SourceProvider = "azure-devops-services", Organization = "az-org",
+                CollectedAtUtc = now.AddMinutes(-4),
+                Snapshot = new DiscoverySnapshot {
+                    SnapshotId = snapshotId,
+                    SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                    CollectedAt = now.AddMinutes(-4),
+                    Projects = [new SourceProject("project", "Project", [
+                        new SourceRepository("repo-1", "project", "One",
+                            VersionControlKind.Git),
+                        new SourceRepository("repo-2", "project", "Two",
+                            VersionControlKind.Git)])],
+                    Identities = [], AccessGrants = []
+                },
+                Refs = [new RepositoryRef("repo-1", "refs/heads/main", "abc")],
+                Issues = [], Completeness = DiscoveryCompleteness.Partial,
+                IdentitiesComplete = false, PermissionsComplete = false
+            };
+            await new PostgresDiscoveryRepository(db).SaveAsync(snapshot, default);
+            var normalized = StagingAssetNormalizer.Normalize(snapshot);
+            await new PostgresStagingRepository(db, TimeProvider.System)
+                .ApplyAsync(snapshot, normalized.Assets, normalized.CompleteTypes, default);
+            var queue = new PostgresIncrementalPreparationRepository(db, TimeProvider.System);
+            var created = await queue.EnqueueAsync(snapshotId, source, target,
+                Guid.NewGuid(), default);
+            prepId = created.Id;
+            var lease = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5),
+                default, source);
+            Assert.NotNull(lease);
+            Assert.True(await queue.PrepareAsync(lease, default));
+        }
+        var admin = await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword);
+        var user = await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword);
+        var path = $"/api/incremental-preparations/{prepId}/target-preflight";
+        var payload = new {
+            expectedReviewSha256 = new string('a', 64),
+            repositories = new[] {
+                new { sourceRepositoryId = "repo-1",
+                    targetRepositoryName = "occupied", strategy = 0, include = true },
+                new { sourceRepositoryId = "repo-2",
+                    targetRepositoryName = "hidden", strategy = 0, include = true }
+            }
+        };
+        var callsBefore = harness.Calls.Count;
+        using (var anonymous = await harness.Client.PostAsJsonAsync(path, payload))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using (var forbidden = await PostAsAsync(path, payload, user))
+            Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+        using (var noReview = await PostAsAsync(path, payload, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, noReview.StatusCode);
+            Assert.Contains("PlanningReviewRequired",
+                await noReview.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore, harness.Calls.Count);
+
+        string hash;
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var review = new PostgresIncrementalReviewRepository(db, TimeProvider.System);
+            var proof = await review.DryRunAsync(prepId, Guid.NewGuid(), default);
+            var approved = await review.DecideAsync(prepId, Guid.NewGuid(),
+                "ApproveForPlanning", proof.DryRunSha256, false, null, default);
+            Assert.True(approved.IsCurrent);
+            hash = approved.DryRunSha256;
+        }
+
+        var approvedRequest = new {
+            expectedReviewSha256 = hash,
+            repositories = payload.repositories
+        };
+        using var checkedRequest = await PostAsAsync(path, approvedRequest, admin);
+        Assert.Equal(HttpStatusCode.OK, checkedRequest.StatusCode);
+        var responseJson = await checkedRequest.Content.ReadAsStringAsync();
+        using var json = JsonDocument.Parse(responseJson);
+        var root = json.RootElement;
+        Assert.Equal("Blocked", root.GetProperty("state").GetString());
+        Assert.Equal(2, root.GetProperty("checkedRepositories").GetInt32());
+        Assert.Equal(1, root.GetProperty("visibleCollisions").GetInt32());
+        Assert.Equal(1, root.GetProperty("uncertainRepositories").GetInt32());
+        Assert.True(root.GetProperty("membershipVerified").GetBoolean());
+        Assert.False(root.GetProperty("repositoryCreatePermissionVerified").GetBoolean());
+        Assert.False(root.GetProperty("targetAvailabilityVerified").GetBoolean());
+        Assert.False(root.GetProperty("readyForExecution").GetBoolean());
+        Assert.True(root.GetProperty("isCurrent").GetBoolean());
+        Assert.Equal(["Exists", "NotVisibleOrMissing"],
+            root.GetProperty("repositories").EnumerateArray()
+                .Select(x => x.GetProperty("status").GetString()).ToArray());
+
+        var calls = harness.Calls.ToArray().Skip(callsBefore).ToArray();
+        Assert.Equal(4, calls.Length); // membership + organization + two repo GETs
+        Assert.All(calls, call => {
+            Assert.Equal("GET", call.Method);
+            Assert.Equal("api.github.com", call.Url.Host);
+            Assert.Equal("Bearer", call.AuthScheme);
+        });
+        Assert.Contains(calls, x => x.Url.AbsolutePath == "/repos/gh-org/occupied");
+        Assert.Contains(calls, x => x.Url.AbsolutePath == "/repos/gh-org/hidden");
+        Assert.DoesNotContain(ApiHarness.TargetToken, responseJson);
+        Assert.DoesNotContain(ApiHarness.SourceToken, responseJson);
+        Assert.DoesNotContain("secret", responseJson, StringComparison.OrdinalIgnoreCase);
+
+        using (var get = new HttpRequestMessage(HttpMethod.Get, path))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var stored = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.Equal(root.GetProperty("evidenceSha256").GetString(),
+                stored.RootElement.GetProperty("evidenceSha256").GetString());
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get, path + "/events"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var eventsJson = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.Single(eventsJson.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+
+        // A connection re-validation invalidates even previously persisted GET
+        // observations. Reading the old record makes ZERO additional API calls.
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.Connections.Where(x => x.Id == target)
+                .ExecuteUpdateAsync(update => update.SetProperty(x => x.ValidatedAtUtc,
+                    DateTimeOffset.UtcNow.AddSeconds(25)));
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get, path))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var stale = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.False(stale.RootElement.GetProperty("isCurrent").GetBoolean());
+        }
+        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+    }
+
+    private async Task<HttpResponseMessage> PostAsAsync(
+        string path, object payload, string token)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path) {
+            Content = JsonContent.Create(payload)
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await harness.Client.SendAsync(request);
+    }
+}

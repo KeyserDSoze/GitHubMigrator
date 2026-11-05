@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type StagingChangeSummary, type IncrementalPreparation, type IncrementalReview, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type StagingChangeSummary, type IncrementalPreparation, type IncrementalReview, type IncrementalTargetPreflight, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -20,6 +20,10 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
   const [changeSummary, setChangeSummary] = useState<StagingChangeSummary | null>(null);
   const [preparation, setPreparation] = useState<IncrementalPreparation | null>(null);
   const [review, setReview] = useState<IncrementalReview | null>(null);
+  const [targetPreflight, setTargetPreflight] =
+    useState<IncrementalTargetPreflight | null>(null);
+  const [targetSelections, setTargetSelections] =
+    useState<Record<string, { selected: boolean; name: string }>>({});
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
   const [reviewReason, setReviewReason] = useState('');
   const [job, setJob] = useState<MigrationJob | null>(null);
@@ -86,7 +90,8 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
 
   async function viewSnapshot(id: string) {
     setSelectedId(id); setDetail(null); setStaging(null); setJob(null); setTab('projects'); setError('');
-    setPreparation(null); setReview(null); setRiskAcknowledged(false); setReviewReason('');
+    setPreparation(null); setReview(null); setTargetPreflight(null);
+    setRiskAcknowledged(false); setReviewReason('');
     try {
       const data = await api.getDiscovery(token, id);
       const [sync, jobs] = await Promise.all([
@@ -134,7 +139,8 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
     try {
       const run = await api.enqueueIncrementalPreparation(token, selectedId, destinationId);
       setPreparation(run);
-      setReview(null); setRiskAcknowledged(false); setReviewReason('');
+      setReview(null); setTargetPreflight(null);
+      setRiskAcknowledged(false); setReviewReason('');
       setNotice(t('incrementalQueued'));
     } catch (e) {
       setError(e instanceof Error && e.message === 'IncrementalSnapshotSuperseded'
@@ -170,6 +176,27 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
     finally { setBusy(false); }
   }
 
+  async function runTargetPreflight() {
+    if (!preparation || review?.state !== 'ApprovedForPlanning' ||
+        !review.isCurrent || !detail) return;
+    const selections = detail.snapshot.projects.flatMap(p => p.repositories)
+      .filter(r => r.versionControl === 0 && targetSelections[r.providerId]?.selected)
+      .map(r => ({ sourceRepositoryId: r.providerId,
+        targetRepositoryName: targetSelections[r.providerId].name.trim(),
+        strategy: 0, include: true }));
+    if (selections.length < 1 || selections.length > 10) {
+      setError(t('targetPreflightSelectionLimit')); return;
+    }
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const result = await api.runLiveTargetPreflight(
+        token, preparation.id, review.dryRunSha256, selections);
+      setTargetPreflight(result);
+      setNotice(t('targetPreflightSaved'));
+    } catch { setError(t('targetPreflightError')); }
+    finally { setBusy(false); }
+  }
+
   async function enqueueStagingJob() {
     if (!selectedId) return;
     setBusy(true); setError(''); setNotice('');
@@ -192,6 +219,29 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
     }, 2000);
     return () => { active = false; window.clearInterval(timer); };
   }, [preparation?.id, preparation?.state, token]);
+
+  useEffect(() => {
+    if (!detail) { setTargetSelections({}); return; }
+    const entries = detail.snapshot.projects.flatMap(p => p.repositories)
+      .filter(r => r.versionControl === 0).slice(0, 100);
+    setTargetSelections(Object.fromEntries(entries.map((r, index) =>
+      [r.providerId, { selected: index < 10,
+        name: /^[A-Za-z0-9._-]{1,100}$/.test(r.name) &&
+          !r.name.toLowerCase().endsWith('.git') ? r.name :
+          ('migrated-' + r.providerId.replace(/[^A-Za-z0-9._-]/g, '-')).slice(0, 100) }])));
+  }, [detail?.id]);
+
+  useEffect(() => {
+    if (review?.state !== 'ApprovedForPlanning' || !preparation ||
+        !review.isCurrent) {
+      setTargetPreflight(null); return;
+    }
+    let active = true;
+    void api.getLiveTargetPreflight(token, preparation.id)
+      .then(result => { if (active) setTargetPreflight(result); })
+      .catch(() => { if (active) setTargetPreflight(null); });
+    return () => { active = false; };
+  }, [preparation?.id, review?.state, review?.isCurrent, token]);
 
   useEffect(() => {
     if (!preparation || preparation.state !== 'Prepared') {
@@ -453,6 +503,51 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
               {t('incrementalRevoke')}
             </button>
           </>}
+        </>}
+      </section>}
+    {preparation?.snapshotId === selectedId &&
+      review?.state === 'ApprovedForPlanning' && <section
+        className="notice" aria-label={t('targetPreflightTitle')}>
+        <strong>{t('targetPreflightTitle')}</strong>
+        <p>{t('targetPreflightSafety')}</p>
+        {detail?.snapshot.projects.flatMap(p => p.repositories)
+          .filter(r => r.versionControl === 0 && targetSelections[r.providerId])
+          .slice(0, 100).map(r => <label key={r.providerId}>
+            <input type="checkbox" checked={targetSelections[r.providerId]?.selected ?? false}
+              onChange={event => setTargetSelections(old => ({
+                ...old, [r.providerId]: {
+                  ...old[r.providerId], selected: event.target.checked
+                }
+              }))} />
+            {' '}{r.name} · {t('targetPreflightName')}:
+            <input type="text" maxLength={100}
+              value={targetSelections[r.providerId]?.name ?? ''}
+              onChange={event => setTargetSelections(old => ({
+                ...old, [r.providerId]: {
+                  ...old[r.providerId], name: event.target.value
+                }
+              }))} />
+          </label>)}
+        <button className="plan-secondary" type="button"
+          disabled={busy || !review.isCurrent}
+          onClick={() => { void runTargetPreflight(); }}>
+          {t('targetPreflightRun')}
+        </button>
+        {targetPreflight && <>
+          <p><strong>{targetPreflight.state === 'Blocked'
+            ? t('targetPreflightBlocked') : t('targetPreflightUnknown')}</strong>
+            {' · '}{targetPreflight.checkedRepositories} {t('targetPreflightRepositories')}
+            {' · '}{targetPreflight.visibleCollisions} {t('targetPreflightCollisions')}
+            {' · '}{targetPreflight.uncertainRepositories} {t('targetPreflightUncertain')}
+            {' · '}{targetPreflight.isCurrent
+              ? t('incrementalDryRunCurrent') : t('incrementalDryRunStale')}
+          </p>
+          <p>{t('targetPreflightMembership')}: {targetPreflight.membershipStatus}
+            {' · '}{t('incrementalDigest')}: {targetPreflight.evidenceSha256.slice(0, 12)}…
+          </p>
+          {targetPreflight.repositories.map(r => <p key={r.sourceRepositoryId}>
+            {r.targetRepositoryName}: {r.status}
+          </p>)}
         </>}
       </section>}
     {changeSummary?.snapshotId === selectedId && <section
