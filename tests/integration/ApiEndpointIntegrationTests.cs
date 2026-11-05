@@ -554,7 +554,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         // HTTP test from other worker tests' intentionally abandoned leases.
         await using (var reset = harness.Host.Services.CreateAsyncScope())
             await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
         // The staging catalog is shared across API tests: use an isolated
         // logical source connection so exact asset count assertions are stable.
         var sourceId = Guid.NewGuid();
@@ -646,7 +646,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         await using (var scope = harness.Host.Services.CreateAsyncScope())
         {
             await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
             await scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>()
                 .SaveAsync(secretRef, ApiHarness.SourceToken, default);
             await scope.ServiceProvider.GetRequiredService<IConnectionRepository>().SaveAsync(
