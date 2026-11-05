@@ -59,6 +59,38 @@ public static class MigrationJobEndpoints
             return Results.Ok(await observations.GetAsync(jobId, ct));
         });
 
+        routes.MapGet("/{jobId:guid}/group-progress", async Task<IResult> (
+            Guid jobId, MigrationJobService service,
+            IDiscoveryGroupObservationStore groups, CancellationToken ct) =>
+        {
+            var job = await service.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            return Results.Ok(await groups.GetProgressAsync(jobId, ct));
+        });
+
+        routes.MapGet("/{jobId:guid}/groups", async Task<IResult> (
+            Guid jobId, string? after, int? take, MigrationJobService service,
+            IDiscoveryGroupObservationStore groups, CancellationToken ct) =>
+        {
+            var job = await service.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            if (job.State != MigrationJobStates.Succeeded)
+                return Results.Conflict(new { error = "DiscoveryNotCompleted" });
+            try
+            {
+                return Results.Ok(await groups.ListAsync(jobId, after, take ?? 50, ct));
+            }
+            catch (DiscoveryCheckpointException ex)
+                when (ex.Code == "InvalidGroupObservationPage")
+            {
+                return Results.BadRequest(new { error = ex.Code });
+            }
+        });
+
         routes.MapGet("/{jobId:guid}/identity-progress", async Task<IResult> (
             Guid jobId, MigrationJobService service,
             IDiscoveryIdentityObservationStore observations, CancellationToken ct) =>
