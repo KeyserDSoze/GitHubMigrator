@@ -157,6 +157,7 @@ public sealed class PostgresDiscoveryRefManifestStore(AppDbContext db, TimeProvi
 
     private async Task ValidateWorkerLeaseAsync(MigrationJobLease lease, CancellationToken ct)
     {
+        var now = clock.GetUtcNow();
         if (lease.Id == Guid.Empty || lease.LeaseToken == Guid.Empty ||
             lease.Kind != MigrationJobKinds.DiscoverSource || lease.Attempt < 1 ||
             lease.SnapshotId != lease.Id ||
@@ -168,7 +169,7 @@ public sealed class PostgresDiscoveryRefManifestStore(AppDbContext db, TimeProvi
                 job.State == MigrationJobStates.Running &&
                 job.Attempts == lease.Attempt &&
                 job.LeaseToken == lease.LeaseToken &&
-                job.LeaseUntilUtc > clock.GetUtcNow(), ct))
+                job.LeaseUntilUtc > now, ct))
             throw new DiscoveryRefManifestException("DiscoveryLeaseLost");
     }
 
