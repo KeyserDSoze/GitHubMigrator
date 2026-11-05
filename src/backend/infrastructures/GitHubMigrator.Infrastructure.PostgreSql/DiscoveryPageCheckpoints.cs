@@ -344,17 +344,52 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
         if (shouldHavePage && cached.Length == 0)
             throw new DiscoveryCheckpointException("GroupSnapshotMismatch");
 
-        // Both directions, including duplicate multisets, are checked:
-        // equivalent totals are not enough to accept a replacement group.
+        // Page ↔ indexed observations must agree even when the immutable
+        // snapshot intentionally carries no inline Graph group array.
+        // For legacy snapshots, preserve a second, symmetric snapshot ↔
+        // observation comparison. Complete inventories require a contiguous
+        // terminal page chain, including an empty Graph groups response.
         var mismatch = await db.Database.SqlQuery<bool>($"""
-            WITH saved AS (
+            WITH source_snapshot AS (
+                SELECT inventory FROM migration_discoveries
+                WHERE id = {lease.Id} AND connection_id = {lease.SourceConnectionId}
+            ),
+            flags AS (
+                SELECT
+                    COALESCE((inventory ->> 'groupsExternalized')::boolean, false)
+                        AS externalized,
+                    COALESCE((inventory ->> 'groupCount')::integer, -1)
+                        AS expected_count,
+                    COALESCE(jsonb_array_length(inventory -> 'groups'), 0)
+                        AS inline_count,
+                    COALESCE((inventory -> 'securityCoverage' ->> 'groupsComplete')::boolean,
+                        false) AS complete
+                FROM source_snapshot
+            ),
+            saved AS (
                 SELECT g.descriptor,
                     g."displayName" AS display_name,
                     g."legacyDescriptor" AS legacy
-                FROM migration_discoveries d
-                CROSS JOIN LATERAL jsonb_to_recordset(d.inventory -> 'groups')
+                FROM source_snapshot s
+                CROSS JOIN LATERAL jsonb_to_recordset(s.inventory -> 'groups')
                     AS g(descriptor text, "displayName" text, "legacyDescriptor" text)
-                WHERE d.id = {lease.Id} AND d.connection_id = {lease.SourceConnectionId}
+                WHERE NOT (SELECT externalized FROM flags)
+            ),
+            pages AS (
+                SELECT p.page_index, p.safe_payload_json, p.next_continuation
+                FROM discovery_page_checkpoints p
+                WHERE p.job_id = {lease.Id} AND p.resource_key = 'security-groups'
+            ),
+            page_rows AS (
+                SELECT DISTINCT g.descriptor,
+                    COALESCE(g."displayName", g.descriptor) AS display_name,
+                    g."legacyDescriptor" AS legacy
+                FROM pages p
+                CROSS JOIN LATERAL jsonb_to_recordset(
+                    CASE WHEN jsonb_typeof(p.safe_payload_json -> 'value') = 'array'
+                        THEN p.safe_payload_json -> 'value' ELSE '[]'::jsonb END)
+                    AS g(descriptor text, "displayName" text, "legacyDescriptor" text)
+                WHERE NULLIF(btrim(g.descriptor), '') IS NOT NULL
             ),
             observed AS (
                 SELECT source_id AS descriptor,
@@ -363,11 +398,48 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                 FROM discovery_group_observations WHERE job_id = {lease.Id}
             ),
             differences AS (
-                (SELECT * FROM saved EXCEPT ALL SELECT * FROM observed)
+                (SELECT * FROM page_rows EXCEPT ALL SELECT * FROM observed)
                 UNION ALL
-                (SELECT * FROM observed EXCEPT ALL SELECT * FROM saved)
+                (SELECT * FROM observed EXCEPT ALL SELECT * FROM page_rows)
+                UNION ALL
+                (SELECT * FROM saved WHERE NOT (SELECT externalized FROM flags)
+                    EXCEPT ALL SELECT * FROM observed
+                    WHERE NOT (SELECT externalized FROM flags))
+                UNION ALL
+                (SELECT * FROM observed WHERE NOT (SELECT externalized FROM flags)
+                    EXCEPT ALL SELECT * FROM saved)
+            ),
+            group_page_sequence AS (
+                SELECT count(*) AS page_count, min(page_index) AS first_page,
+                    max(page_index) AS last_page,
+                    count(*) FILTER (WHERE next_continuation IS NULL) AS terminal_count,
+                    max(page_index) FILTER (WHERE next_continuation IS NULL)
+                        AS terminal_page
+                FROM pages
             )
-            SELECT EXISTS(SELECT 1 FROM differences) AS "Value"
+            SELECT (
+                NOT EXISTS (SELECT 1 FROM source_snapshot)
+                OR EXISTS (SELECT 1 FROM differences)
+                OR EXISTS (
+                    SELECT 1 FROM flags f WHERE f.externalized AND
+                        (f.inline_count <> 0 OR f.expected_count < 0
+                            OR f.expected_count > 1_000
+                            OR f.expected_count <> (SELECT count(*) FROM observed))
+                )
+                OR EXISTS (
+                    SELECT 1 FROM pages p
+                    WHERE jsonb_typeof(p.safe_payload_json -> 'value')
+                        IS DISTINCT FROM 'array'
+                )
+                OR EXISTS (
+                    SELECT 1 FROM flags f CROSS JOIN group_page_sequence seq
+                    WHERE f.complete AND
+                        (seq.page_count = 0 OR seq.first_page <> 0
+                            OR seq.last_page + 1 <> seq.page_count
+                            OR seq.terminal_count <> 1
+                            OR seq.terminal_page <> seq.last_page)
+                )
+            ) AS "Value"
             """).SingleAsync(ct);
         if (mismatch)
             throw new DiscoveryCheckpointException("GroupSnapshotMismatch");
@@ -541,9 +613,21 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                     'security-members:' ||
                         left(encode(sha256(convert_to(g.descriptor, 'UTF8')), 'hex'), 40)
                         AS resource_key
-                FROM source_snapshot s
-                CROSS JOIN LATERAL jsonb_to_recordset(s.inventory -> 'groups')
-                    AS g(descriptor text)
+                FROM (
+                    SELECT g.descriptor
+                    FROM source_snapshot s
+                    CROSS JOIN LATERAL jsonb_to_recordset(s.inventory -> 'groups')
+                        AS g(descriptor text)
+                    WHERE NOT COALESCE((s.inventory ->> 'groupsExternalized')::boolean,
+                        false)
+                    UNION ALL
+                    SELECT o.source_id AS descriptor
+                    FROM discovery_group_observations o
+                    JOIN source_snapshot s ON true
+                    WHERE o.job_id = {lease.Id}
+                      AND COALESCE((s.inventory ->> 'groupsExternalized')::boolean,
+                          false)
+                ) g
                 WHERE NULLIF(btrim(g.descriptor), '') IS NOT NULL
             ),
             pages AS (

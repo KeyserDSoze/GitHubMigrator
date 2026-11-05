@@ -301,7 +301,8 @@ public sealed class StagingSyncService(IDiscoveryRepository discoveries, IStagin
         // inventory. Legacy manual staging must never silently normalize it
         // as zero refs or persist a false authoritative sync result.
         if (inventory.RefsExternalized || inventory.IdentitiesExternalized ||
-            inventory.MembershipsExternalized || inventory.AclsExternalized)
+            inventory.MembershipsExternalized || inventory.AclsExternalized ||
+            inventory.GroupsExternalized)
             throw new StagingSyncInputException("ExternalizedSnapshotRequiresManifest");
         var normalized = StagingAssetNormalizer.Normalize(inventory);
         return await staging.ApplyAsync(inventory, normalized.Assets, normalized.CompleteTypes, ct);

@@ -255,14 +255,28 @@ public sealed class PostgresIdentitySnapshotReader(AppDbContext db) : IIdentityS
                 SELECT g."legacyDescriptor" AS legacy FROM migration_discoveries d
                 CROSS JOIN LATERAL jsonb_to_recordset(
                     d.inventory -> 'groups') AS g("legacyDescriptor" text)
-                WHERE d.id = {snapshotId}
+                WHERE d.id = {snapshotId} AND NOT
+                    COALESCE((d.inventory ->> 'groupsExternalized')::boolean, false)
+                UNION
+                SELECT o.payload_json ->> 'LegacyDescriptor' AS legacy
+                FROM discovery_group_observations o
+                JOIN migration_discoveries d ON d.id = o.job_id
+                WHERE d.id = {snapshotId} AND
+                    COALESCE((d.inventory ->> 'groupsExternalized')::boolean, false)
             ),
             principals AS (
                 SELECT DISTINCT a."securityDescriptor" AS descriptor
                 FROM migration_discoveries d
                 CROSS JOIN LATERAL jsonb_to_recordset(d.inventory -> 'aclEvidence')
                     AS a("securityDescriptor" text)
-                WHERE d.id = {snapshotId}
+                WHERE d.id = {snapshotId} AND NOT
+                    COALESCE((d.inventory ->> 'aclsExternalized')::boolean, false)
+                UNION
+                SELECT DISTINCT o.security_descriptor AS descriptor
+                FROM discovery_acl_observations o
+                JOIN migration_discoveries d ON d.id = o.job_id
+                WHERE d.id = {snapshotId} AND
+                    COALESCE((d.inventory ->> 'aclsExternalized')::boolean, false)
             )
             SELECT COUNT(*)::int AS "Value"
             FROM principals a

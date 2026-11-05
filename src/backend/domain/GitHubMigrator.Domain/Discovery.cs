@@ -44,6 +44,10 @@ public sealed class DiscoveryInventory
 
     // Optional to preserve deserialization of snapshots produced before security discovery.
     public IReadOnlyList<DiscoveryGroup> Groups { get; init; } = [];
+    // Leased Graph group pages are persisted in PostgreSQL; the reader only
+    // keeps descriptors temporarily while traversing direct membership.
+    public bool GroupsExternalized { get; init; }
+    public int GroupCount { get; init; }
     public IReadOnlyList<DiscoveryMembership> Memberships { get; init; } = [];
     // An externalized list is NOT evidence of zero direct group memberships.
     public bool MembershipsExternalized { get; init; }
