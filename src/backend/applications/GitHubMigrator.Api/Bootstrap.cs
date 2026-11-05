@@ -153,6 +153,24 @@ public static class Bootstrap
             );
             CREATE INDEX IF NOT EXISTS ix_discovery_ref_observations_repo
                 ON discovery_ref_observations(job_id, repository_id);
+            CREATE TABLE IF NOT EXISTS discovery_ref_manifests (
+                job_id uuid PRIMARY KEY REFERENCES migration_jobs(id) ON DELETE CASCADE,
+                source_connection_id uuid NOT NULL,
+                asset_count integer NOT NULL CHECK (asset_count >= 0),
+                chunk_size integer NOT NULL CHECK (chunk_size > 0),
+                chunk_count integer NOT NULL CHECK (chunk_count >= 0),
+                root_sha256 varchar(64) NOT NULL,
+                prepared_at_utc timestamp with time zone NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS discovery_ref_chunks (
+                job_id uuid NOT NULL REFERENCES discovery_ref_manifests(job_id) ON DELETE CASCADE,
+                chunk_index integer NOT NULL CHECK (chunk_index >= 0),
+                asset_count integer NOT NULL CHECK (asset_count > 0 AND asset_count <= 250),
+                first_source_id varchar(1024) NOT NULL,
+                last_source_id varchar(1024) NOT NULL,
+                sha256 varchar(64) NOT NULL,
+                PRIMARY KEY (job_id, chunk_index)
+            );
             CREATE TABLE IF NOT EXISTS migration_connection_secrets (
                 reference varchar(100) PRIMARY KEY,
                 ciphertext bytea NOT NULL,

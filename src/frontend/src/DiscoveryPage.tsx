@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -15,6 +15,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [staging, setStaging] = useState<StagingSyncResult | null>(null);
   const [job, setJob] = useState<MigrationJob | null>(null);
   const [refProgress, setRefProgress] = useState<DiscoveryRefIngestProgress | null>(null);
+  const [refManifest, setRefManifest] = useState<DiscoveryRefManifest | null>(null);
   const [tab, setTab] = useState<Tab>('projects');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -147,6 +148,18 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     return () => { active = false; window.clearInterval(timer); };
   }, [job?.id, job?.state, token, t]);
 
+  useEffect(() => {
+    if (!job || job.kind !== 'DiscoverSource' || job.state !== 'Succeeded') {
+      setRefManifest(null);
+      return;
+    }
+    let active = true;
+    void api.getDiscoveryRefManifest(token, job.id).then(value => {
+      if (active) setRefManifest(value);
+    }).catch(() => { if (active) setRefManifest(null); });
+    return () => { active = false; };
+  }, [job?.id, job?.kind, job?.state, token]);
+
   if (!isAdmin) return <section className="empty-card"><ShieldAlert size={30} /><p>{t('discoveryRequiresAdmin')}</p></section>;
 
   const summary = summaries.find(x => x.id === selectedId);
@@ -197,6 +210,14 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         {' · '}{refProgress.observedRefs} {t('discoveryRefProgressRefs')}
         {' · '}{refProgress.checkpointedRefPages} {t('discoveryRefProgressPages')}
         {' · '}{t('discoveryRefProgressProvisional')}
+      </section>}
+    {job?.kind === 'DiscoverSource' && job.state === 'Succeeded' &&
+      refManifest?.jobId === job.id &&
+      <section className="notice" role="status" aria-label={t('discoveryManifestTitle')}>
+        <strong>{t('discoveryManifestTitle')}</strong>
+        {' · '}{refManifest.assetCount} {t('discoveryManifestAssets')}
+        {' · '}{refManifest.chunkCount} {t('discoveryManifestChunks')}
+        {' · '}{t('discoveryManifestDigest')} {refManifest.rootSha256.slice(0, 12)}…
       </section>}
     {staging && <section className="notice" role="status" aria-label={t('stagingStatus')}>
       <strong>{t('stagingStatus')}</strong> · {staging.observed} {t('stagingObserved')}

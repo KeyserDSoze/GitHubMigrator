@@ -95,7 +95,7 @@ public sealed class MigrationJobService(
 
 public sealed class MigrationJobProcessor(
     IMigrationJobRepository jobs, StagingSyncService staging,
-    DiscoveryService? discovery = null)
+    DiscoveryService? discovery = null, IDiscoveryRefManifestStore? refManifests = null)
 {
     // Lease > execution deadline, ensuring normal slow work cannot run past its lease.
     // An abrupt process death is recovered after the lease expires by another worker.
@@ -121,6 +121,7 @@ public sealed class MigrationJobProcessor(
                 ? DiscoveryDeadline : ExecutionDeadline);
 
             Guid snapshotId = lease.SnapshotId;
+            var expectedRefs = 0;
             if (lease.Kind == MigrationJobKinds.DiscoverSource)
             {
                 if (discovery is null)
@@ -130,12 +131,19 @@ public sealed class MigrationJobProcessor(
                 var snapshot = await discovery.ScanAsync(lease.SourceConnectionId, work.Token, lease.Id,
                     new DiscoveryLeaseContext(lease.Id, lease.LeaseToken, lease.Attempt));
                 snapshotId = snapshot.Id;
+                expectedRefs = snapshot.Refs.Count;
                 if (snapshotId != lease.Id || snapshot.ConnectionId != lease.SourceConnectionId)
                     throw new MigrationJobInputException("DiscoveryJobSourceMismatch");
                 if (lease.SnapshotId == Guid.Empty &&
                     !await jobs.CheckpointSnapshotAsync(lease, snapshotId, work.Token))
                     return true; // ownership lost; the new lease is responsible
             }
+            // Prepare a bounded-memory, immutable chunk manifest before the
+            // canonical staging commit. It remains invisible until the job
+            // itself succeeds. Retrying a prepared manifest is idempotent.
+            if (lease.Kind == MigrationJobKinds.DiscoverSource && refManifests is not null)
+                await refManifests.PrepareAsync(lease, expectedRefs, work.Token);
+
             var result = await staging.SyncAsync(snapshotId, work.Token);
             await jobs.CompleteAsync(lease, result, shutdown);
         }
@@ -153,6 +161,10 @@ public sealed class MigrationJobProcessor(
             await RecordFailureAsync(lease, "StagingSnapshotOutOfOrder", true, shutdown);
         }
         catch (StagingSyncInputException ex)
+        {
+            await RecordFailureAsync(lease, ex.Code, true, shutdown);
+        }
+        catch (DiscoveryRefManifestException ex)
         {
             await RecordFailureAsync(lease, ex.Code, true, shutdown);
         }

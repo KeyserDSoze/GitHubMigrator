@@ -44,6 +44,14 @@ Feature: Durable and verifiable migration execution
     And raw ACL allow and deny masks are preserved without unrecognized fields
     And effective GitHub permissions remain unverified
 
+  Scenario: Complete source ref manifest can be consumed in bounded verified chunks
+    Given an immutable source snapshot and source ref pages saved under an active lease
+    When the worker prepares its chunk manifest before committing the staging catalog
+    Then it verifies the full repository, ref name and object ID multiset
+    And only a successful discovery job can publish the immutable chunk manifest
+    And a client can page chunk descriptors and read one integrity-checked chunk at a time
+    And a corrupted ref fingerprint fails verification instead of being returned
+
   Scenario: Ref page and normalized observations commit atomically
     Given an active Azure DevOps discovery worker and one page of Git refs
     When the source page is saved in PostgreSQL

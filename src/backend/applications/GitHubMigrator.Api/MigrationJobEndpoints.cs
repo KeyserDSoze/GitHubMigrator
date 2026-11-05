@@ -59,6 +59,74 @@ public static class MigrationJobEndpoints
             return Results.Ok(await observations.GetAsync(jobId, ct));
         });
 
+        routes.MapGet("/{jobId:guid}/ref-manifest", async Task<IResult> (
+            Guid jobId, MigrationJobService jobs,
+            IDiscoveryRefManifestStore manifests, CancellationToken ct) =>
+        {
+            var job = await jobs.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            if (job.State != MigrationJobStates.Succeeded)
+                return Results.Conflict(new { error = "DiscoveryNotCompleted" });
+            var manifest = await manifests.GetAsync(jobId, ct);
+            return manifest is null
+                ? Results.NotFound(new { error = "RefManifestUnavailable" })
+                : Results.Ok(manifest);
+        });
+
+        routes.MapGet("/{jobId:guid}/ref-manifest/chunks", async Task<IResult> (
+            Guid jobId, int? after, int? take, MigrationJobService jobs,
+            IDiscoveryRefManifestStore manifests, CancellationToken ct) =>
+        {
+            var job = await jobs.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            if (job.State != MigrationJobStates.Succeeded)
+                return Results.Conflict(new { error = "DiscoveryNotCompleted" });
+            try
+            {
+                return Results.Ok(await manifests.ListChunksAsync(
+                    jobId, after ?? -1, take ?? 20, ct));
+            }
+            catch (DiscoveryRefManifestException ex) when (ex.Code == "InvalidRefChunkPage")
+            {
+                return Results.BadRequest(new { error = ex.Code });
+            }
+            catch (DiscoveryRefManifestException ex)
+            {
+                return Results.Conflict(new { error = ex.Code });
+            }
+        });
+
+        routes.MapGet("/{jobId:guid}/ref-manifest/chunks/{index:int}", async Task<IResult> (
+            Guid jobId, int index, MigrationJobService jobs,
+            IDiscoveryRefManifestStore manifests, CancellationToken ct) =>
+        {
+            var job = await jobs.GetAsync(jobId, ct);
+            if (job is null) return Results.NotFound(new { error = "JobNotFound" });
+            if (job.Kind != MigrationJobKinds.DiscoverSource)
+                return Results.BadRequest(new { error = "UnsupportedJobKind" });
+            if (job.State != MigrationJobStates.Succeeded)
+                return Results.Conflict(new { error = "DiscoveryNotCompleted" });
+            try
+            {
+                var chunk = await manifests.ReadChunkAsync(jobId, index, ct);
+                return chunk is null
+                    ? Results.NotFound(new { error = "RefChunkNotFound" })
+                    : Results.Ok(chunk);
+            }
+            catch (DiscoveryRefManifestException ex) when (ex.Code == "InvalidRefChunkIndex")
+            {
+                return Results.BadRequest(new { error = ex.Code });
+            }
+            catch (DiscoveryRefManifestException ex)
+            {
+                return Results.Conflict(new { error = ex.Code });
+            }
+        });
+
         routes.MapGet("/{jobId:guid}/events", async Task<IResult> (
             Guid jobId, MigrationJobService service, CancellationToken ct) =>
         {

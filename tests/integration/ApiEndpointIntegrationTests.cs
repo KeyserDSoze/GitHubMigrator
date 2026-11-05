@@ -467,7 +467,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         // HTTP test from other worker tests' intentionally abandoned leases.
         await using (var reset = harness.Host.Services.CreateAsyncScope())
             await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
         // The staging catalog is shared across API tests: use an isolated
         // logical source connection so exact asset count assertions are stable.
         var sourceId = Guid.NewGuid();
@@ -559,7 +559,7 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         await using (var scope = harness.Host.Services.CreateAsyncScope())
         {
             await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database
-                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
             await scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>()
                 .SaveAsync(secretRef, ApiHarness.SourceToken, default);
             await scope.ServiceProvider.GetRequiredService<IConnectionRepository>().SaveAsync(
@@ -601,6 +601,15 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var second = JsonDocument.Parse(await parallel.Content.ReadAsStringAsync());
         Assert.Equal(jobId, second.RootElement.GetProperty("id").GetGuid());
 
+        // A manifest may be prepared during a scan but must never be published
+        // to callers before the durable discovery job reports success.
+        using (var pendingManifest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/ref-manifest"))
+        {
+            pendingManifest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(pendingManifest);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        }
         await using (var scope = harness.Host.Services.CreateAsyncScope())
             Assert.True(await scope.ServiceProvider.GetRequiredService<MigrationJobProcessor>()
                 .RunOnceAsync(default));
@@ -684,6 +693,45 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var progressUnauthenticated = await harness.Client.GetAsync(
             $"/api/jobs/{jobId}/ref-progress");
         Assert.Equal(HttpStatusCode.Unauthorized, progressUnauthenticated.StatusCode);
+
+        using var manifestGet = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/ref-manifest");
+        manifestGet.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var manifestResponse = await harness.Client.SendAsync(manifestGet);
+        Assert.Equal(HttpStatusCode.OK, manifestResponse.StatusCode);
+        using var manifest = JsonDocument.Parse(await manifestResponse.Content.ReadAsStringAsync());
+        Assert.Equal(jobId, manifest.RootElement.GetProperty("jobId").GetGuid());
+        Assert.Equal(1, manifest.RootElement.GetProperty("assetCount").GetInt32());
+        Assert.Equal(1, manifest.RootElement.GetProperty("chunkCount").GetInt32());
+        Assert.Equal(64, manifest.RootElement.GetProperty("rootSha256").GetString()!.Length);
+        using var chunksRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/ref-manifest/chunks?take=1");
+        chunksRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var chunksResponse = await harness.Client.SendAsync(chunksRequest);
+        Assert.Equal(HttpStatusCode.OK, chunksResponse.StatusCode);
+        using var chunkDescriptors = JsonDocument.Parse(await chunksResponse.Content.ReadAsStringAsync());
+        Assert.Equal(1, chunkDescriptors.RootElement.GetProperty("items").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, chunkDescriptors.RootElement.GetProperty("nextAfter").ValueKind);
+
+        using var chunkRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/ref-manifest/chunks/0");
+        chunkRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var chunkResponse = await harness.Client.SendAsync(chunkRequest);
+        Assert.Equal(HttpStatusCode.OK, chunkResponse.StatusCode);
+        using var loadedChunk = JsonDocument.Parse(await chunkResponse.Content.ReadAsStringAsync());
+        var firstItem = loadedChunk.RootElement.GetProperty("items")[0];
+        Assert.Equal(64, firstItem.GetProperty("fingerprint").GetString()!.Length);
+        Assert.Equal(new string('a', 40),
+            firstItem.GetProperty("properties").GetProperty("ObjectId").GetString());
+        using var deniedManifest = await harness.Client.GetAsync(
+            $"/api/jobs/{jobId}/ref-manifest");
+        Assert.Equal(HttpStatusCode.Unauthorized, deniedManifest.StatusCode);
+
+        using var invalidChunksRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/ref-manifest/chunks?take=999");
+        invalidChunksRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var invalidChunksResponse = await harness.Client.SendAsync(invalidChunksRequest);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidChunksResponse.StatusCode);
 
         var providerReadCount = harness.Calls.Count;
         using var replay = await PostAsync("/api/jobs/discovery", payload, admin);

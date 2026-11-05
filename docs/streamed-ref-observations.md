@@ -39,6 +39,10 @@ The Discovery workbench polls this count alongside the durable job status. The U
 - **Data validation:** duplicate keys within one page are rejected atomically; invalid/empty provider entries are filtered consistently with the source reader.
 - **API/UI:** end-to-end provider scan yields provisional records whose fingerprints equal the finalized F-013 records; role checks for progress; Playwright displays progress while discovery is in flight.
 
+## Immutable chunk manifests (next slice)
+
+After the source snapshot is saved, the worker now prepares an immutable chunk manifest from these provisional observations and verifies the snapshot's full ref multiset in PostgreSQL. The manifest is exposed only when the discovery job succeeds; chunk range reads use the PostgreSQL source-ID index and recheck SHA-256. See [immutable ref chunk manifests](immutable-ref-manifests.md).
+
 ## Current limitations / next milestones
 
 This first slice **persists Git ref observations incrementally** but still retains the final `DiscoveryInventory.Refs` collection and immutable full JSONB discovery snapshot in memory. Therefore **it is not yet full end-to-end constant-memory streaming**. No throughput or million-asset SLA has been benchmarked.
