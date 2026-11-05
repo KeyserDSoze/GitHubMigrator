@@ -65,6 +65,7 @@ builder.Services.AddScoped<IDiscoveryPageCheckpointStore>(
     provider => provider.GetRequiredService<PostgresDiscoveryPageCheckpointStore>());
 builder.Services.AddScoped<IDiscoveryRefIngestProgress>(
     provider => provider.GetRequiredService<PostgresDiscoveryPageCheckpointStore>());
+builder.Services.AddScoped<IDiscoveryRefManifestStore, PostgresDiscoveryRefManifestStore>();
 builder.Services.AddScoped<IStagingRepository, PostgresStagingRepository>();
 builder.Services.AddScoped<StagingSyncService>();
 builder.Services.AddScoped<IMigrationJobRepository, PostgresMigrationJobRepository>();
