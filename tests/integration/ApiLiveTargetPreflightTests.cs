@@ -341,6 +341,26 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             Assert.False(stale.RootElement[0].GetProperty("isCurrent").GetBoolean());
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // A same-row mutation that preserves a plausible JSON shape but
+        // changes the recorded count must fail SHA/metadata verification.
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.GitHubTargetRefEvidence
+                .Where(x => x.Id == observationId)
+                .ExecuteUpdateAsync(set => set.SetProperty(x => x.RefCount, 3));
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            evidencePath + "/" + observationId + "?take=50"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("RefEvidenceIntegrityFailed",
+                await response.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
     }
 
     private async Task<HttpResponseMessage> PostAsAsync(
