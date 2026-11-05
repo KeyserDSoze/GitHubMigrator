@@ -157,9 +157,9 @@ test('F-033 operator collects target refs, compares snapshots and reviews four b
   await expect(submit).toBeEnabled();
   await submit.click();
 
-  await expect(page.getByText(/github-api/).first()).toBeVisible();
+  await expect(page.getByRole('combobox', { name: /Repository sorgente|Source → destination repository/i })).toHaveValue('repo-1');
   await expect(page.getByText(/Bloccata — nessuna scrittura|Blocked — no writes/)).toBeVisible();
-  await expect(page.getByText(/Nessuna osservazione target|No verified target observations/)).toBeVisible();
+  await expect(page.getByRole('combobox', { name: /Osservazione target salvata|Saved target observation/i })).toHaveValue('');
   await expect(page.getByRole('button', { name: /Confronta ref certificati|Compare verified refs/i }))
     .toBeDisabled();
 
