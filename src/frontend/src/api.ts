@@ -93,6 +93,40 @@ export type IncrementalOperationPlan = {
     kind: string; state: 'Blocked'; blockerCode: string;
     changedRefs: number }[];
 };
+// F-031/F-032: immutable, non-executable evidence from the real ASP.NET API.
+export type GitHubTargetRefEvidence = {
+  id: string; planId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; organization: string;
+  manifestSha256: string; evidenceSha256: string;
+  observedAtUtc: string; refCount: number; isCurrent: boolean;
+  readyForExecution: false;
+};
+export type GitHubTargetRefEvidencePage = {
+  evidence: GitHubTargetRefEvidence;
+  items: { name: string; objectId: string; objectType: 'commit' | 'tag' }[];
+  nextAfter: string | null;
+};
+export type GitRefDisposition = 0 | 1 | 2 | 3;
+export type GitRefComparison = {
+  name: string; sourceObjectId: string | null;
+  targetObjectId: string | null; disposition: GitRefDisposition;
+  blockerCode: string;
+};
+export type GitRefReconciliation = {
+  id: string; planId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; targetObservationId: string;
+  snapshotId: string; manifestSha256: string; sourceEvidenceSha256: string;
+  sourceManifestRootSha256: string | null; targetEvidenceSha256: string;
+  reconciliationSha256: string; createdAtUtc: string;
+  sourceRefCount: number; targetRefCount: number; matchingCount: number;
+  createCandidateCount: number; divergedCount: number; targetOnlyCount: number;
+  isCurrent: boolean; readyForExecution: false;
+};
+export type GitRefReconciliationPage = {
+  reconciliation: GitRefReconciliation;
+  items: GitRefComparison[];
+  nextAfter: string | null;
+};
 export type IncrementalTargetPreflight = {
   preparationId: string; snapshotId: string; destinationConnectionId: string;
   organization: string; reviewSha256: string; evidenceSha256: string;
@@ -414,6 +448,34 @@ export const api = {
   getIncrementalOperationPlan: (token: string, id: string, planId: string) =>
     call<IncrementalOperationPlan>(
       `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans/${encodeURIComponent(planId)}`,
+      { headers: withToken(token) }),
+  listGitHubTargetRefEvidence: (token: string, preparationId: string, planId: string) =>
+    call<GitHubTargetRefEvidence[]>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/target-ref-evidence`,
+      { headers: withToken(token) }),
+  captureGitHubTargetRefEvidence: (token: string, preparationId: string,
+      planId: string, expectedManifestSha256: string, sourceRepositoryId: string) =>
+    call<GitHubTargetRefEvidence>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/target-ref-evidence`,
+      { method: 'POST', headers: withToken(token),
+        body: JSON.stringify({ expectedManifestSha256, sourceRepositoryId }) }),
+  listGitRefReconciliations: (token: string, preparationId: string, planId: string) =>
+    call<GitRefReconciliation[]>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/ref-reconciliations`,
+      { headers: withToken(token) }),
+  createGitRefReconciliation: (token: string, preparationId: string, planId: string,
+      sourceRepositoryId: string, targetObservationId: string, expectedManifestSha256: string,
+      expectedTargetEvidenceSha256: string) =>
+    call<GitRefReconciliation>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/ref-reconciliations`,
+      { method: 'POST', headers: withToken(token),
+        body: JSON.stringify({ sourceRepositoryId, targetObservationId,
+          expectedManifestSha256, expectedTargetEvidenceSha256 }) }),
+  getGitRefReconciliationPage: (token: string, preparationId: string,
+      planId: string, reconciliationId: string, after?: string | null, take = 50) =>
+    call<GitRefReconciliationPage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/ref-reconciliations/${encodeURIComponent(reconciliationId)}?take=${take}` +
+      (after ? `&after=${encodeURIComponent(after)}` : ''),
       { headers: withToken(token) }),
   runLiveTargetPreflight: (token: string, id: string, expectedReviewSha256: string,
       repositories: { sourceRepositoryId: string; targetRepositoryName: string;
