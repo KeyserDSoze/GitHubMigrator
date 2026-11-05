@@ -74,6 +74,7 @@ builder.Services.AddScoped<IMigrationJobRepository, PostgresMigrationJobReposito
 builder.Services.AddScoped<MigrationJobService>();
 builder.Services.AddScoped<MigrationJobProcessor>();
 builder.Services.AddHostedService<MigrationJobBackgroundWorker>();
+builder.Services.AddScoped<IIdentitySnapshotReader, PostgresIdentitySnapshotReader>();
 builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMappingDraftRepository>();
 builder.Services.AddScoped<IdentityMappingService>();
 builder.Services.AddScoped<WorkloadPreviewService>();
