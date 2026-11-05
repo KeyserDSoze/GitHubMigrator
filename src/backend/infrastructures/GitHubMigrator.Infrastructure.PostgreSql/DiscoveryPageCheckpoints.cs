@@ -21,7 +21,7 @@ public sealed class DiscoveryPageCheckpointRecord
 // the lease. Every committed page is immutable and individually resumable.
 public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimeProvider clock)
     : IDiscoveryPageCheckpointStore, IDiscoveryRefIngestProgress,
-      IDiscoveryIdentityObservationStore
+      IDiscoveryIdentityObservationStore, IDiscoveryGroupObservationStore
 {
     private const int MaxPageBytes = 1_048_576;
     private const int MaxResourceLength = 256;
@@ -97,6 +97,8 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
             await IngestRefPageAsync(stored, ct);
         else if (stored.ResourceKey == "graph-users")
             await IngestIdentityPageAsync(stored, ct);
+        else if (stored.ResourceKey == "security-groups")
+            await IngestGroupPageAsync(stored, ct);
 
         // Fencing must hold at commit time as well, even when a very large
         // source page took longer than expected to normalize and persist.
@@ -199,6 +201,171 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
     // Graph user observations share the immutable page's transaction,
     // audit event and worker lease fencing. Only allowlisted fields enter
     // this table; provider JSON never passes through unfiltered.
+    private async Task IngestGroupPageAsync(
+        DiscoveryPageCheckpoint page, CancellationToken ct)
+    {
+        using var doc = JsonDocument.Parse(page.SafePayloadJson);
+        if (!doc.RootElement.TryGetProperty("value", out var items) ||
+            items.ValueKind != JsonValueKind.Array || items.GetArrayLength() > 1_000)
+            throw new DiscoveryCheckpointException("InvalidGroupObservation");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var normalized = new List<StagingAssetInput>(items.GetArrayLength());
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new DiscoveryCheckpointException("InvalidGroupObservation");
+            var descriptor = GetText(item, "descriptor");
+            if (string.IsNullOrWhiteSpace(descriptor)) continue;
+            StagingAssetInput asset;
+            try
+            {
+                asset = StagingAssetNormalizer.NormalizeGroup(
+                    descriptor, GetText(item, "displayName") ?? descriptor,
+                    GetText(item, "legacyDescriptor"));
+            }
+            catch (StagingSyncInputException)
+            {
+                throw new DiscoveryCheckpointException("InvalidGroupObservation");
+            }
+            if (!seen.Add(asset.SourceId))
+                throw new DiscoveryCheckpointException("DuplicateGroupObservation");
+            normalized.Add(asset);
+        }
+
+        const int batchSize = 250;
+        for (var i = 0; i < normalized.Count; i += batchSize)
+        {
+            var part = normalized.Skip(i).Take(batchSize).ToArray();
+            var json = JsonSerializer.Serialize(part.Select(row => new {
+                source_id = row.SourceId,
+                fingerprint = row.Fingerprint,
+                payload_json = row.PayloadJson
+            }));
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                WITH incoming AS (
+                    SELECT * FROM jsonb_to_recordset({json}::jsonb)
+                        AS rows(source_id text, fingerprint text, payload_json text)
+                )
+                INSERT INTO discovery_group_observations (
+                    job_id, source_id, fingerprint, payload_json, resource_key, page_index)
+                SELECT {page.JobId}, source_id, fingerprint, payload_json::jsonb,
+                    {page.ResourceKey}, {page.PageIndex}
+                FROM incoming
+                ON CONFLICT (job_id, source_id) DO NOTHING
+                """, ct);
+
+            var ids = part.Select(x => x.SourceId).ToArray();
+            var persisted = await db.DiscoveryGroupObservations.AsNoTracking()
+                .Where(x => x.JobId == page.JobId && ids.Contains(x.SourceId))
+                .Select(x => new { x.SourceId, x.Fingerprint }).ToArrayAsync(ct);
+            if (persisted.Length != part.Length ||
+                persisted.Any(row => !part.Any(x =>
+                    x.SourceId == row.SourceId && x.Fingerprint == row.Fingerprint)))
+                throw new DiscoveryCheckpointException("GroupObservationConflict");
+        }
+    }
+
+    async Task<DiscoveryGroupProgress> IDiscoveryGroupObservationStore.GetProgressAsync(
+        Guid jobId, CancellationToken ct)
+    {
+        if (jobId == Guid.Empty)
+            throw new DiscoveryCheckpointException("InvalidCheckpointKey");
+        var pages = await db.DiscoveryPageCheckpoints.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId && x.ResourceKey == "security-groups", ct);
+        var groups = await db.DiscoveryGroupObservations.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId, ct);
+        return new(jobId, pages, groups);
+    }
+
+    async Task<DiscoveryGroupObservationPage> IDiscoveryGroupObservationStore.ListAsync(
+        Guid jobId, string? after, int take, CancellationToken ct)
+    {
+        if (jobId == Guid.Empty || take is < 1 or > 100 ||
+            (after?.Length ?? 0) > 1024 || (after?.Any(char.IsControl) ?? false))
+            throw new DiscoveryCheckpointException("InvalidGroupObservationPage");
+        var rows = db.DiscoveryGroupObservations.AsNoTracking()
+            .Where(x => x.JobId == jobId);
+        if (after is not null)
+            rows = rows.Where(x => string.Compare(x.SourceId, after) > 0);
+        var result = await rows.OrderBy(x => x.SourceId)
+            .Take(take + 1).ToArrayAsync(ct);
+        var items = result.Take(take).Select(x => new DiscoveryGroupObservation(
+            x.SourceId, x.Fingerprint,
+            JsonSerializer.Deserialize<JsonElement>(x.PayloadJson))).ToArray();
+        return new(jobId, items,
+            result.Length > take ? items[^1].SourceId : null);
+    }
+
+    async Task IDiscoveryGroupObservationStore.VerifySnapshotAsync(
+        MigrationJobLease lease, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        if (lease.Id == Guid.Empty || lease.LeaseToken == Guid.Empty ||
+            lease.Kind != MigrationJobKinds.DiscoverSource ||
+            lease.SnapshotId != lease.Id ||
+            !await db.MigrationJobs.AsNoTracking().AnyAsync(x =>
+                x.Id == lease.Id &&
+                x.SourceConnectionId == lease.SourceConnectionId &&
+                x.SnapshotId == lease.Id &&
+                x.Kind == MigrationJobKinds.DiscoverSource &&
+                x.State == MigrationJobStates.Running &&
+                x.Attempts == lease.Attempt &&
+                x.LeaseToken == lease.LeaseToken && x.LeaseUntilUtc > now, ct))
+            throw new DiscoveryCheckpointException("DiscoveryLeaseLost");
+
+        // Previously committed group checkpoints may predate normalized
+        // observations. Replay them under the current fenced attempt.
+        var cached = await db.DiscoveryPageCheckpoints.AsNoTracking()
+            .Where(x => x.JobId == lease.Id && x.ResourceKey == "security-groups")
+            .OrderBy(x => x.PageIndex).ToArrayAsync(ct);
+        foreach (var row in cached)
+            await SaveAsync(new(lease.Id, lease.LeaseToken, lease.Attempt),
+                ToCheckpoint(row), ct);
+
+        var snapshotExists = await db.Discoveries.AsNoTracking().AnyAsync(
+            x => x.Id == lease.Id && x.ConnectionId == lease.SourceConnectionId, ct);
+        if (!snapshotExists)
+            throw new DiscoveryCheckpointException("GroupSnapshotMismatch");
+
+        var shouldHavePage = await db.Database.SqlQuery<bool>($"""
+            SELECT COALESCE(
+                (inventory -> 'securityCoverage' ->> 'groupsComplete')::boolean,
+                false) AS "Value"
+            FROM migration_discoveries WHERE id = {lease.Id}
+            """).SingleAsync(ct);
+        if (shouldHavePage && cached.Length == 0)
+            throw new DiscoveryCheckpointException("GroupSnapshotMismatch");
+
+        // Both directions, including duplicate multisets, are checked:
+        // equivalent totals are not enough to accept a replacement group.
+        var mismatch = await db.Database.SqlQuery<bool>($"""
+            WITH saved AS (
+                SELECT g.descriptor,
+                    g."displayName" AS display_name,
+                    g."legacyDescriptor" AS legacy
+                FROM migration_discoveries d
+                CROSS JOIN LATERAL jsonb_to_recordset(d.inventory -> 'groups')
+                    AS g(descriptor text, "displayName" text, "legacyDescriptor" text)
+                WHERE d.id = {lease.Id} AND d.connection_id = {lease.SourceConnectionId}
+            ),
+            observed AS (
+                SELECT source_id AS descriptor,
+                    payload_json ->> 'DisplayName' AS display_name,
+                    payload_json ->> 'LegacyDescriptor' AS legacy
+                FROM discovery_group_observations WHERE job_id = {lease.Id}
+            ),
+            differences AS (
+                (SELECT * FROM saved EXCEPT ALL SELECT * FROM observed)
+                UNION ALL
+                (SELECT * FROM observed EXCEPT ALL SELECT * FROM saved)
+            )
+            SELECT EXISTS(SELECT 1 FROM differences) AS "Value"
+            """).SingleAsync(ct);
+        if (mismatch)
+            throw new DiscoveryCheckpointException("GroupSnapshotMismatch");
+    }
+
     private async Task IngestIdentityPageAsync(
         DiscoveryPageCheckpoint page, CancellationToken ct)
     {
