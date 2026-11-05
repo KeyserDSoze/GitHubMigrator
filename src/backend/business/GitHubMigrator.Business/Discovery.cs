@@ -55,6 +55,13 @@ public sealed class DiscoveryCheckpointException(string code)
     public string Code { get; } = code;
 }
 
+// Lightweight snapshot projection for chunk-based staging: PostgreSQL strips
+// the large Git refs JSON array before sending discovery metadata to .NET.
+public interface IDiscoveryWithoutRefsRepository
+{
+    Task<DiscoveryInventory?> GetWithoutRefsAsync(Guid snapshotId, CancellationToken ct);
+}
+
 public interface IDiscoveryRepository
 {
     Task SaveAsync(DiscoveryInventory inventory, CancellationToken ct);
