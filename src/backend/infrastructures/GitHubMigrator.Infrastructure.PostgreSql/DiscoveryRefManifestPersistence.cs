@@ -203,7 +203,8 @@ public sealed class PostgresDiscoveryRefManifestStore(AppDbContext db, TimeProvi
             """).AsNoTracking().ToListAsync(ct);
 
         var summary = rows.Select(x => (x.SourceId, x.Fingerprint)).ToArray();
-        if (rows.Count != chunk.AssetCount || rows.Count > ChunkSize ||
+        if (rows.Any(row => !ValidCanonicalRef(row)) ||
+            rows.Count != chunk.AssetCount || rows.Count > ChunkSize ||
             rows.Count == 0 || rows[0].SourceId != chunk.FirstSourceId ||
             rows[^1].SourceId != chunk.LastSourceId ||
             HashChunk(summary) != chunk.Sha256)
@@ -212,6 +213,33 @@ public sealed class PostgresDiscoveryRefManifestStore(AppDbContext db, TimeProvi
         return new(jobId, Descriptor(chunk), rows.Select(x => new DiscoveryRefChunkAsset(
             x.SourceId, x.RepositoryId, x.Fingerprint,
             JsonSerializer.Deserialize<JsonElement>(x.PayloadJson))).ToArray());
+    }
+
+    private static bool ValidCanonicalRef(DiscoveryRefObservationRecord row)
+    {
+        try
+        {
+            using var identity = JsonDocument.Parse(row.SourceId);
+            using var payload = JsonDocument.Parse(row.PayloadJson);
+            if (identity.RootElement.ValueKind != JsonValueKind.Array ||
+                identity.RootElement.GetArrayLength() != 2 ||
+                payload.RootElement.ValueKind != JsonValueKind.Object ||
+                payload.RootElement.EnumerateObject().Count() != 1 ||
+                !payload.RootElement.TryGetProperty("ObjectId", out var oid) ||
+                oid.ValueKind != JsonValueKind.String)
+                return false;
+            var repository = identity.RootElement[0].GetString();
+            var reference = identity.RootElement[1].GetString();
+            var objectId = oid.GetString();
+            if (repository != row.RepositoryId || repository is null ||
+                reference is null || objectId is null)
+                return false;
+            var normalized = StagingAssetNormalizer.NormalizeRef(repository, reference, objectId);
+            return normalized.SourceId == row.SourceId && normalized.Fingerprint == row.Fingerprint;
+        }
+        catch (JsonException) { return false; }
+        catch (InvalidOperationException) { return false; }
+        catch (StagingSyncInputException) { return false; }
     }
 
     private static DiscoveryRefChunkRecord Chunk(
