@@ -134,7 +134,8 @@ public sealed class DiscoveryService(
                     AccessGrants = sourceSnapshot.AccessGrants,
                     PermissionsComplete = sourceSnapshot.PermissionsComplete
                 },
-                Refs = inventory.Refs, Issues = inventory.Issues,
+                Refs = inventory.Refs, RefCount = inventory.RefCount,
+                RefsExternalized = inventory.RefsExternalized, Issues = inventory.Issues,
                 Completeness = inventory.Completeness, IdentitiesComplete = inventory.IdentitiesComplete,
                 PermissionsComplete = inventory.PermissionsComplete,
                 Groups = inventory.Groups, Memberships = inventory.Memberships,
