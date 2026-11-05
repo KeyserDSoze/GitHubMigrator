@@ -20,8 +20,8 @@ public sealed class PostgresIdentitySnapshotReader(AppDbContext db) : IIdentityS
         if (snapshotId == Guid.Empty) return null;
         var json = await db.Database.SqlQuery<string>($"""
             SELECT jsonb_set(
-                jsonb_set(inventory, '{snapshot,identities}', '[]'::jsonb),
-                '{refs}', '[]'::jsonb)::text AS "Value"
+                jsonb_set(inventory, ARRAY['snapshot','identities'], '[]'::jsonb),
+                ARRAY['refs'], '[]'::jsonb)::text AS "Value"
             FROM migration_discoveries
             WHERE id = {snapshotId}
             """).FirstOrDefaultAsync(ct);
