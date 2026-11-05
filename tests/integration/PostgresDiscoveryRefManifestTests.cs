@@ -45,6 +45,13 @@ public sealed class PostgresDiscoveryRefManifestTests(PostgresDraftFixture fixtu
         Assert.NotNull(published);
         Assert.Equal(first.RootSha256, published.RootSha256);
 
+        var invalid = await Assert.ThrowsAsync<DiscoveryRefManifestException>(() =>
+            store.ListChunksAsync(job.Id, -1, 51, default));
+        Assert.Equal("InvalidRefChunkPage", invalid.Code);
+        var badIndex = await Assert.ThrowsAsync<DiscoveryRefManifestException>(() =>
+            store.ReadChunkAsync(job.Id, -1, default));
+        Assert.Equal("InvalidRefChunkIndex", badIndex.Code);
+
         var part1 = await store.ListChunksAsync(job.Id, -1, 2, default);
         Assert.Equal(2, part1.Items.Count);
         Assert.Equal(1, part1.NextAfter);
@@ -91,6 +98,27 @@ public sealed class PostgresDiscoveryRefManifestTests(PostgresDraftFixture fixtu
         Assert.Equal("RefManifestCountMismatch", error.Code);
         Assert.Null(await manifest.GetAsync(job.Id, default));
         Assert.Empty(await db.DiscoveryRefChunks.ToArrayAsync());
+        Assert.Empty(await db.DiscoveryRefManifests.ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task Equal_counts_but_different_object_ids_cannot_be_sealed()
+    {
+        await ResetAsync();
+        await using var db = fixture.NewContext();
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        var refs = new[] { new RepositoryRef("repo-1", "refs/heads/main", "original") };
+        var (job, lease) = await PrepareJobAsync(db, clock, refs);
+        await new PostgresDiscoveryPageCheckpointStore(db, clock).SaveAsync(
+            new(lease.Id, lease.LeaseToken, lease.Attempt),
+            Page(job.Id, 0,
+                [new RepositoryRef("repo-1", "refs/heads/main", "incorrect")], null),
+            default);
+        var manifest = new PostgresDiscoveryRefManifestStore(db, clock);
+        var error = await Assert.ThrowsAsync<DiscoveryRefManifestException>(() =>
+            manifest.PrepareAsync(lease, 1, default));
+        Assert.Equal("RefManifestSnapshotMismatch", error.Code);
+        Assert.Null(await manifest.GetAsync(job.Id, default));
         Assert.Empty(await db.DiscoveryRefManifests.ToArrayAsync());
     }
 
