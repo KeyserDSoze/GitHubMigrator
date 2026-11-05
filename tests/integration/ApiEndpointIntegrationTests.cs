@@ -812,6 +812,35 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             $"/api/jobs/{jobId}/ref-progress");
         Assert.Equal(HttpStatusCode.Unauthorized, progressUnauthenticated.StatusCode);
 
+        using var groupProgressRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/group-progress");
+        groupProgressRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var groupProgressResponse = await harness.Client.SendAsync(groupProgressRequest);
+        Assert.Equal(HttpStatusCode.OK, groupProgressResponse.StatusCode);
+        using (var groupProgress = JsonDocument.Parse(
+            await groupProgressResponse.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal(1, groupProgress.RootElement.GetProperty("checkpointedGroupPages").GetInt32());
+            Assert.Equal(0, groupProgress.RootElement.GetProperty("observedGroups").GetInt32());
+        }
+
+        using var groupListRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/groups?take=100");
+        groupListRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var groupListReply = await harness.Client.SendAsync(groupListRequest);
+        Assert.Equal(HttpStatusCode.OK, groupListReply.StatusCode);
+        using (var groupRows = JsonDocument.Parse(
+            await groupListReply.Content.ReadAsStringAsync()))
+            Assert.Equal(0, groupRows.RootElement.GetProperty("items").GetArrayLength());
+
+        using var invalidGroupRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/jobs/{jobId}/groups?take=101");
+        invalidGroupRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var invalidGroup = await harness.Client.SendAsync(invalidGroupRequest);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidGroup.StatusCode);
+        using var deniedGroups = await harness.Client.GetAsync($"/api/jobs/{jobId}/groups");
+        Assert.Equal(HttpStatusCode.Unauthorized, deniedGroups.StatusCode);
+
         using var identityProgressRequest = new HttpRequestMessage(HttpMethod.Get,
             $"/api/jobs/{jobId}/identity-progress");
         identityProgressRequest.Headers.Authorization =
