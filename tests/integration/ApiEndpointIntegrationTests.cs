@@ -729,6 +729,48 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(sourceId, status.GetProperty("sourceConnectionId").GetGuid());
         Assert.Equal(4, status.GetProperty("result").GetProperty("observed").GetInt32());
 
+        // The F-025 immutable delta is only exposed to authenticated admins
+        // after the same source-scoped staging transaction has committed.
+        using var anonymousDelta = await harness.Client.GetAsync(
+            $"/api/staging/snapshots/{jobId}/change-summary");
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousDelta.StatusCode);
+        using (var changeQuery = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/staging/snapshots/{jobId}/change-summary"))
+        {
+            changeQuery.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var changeReply = await harness.Client.SendAsync(changeQuery);
+            Assert.Equal(HttpStatusCode.OK, changeReply.StatusCode);
+            using var journal = JsonDocument.Parse(
+                await changeReply.Content.ReadAsStringAsync());
+            Assert.Equal(jobId, journal.RootElement.GetProperty("snapshotId").GetGuid());
+            Assert.Equal(sourceId, journal.RootElement.GetProperty("sourceConnectionId").GetGuid());
+            Assert.Equal(4, journal.RootElement.GetProperty("added").GetInt32());
+            Assert.Equal(4, journal.RootElement.GetProperty("total").GetInt32());
+            Assert.Equal(0, journal.RootElement.GetProperty("restored").GetInt32());
+            Assert.Equal(0, journal.RootElement.GetProperty("missing").GetInt32());
+        }
+        using (var refChanges = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/staging/snapshots/{jobId}/changes/ref?take=50"))
+        {
+            refChanges.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(refChanges);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var page = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            var entry = Assert.Single(page.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal("Added", entry.GetProperty("kind").GetString());
+            Assert.Equal(JsonValueKind.Null,
+                entry.GetProperty("previousFingerprint").ValueKind);
+            Assert.Equal(1, entry.GetProperty("revision").GetInt32());
+            Assert.Equal(JsonValueKind.Null, page.RootElement.GetProperty("nextAfter").ValueKind);
+        }
+        using (var invalidPage = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/staging/snapshots/{jobId}/changes/ref?take=101"))
+        {
+            invalidPage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(invalidPage);
+            Assert.Equal(HttpStatusCode.BadRequest, reply.StatusCode);
+        }
+
         using var snapshot = new HttpRequestMessage(HttpMethod.Get,
             $"/api/discoveries/{jobId}");
         snapshot.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);

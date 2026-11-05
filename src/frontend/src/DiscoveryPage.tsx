@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type StagingChangeSummary, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -13,6 +13,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<DiscoveryDetail | null>(null);
   const [staging, setStaging] = useState<StagingSyncResult | null>(null);
+  const [changeSummary, setChangeSummary] = useState<StagingChangeSummary | null>(null);
   const [job, setJob] = useState<MigrationJob | null>(null);
   const [refProgress, setRefProgress] = useState<DiscoveryRefIngestProgress | null>(null);
   const [identityProgress, setIdentityProgress] = useState<DiscoveryIdentityProgress | null>(null);
@@ -178,6 +179,20 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     return () => { active = false; };
   }, [job?.id, job?.kind, job?.state, token]);
 
+  // A legacy sync has no F-025 journal; the 409 response is intentional and
+  // must not be presented as an empty delta. Avoid mixing selected snapshots.
+  useEffect(() => {
+    if (!staging || staging.snapshotId !== selectedId) {
+      setChangeSummary(null);
+      return;
+    }
+    let active = true;
+    void api.getStagingChangeSummary(token, staging.snapshotId)
+      .then(delta => { if (active) setChangeSummary(delta); })
+      .catch(() => { if (active) setChangeSummary(null); });
+    return () => { active = false; };
+  }, [staging?.snapshotId, selectedId, token]);
+
   if (!isAdmin) return <section className="empty-card"><ShieldAlert size={30} /><p>{t('discoveryRequiresAdmin')}</p></section>;
 
   const summary = summaries.find(x => x.id === selectedId);
@@ -275,6 +290,14 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
       {' · ~'}{staging.changed} {t('stagingChanged')}
       {' · '}{staging.markedMissing} {t('stagingMissing')}
       {' · '}{staging.sourceInventoryComplete ? t('stagingCoverageComplete') : t('stagingCoveragePartial')}
+    </section>}
+    {changeSummary?.snapshotId === selectedId && <section
+      className="notice" role="status" aria-label={t('stagingChangeJournalTitle')}>
+      <strong>{t('stagingChangeJournalTitle')}</strong>
+      {' · +'}{changeSummary.added} {t('stagingAdded')}
+      {' · ~'}{changeSummary.changed} {t('stagingChanged')}
+      {' · ↺'}{changeSummary.restored} {t('stagingRestored')}
+      {' · −'}{changeSummary.missing} {t('stagingMissing')}
     </section>}
     {summary && <div className="discovery-summary">
       {[

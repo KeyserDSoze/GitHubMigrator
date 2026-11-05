@@ -34,6 +34,8 @@ public sealed class StagingSnapshotSyncRecord
     public int Unchanged { get; set; }
     public int MarkedMissing { get; set; }
     public bool SourceInventoryComplete { get; set; }
+    // Zero means pre-F-025 sync: historical deltas cannot be inferred.
+    public int JournalVersion { get; set; }
 }
 
 public sealed class PostgresStagingRepository(
@@ -456,6 +458,21 @@ public sealed class PostgresStagingRepository(
         if (completeTypes.Count > 0)
         {
             var kinds = completeTypes.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            // A positive source coverage flag is required for 'Missing'.
+            // The event is recorded against the previous known fingerprint;
+            // an incomplete scan cannot claim that an absent row was deleted.
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO staging_asset_changes (
+                    snapshot_id, source_connection_id, asset_type, source_id,
+                    change_kind, previous_fingerprint, current_fingerprint, revision)
+                SELECT {inventory.Id}, {inventory.ConnectionId}, asset_type, source_id,
+                    'Missing', fingerprint, NULL, revision + 1
+                FROM staging_assets
+                WHERE source_connection_id = {inventory.ConnectionId}
+                  AND asset_type = ANY({kinds})
+                  AND last_seen_snapshot_id <> {inventory.Id}
+                  AND missing = false
+                """, ct);
             await db.Database.ExecuteSqlInterpolatedAsync($"""
                 UPDATE staging_assets
                 SET missing = true, revision = revision + 1,
@@ -498,7 +515,8 @@ public sealed class PostgresStagingRepository(
             Unchanged = assets.Count + (prepared?.AssetCount ?? 0) +
                 stagedIdentityCount + stagedMembershipCount + stagedAclCount +
                 stagedGroupCount - added - changed,
-            MarkedMissing = missing, SourceInventoryComplete = fullyCovered
+            MarkedMissing = missing, SourceInventoryComplete = fullyCovered,
+            JournalVersion = 1
         };
         db.StagingSnapshotSyncs.Add(saved);
         await db.SaveChangesAsync(ct);
@@ -524,6 +542,34 @@ public sealed class PostgresStagingRepository(
                 SELECT * FROM jsonb_to_recordset({batch}::jsonb) AS items(
                     asset_type text, source_id text, project_id text,
                     fingerprint text, payload_json text)
+            ),
+            before AS (
+                SELECT i.asset_type, i.source_id,
+                    current_row.fingerprint AS previous_fingerprint,
+                    current_row.revision AS previous_revision,
+                    current_row.missing AS was_missing,
+                    current_row.source_id IS NOT NULL AS existed
+                FROM incoming i
+                LEFT JOIN staging_assets current_row
+                    ON current_row.source_connection_id = {inventory.ConnectionId}
+                    AND current_row.asset_type = i.asset_type
+                    AND current_row.source_id = i.source_id
+            ),
+            journal AS (
+                INSERT INTO staging_asset_changes (
+                    snapshot_id, source_connection_id, asset_type, source_id,
+                    change_kind, previous_fingerprint, current_fingerprint, revision)
+                SELECT {inventory.Id}, {inventory.ConnectionId}, i.asset_type, i.source_id,
+                    CASE WHEN NOT b.existed THEN 'Added'
+                         WHEN b.was_missing THEN 'Restored'
+                         ELSE 'Changed' END,
+                    b.previous_fingerprint, i.fingerprint,
+                    COALESCE(b.previous_revision, 0) + 1
+                FROM incoming i
+                JOIN before b ON b.asset_type = i.asset_type
+                    AND b.source_id = i.source_id
+                WHERE NOT b.existed OR b.was_missing OR
+                    b.previous_fingerprint IS DISTINCT FROM i.fingerprint
             )
             INSERT INTO staging_assets (
                 source_connection_id, asset_type, source_id, project_id, fingerprint,
@@ -546,6 +592,58 @@ public sealed class PostgresStagingRepository(
                     THEN 1 ELSE 0 END,
                 missing = false
             """, ct);
+    }
+
+    public async Task<StagingChangeSummary?> GetChangeSummaryAsync(
+        Guid snapshotId, CancellationToken ct)
+    {
+        var sync = await db.StagingSnapshotSyncs.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.SnapshotId == snapshotId, ct);
+        if (sync is null) return null;
+        if (sync.JournalVersion != 1)
+            throw new StagingChangeJournalUnavailableException();
+
+        var counts = await db.StagingAssetChanges.AsNoTracking()
+            .Where(x => x.SnapshotId == snapshotId &&
+                x.SourceConnectionId == sync.SourceConnectionId)
+            .GroupBy(x => x.Kind)
+            .Select(x => new { Kind = x.Key, Count = x.Count() })
+            .ToArrayAsync(ct);
+        var added = counts.SingleOrDefault(x => x.Kind == "Added")?.Count ?? 0;
+        var changed = counts.SingleOrDefault(x => x.Kind == "Changed")?.Count ?? 0;
+        var restored = counts.SingleOrDefault(x => x.Kind == "Restored")?.Count ?? 0;
+        var missing = counts.SingleOrDefault(x => x.Kind == "Missing")?.Count ?? 0;
+        if (counts.Any(x => x.Kind is not ("Added" or "Changed" or "Restored" or "Missing")) ||
+            added != sync.Added || changed + restored != sync.Changed ||
+            missing != sync.MarkedMissing)
+            throw new StagingChangeIntegrityException();
+        return new(sync.SnapshotId, sync.SourceConnectionId,
+            added, changed, restored, missing);
+    }
+
+    public async Task<StagingChangePage?> ListChangesAsync(
+        Guid snapshotId, string assetType, string? after, int take, CancellationToken ct)
+    {
+        var sync = await db.StagingSnapshotSyncs.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.SnapshotId == snapshotId, ct);
+        if (sync is null) return null;
+        if (sync.JournalVersion != 1)
+            throw new StagingChangeJournalUnavailableException();
+
+        var rows = await db.StagingAssetChanges.FromSqlInterpolated($"""
+            SELECT * FROM staging_asset_changes
+            WHERE snapshot_id = {snapshotId}
+              AND source_connection_id = {sync.SourceConnectionId}
+              AND asset_type = {assetType}
+              AND source_id > {after ?? ""}
+            ORDER BY source_id
+            LIMIT {take + 1}
+            """).AsNoTracking().ToArrayAsync(ct);
+        var items = rows.Take(take).Select(x => new StagingChangeView(
+            x.AssetType, x.SourceId, x.Kind, x.PreviousFingerprint,
+            x.CurrentFingerprint, x.Revision)).ToArray();
+        return new(snapshotId, assetType, items,
+            rows.Length > take ? items[^1].SourceId : null);
     }
 
     public async Task<StagingSyncResult?> GetSyncAsync(Guid snapshotId, CancellationToken ct)

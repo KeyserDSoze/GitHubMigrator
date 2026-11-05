@@ -27,6 +27,29 @@ public sealed record StagingAssetPage(
     Guid SourceConnectionId, string AssetType, IReadOnlyList<StagingAssetView> Items,
     string? NextAfter);
 
+// F-025: persistent, non-executable change evidence. A snapshot's delta
+// remains queryable after later snapshots replace the current staging catalog.
+public sealed record StagingChangeSummary(
+    Guid SnapshotId, Guid SourceConnectionId,
+    int Added, int Changed, int Restored, int Missing)
+{
+    public int Total => Added + Changed + Restored + Missing;
+}
+
+public sealed record StagingChangeView(
+    string AssetType, string SourceId, string Kind,
+    string? PreviousFingerprint, string? CurrentFingerprint, int Revision);
+
+public sealed record StagingChangePage(
+    Guid SnapshotId, string AssetType, IReadOnlyList<StagingChangeView> Items,
+    string? NextAfter);
+
+public sealed class StagingChangeJournalUnavailableException()
+    : Exception("Historical staging change journal is not available for this snapshot");
+
+public sealed class StagingChangeIntegrityException()
+    : Exception("Committed staging journal does not agree with snapshot sync result");
+
 public interface IStagingRepository
 {
     Task<StagingSyncResult> ApplyAsync(DiscoveryInventory inventory,
@@ -39,6 +62,9 @@ public interface IStagingRepository
     Task<StagingCatalogSummary> GetSummaryAsync(Guid sourceConnectionId, CancellationToken ct);
     Task<StagingAssetPage> ListAssetsAsync(Guid sourceConnectionId, string assetType,
         string? after, int take, CancellationToken ct);
+    Task<StagingChangeSummary?> GetChangeSummaryAsync(Guid snapshotId, CancellationToken ct);
+    Task<StagingChangePage?> ListChangesAsync(
+        Guid snapshotId, string assetType, string? after, int take, CancellationToken ct);
 }
 
 public sealed class StagingSyncInputException(string code) : Exception("Invalid staging sync")
@@ -254,6 +280,25 @@ public sealed class StagingSyncService(IDiscoveryRepository discoveries, IStagin
 
     public Task<StagingCatalogSummary> GetSummaryAsync(Guid connectionId, CancellationToken ct) =>
         staging.GetSummaryAsync(connectionId, ct);
+
+    public Task<StagingChangeSummary?> GetChangeSummaryAsync(Guid snapshotId, CancellationToken ct)
+    {
+        if (snapshotId == Guid.Empty)
+            throw new StagingSyncInputException("InvalidStagingSnapshot");
+        return staging.GetChangeSummaryAsync(snapshotId, ct);
+    }
+
+    public Task<StagingChangePage?> ListChangesAsync(
+        Guid snapshotId, string assetType, string? after, int take, CancellationToken ct)
+    {
+        if (snapshotId == Guid.Empty ||
+            !SupportedTypes.Contains(assetType))
+            throw new StagingSyncInputException("UnsupportedStagingAssetType");
+        if (take is < 1 or > 100 || (after?.Length ?? 0) > 1024 ||
+            (after?.Any(char.IsControl) ?? false))
+            throw new StagingSyncInputException("InvalidStagingPage");
+        return staging.ListChangesAsync(snapshotId, assetType, after, take, ct);
+    }
 
     private static readonly HashSet<string> SupportedTypes = new(StringComparer.Ordinal)
     {

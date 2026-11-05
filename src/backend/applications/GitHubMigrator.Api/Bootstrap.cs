@@ -81,10 +81,32 @@ public static class Bootstrap
                 changed integer NOT NULL,
                 unchanged integer NOT NULL,
                 marked_missing integer NOT NULL,
-                source_inventory_complete boolean NOT NULL
+                source_inventory_complete boolean NOT NULL,
+                journal_version integer NOT NULL DEFAULT 0
             );
+            -- F-025 upgrades an existing F-013 schema without pretending that
+            -- older, already committed snapshots have historical change rows.
+            ALTER TABLE staging_snapshot_syncs
+                ADD COLUMN IF NOT EXISTS journal_version integer NOT NULL DEFAULT 0;
             CREATE INDEX IF NOT EXISTS ix_staging_snapshot_syncs_source
                 ON staging_snapshot_syncs(source_connection_id, source_collected_at_utc);
+            -- Immutable, snapshot-scoped delta events for future approved
+            -- incremental synchronization; this table contains no secret or
+            -- provider payload and cannot trigger target-side writes.
+            CREATE TABLE IF NOT EXISTS staging_asset_changes (
+                snapshot_id uuid NOT NULL,
+                source_connection_id uuid NOT NULL,
+                asset_type varchar(32) NOT NULL,
+                source_id varchar(1024) NOT NULL,
+                change_kind varchar(12) NOT NULL CHECK
+                    (change_kind IN ('Added', 'Changed', 'Restored', 'Missing')),
+                previous_fingerprint varchar(64) NULL,
+                current_fingerprint varchar(64) NULL,
+                revision integer NOT NULL CHECK (revision >= 1),
+                PRIMARY KEY (snapshot_id, asset_type, source_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_staging_asset_changes_source_kind
+                ON staging_asset_changes(source_connection_id, snapshot_id, change_kind);
             CREATE TABLE IF NOT EXISTS migration_jobs (
                 id uuid PRIMARY KEY,
                 kind varchar(40) NOT NULL,
