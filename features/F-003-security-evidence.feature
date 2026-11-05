@@ -4,6 +4,14 @@ Feature: Source security evidence, not speculative GitHub permissions
     Given an Azure DevOps Services source connection is saved
     And I am signed in as a platform administrator
 
+  Scenario: Graph security groups are checkpointed and reconciled without granting access
+    Given a leased source worker reading multiple sanitized Graph security-group pages
+    When group descriptors and metadata are saved into PostgreSQL
+    Then each page, normalized observations and audit commit atomically
+    And conflicting group metadata rejects the entire page
+    And a complete source snapshot must agree with all recorded group evidence
+    And raw group membership and ACL evidence never authorize effective GitHub access
+
   Scenario: Capture groups and direct memberships
     Given the Graph groups endpoint has multiple pages
     And group A includes an Azure DevOps user and group B
