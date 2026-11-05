@@ -412,7 +412,7 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
         </div>
         {review && <>
           <p>{t('incrementalReviewState')}: {review.state}
-            {' · '}{review.itemCount} {t('incrementalReviewItems')}
+            {' · '}{review.itemCount} {t('incrementalReviewItemCount')}
             {' · '}{review.sensitiveItemCount} {t('incrementalSensitiveItems')}
             {' · '}{review.removalItemCount} {t('incrementalRemovals')}
           </p>

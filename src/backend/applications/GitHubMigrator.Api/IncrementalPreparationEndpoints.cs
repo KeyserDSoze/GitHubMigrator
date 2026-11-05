@@ -75,7 +75,7 @@ public static class IncrementalPreparationEndpoints
             { return Results.NotFound(new { error = "PreparationNotFound" }); }
             catch (IncrementalReviewException ex)
             { return ReviewError(ex); }
-        }).RequireRateLimiting("staging-sync");
+        }).RequireRateLimiting("incremental-review");
 
         routes.MapGet("/{id:guid}/review", async Task<IResult> (
             Guid id, IncrementalReviewService reviews, CancellationToken ct) =>
@@ -105,7 +105,7 @@ public static class IncrementalPreparationEndpoints
             { return Results.NotFound(new { error = "PreparationNotFound" }); }
             catch (IncrementalReviewException ex)
             { return ReviewError(ex); }
-        }).RequireRateLimiting("staging-sync");
+        }).RequireRateLimiting("incremental-review");
 
         routes.MapPost("/{id:guid}/review/revoke", async Task<IResult> (
             Guid id, RevokeIncrementalReviewRequest request,
@@ -124,7 +124,7 @@ public static class IncrementalPreparationEndpoints
             { return Results.NotFound(new { error = "PreparationNotFound" }); }
             catch (IncrementalReviewException ex)
             { return ReviewError(ex); }
-        }).RequireRateLimiting("staging-sync");
+        }).RequireRateLimiting("incremental-review");
 
         routes.MapGet("/{id:guid}/review/events", async Task<IResult> (
             Guid id, IncrementalReviewService reviews, CancellationToken ct) =>

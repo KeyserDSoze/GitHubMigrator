@@ -214,10 +214,9 @@ public sealed class PostgresIncrementalReviewTests(PostgresDraftFixture fixture)
         var destination = await db.Connections.AsNoTracking()
             .SingleAsync(x => x.Id == destinationId);
         var newerValidation = destination.ValidatedAtUtc!.Value.AddMinutes(2);
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            UPDATE connections SET validated_at_utc = {newerValidation}
-            WHERE id = {destinationId}
-            """);
+        await db.Connections.Where(x => x.Id == destinationId)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(x => x.ValidatedAtUtc, newerValidation));
         var stale = await service.GetAsync(run.Id, default);
         Assert.False(stale!.IsCurrent);
         Assert.Equal("DryRunOutdated",
