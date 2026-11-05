@@ -42,8 +42,12 @@ public sealed class PostgresStagingRepository(
 
     public Task<StagingSyncResult> ApplyAsync(DiscoveryInventory inventory,
         IReadOnlyList<StagingAssetInput> assets, IReadOnlySet<string> completeTypes,
-        CancellationToken ct) =>
-        ApplyCoreAsync(inventory, assets, completeTypes, null, ct);
+        CancellationToken ct)
+    {
+        if (inventory.RefsExternalized)
+            throw new StagingSyncInputException("ExternalizedSnapshotRequiresManifest");
+        return ApplyCoreAsync(inventory, assets, completeTypes, null, ct);
+    }
 
     public Task<StagingSyncResult> ApplyWithRefManifestAsync(
         DiscoveryInventory slimInventory, IReadOnlyList<StagingAssetInput> nonRefAssets,
