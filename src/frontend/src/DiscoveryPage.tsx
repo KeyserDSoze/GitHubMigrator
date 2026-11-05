@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
@@ -15,6 +15,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
   const [staging, setStaging] = useState<StagingSyncResult | null>(null);
   const [job, setJob] = useState<MigrationJob | null>(null);
   const [refProgress, setRefProgress] = useState<DiscoveryRefIngestProgress | null>(null);
+  const [identityProgress, setIdentityProgress] = useState<DiscoveryIdentityProgress | null>(null);
   const [refManifest, setRefManifest] = useState<DiscoveryRefManifest | null>(null);
   const [tab, setTab] = useState<Tab>('projects');
   const [busy, setBusy] = useState(false);
@@ -81,7 +82,7 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
 
   async function scan() {
     if (!sourceId) return;
-    setBusy(true); setError(''); setNotice(''); setRefProgress(null);
+    setBusy(true); setError(''); setNotice(''); setRefProgress(null); setIdentityProgress(null);
     try {
       // Preserve the request ID after an uncertain network failure so retry
       // cannot enqueue a second scan while the first is being processed.
@@ -127,6 +128,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         void api.getDiscoveryRefProgress(token, job.id).then(progress => {
           if (active) setRefProgress(progress);
         }).catch(() => {}); // Status polling remains usable if progress endpoint is unavailable.
+        void api.getDiscoveryIdentityProgress(token, job.id).then(progress => {
+          if (active) setIdentityProgress(progress);
+        }).catch(() => {});
       }
       void api.getMigrationJob(token, job.id).then(current => {
         if (!active) return;
@@ -210,6 +214,14 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         {' · '}{refProgress.observedRefs} {t('discoveryRefProgressRefs')}
         {' · '}{refProgress.checkpointedRefPages} {t('discoveryRefProgressPages')}
         {' · '}{t('discoveryRefProgressProvisional')}
+      </section>}
+    {job?.kind === 'DiscoverSource' && identityProgress?.jobId === job.id &&
+      <section className="notice" role="status" aria-label={t('discoveryIdentityProgressTitle')}>
+        <strong>{t('discoveryIdentityProgressTitle')}</strong>
+        {' · '}{identityProgress.observedUsers} {t('discoveryIdentityProgressUsers')}
+        {' · '}{identityProgress.checkpointedUserPages} {t('discoveryIdentityProgressPages')}
+        {' · '}{job.state === 'Succeeded'
+          ? t('discoveryIdentityProgressVerified') : t('discoveryRefProgressProvisional')}
       </section>}
     {job?.kind === 'DiscoverSource' && job.state === 'Succeeded' &&
       refManifest?.jobId === job.id &&

@@ -49,6 +49,24 @@ public interface IDiscoveryRefIngestProgress
     Task<DiscoveryRefIngestProgress> GetAsync(Guid jobId, CancellationToken ct);
 }
 
+// Provisional Azure DevOps Graph user observations. These never authorize
+// grants and are not interpreted as complete identity coverage until the
+// immutable source snapshot has passed reconciliation and its job succeeded.
+public sealed record DiscoveryIdentityProgress(
+    Guid JobId, int CheckpointedUserPages, int ObservedUsers);
+public sealed record DiscoveryIdentityObservation(
+    string SourceId, string Fingerprint, System.Text.Json.JsonElement Properties);
+public sealed record DiscoveryIdentityObservationPage(
+    Guid JobId, IReadOnlyList<DiscoveryIdentityObservation> Items, string? NextAfter);
+
+public interface IDiscoveryIdentityObservationStore
+{
+    Task<DiscoveryIdentityProgress> GetProgressAsync(Guid jobId, CancellationToken ct);
+    Task<DiscoveryIdentityObservationPage> ListAsync(
+        Guid jobId, string? after, int take, CancellationToken ct);
+    Task VerifySnapshotAsync(MigrationJobLease lease, CancellationToken ct);
+}
+
 public sealed class DiscoveryCheckpointException(string code)
     : Exception("Invalid or expired discovery page checkpoint")
 {

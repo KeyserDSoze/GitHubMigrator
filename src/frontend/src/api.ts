@@ -23,6 +23,15 @@ export type DiscoveryRefChunkContents = {
   jobId: string; chunk: DiscoveryRefManifestChunk;
   items: { sourceId: string; repositoryId: string; fingerprint: string; properties: { ObjectId: string } }[];
 };
+export type DiscoveryIdentityProgress = {
+  jobId: string; checkpointedUserPages: number; observedUsers: number;
+};
+export type DiscoveryIdentityObservationPage = {
+  jobId: string;
+  items: { sourceId: string; fingerprint: string;
+    properties: { DisplayName: string; Email: string | null; LegacyDescriptor: string | null } }[];
+  nextAfter: string | null;
+};
 export type DiscoveryRefIngestProgress = {
   jobId: string; checkpointedRefPages: number; observedRefs: number;
 };
@@ -228,6 +237,14 @@ export const api = {
       { headers: withToken(token) }),
   getDiscoveryRefChunk: (token: string, jobId: string, index: number) =>
     call<DiscoveryRefChunkContents>(`/api/jobs/${encodeURIComponent(jobId)}/ref-manifest/chunks/${index}`,
+      { headers: withToken(token) }),
+  getDiscoveryIdentityProgress: (token: string, jobId: string) =>
+    call<DiscoveryIdentityProgress>(`/api/jobs/${encodeURIComponent(jobId)}/identity-progress`,
+      { headers: withToken(token) }),
+  listDiscoveryIdentityObservations: (token: string, jobId: string, after?: string, take = 50) =>
+    call<DiscoveryIdentityObservationPage>(
+      `/api/jobs/${encodeURIComponent(jobId)}/identities?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
       { headers: withToken(token) }),
   getDiscoveryRefProgress: (token: string, jobId: string) =>
     call<DiscoveryRefIngestProgress>(`/api/jobs/${encodeURIComponent(jobId)}/ref-progress`,
