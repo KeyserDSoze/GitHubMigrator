@@ -91,15 +91,19 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var invalid = await harness.Client.SendAsync(invalidRequest);
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
 
-        using var save = await PostAsync(
-            $"/api/identity-mappings/{snapshotId}", new {
+        using var saveRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"/api/identity-mappings/{snapshotId}") {
+            Content = JsonContent.Create(new {
                 destinationConnectionId = harness.DestinationConnectionId,
                 expectedRevision = 0,
                 mappings = new [] {
                     new { sourceIdentityId = "aad.alpha", gitHubLogin = "alpha-gh" },
                     new { sourceIdentityId = "aad.gamma", gitHubLogin = "gamma-gh" }
                 }
-            }, admin, HttpMethod.Put);
+            })
+        };
+        saveRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var save = await harness.Client.SendAsync(saveRequest);
         Assert.Equal(HttpStatusCode.OK, save.StatusCode);
         using var saved = JsonDocument.Parse(await save.Content.ReadAsStringAsync());
         Assert.Equal(3, saved.RootElement.GetProperty("preview")
