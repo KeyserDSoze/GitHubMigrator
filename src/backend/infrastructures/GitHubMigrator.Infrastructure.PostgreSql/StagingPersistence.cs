@@ -44,7 +44,7 @@ public sealed class PostgresStagingRepository(
         IReadOnlyList<StagingAssetInput> assets, IReadOnlySet<string> completeTypes,
         CancellationToken ct)
     {
-        if (inventory.RefsExternalized)
+        if (inventory.RefsExternalized || inventory.IdentitiesExternalized)
             throw new StagingSyncInputException("ExternalizedSnapshotRequiresManifest");
         return ApplyCoreAsync(inventory, assets, completeTypes, null, ct);
     }
