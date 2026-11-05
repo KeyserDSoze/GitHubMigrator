@@ -8,6 +8,21 @@ export type ConnectionDraft = { name: string; providerKey: string; organization:
 export type ValidationResult = {
   isValid: boolean; code: string; authenticatedAs: string | null; permissionAssessment: string
 };
+export type DiscoveryRefManifest = {
+  jobId: string; sourceConnectionId: string;
+  assetCount: number; chunkSize: number; chunkCount: number;
+  rootSha256: string; preparedAtUtc: string;
+};
+export type DiscoveryRefManifestChunk = {
+  index: number; assetCount: number; firstSourceId: string; lastSourceId: string; sha256: string;
+};
+export type DiscoveryRefChunkList = {
+  jobId: string; items: DiscoveryRefManifestChunk[]; nextAfter: number | null;
+};
+export type DiscoveryRefChunkContents = {
+  jobId: string; chunk: DiscoveryRefManifestChunk;
+  items: { sourceId: string; repositoryId: string; fingerprint: string; properties: { ObjectId: string } }[];
+};
 export type DiscoveryRefIngestProgress = {
   jobId: string; checkpointedRefPages: number; observedRefs: number;
 };
@@ -204,6 +219,15 @@ export const api = {
     call<MigrationJob>('/api/jobs/staging', {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ snapshotId })
     }),
+  getDiscoveryRefManifest: (token: string, jobId: string) =>
+    call<DiscoveryRefManifest>(`/api/jobs/${encodeURIComponent(jobId)}/ref-manifest`,
+      { headers: withToken(token) }),
+  listDiscoveryRefChunks: (token: string, jobId: string, after = -1, take = 20) =>
+    call<DiscoveryRefChunkList>(`/api/jobs/${encodeURIComponent(jobId)}/ref-manifest/chunks?after=${after}&take=${take}`,
+      { headers: withToken(token) }),
+  getDiscoveryRefChunk: (token: string, jobId: string, index: number) =>
+    call<DiscoveryRefChunkContents>(`/api/jobs/${encodeURIComponent(jobId)}/ref-manifest/chunks/${index}`,
+      { headers: withToken(token) }),
   getDiscoveryRefProgress: (token: string, jobId: string) =>
     call<DiscoveryRefIngestProgress>(`/api/jobs/${encodeURIComponent(jobId)}/ref-progress`,
       { headers: withToken(token) }),
