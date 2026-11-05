@@ -183,11 +183,8 @@ export default function IdentityMappingPage({ token, isAdmin }: { token: string;
           <div className="mapping-actions">
             <button type="button" disabled={busy || previous.length === 0}
               onClick={() => {
-                setPrevious(cursors => {
-                  const last = cursors[cursors.length - 1] ?? null;
-                  setAfter(last);
-                  return cursors.slice(0, -1);
-                });
+                setAfter(previous[previous.length - 1] ?? null);
+                setPrevious(previous.slice(0, -1));
               }}>{t('mappingPreviousPage')}</button>
             <span>{t('mappingPageNumber')} {previous.length + 1}</span>
             <button type="button" disabled={busy || !sourcePage.nextAfter}
