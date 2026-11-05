@@ -67,6 +67,15 @@ test('admin maps identities in saved revision and review remains blocked', async
     }
     return route.fulfill({ json: review(savedRevision, savedMappings) });
   });
+  await page.route(`**/api/identity-mappings/${snapshotId}/sources?**`, route =>
+    route.fulfill({ json: {
+      snapshotId,
+      items: sourceDetail.snapshot.identities.map(user => ({
+        sourceIdentityId: user.providerId, displayName: user.displayName,
+        email: user.email, legacyDescriptor: null
+      })),
+      nextAfter: null
+    } }));
   await page.route('**/api/connections/*/credential', route => { grants++; return route.fulfill({ status: 403 }); });
   await signIn(page, 'admin');
   await page.getByRole('button', { name: /mapping utenti|identity mapping/i }).click();
@@ -95,6 +104,15 @@ test('duplicate GitHub login is rejected before PUT', async ({ page }) => {
     if (route.request().method() === 'PUT') putCount++;
     return route.fulfill({ json: review(0, []) });
   });
+  await page.route(`**/api/identity-mappings/${snapshotId}/sources?**`, route =>
+    route.fulfill({ json: {
+      snapshotId,
+      items: sourceDetail.snapshot.identities.map(user => ({
+        sourceIdentityId: user.providerId, displayName: user.displayName,
+        email: user.email, legacyDescriptor: null
+      })),
+      nextAfter: null
+    } }));
   await signIn(page, 'admin');
   await page.getByRole('button', { name: /mapping utenti|identity mapping/i }).click();
   await page.getByRole('textbox', { name: 'Alice Smith GitHub' }).fill('some-gh');
@@ -102,6 +120,61 @@ test('duplicate GitHub login is rejected before PUT', async ({ page }) => {
   await page.getByRole('button', { name: /salva bozza mapping|save mapping draft/i }).click();
   await expect(page.getByText(/nomi account GitHub|GitHub account names/i)).toBeVisible();
   expect(putCount).toBe(0);
+});
+
+test('pagination preserves mappings edited on earlier pages in the complete draft', async ({ page }) => {
+  const users = Array.from({ length: 101 }, (_, i) => ({
+    sourceIdentityId: `aad.user-${String(i).padStart(3, '0')}`,
+    displayName: `Person ${i}`, email: null, legacyDescriptor: null
+  }));
+  let savedMappings: { sourceIdentityId: string; gitHubLogin: string }[] = [];
+  let revision = 0;
+  await page.route('**/api/connections', route => route.fulfill({ json: [{
+    id: destinationId, name: 'Target', organization: 'gh-target',
+    providerKey: 'github-enterprise-cloud', direction: 'destination', validationCode: 'Verified'
+  }] }));
+  await page.route('**/api/discoveries', route => route.fulfill({ json: [{
+    id: snapshotId, organization: 'source', collectedAtUtc: sourceDetail.collectedAtUtc
+  }] }));
+  await page.route(`**/api/identity-mappings/${snapshotId}**`, route => {
+    if (route.request().method() === 'PUT') {
+      const request = route.request().postDataJSON();
+      savedMappings = request.mappings;
+      revision++;
+    }
+    const result = review(revision, savedMappings);
+    return route.fulfill({ json: {
+      ...result, preview: { ...result.preview, discoveredIdentities: 101,
+        mappedIdentities: savedMappings.length,
+        unmappedIdentities: 101 - savedMappings.length }
+    } });
+  });
+  await page.route(`**/api/identity-mappings/${snapshotId}/sources?**`, route => {
+    const after = new URL(route.request().url()).searchParams.get('after');
+    const index = after ? users.findIndex(x => x.sourceIdentityId === after) + 1 : 0;
+    const selected = users.slice(index, index + 100);
+    return route.fulfill({ json: {
+      snapshotId, items: selected,
+      nextAfter: index + 100 < users.length ? selected.at(-1)?.sourceIdentityId : null
+    } });
+  });
+  await signIn(page, 'admin');
+  await page.getByRole('button', { name: /mapping utenti|identity mapping/i }).click();
+  await expect(page.getByText('Person 0', { exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Person 0 GitHub' }).fill('mapped-first');
+  await page.getByRole('button', { name: /utenti successivi|next users/i }).click();
+  await expect(page.getByText('Person 100', { exact: true })).toBeVisible();
+  await expect(page.getByText('Person 0', { exact: true })).toHaveCount(0);
+  await page.getByRole('textbox', { name: 'Person 100 GitHub' }).fill('mapped-last');
+  await page.getByRole('button', { name: /salva bozza mapping|save mapping draft/i }).click();
+  await expect(page.getByRole('status').getByText(/bozza salvata|mapping draft saved/i)).toBeVisible();
+  expect(savedMappings).toEqual([
+    { sourceIdentityId: 'aad.user-000', gitHubLogin: 'mapped-first' },
+    { sourceIdentityId: 'aad.user-100', gitHubLogin: 'mapped-last' }
+  ]);
+  await page.getByRole('button', { name: /utenti precedenti|previous users/i }).click();
+  await expect(page.getByRole('textbox', { name: 'Person 0 GitHub' }))
+    .toHaveValue('mapped-first');
 });
 
 test('regular user has no access to identity mapping requests', async ({ page }) => {
