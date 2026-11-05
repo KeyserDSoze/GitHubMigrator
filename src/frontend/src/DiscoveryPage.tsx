@@ -236,6 +236,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
         <strong>{value}</strong><small>{title}</small>
       </div>)}
     </div>}
+    {summary?.refsExternalized && <p className="muted" role="note">
+      {t('discoveryExternalRefsNotice')}
+    </p>}
     {summary && <div className="discovery-notice"><ShieldAlert size={17} />
       <span>{t('discoveryPartial')}. {t('discoveryPermissionWarning')}</span>
     </div>}
@@ -271,7 +274,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
                 const repoRefs = detail.refs.filter(ref => ref.repositoryId === repo.providerId);
                 return <div className="discovery-repo" key={repo.providerId}>
                   <div><strong>{repo.name}</strong>
-                    <small>{repo.sourcePath || `${repoRefs.length} ${t('discoveryBranchCount')}`}</small></div>
+                    <small>{repo.sourcePath ||
+                      (detail.refsExternalized ? t('discoveryRefsStoredInDb') :
+                        `${repoRefs.length} ${t('discoveryBranchCount')}`)}</small></div>
                   <span className="kind">{repo.versionControl === 1 ? t('discoveryTfvc') : t('discoveryGit')}</span>
                 </div>;
               })}
