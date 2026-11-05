@@ -363,7 +363,8 @@ public sealed class AzureDevOpsDiscoveryReader(
             // Backfill provisional observations when resuming a checkpoint
             // written before the streaming-ref feature was deployed. Replaying
             // the same page is idempotent and remains fenced by the new lease.
-            if (resource.StartsWith("refs:", StringComparison.Ordinal))
+            if (resource.StartsWith("refs:", StringComparison.Ordinal) ||
+                string.Equals(resource, "graph-users", StringComparison.Ordinal))
                 await checkpoints.SaveAsync(lease.Value, saved, ct);
             try { return new ResponsePage(JsonDocument.Parse(saved.SafePayloadJson), saved.NextContinuation); }
             catch (JsonException) { throw new DiscoveryCheckpointException("CheckpointPayloadInvalid"); }
