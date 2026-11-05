@@ -217,6 +217,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         {
             entity.ToTable("discovery_ref_chunks");
             entity.HasKey(x => new { x.JobId, x.Index });
+            entity.HasOne<DiscoveryRefManifestRecord>().WithMany()
+                .HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Cascade);
             entity.Property(x => x.JobId).HasColumnName("job_id");
             entity.Property(x => x.Index).HasColumnName("chunk_index");
             entity.Property(x => x.AssetCount).HasColumnName("asset_count");
