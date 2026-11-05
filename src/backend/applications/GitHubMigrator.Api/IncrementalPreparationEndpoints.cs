@@ -280,6 +280,77 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-032 is a PostgreSQL-only immutable comparison of F-014 source
+        // and F-031 GitHub GET snapshots. No network call or target write.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/ref-reconciliations",
+            async Task<IResult> (Guid id, Guid planId,
+                CreateGitRefReconciliationRequest request,
+                ClaimsPrincipal principal, IncrementalGitRefReconciliationService service,
+                CancellationToken ct) =>
+            {
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor)) return Results.Unauthorized();
+                try
+                {
+                    return Results.Ok(await service.CreateAsync(id, planId,
+                        request.SourceRepositoryId ?? "",
+                        request.TargetObservationId,
+                        request.ExpectedManifestSha256 ?? "",
+                        request.ExpectedTargetEvidenceSha256 ?? "",
+                        actor, ct));
+                }
+                catch (KeyNotFoundException ex)
+                { return Results.NotFound(new { error = ex.Message }); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (DiscoveryRefManifestException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("incremental-review");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/ref-reconciliations",
+            async Task<IResult> (Guid id, Guid planId,
+                IncrementalGitRefReconciliationService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.ListAsync(id, planId, ct)); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/ref-reconciliations/{reconciliationId:guid}",
+            async Task<IResult> (Guid id, Guid planId, Guid reconciliationId,
+                string? after, int? take, IncrementalGitRefReconciliationService service,
+                CancellationToken ct) =>
+            {
+                try
+                {
+                    var page = await service.PageAsync(id, planId,
+                        reconciliationId, after, take ?? 50, ct);
+                    return page is null
+                        ? Results.NotFound(new { error = "RefReconciliationNotFound" })
+                        : Results.Ok(page);
+                }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/execution-authorization",
             async Task<IResult> (Guid id, Guid planId,
                 AuthorizeOperationPlanRequest request, ClaimsPrincipal principal,
@@ -339,6 +410,12 @@ public static class IncrementalPreparationEndpoints
         });
     }
 
+    private static IResult ReconciliationError(
+        IncrementalGitRefReconciliationException ex) =>
+        ex.Code is "InvalidReconciliationRequest" or "InvalidReconciliationPage"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
+
     private static IResult TargetRefEvidenceError(
         GitHubTargetRefEvidenceException ex) =>
         ex.Code is "InvalidRefEvidenceRequest" or "InvalidRefEvidencePage"
@@ -372,3 +449,7 @@ public sealed record AuthorizeOperationPlanRequest(
 
 public sealed record CollectTargetRefEvidenceRequest(
     string? ExpectedManifestSha256, string? SourceRepositoryId);
+
+public sealed record CreateGitRefReconciliationRequest(
+    string? ExpectedManifestSha256, string? SourceRepositoryId,
+    Guid TargetObservationId, string? ExpectedTargetEvidenceSha256);

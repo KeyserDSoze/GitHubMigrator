@@ -44,9 +44,10 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                             VersionControlKind.Git)])],
                     Identities = [], AccessGrants = []
                 },
-                Refs = [new RepositoryRef("repo-1", "refs/heads/main", "abc")],
-                Issues = [], Completeness = DiscoveryCompleteness.Partial,
-                IdentitiesComplete = false, PermissionsComplete = false
+                Refs = [new RepositoryRef("repo-1", "refs/heads/main", ApiHarness.Sha)],
+                Issues = [], Completeness = DiscoveryCompleteness.Complete,
+                IdentitiesComplete = true, PermissionsComplete = true,
+                SecurityCoverage = new DiscoveryCoverage(true, true, true, true)
             };
             await new PostgresDiscoveryRepository(db).SaveAsync(snapshot, default);
             var normalized = StagingAssetNormalizer.Normalize(snapshot);
@@ -246,6 +247,7 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         Assert.Equal(callsBefore + 4, harness.Calls.Count);
 
         Guid observationId;
+        string targetRefSha;
         using (var collected = await PostAsAsync(evidencePath, evidenceRequest, admin))
         {
             Assert.Equal(HttpStatusCode.OK, collected.StatusCode);
@@ -259,6 +261,7 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             Assert.Equal(64, evidenceJson.RootElement.GetProperty(
                 "evidenceSha256").GetString()!.Length);
             observationId = evidenceJson.RootElement.GetProperty("id").GetGuid();
+            targetRefSha = evidenceJson.RootElement.GetProperty("evidenceSha256").GetString()!;
         }
         var providerCalls = harness.Calls.ToArray().Skip(callsBefore + 4).ToArray();
         Assert.Equal(2, providerCalls.Length);
@@ -300,6 +303,122 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             Assert.Equal(1, await db.GitHubTargetRefEvidence.AsNoTracking()
+                .CountAsync(x => x.PlanId == planId));
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-032 combines the historical, *complete* source snapshot with
+        // persisted F-031 target evidence. The endpoint issues no GitHub
+        // or Azure DevOps requests, stores no provider credentials and does
+        // not turn ref equality into execution permission.
+        var diffPath = $"{operationalPath}/{planId}/ref-reconciliations";
+        var diffRequest = new {
+            expectedManifestSha256 = planSha,
+            sourceRepositoryId = "repo-1",
+            targetObservationId = observationId,
+            expectedTargetEvidenceSha256 = targetRefSha
+        };
+        using (var noAuth = await harness.Client.PostAsJsonAsync(diffPath, diffRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, noAuth.StatusCode);
+        using (var lowRole = await PostAsAsync(diffPath, diffRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, lowRole.StatusCode);
+        using (var wrongDigest = await PostAsAsync(diffPath, new {
+            expectedManifestSha256 = planSha,
+            sourceRepositoryId = "repo-1",
+            targetObservationId = observationId,
+            expectedTargetEvidenceSha256 = new string('f', 64)
+        }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, wrongDigest.StatusCode);
+        using (var wrongMapping = await PostAsAsync(diffPath, new {
+            expectedManifestSha256 = planSha,
+            sourceRepositoryId = "does-not-exist",
+            targetObservationId = observationId,
+            expectedTargetEvidenceSha256 = targetRefSha
+        }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, wrongMapping.StatusCode);
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        Guid diffId;
+        string reconciliationSha;
+        using (var compared = await PostAsAsync(diffPath, diffRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.OK, compared.StatusCode);
+            var body = await compared.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            using var comparedJson = JsonDocument.Parse(body);
+            var result = comparedJson.RootElement;
+            diffId = result.GetProperty("id").GetGuid();
+            reconciliationSha = result.GetProperty("reconciliationSha256").GetString()!;
+            Assert.Equal(64, reconciliationSha.Length);
+            Assert.Equal(1, result.GetProperty("sourceRefCount").GetInt32());
+            Assert.Equal(2, result.GetProperty("targetRefCount").GetInt32());
+            Assert.Equal(1, result.GetProperty("matchingCount").GetInt32());
+            Assert.Equal(0, result.GetProperty("createCandidateCount").GetInt32());
+            Assert.Equal(0, result.GetProperty("divergedCount").GetInt32());
+            Assert.Equal(1, result.GetProperty("targetOnlyCount").GetInt32());
+            Assert.True(result.GetProperty("isCurrent").GetBoolean());
+            Assert.False(result.GetProperty("readyForExecution").GetBoolean());
+            Assert.Equal(JsonValueKind.Null,
+                result.GetProperty("sourceManifestRootSha256").ValueKind);
+        }
+
+        using (var replay = await PostAsAsync(diffPath, diffRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+            using var body = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+            Assert.Equal(diffId, body.RootElement.GetProperty("id").GetGuid());
+            Assert.Equal(reconciliationSha,
+                body.RootElement.GetProperty("reconciliationSha256").GetString());
+        }
+        // Separate dependency-injection scopes simulate independent API
+        // replicas replaying the same current digest under the DB lock.
+        await using (var replicaOne = harness.Host.Services.CreateAsyncScope())
+        await using (var replicaTwo = harness.Host.Services.CreateAsyncScope())
+        {
+            var one = replicaOne.ServiceProvider.GetRequiredService<
+                IncrementalGitRefReconciliationService>();
+            var two = replicaTwo.ServiceProvider.GetRequiredService<
+                IncrementalGitRefReconciliationService>();
+            var results = await Task.WhenAll(
+                one.CreateAsync(prepId, planId, "repo-1", observationId,
+                    planSha, targetRefSha, Guid.NewGuid(), default),
+                two.CreateAsync(prepId, planId, "repo-1", observationId,
+                    planSha, targetRefSha, Guid.NewGuid(), default));
+            Assert.Equal(diffId, results[0].Id);
+            Assert.Equal(diffId, results[1].Id);
+            Assert.Equal(reconciliationSha, results[0].ReconciliationSha256);
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get, diffPath))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Single(body.RootElement.EnumerateArray());
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            diffPath + "/" + diffId + "?take=1"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Single(body.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal("refs/heads/main",
+                body.RootElement.GetProperty("items")[0].GetProperty("name").GetString());
+            Assert.Equal("refs/heads/main",
+                body.RootElement.GetProperty("nextAfter").GetString());
+            Assert.Equal((int)GitMirrorRefDisposition.MatchingObjectId,
+                body.RootElement.GetProperty("items")[0]
+                    .GetProperty("disposition").GetInt32());
+            Assert.False(body.RootElement.GetProperty("reconciliation")
+                .GetProperty("readyForExecution").GetBoolean());
+        }
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.IncrementalGitRefReconciliations.AsNoTracking()
                 .CountAsync(x => x.PlanId == planId));
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
@@ -359,6 +478,26 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
             Assert.Contains("RefEvidenceIntegrityFailed",
                 await response.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+        // Corrupt an F-032 count without changing the sealed proof; reads
+        // must reject even though the persisted JSON retains valid syntax.
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.IncrementalGitRefReconciliations
+                .Where(x => x.Id == diffId)
+                .ExecuteUpdateAsync(updates => updates.SetProperty(
+                    x => x.MatchingCount, 2));
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            diffPath + "/" + diffId))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.Conflict, reply.StatusCode);
+            Assert.Contains("ReconciliationIntegrityFailed",
+                await reply.Content.ReadAsStringAsync());
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
     }
