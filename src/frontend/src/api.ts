@@ -79,6 +79,20 @@ export type StagingSyncResult = {
   appliedAtUtc: string; observed: number; added: number; changed: number;
   unchanged: number; markedMissing: number; sourceInventoryComplete: boolean;
 };
+export type IncrementalOperationPlan = {
+  id: string; preparationId: string; snapshotId: string;
+  sourceConnectionId: string; destinationConnectionId: string;
+  organization: string; reviewSha256: string;
+  preparationEvidenceSha256: string; preflightEvidenceSha256: string;
+  manifestSha256: string; createdAtUtc: string; createdBy: string;
+  repositoryCount: number; stepCount: number; changedRefCount: number;
+  sensitiveChangeCount: number; isCurrent: boolean; readyForExecution: boolean;
+  blockers: string[];
+  steps: { ordinal: number; dependsOnOrdinal: number | null;
+    sourceRepositoryId: string; targetRepositoryName: string;
+    kind: string; state: 'Blocked'; blockerCode: string;
+    changedRefs: number }[];
+};
 export type IncrementalTargetPreflight = {
   preparationId: string; snapshotId: string; destinationConnectionId: string;
   organization: string; reviewSha256: string; evidenceSha256: string;
@@ -386,6 +400,20 @@ export const api = {
     }),
   getStagingSync: (token: string, snapshotId: string) =>
     call<StagingSyncResult>(`/api/staging/snapshots/${encodeURIComponent(snapshotId)}`,
+      { headers: withToken(token) }),
+  createIncrementalOperationPlan: (token: string, id: string,
+      expectedPreflightSha256: string) =>
+    call<IncrementalOperationPlan>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans`,
+      { method: 'POST', headers: withToken(token),
+        body: JSON.stringify({ expectedPreflightSha256 }) }),
+  listIncrementalOperationPlans: (token: string, id: string) =>
+    call<IncrementalOperationPlan[]>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans`,
+      { headers: withToken(token) }),
+  getIncrementalOperationPlan: (token: string, id: string, planId: string) =>
+    call<IncrementalOperationPlan>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans/${encodeURIComponent(planId)}`,
       { headers: withToken(token) }),
   runLiveTargetPreflight: (token: string, id: string, expectedReviewSha256: string,
       repositories: { sourceRepositoryId: string; targetRepositoryName: string;

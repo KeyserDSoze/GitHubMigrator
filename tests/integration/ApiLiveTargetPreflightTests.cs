@@ -6,6 +6,7 @@ using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -151,6 +152,80 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 4, harness.Calls.Count);
 
+        // F-029: immutable blocked operation manifest is constructed entirely
+        // from the saved F-025–F-028 proofs. It never calls any provider.
+        var operationalPath = $"/api/incremental-preparations/{prepId}/operation-plans";
+        var sourceProof = root.GetProperty("evidenceSha256").GetString()!;
+        using var invalidPlan = await PostAsAsync(operationalPath,
+            new { expectedPreflightSha256 = new string('a', 64) }, admin);
+        Assert.Equal(HttpStatusCode.Conflict, invalidPlan.StatusCode);
+
+        using var planResponse = await PostAsAsync(operationalPath,
+            new { expectedPreflightSha256 = sourceProof }, admin);
+        Assert.Equal(HttpStatusCode.OK, planResponse.StatusCode);
+        using var planJson = JsonDocument.Parse(
+            await planResponse.Content.ReadAsStringAsync());
+        var manifest = planJson.RootElement;
+        var planId = manifest.GetProperty("id").GetGuid();
+        var planSha = manifest.GetProperty("manifestSha256").GetString()!;
+        Assert.Equal(64, planSha.Length);
+        Assert.Equal(2, manifest.GetProperty("repositoryCount").GetInt32());
+        Assert.Equal(12, manifest.GetProperty("stepCount").GetInt32());
+        Assert.Equal(1, manifest.GetProperty("changedRefCount").GetInt32());
+        Assert.True(manifest.GetProperty("isCurrent").GetBoolean());
+        Assert.False(manifest.GetProperty("readyForExecution").GetBoolean());
+        Assert.All(manifest.GetProperty("steps").EnumerateArray(),
+            s => Assert.Equal("Blocked", s.GetProperty("state").GetString()));
+
+        using var replayPlan = await PostAsAsync(operationalPath,
+            new { expectedPreflightSha256 = sourceProof }, admin);
+        Assert.Equal(HttpStatusCode.OK, replayPlan.StatusCode);
+        using var replayJson = JsonDocument.Parse(
+            await replayPlan.Content.ReadAsStringAsync());
+        Assert.Equal(planId, replayJson.RootElement.GetProperty("id").GetGuid());
+        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+
+        var authorizePath = $"{operationalPath}/{planId}/execution-authorization";
+        using var nonSuperadmin = await PostAsAsync(authorizePath,
+            new { expectedManifestSha256 = planSha,
+                acknowledgeBlockedOperations = true }, admin);
+        Assert.Equal(HttpStatusCode.Forbidden, nonSuperadmin.StatusCode);
+        using var notLogged = await harness.Client.PostAsJsonAsync(authorizePath,
+            new { expectedManifestSha256 = planSha,
+                acknowledgeBlockedOperations = true });
+        Assert.Equal(HttpStatusCode.Unauthorized, notLogged.StatusCode);
+
+        var superUserName = "f029-super-" + Guid.NewGuid().ToString("N");
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+            var userInfo = new ApplicationUser {
+                UserName = superUserName, MustChangePassword = false
+            };
+            Assert.True((await users.CreateAsync(userInfo, ApiHarness.AdminPassword)).Succeeded);
+            Assert.True((await users.AddToRoleAsync(userInfo, "superadmin")).Succeeded);
+        }
+        var superToken = await harness.LoginAsync(superUserName, ApiHarness.AdminPassword);
+        using var denied = await PostAsAsync(authorizePath,
+            new { expectedManifestSha256 = planSha,
+                acknowledgeBlockedOperations = true }, superToken);
+        Assert.Equal(HttpStatusCode.Conflict, denied.StatusCode);
+        using var deniedJson = JsonDocument.Parse(await denied.Content.ReadAsStringAsync());
+        Assert.Equal("Denied", deniedJson.RootElement.GetProperty("decision").GetString());
+        Assert.Equal("DestinationWritePermissionUnverified",
+            deniedJson.RootElement.GetProperty("reasonCode").GetString());
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/authorization-attempts"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", superToken);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var audit = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(audit.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())
@@ -169,6 +244,16 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             Assert.False(stale.RootElement.GetProperty("isCurrent").GetBoolean());
         }
         Assert.Equal(callsBefore + 4, harness.Calls.Count);
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var stale = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.False(stale.RootElement.GetProperty("isCurrent").GetBoolean());
+            Assert.False(stale.RootElement.GetProperty("readyForExecution").GetBoolean());
+        }
     }
 
     private async Task<HttpResponseMessage> PostAsAsync(

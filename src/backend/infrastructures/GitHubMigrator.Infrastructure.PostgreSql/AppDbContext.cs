@@ -47,6 +47,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<IncrementalTargetProbeRecord>();
     public DbSet<IncrementalTargetPreflightEventRecord> IncrementalTargetPreflightEvents =>
         Set<IncrementalTargetPreflightEventRecord>();
+    public DbSet<IncrementalOperationPlanRecord> IncrementalOperationPlans =>
+        Set<IncrementalOperationPlanRecord>();
+    public DbSet<IncrementalOperationStepRecord> IncrementalOperationSteps =>
+        Set<IncrementalOperationStepRecord>();
+    public DbSet<IncrementalExecutionAuthorizationAttemptRecord> IncrementalExecutionAuthorizationAttempts =>
+        Set<IncrementalExecutionAuthorizationAttemptRecord>();
     public DbSet<MigrationJobRecord> MigrationJobs => Set<MigrationJobRecord>();
     public DbSet<MigrationJobEventRecord> MigrationJobEvents => Set<MigrationJobEventRecord>();
     public DbSet<DiscoveryPageCheckpointRecord> DiscoveryPageCheckpoints => Set<DiscoveryPageCheckpointRecord>();
@@ -319,6 +325,63 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => new { x.PreparationId, x.Id })
                 .HasDatabaseName("ix_incremental_target_preflight_events");
+        });
+        builder.Entity<IncrementalOperationPlanRecord>(entity =>
+        {
+            entity.ToTable("incremental_operation_plans");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.DestinationConnectionId).HasColumnName("destination_connection_id");
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(100);
+            entity.Property(x => x.ReviewSha256).HasColumnName("review_sha256").HasMaxLength(64);
+            entity.Property(x => x.PreparationSha256).HasColumnName("preparation_sha256").HasMaxLength(64);
+            entity.Property(x => x.PreflightSha256).HasColumnName("preflight_sha256").HasMaxLength(64);
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.CreatedBy).HasColumnName("created_by");
+            entity.Property(x => x.RepositoryCount).HasColumnName("repository_count");
+            entity.Property(x => x.StepCount).HasColumnName("step_count");
+            entity.Property(x => x.ChangedRefCount).HasColumnName("changed_ref_count");
+            entity.Property(x => x.SensitiveChangeCount).HasColumnName("sensitive_change_count");
+            entity.HasIndex(x => new { x.PreparationId, x.PreflightSha256 })
+                .IsUnique().HasDatabaseName("ux_incremental_operation_plans_proof");
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<IncrementalOperationStepRecord>(entity =>
+        {
+            entity.ToTable("incremental_operation_plan_steps");
+            entity.HasKey(x => new { x.PlanId, x.Ordinal });
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.Ordinal).HasColumnName("ordinal");
+            entity.Property(x => x.DependsOnOrdinal).HasColumnName("depends_on_ordinal");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id").HasMaxLength(256);
+            entity.Property(x => x.TargetRepositoryName).HasColumnName("target_repository_name").HasMaxLength(100);
+            entity.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(40);
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(20);
+            entity.Property(x => x.BlockerCode).HasColumnName("blocker_code").HasMaxLength(64);
+            entity.Property(x => x.ChangedRefs).HasColumnName("changed_refs");
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<IncrementalExecutionAuthorizationAttemptRecord>(entity =>
+        {
+            entity.ToTable("incremental_execution_authorization_attempts");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.AtUtc).HasColumnName("at_utc");
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.Decision).HasColumnName("decision").HasMaxLength(16);
+            entity.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(64);
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.PlanId, x.Id })
+                .HasDatabaseName("ix_incremental_execution_authorization_events");
         });
         builder.Entity<MigrationJobRecord>(entity =>
         {
