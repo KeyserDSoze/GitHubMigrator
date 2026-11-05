@@ -120,16 +120,27 @@ public sealed class PostgresPlanRefEvidenceTests(PostgresDraftFixture fixture)
     private static async Task<Guid> CompletedExternalizedAsync(
         AppDbContext db, TimeProvider clock, Guid source, RepositoryRef[] refs)
     {
+        // Exercise the fenced worker state deterministically: other tests
+        // share a database queue and may leave unrelated jobs unprocessed.
         var jobs = new PostgresMigrationJobRepository(db, clock);
-        var job = await jobs.EnqueueDiscoveryAsync(source, Guid.NewGuid(), Guid.NewGuid(), default);
-        var lease = (await jobs.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(3), default))!;
-        Assert.Equal(job.Id, lease.Id);
-        await SaveSnapshotAsync(db, job.Id, source, refs,
+        var id = Guid.NewGuid();
+        var token = Guid.NewGuid();
+        var now = clock.GetUtcNow();
+        db.MigrationJobs.Add(new MigrationJobRecord {
+            Id = id, SourceConnectionId = source, SnapshotId = Guid.Empty,
+            Kind = MigrationJobKinds.DiscoverSource, State = MigrationJobStates.Running,
+            Attempts = 1, EnqueuedBy = Guid.NewGuid(),
+            IdempotencyKey = "f017-ref-test:" + id,
+            LeaseToken = token, LeaseUntilUtc = now.AddMinutes(3),
+            AvailableAtUtc = now, CreatedAtUtc = now, UpdatedAtUtc = now
+        });
+        await db.SaveChangesAsync();
+        var lease = new MigrationJobLease(id, Guid.Empty, source,
+            MigrationJobKinds.DiscoverSource, token, 1);
+        await SaveSnapshotAsync(db, id, source, refs,
             externalized: true, expected: refs.Length);
-        Assert.True(await jobs.CheckpointSnapshotAsync(lease, job.Id, default));
-        // ClaimAsync starts before the source snapshot exists. Stage only with
-        // the new persisted snapshot ID owned by the same fenced worker.
-        lease = lease with { SnapshotId = job.Id };
+        Assert.True(await jobs.CheckpointSnapshotAsync(lease, id, default));
+        lease = lease with { SnapshotId = id };
         var pages = new PostgresDiscoveryPageCheckpointStore(db, clock);
         foreach (var group in refs.GroupBy(r => r.RepositoryId))
         {
@@ -137,7 +148,7 @@ public sealed class PostgresPlanRefEvidenceTests(PostgresDraftFixture fixture)
                 value = group.Select(r => new { name = r.Name, objectId = r.ObjectId })
             });
             await pages.SaveAsync(new(lease.Id, lease.LeaseToken, lease.Attempt),
-                new DiscoveryPageCheckpoint(job.Id, "refs:" + group.Key, 0,
+                new DiscoveryPageCheckpoint(id, "refs:" + group.Key, 0,
                     new string('a', 64), payload, null, clock.GetUtcNow()), default);
         }
         var manifests = new PostgresDiscoveryRefManifestStore(db, clock);
@@ -146,7 +157,7 @@ public sealed class PostgresPlanRefEvidenceTests(PostgresDraftFixture fixture)
             new PostgresStagingRepository(db, clock, manifests));
         var result = await staging.SyncUsingRefManifestAsync(lease, default);
         Assert.True(await jobs.CompleteAsync(lease, result, default));
-        return job.Id;
+        return id;
     }
 
     private static async Task SaveSnapshotAsync(

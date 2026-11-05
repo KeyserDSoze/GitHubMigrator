@@ -251,6 +251,9 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
     {summary?.refsExternalized && <p className="muted" role="note">
       {t('discoveryExternalRefsNotice')}
     </p>}
+    {summary?.identitiesExternalized && <p className="muted" role="note">
+      {t('discoveryExternalIdentitiesNotice')}
+    </p>}
     {summary && <div className="discovery-notice"><ShieldAlert size={17} />
       <span>{t('discoveryPartial')}. {t('discoveryPermissionWarning')}</span>
     </div>}
@@ -295,7 +298,12 @@ export default function DiscoveryPage({ token, isAdmin }: { token: string; isAdm
             </article>) : <p className="muted">{t('discoveryNoProjects')}</p>)}
           {tab === 'users' && <>
             {!detail.identitiesComplete && <div className="discovery-warning"><ShieldAlert size={16} />{t('discoveryGraphIncomplete')}</div>}
-            {detail.snapshot.identities.length ? detail.snapshot.identities.map(identity =>
+            {detail.identitiesExternalized
+              ? <p className="muted" role="note">
+                  {t('discoveryExternalIdentitiesNotice')}
+                  {' '}{detail.identityCount ?? 0} {t('discoveryUserCount')}.
+                </p>
+              : detail.snapshot.identities.length ? detail.snapshot.identities.map(identity =>
               <div className="discovery-identity" key={identity.providerId}>
                 <strong><Users size={13} /> {identity.displayName}</strong>
                 <small>{identity.email || identity.providerId}</small>

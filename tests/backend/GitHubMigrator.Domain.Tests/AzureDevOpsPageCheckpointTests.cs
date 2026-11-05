@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using GitHubMigrator.Business;
 using GitHubMigrator.Infrastructure.AzureDevOps;
 
@@ -65,6 +66,9 @@ public sealed class AzureDevOpsPageCheckpointTests
         Assert.Empty(result.Refs); // leased workers never retain the full ref list
         Assert.True(result.RefsExternalized);
         Assert.Equal(1001, result.RefCount);
+        Assert.True(result.IdentitiesExternalized);
+        Assert.Empty(result.Snapshot.Identities);
+        Assert.Equal(1, result.IdentityCount);
         Assert.Single(result.Snapshot.Projects);
         Assert.True(result.IdentitiesComplete);
         Assert.Equal(1, calls["/test-org/_apis/projects#start"]);
@@ -73,6 +77,60 @@ public sealed class AzureDevOpsPageCheckpointTests
         Assert.Equal(1, store.Items.Count(x => x.ResourceKey == "refs:repo-1" && x.PageIndex == 0));
         Assert.Equal(1, store.Items.Count(x => x.ResourceKey == "refs:repo-1" && x.PageIndex == 1));
         Assert.All(store.Items, item => Assert.Equal(64, item.RequestHash.Length));
+    }
+
+    [Fact]
+    public async Task Graph_page_two_retry_reuses_first_1000_users_without_materializing_identity_inventory()
+    {
+        var lease = new DiscoveryLeaseContext(Guid.NewGuid(), Guid.NewGuid(), 1);
+        var store = new FakePageStore();
+        var calls = new Dictionary<string, int>(StringComparer.Ordinal);
+        var users = string.Join(",", Enumerable.Range(0, 1000).Select(i =>
+            $$"""{"descriptor":"aad.user-{{i:0000}}","displayName":"Person {{i}}","unsafeToken":"DO_NOT_SAVE"}"""));
+        using var http = new HttpClient(new Stub(req =>
+        {
+            var url = req.RequestUri!;
+            var path = url.AbsolutePath;
+            var key = path + (url.Query.Contains("continuationToken", StringComparison.Ordinal)
+                ? "#next" : "#first");
+            calls[key] = calls.GetValueOrDefault(key) + 1;
+            if (path.EndsWith("/_apis/projects"))
+                return Json("""{"value":[]}""");
+            if (path.EndsWith("/_apis/graph/users"))
+            {
+                if (key.EndsWith("#next", StringComparison.Ordinal))
+                {
+                    if (calls[key] == 1) throw new HttpRequestException("transient");
+                    return Json("""{"value":[{"descriptor":"aad.user-1000","displayName":"Last"}]}""");
+                }
+                var result = Json("{\"value\":[" + users + "]}");
+                result.Headers.Add("X-MS-ContinuationToken", "next");
+                return result;
+            }
+            if (path.EndsWith("/_apis/graph/groups") ||
+                path.Contains("/_apis/accesscontrollists/"))
+                return Json("""{"value":[]}""");
+            throw new Xunit.Sdk.XunitException("Unexpected GET " + path);
+        }));
+        var reader = new AzureDevOpsDiscoveryReader(http, TimeProvider.System, store);
+        var source = Guid.NewGuid();
+        var first = await Assert.ThrowsAsync<DiscoveryProviderException>(() =>
+            reader.DiscoverWithCheckpointsAsync(source, "test-org", "PAT", lease, default));
+        Assert.Equal("ProviderUnavailable", first.Code);
+        Assert.NotNull(await store.GetAsync(lease.JobId, "graph-users", 0, default));
+        Assert.Null(await store.GetAsync(lease.JobId, "graph-users", 1, default));
+        Assert.DoesNotContain("DO_NOT_SAVE",
+            string.Join(" ", store.Items.Select(x => x.SafePayloadJson)));
+
+        var inventory = await reader.DiscoverWithCheckpointsAsync(
+            source, "test-org", "PAT", lease, default);
+        Assert.True(inventory.IdentitiesExternalized);
+        Assert.Equal(1001, inventory.IdentityCount);
+        Assert.Empty(inventory.Snapshot.Identities);
+        Assert.True(inventory.IdentitiesComplete);
+        Assert.Equal(1, calls["/test-org/_apis/graph/users#first"]);
+        Assert.Equal(2, calls["/test-org/_apis/graph/users#next"]);
+        Assert.Equal(2, store.Items.Count(x => x.ResourceKey == "graph-users"));
     }
 
     [Fact]
@@ -198,10 +256,36 @@ public sealed class AzureDevOpsPageCheckpointTests
         Assert.Equal(0, calls);
     }
 
-    private sealed class FakePageStore : IDiscoveryPageCheckpointStore
+    private sealed class FakePageStore : IDiscoveryPageCheckpointStore, IDiscoveryIdentityObservationStore
     {
         private readonly Dictionary<(Guid, string, int), DiscoveryPageCheckpoint> _rows = [];
         public IReadOnlyCollection<DiscoveryPageCheckpoint> Items => _rows.Values;
+
+        public Task<DiscoveryIdentityProgress> GetProgressAsync(Guid job, CancellationToken ct)
+        {
+            var pages = _rows.Values.Where(x =>
+                x.JobId == job && x.ResourceKey == "graph-users").ToArray();
+            var known = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var page in pages)
+            {
+                using var parsed = JsonDocument.Parse(page.SafePayloadJson);
+                foreach (var item in parsed.RootElement.GetProperty("value").EnumerateArray())
+                {
+                    if (item.TryGetProperty("descriptor", out var id) &&
+                        id.ValueKind == JsonValueKind.String &&
+                        !string.IsNullOrWhiteSpace(id.GetString()))
+                        known.Add(id.GetString()!);
+                }
+            }
+            return Task.FromResult(new DiscoveryIdentityProgress(job, pages.Length, known.Count));
+        }
+
+        public Task<DiscoveryIdentityObservationPage> ListAsync(
+            Guid job, string? after, int take, CancellationToken ct) =>
+            throw new NotSupportedException("Reader tests only use page-count evidence");
+
+        public Task VerifySnapshotAsync(MigrationJobLease lease, CancellationToken ct) =>
+            throw new NotSupportedException("Reader tests do not finalize staging");
         public Task<DiscoveryPageCheckpoint?> GetAsync(
             Guid job, string resource, int page, CancellationToken ct) =>
             Task.FromResult(_rows.GetValueOrDefault((job, resource, page)));

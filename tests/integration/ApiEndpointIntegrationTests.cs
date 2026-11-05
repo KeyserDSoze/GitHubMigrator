@@ -731,6 +731,10 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.True(persisted.RootElement.GetProperty("refsExternalized").GetBoolean());
         Assert.Equal(1, persisted.RootElement.GetProperty("refCount").GetInt32());
         Assert.Equal(0, persisted.RootElement.GetProperty("refs").GetArrayLength());
+        Assert.True(persisted.RootElement.GetProperty("identitiesExternalized").GetBoolean());
+        Assert.Equal(1, persisted.RootElement.GetProperty("identityCount").GetInt32());
+        Assert.Empty(persisted.RootElement.GetProperty("snapshot")
+            .GetProperty("identities").EnumerateArray());
         await using (var scope = harness.Host.Services.CreateAsyncScope())
         {
             var snapshotDb = await scope.ServiceProvider.GetRequiredService<AppDbContext>()
@@ -739,6 +743,10 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             Assert.True(storedJson.RootElement.GetProperty("refsExternalized").GetBoolean());
             Assert.Equal(1, storedJson.RootElement.GetProperty("refCount").GetInt32());
             Assert.Empty(storedJson.RootElement.GetProperty("refs").EnumerateArray());
+            Assert.True(storedJson.RootElement.GetProperty("identitiesExternalized").GetBoolean());
+            Assert.Equal(1, storedJson.RootElement.GetProperty("identityCount").GetInt32());
+            Assert.Empty(storedJson.RootElement.GetProperty("snapshot")
+                .GetProperty("identities").EnumerateArray());
         }
         using var summariesGet = new HttpRequestMessage(HttpMethod.Get, "/api/discoveries");
         summariesGet.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
@@ -749,6 +757,8 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             .Single(x => x.GetProperty("id").GetGuid() == jobId);
         Assert.Equal(1, currentSummary.GetProperty("refCount").GetInt32());
         Assert.True(currentSummary.GetProperty("refsExternalized").GetBoolean());
+        Assert.True(currentSummary.GetProperty("identitiesExternalized").GetBoolean());
+        Assert.Equal(1, currentSummary.GetProperty("identityCount").GetInt32());
 
         using var eventRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{jobId}/events");
         eventRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
@@ -822,6 +832,13 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(jobId, identityList.RootElement.GetProperty("jobId").GetGuid());
         var identityRow = Assert.Single(identityList.RootElement.GetProperty("items").EnumerateArray());
         Assert.Equal("aad.test", identityRow.GetProperty("sourceId").GetString());
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var reader = scope.ServiceProvider.GetRequiredService<IIdentitySnapshotReader>();
+            Assert.Equal(1, await reader.CountAsync(jobId, default));
+            var sourcePage = await reader.ListAsync(jobId, null, 100, default);
+            Assert.Equal("aad.test", Assert.Single(sourcePage.Items).SourceIdentityId);
+        }
         Assert.Equal("Test User",
             identityRow.GetProperty("properties").GetProperty("DisplayName").GetString());
         Assert.Equal("test@example.invalid",

@@ -34,6 +34,10 @@
 - Playwright: 101 users across two pages; saving a draft retains edits from the first page after advancing, and the mapping is restored when returning.
 - Existing .NET/xUnit, PostgreSQL, Playwright and Terraform CI remain mandatory.
 
+## Externalized source identities (F-018)
+
+Leased source discovery now stores only an externalized identity count in the inventory; F-004's PostgreSQL reader selects the original F-015 observations even when `snapshot.identities` is empty, provided the source job succeeded and the immutable Graph pages match all stored user metadata. Zero-user externalized scans no longer fall back to legacy inline reads. See [F-018](externalized-graph-identities.md).
+
 ## Limitations and next step
 
 The old immutable snapshot still stores the full `DiscoverySnapshot.Identities` JSONB array, and Azure DevOps Graph discovery still gathers users in process memory. **F-016 reduces F-004 review/read memory, not source-discovery memory.**

@@ -59,6 +59,132 @@ public sealed class PostgresGraphIdentityObservationTests(PostgresDraftFixture f
     }
 
     [Fact]
+    public async Task Externalized_1001_Graph_users_are_staged_in_bounded_batches_and_paged_by_F004()
+    {
+        await ResetAsync();
+        var clock = new TestClock(DateTimeOffset.UtcNow);
+        var (job, pageLease) = await EnqueueAndClaimAsync(clock);
+        await using var db = fixture.NewContext();
+        var pages = new PostgresDiscoveryPageCheckpointStore(db, clock);
+        await pages.SaveAsync(pageLease,
+            Page(job.Id, 0, Enumerable.Range(0, 1000).Select(User), "cursor"), default);
+        await pages.SaveAsync(pageLease, Page(job.Id, 1, [User(1000)], null), default);
+        Assert.Equal(new(job.Id, 2, 1001),
+            await pages.GetProgressAsync(job.Id, default));
+
+        var now = clock.GetUtcNow();
+        await new PostgresDiscoveryRepository(db).SaveAsync(new DiscoveryInventory {
+            Id = job.Id, ConnectionId = job.SourceConnectionId,
+            SourceProvider = "azure-devops-services", Organization = "test-org",
+            CollectedAtUtc = now,
+            Snapshot = new DiscoverySnapshot {
+                SnapshotId = job.Id, SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                CollectedAt = now, Projects = [
+                    new SourceProject("p1", "Project", [
+                        new SourceRepository("r1", "p1", "Repo", VersionControlKind.Git)])
+                ],
+                Identities = [], AccessGrants = []
+            },
+            Refs = [], RefsExternalized = true, RefCount = 0,
+            IdentitiesExternalized = true, IdentityCount = 1001,
+            Issues = [], Completeness = DiscoveryCompleteness.Partial,
+            IdentitiesComplete = true, PermissionsComplete = false
+        }, default);
+        var stored = await new PostgresDiscoveryRepository(db).GetAsync(job.Id, default);
+        Assert.NotNull(stored);
+        Assert.Empty(stored.Snapshot.Identities);
+        Assert.True(stored.IdentitiesExternalized);
+        Assert.Equal(1001, stored.IdentityCount);
+        var legacy = new StagingSyncService(new PostgresDiscoveryRepository(db),
+            new PostgresStagingRepository(db, clock));
+        var refused = await Assert.ThrowsAsync<StagingSyncInputException>(() =>
+            legacy.SyncAsync(job.Id, default));
+        Assert.Equal("ExternalizedSnapshotRequiresManifest", refused.Code);
+
+        var jobs = new PostgresMigrationJobRepository(db, clock);
+        var lease = new MigrationJobLease(job.Id, job.Id, job.SourceConnectionId,
+            MigrationJobKinds.DiscoverSource, pageLease.LeaseToken, pageLease.Attempt);
+        Assert.True(await jobs.CheckpointSnapshotAsync(lease, job.Id, default));
+        await pages.VerifySnapshotAsync(lease, default);
+        var manifest = new PostgresDiscoveryRefManifestStore(db, clock);
+        await manifest.PrepareAsync(lease, 0, default);
+        var staged = await new StagingSyncService(new PostgresDiscoveryRepository(db),
+            new PostgresStagingRepository(db, clock, manifest, pages))
+            .SyncUsingRefManifestAsync(lease, default);
+        Assert.Equal(1003, staged.Observed); // 1001 identities + project + repo
+        Assert.Equal(1003, staged.Added);
+        Assert.Equal(1001, await db.StagingAssets.AsNoTracking()
+            .CountAsync(x => x.SourceConnectionId == job.SourceConnectionId &&
+                x.AssetType == "identity"));
+        var observed = await db.DiscoveryIdentityObservations.AsNoTracking()
+            .SingleAsync(x => x.JobId == job.Id && x.SourceId == "aad.user-0042");
+        var canonical = await db.StagingAssets.AsNoTracking()
+            .SingleAsync(x => x.SourceConnectionId == job.SourceConnectionId &&
+                x.AssetType == "identity" && x.SourceId == "aad.user-0042");
+        Assert.Equal(observed.Fingerprint, canonical.Fingerprint);
+
+        Assert.True(await jobs.CompleteAsync(lease, staged, default));
+        var identitySource = new PostgresIdentitySnapshotReader(db);
+        Assert.Equal(1001, await identitySource.CountAsync(job.Id, default));
+        var first = await identitySource.ListAsync(job.Id, null, 100, default);
+        Assert.Equal(100, first.Items.Count);
+        var second = await identitySource.ListAsync(job.Id, first.NextAfter, 100, default);
+        Assert.Equal("aad.user-0100", second.Items[0].SourceIdentityId);
+        Assert.Equal("Person 100", second.Items[0].DisplayName);
+        Assert.Equal(staged, await new StagingSyncService(
+            new PostgresDiscoveryRepository(db),
+            new PostgresStagingRepository(db, clock, manifest, pages))
+            .GetSyncAsync(job.Id, default));
+    }
+
+    [Fact]
+    public async Task Identity_fingerprint_tampering_rolls_back_project_and_identity_staging_together()
+    {
+        await ResetAsync();
+        var clock = new TestClock(DateTimeOffset.UtcNow);
+        var (job, pageLease) = await EnqueueAndClaimAsync(clock);
+        await using var db = fixture.NewContext();
+        var pages = new PostgresDiscoveryPageCheckpointStore(db, clock);
+        await pages.SaveAsync(pageLease, Page(job.Id, 0, [User(1)], null), default);
+        var now = clock.GetUtcNow();
+        await new PostgresDiscoveryRepository(db).SaveAsync(new DiscoveryInventory {
+            Id = job.Id, ConnectionId = job.SourceConnectionId,
+            SourceProvider = "azure-devops-services", Organization = "test-org",
+            CollectedAtUtc = now,
+            Snapshot = new DiscoverySnapshot {
+                SnapshotId = job.Id, SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                CollectedAt = now,
+                Projects = [new SourceProject("p1", "Project", [])],
+                Identities = [], AccessGrants = []
+            },
+            Refs = [], RefsExternalized = true, RefCount = 0,
+            IdentitiesExternalized = true, IdentityCount = 1,
+            Issues = [], Completeness = DiscoveryCompleteness.Partial,
+            IdentitiesComplete = true, PermissionsComplete = false
+        }, default);
+        var jobs = new PostgresMigrationJobRepository(db, clock);
+        var lease = new MigrationJobLease(job.Id, job.Id, job.SourceConnectionId,
+            MigrationJobKinds.DiscoverSource, pageLease.LeaseToken, pageLease.Attempt);
+        Assert.True(await jobs.CheckpointSnapshotAsync(lease, job.Id, default));
+        var manifest = new PostgresDiscoveryRefManifestStore(db, clock);
+        await manifest.PrepareAsync(lease, 0, default);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE discovery_identity_observations SET fingerprint = {"corrupted"}
+            WHERE job_id = {job.Id}
+            """);
+        var stage = new StagingSyncService(new PostgresDiscoveryRepository(db),
+            new PostgresStagingRepository(db, clock, manifest, pages));
+        var error = await Assert.ThrowsAsync<DiscoveryCheckpointException>(() =>
+            stage.SyncUsingRefManifestAsync(lease, default));
+        // The cached Graph page replay detects the altered fingerprint even
+        // before staging starts; it must fail closed with no catalog writes.
+        Assert.Equal("IdentityObservationConflict", error.Code);
+        Assert.Equal(0, await db.StagingAssets.AsNoTracking()
+            .CountAsync(x => x.SourceConnectionId == job.SourceConnectionId));
+        Assert.Null(await stage.GetSyncAsync(job.Id, default));
+    }
+
+    [Fact]
     public async Task Conflicting_user_on_later_page_rolls_back_its_checkpoint_and_all_batches()
     {
         await ResetAsync();
@@ -202,13 +328,24 @@ public sealed class PostgresGraphIdentityObservationTests(PostgresDraftFixture f
         EnqueueAndClaimAsync(TimeProvider clock)
     {
         await using var db = fixture.NewContext();
+        // Isolate test workers from unrelated queued migration jobs sharing
+        // this PostgreSQL fixture. We need the active lease, not queue ranking.
         var jobs = new PostgresMigrationJobRepository(db, clock);
-        var job = await jobs.EnqueueDiscoveryAsync(
-            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), default);
-        var lease = (await jobs.ClaimAsync(Guid.NewGuid(),
-            TimeSpan.FromMinutes(3), default))!;
-        Assert.Equal(job.Id, lease.Id);
-        return (job, new(lease.Id, lease.LeaseToken, lease.Attempt));
+        var id = Guid.NewGuid();
+        var token = Guid.NewGuid();
+        var source = Guid.NewGuid();
+        var now = clock.GetUtcNow();
+        db.MigrationJobs.Add(new MigrationJobRecord {
+            Id = id, SourceConnectionId = source, SnapshotId = Guid.Empty,
+            Kind = MigrationJobKinds.DiscoverSource, State = MigrationJobStates.Running,
+            Attempts = 1, EnqueuedBy = Guid.NewGuid(),
+            IdempotencyKey = "f018-graph-test:" + id,
+            LeaseToken = token, LeaseUntilUtc = now.AddMinutes(3),
+            AvailableAtUtc = now, CreatedAtUtc = now, UpdatedAtUtc = now
+        });
+        await db.SaveChangesAsync();
+        var job = (await jobs.GetAsync(id, default))!;
+        return (job, new(id, token, 1));
     }
 
     private async Task ResetAsync()

@@ -59,7 +59,8 @@ export type StagingCatalogSummary = {
 export type DiscoverySummary = {
   id: string; connectionId: string; sourceProvider: string; organization: string; collectedAtUtc: string;
   completeness: 'complete' | 'partial'; projectCount: number; repositoryCount: number;
-  refCount: number; refsExternalized?: boolean; identityCount: number; issueCount: number;
+  refCount: number; refsExternalized?: boolean; identityCount: number;
+  identitiesExternalized?: boolean; issueCount: number;
   groupCount?: number; membershipCount?: number; aclEntryCount?: number;
   securityCoverage?: SecurityCoverage;
   identitiesComplete: boolean; permissionsComplete: boolean;
@@ -85,6 +86,7 @@ export type DiscoveryDetail = {
   };
   refs: { repositoryId: string; name: string; objectId: string }[];
   refsExternalized?: boolean; refCount?: number;
+  identitiesExternalized?: boolean; identityCount?: number;
   issues: { code: string; projectId: string | null; repositoryId: string | null }[];
   groups?: SecurityGroup[]; memberships?: SecurityMembership[];
   aclEvidence?: AclEvidence[]; securityCoverage?: SecurityCoverage;

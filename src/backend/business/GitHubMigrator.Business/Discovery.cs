@@ -140,6 +140,12 @@ public sealed class DiscoveryService(
             (checkpointLease is null || stableSnapshotId is null ||
              inventory.Refs.Count != 0 || inventory.RefCount < 0))
             throw new InvalidOperationException("Externalized refs require a durable job-owned source snapshot.");
+        if (inventory.IdentitiesExternalized &&
+            (checkpointLease is null || stableSnapshotId is null ||
+             inventory.Snapshot.Identities.Count != 0 || inventory.IdentityCount < 0 ||
+             inventory.IdentityCount > 15_000))
+            throw new InvalidOperationException(
+                "Externalized identities require a durable job-owned source snapshot.");
         if (stableSnapshotId is { } fixedId)
         {
             var sourceSnapshot = inventory.Snapshot;
@@ -157,7 +163,9 @@ public sealed class DiscoveryService(
                     PermissionsComplete = sourceSnapshot.PermissionsComplete
                 },
                 Refs = inventory.Refs, RefCount = inventory.RefCount,
-                RefsExternalized = inventory.RefsExternalized, Issues = inventory.Issues,
+                RefsExternalized = inventory.RefsExternalized,
+                IdentitiesExternalized = inventory.IdentitiesExternalized,
+                IdentityCount = inventory.IdentityCount, Issues = inventory.Issues,
                 Completeness = inventory.Completeness, IdentitiesComplete = inventory.IdentitiesComplete,
                 PermissionsComplete = inventory.PermissionsComplete,
                 Groups = inventory.Groups, Memberships = inventory.Memberships,

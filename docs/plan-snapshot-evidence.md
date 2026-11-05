@@ -34,6 +34,10 @@ No new public endpoint is needed: the existing admin-only `POST /api/migration-p
 - Full HTTP/JWT/PostgreSQL + mocked GET-only Azure DevOps: a successful async discovery persists `refs: []` with one observed ref; F-005 reports `refCount: 1`, leaves approval blocked and makes no new provider calls.
 - Unit: no externalized Git ref count is silently interpreted as zero when the evidence reader is absent.
 
+## Graph identity source externalization (F-018)
+
+F-005's F-016 identity source reader now accepts the new immutable `identitiesExternalized` and `identityCount` metadata from leased source jobs, verifying the Graph pages and observations instead of expecting inline user data. Read-only planning retains historical snapshot binding and all GitHub authorization blockers. See [F-018 implementation](externalized-graph-identities.md).
+
 ## Performance and limits
 
 This keeps **all Git ref and identity list payloads out of the F-005 review process**, but the plan still materializes source project/repository metadata and raw ACL data. On every externalized preview with selected repos the current SQL guard checks the full saved ref-page/observation multiset; this is fail-closed but can be expensive at enterprise scale. Add persisted verification checkpoints, indexed content summaries and reproducible explain/analyze benchmarks before promising low latency for very large scans.
