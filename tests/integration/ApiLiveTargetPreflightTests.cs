@@ -423,6 +423,121 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
+        // F-034: durable read-only transfer preparation is bound to this
+        // exact current F-032 digest. It cannot create an executable task.
+        var workPath = $"{diffPath}/{diffId}/transfer-workpacks";
+        var workRequest = new {
+            expectedManifestSha256 = planSha,
+            expectedReconciliationSha256 = reconciliationSha
+        };
+        using (var unauth = await harness.Client.PostAsJsonAsync(workPath, workRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, unauth.StatusCode);
+        using (var noAdmin = await PostAsAsync(workPath, workRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, noAdmin.StatusCode);
+        using (var forged = await PostAsAsync(workPath, new {
+            expectedManifestSha256 = planSha,
+            expectedReconciliationSha256 = new string('e', 64)
+        }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, forged.StatusCode);
+
+        Guid workId;
+        using (var accepted = await PostAsAsync(workPath, workRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+            var body = await accepted.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            using var json = JsonDocument.Parse(body);
+            workId = json.RootElement.GetProperty("id").GetGuid();
+            Assert.Equal("Queued", json.RootElement.GetProperty("state").GetString());
+            Assert.Equal("EvidencePending", json.RootElement.GetProperty("phase").GetString());
+            Assert.False(json.RootElement.GetProperty("readyForExecution").GetBoolean());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+        await using (var firstReplica = harness.Host.Services.CreateAsyncScope())
+        await using (var secondReplica = harness.Host.Services.CreateAsyncScope())
+        {
+            var a = firstReplica.ServiceProvider.GetRequiredService<GitTransferWorkpackService>();
+            var b = secondReplica.ServiceProvider.GetRequiredService<GitTransferWorkpackService>();
+            var replay = await Task.WhenAll(
+                a.EnqueueAsync(prepId, planId, diffId,
+                    planSha, reconciliationSha, Guid.NewGuid(), default),
+                b.EnqueueAsync(prepId, planId, diffId,
+                    planSha, reconciliationSha, Guid.NewGuid(), default));
+            Assert.All(replay, x => Assert.Equal(workId, x.Id));
+        }
+        await using (var firstReplica = harness.Host.Services.CreateAsyncScope())
+        await using (var secondReplica = harness.Host.Services.CreateAsyncScope())
+        {
+            var jobs1 = firstReplica.ServiceProvider.GetRequiredService<IGitTransferWorkpackRepository>();
+            var jobs2 = secondReplica.ServiceProvider.GetRequiredService<IGitTransferWorkpackRepository>();
+            var claims = await Task.WhenAll(
+                jobs1.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(2), default),
+                jobs2.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(2), default));
+            var firstLease = Assert.Single(claims.Where(x => x is not null))!;
+            Assert.Equal(workId, firstLease.Id);
+            Assert.Equal(1, firstLease.Attempt);
+            Assert.Equal("EvidencePending", firstLease.Phase);
+            Assert.True(await jobs1.CheckpointEvidenceAsync(firstLease, default));
+            Assert.False(await jobs1.CheckpointEvidenceAsync(firstLease, default));
+
+            // Simulate a process crash after the persisted EvidenceChecked
+            // checkpoint. Reclaim must resume without repeating that phase.
+            var db = firstReplica.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.GitTransferWorkpacks.Where(x => x.Id == workId)
+                .ExecuteUpdateAsync(updates => updates.SetProperty(
+                    x => x.LeaseUntilUtc, DateTimeOffset.UtcNow.AddMinutes(-1)));
+            var secondLease = await jobs2.ClaimAsync(
+                Guid.NewGuid(), TimeSpan.FromMinutes(2), default);
+            Assert.NotNull(secondLease);
+            Assert.Equal(workId, secondLease!.Id);
+            Assert.Equal(2, secondLease.Attempt);
+            Assert.Equal("EvidenceChecked", secondLease.Phase);
+
+            // Original worker is irreversibly fenced, even if it wakes up
+            // just before the new worker commits the next checkpoint.
+            Assert.False(await jobs1.BlockAtWriteBarrierAsync(firstLease, default));
+            Assert.True(await jobs2.BlockAtWriteBarrierAsync(secondLease, default));
+            Assert.False(await jobs1.FailAsync(
+                firstLease, "StaleWorkerAttempt", false, default));
+            Assert.False(await jobs2.BlockAtWriteBarrierAsync(secondLease, default));
+            Assert.Null(await jobs1.ClaimAsync(
+                Guid.NewGuid(), TimeSpan.FromMinutes(2), default));
+        }
+        using (var read = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}"))
+        {
+            read.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(read);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var json = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.Equal("Blocked", json.RootElement.GetProperty("state").GetString());
+            Assert.Equal("WriteBlocked", json.RootElement.GetProperty("phase").GetString());
+            Assert.Equal("DestinationWritesNotAuthorized",
+                json.RootElement.GetProperty("lastErrorCode").GetString());
+            Assert.False(json.RootElement.GetProperty("readyForExecution").GetBoolean());
+        }
+        using (var read = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}/events"))
+        {
+            read.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(read);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var json = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.Equal(new[] { "Queued", "Claimed", "EvidenceChecked",
+                "Claimed", "WriteBlocked" }, json.RootElement.EnumerateArray()
+                .Select(x => x.GetProperty("type").GetString()).ToArray());
+        }
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.GitTransferWorkpacks.AsNoTracking()
+                .CountAsync(x => x.ReconciliationId == diffId));
+            Assert.False((await db.GitTransferWorkpacks.AsNoTracking()
+                .SingleAsync(x => x.Id == workId)).ReadyForExecution);
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())
