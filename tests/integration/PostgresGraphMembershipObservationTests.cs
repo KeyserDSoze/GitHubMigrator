@@ -30,19 +30,20 @@ public sealed class PostgresGraphMembershipObservationTests(PostgresDraftFixture
         await store.SaveAsync(Context(lease),
             Page(lease.Id, GroupA, 1, edges.Skip(400), null), default);
         await store.SaveAsync(Context(lease), Page(lease.Id, GroupB, 0, [], null), default);
+        var membershipEvidence = (IDiscoveryMembershipEvidenceVerifier)store;
         Assert.Equal(new DiscoveryMembershipProgress(lease.Id, 3, 521),
-            await store.GetProgressAsync(lease.Id, default));
+            await membershipEvidence.GetProgressAsync(lease.Id, default));
         var canonical = StagingAssetNormalizer.NormalizeMembership(GroupA, "aad.member-0042");
         var observed = await db.DiscoveryMembershipObservations.AsNoTracking()
             .SingleAsync(x => x.JobId == lease.Id && x.SourceId == canonical.SourceId);
         Assert.Equal(canonical.Fingerprint, observed.Fingerprint);
         Assert.Equal(GroupA, observed.GroupDescriptor);
 
-        var first = await store.ListAsync(lease.Id, null, 100, default);
+        var first = await membershipEvidence.ListAsync(lease.Id, null, 100, default);
         Assert.Equal(100, first.Items.Count);
         Assert.NotNull(first.NextAfter);
         Assert.Equal("aad.member-0000", first.Items[0].MemberDescriptor);
-        var second = await store.ListAsync(lease.Id, first.NextAfter, 100, default);
+        var second = await membershipEvidence.ListAsync(lease.Id, first.NextAfter, 100, default);
         Assert.Equal("aad.member-0100", second.Items[0].MemberDescriptor);
 
         await SnapshotAsync(db, lease, [GroupA, GroupB], 521, true);
@@ -140,7 +141,8 @@ public sealed class PostgresGraphMembershipObservationTests(PostgresDraftFixture
         var store = new PostgresDiscoveryPageCheckpointStore(db,
             new TestClock(DateTimeOffset.UtcNow));
         var error = await Assert.ThrowsAsync<DiscoveryCheckpointException>(() =>
-            store.ListAsync(Guid.NewGuid(), null, 101, default));
+            ((IDiscoveryMembershipEvidenceVerifier)store)
+                .ListAsync(Guid.NewGuid(), null, 101, default));
         Assert.Equal("InvalidMembershipObservationPage", error.Code);
     }
 

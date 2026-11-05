@@ -449,7 +449,7 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
             throw new DiscoveryCheckpointException("MembershipObservationLimit");
     }
 
-    public async Task<DiscoveryMembershipProgress> GetProgressAsync(
+    async Task<DiscoveryMembershipProgress> IDiscoveryMembershipEvidenceVerifier.GetProgressAsync(
         Guid jobId, CancellationToken ct)
     {
         if (jobId == Guid.Empty)
@@ -462,7 +462,7 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
         return new(jobId, pages, edges);
     }
 
-    public async Task<DiscoveryMembershipObservationPage> ListAsync(
+    async Task<DiscoveryMembershipObservationPage> IDiscoveryMembershipEvidenceVerifier.ListAsync(
         Guid jobId, string? after, int take, CancellationToken ct)
     {
         if (jobId == Guid.Empty || take is < 1 or > 100 ||
