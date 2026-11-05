@@ -20,7 +20,8 @@ public sealed class DiscoveryPageCheckpointRecord
 // workers are never allowed to insert pages after another worker has reclaimed
 // the lease. Every committed page is immutable and individually resumable.
 public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimeProvider clock)
-    : IDiscoveryPageCheckpointStore, IDiscoveryRefIngestProgress
+    : IDiscoveryPageCheckpointStore, IDiscoveryRefIngestProgress,
+      IDiscoveryIdentityObservationStore
 {
     private const int MaxPageBytes = 1_048_576;
     private const int MaxResourceLength = 256;
@@ -94,6 +95,8 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
 
         if (stored.ResourceKey.StartsWith("refs:", StringComparison.Ordinal))
             await IngestRefPageAsync(stored, ct);
+        else if (stored.ResourceKey == "graph-users")
+            await IngestIdentityPageAsync(stored, ct);
 
         // Fencing must hold at commit time as well, even when a very large
         // source page took longer than expected to normalize and persist.
@@ -191,6 +194,175 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                         item.Fingerprint == row.Fingerprint)))
                 throw new DiscoveryCheckpointException("RefObservationConflict");
         }
+    }
+
+    // Graph user observations share the immutable page's transaction,
+    // audit event and worker lease fencing. Only allowlisted fields enter
+    // this table; provider JSON never passes through unfiltered.
+    private async Task IngestIdentityPageAsync(
+        DiscoveryPageCheckpoint page, CancellationToken ct)
+    {
+        using var doc = JsonDocument.Parse(page.SafePayloadJson);
+        if (!doc.RootElement.TryGetProperty("value", out var rows) ||
+            rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() > 15_000)
+            throw new DiscoveryCheckpointException("InvalidIdentityObservation");
+
+        var assets = new List<StagingAssetInput>(rows.GetArrayLength());
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in rows.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object) 
+                throw new DiscoveryCheckpointException("InvalidIdentityObservation");
+            var descriptor = GetText(entry, "descriptor");
+            if (string.IsNullOrWhiteSpace(descriptor)) continue;
+            StagingAssetInput asset;
+            try
+            {
+                asset = StagingAssetNormalizer.NormalizeIdentity(
+                    descriptor, GetText(entry, "displayName") ?? descriptor,
+                    GetText(entry, "mailAddress"), GetText(entry, "legacyDescriptor"));
+            }
+            catch (StagingSyncInputException)
+            {
+                throw new DiscoveryCheckpointException("InvalidIdentityObservation");
+            }
+            if (!seen.Add(asset.SourceId))
+                throw new DiscoveryCheckpointException("DuplicateIdentityObservation");
+            assets.Add(asset);
+        }
+
+        const int batchSize = 250;
+        for (var i = 0; i < assets.Count; i += batchSize)
+        {
+            var part = assets.Skip(i).Take(batchSize).ToArray();
+            var payload = JsonSerializer.Serialize(part.Select(asset => new {
+                source_id = asset.SourceId,
+                fingerprint = asset.Fingerprint,
+                payload_json = asset.PayloadJson
+            }));
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                WITH incoming AS (
+                    SELECT * FROM jsonb_to_recordset({payload}::jsonb)
+                        AS items(source_id text, fingerprint text, payload_json text)
+                )
+                INSERT INTO discovery_identity_observations (
+                    job_id, source_id, fingerprint, payload_json,
+                    resource_key, page_index)
+                SELECT {page.JobId}, source_id, fingerprint,
+                    payload_json::jsonb, {page.ResourceKey}, {page.PageIndex}
+                FROM incoming
+                ON CONFLICT (job_id, source_id) DO NOTHING
+                """, ct);
+            // The same descriptor may recur on another provider page.
+            // Identical observations are idempotent; contradictory user
+            // information fails rather than silently overwriting evidence.
+            var ids = part.Select(x => x.SourceId).ToArray();
+            var existing = await db.DiscoveryIdentityObservations.AsNoTracking()
+                .Where(x => x.JobId == page.JobId && ids.Contains(x.SourceId))
+                .Select(x => new { x.SourceId, x.Fingerprint })
+                .ToArrayAsync(ct);
+            if (existing.Length != part.Length ||
+                existing.Any(row => !part.Any(asset =>
+                    asset.SourceId == row.SourceId &&
+                    asset.Fingerprint == row.Fingerprint)))
+                throw new DiscoveryCheckpointException("IdentityObservationConflict");
+        }
+    }
+
+    private static string? GetText(JsonElement entry, string name) =>
+        entry.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() : null;
+
+    public async Task<DiscoveryIdentityProgress> GetProgressAsync(
+        Guid jobId, CancellationToken ct)
+    {
+        if (jobId == Guid.Empty)
+            throw new DiscoveryCheckpointException("InvalidCheckpointKey");
+        var pages = await db.DiscoveryPageCheckpoints.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId && x.ResourceKey == "graph-users", ct);
+        var users = await db.DiscoveryIdentityObservations.AsNoTracking()
+            .CountAsync(x => x.JobId == jobId, ct);
+        return new(jobId, pages, users);
+    }
+
+    public async Task<DiscoveryIdentityObservationPage> ListAsync(
+        Guid jobId, string? after, int take, CancellationToken ct)
+    {
+        if (jobId == Guid.Empty || take is < 1 or > 100 ||
+            (after?.Length ?? 0) > 1024)
+            throw new DiscoveryCheckpointException("InvalidIdentityObservationPage");
+        var query = db.DiscoveryIdentityObservations.AsNoTracking()
+            .Where(x => x.JobId == jobId);
+        if (after is not null)
+            query = query.Where(x => string.Compare(x.SourceId, after) > 0);
+        var rows = await query.OrderBy(x => x.SourceId)
+            .Take(take + 1).ToArrayAsync(ct);
+        var selected = rows.Take(take).Select(x => new DiscoveryIdentityObservation(
+            x.SourceId, x.Fingerprint,
+            JsonSerializer.Deserialize<JsonElement>(x.PayloadJson))).ToArray();
+        return new(jobId, selected, rows.Length > take ? selected[^1].SourceId : null);
+    }
+
+    public async Task VerifySnapshotAsync(MigrationJobLease lease, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        if (lease.Id == Guid.Empty || lease.LeaseToken == Guid.Empty ||
+            lease.Kind != MigrationJobKinds.DiscoverSource ||
+            !await db.MigrationJobs.AsNoTracking().AnyAsync(job =>
+                job.Id == lease.Id && job.Kind == MigrationJobKinds.DiscoverSource &&
+                job.SourceConnectionId == lease.SourceConnectionId &&
+                job.SnapshotId == lease.Id &&
+                job.State == MigrationJobStates.Running &&
+                job.Attempts == lease.Attempt &&
+                job.LeaseToken == lease.LeaseToken &&
+                job.LeaseUntilUtc > now, ct))
+            throw new DiscoveryCheckpointException("DiscoveryLeaseLost");
+
+        // Recovery from a deployment upgrade: the F-008 source page may be
+        // committed already, even when observations were not materialized
+        // before this feature existed. Backfill under the new live lease.
+        var cached = await db.DiscoveryPageCheckpoints.AsNoTracking()
+            .Where(x => x.JobId == lease.Id && x.ResourceKey == "graph-users")
+            .OrderBy(x => x.PageIndex).ToArrayAsync(ct);
+        foreach (var page in cached)
+            await SaveAsync(new DiscoveryLeaseContext(
+                lease.Id, lease.LeaseToken, lease.Attempt),
+                ToCheckpoint(page), ct);
+
+        var exists = await db.Discoveries.AsNoTracking()
+            .AnyAsync(x => x.Id == lease.Id && x.ConnectionId == lease.SourceConnectionId, ct);
+        if (!exists)
+            throw new DiscoveryCheckpointException("IdentitySnapshotMismatch");
+
+        // Validate both directions using PostgreSQL set difference, rather
+        // than assuming successful pagination means all identities were
+        // retained. No full identity list crosses the DB/process boundary.
+        var mismatch = await db.Database.SqlQuery<bool>($"""
+            WITH saved AS (
+                SELECT i."providerId" AS descriptor, i."displayName" AS display_name,
+                    i.email AS email, i."legacyDescriptor" AS legacy
+                FROM migration_discoveries d
+                CROSS JOIN LATERAL jsonb_to_recordset(d.inventory -> 'snapshot' -> 'identities')
+                    AS i("providerId" text, "displayName" text, email text, "legacyDescriptor" text)
+                WHERE d.id = {lease.Id} AND d.connection_id = {lease.SourceConnectionId}
+            ),
+            observed AS (
+                SELECT source_id AS descriptor,
+                    payload_json ->> 'DisplayName' AS display_name,
+                    payload_json ->> 'Email' AS email,
+                    payload_json ->> 'LegacyDescriptor' AS legacy
+                FROM discovery_identity_observations
+                WHERE job_id = {lease.Id}
+            ),
+            differences AS (
+                (SELECT * FROM saved EXCEPT SELECT * FROM observed)
+                UNION ALL
+                (SELECT * FROM observed EXCEPT SELECT * FROM saved)
+            )
+            SELECT EXISTS (SELECT 1 FROM differences) AS "Value"
+            """).SingleAsync(ct);
+        if (mismatch)
+            throw new DiscoveryCheckpointException("IdentitySnapshotMismatch");
     }
 
     public async Task<DiscoveryRefIngestProgress> GetAsync(Guid jobId, CancellationToken ct)
