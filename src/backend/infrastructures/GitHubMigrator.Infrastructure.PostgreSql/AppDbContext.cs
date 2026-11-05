@@ -34,6 +34,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<MigrationJobEventRecord> MigrationJobEvents => Set<MigrationJobEventRecord>();
     public DbSet<DiscoveryPageCheckpointRecord> DiscoveryPageCheckpoints => Set<DiscoveryPageCheckpointRecord>();
     public DbSet<DiscoveryRefObservationRecord> DiscoveryRefObservations => Set<DiscoveryRefObservationRecord>();
+    public DbSet<DiscoveryRefManifestRecord> DiscoveryRefManifests => Set<DiscoveryRefManifestRecord>();
+    public DbSet<DiscoveryRefChunkRecord> DiscoveryRefChunks => Set<DiscoveryRefChunkRecord>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -198,6 +200,29 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.PageIndex).HasColumnName("page_index");
             entity.HasIndex(x => new { x.JobId, x.RepositoryId })
                 .HasDatabaseName("ix_discovery_ref_observations_repo");
+        });
+        builder.Entity<DiscoveryRefManifestRecord>(entity =>
+        {
+            entity.ToTable("discovery_ref_manifests");
+            entity.HasKey(x => x.JobId);
+            entity.Property(x => x.JobId).HasColumnName("job_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.AssetCount).HasColumnName("asset_count");
+            entity.Property(x => x.ChunkSize).HasColumnName("chunk_size");
+            entity.Property(x => x.ChunkCount).HasColumnName("chunk_count");
+            entity.Property(x => x.RootSha256).HasColumnName("root_sha256").HasMaxLength(64);
+            entity.Property(x => x.PreparedAtUtc).HasColumnName("prepared_at_utc");
+        });
+        builder.Entity<DiscoveryRefChunkRecord>(entity =>
+        {
+            entity.ToTable("discovery_ref_chunks");
+            entity.HasKey(x => new { x.JobId, x.Index });
+            entity.Property(x => x.JobId).HasColumnName("job_id");
+            entity.Property(x => x.Index).HasColumnName("chunk_index");
+            entity.Property(x => x.AssetCount).HasColumnName("asset_count");
+            entity.Property(x => x.FirstSourceId).HasColumnName("first_source_id").HasMaxLength(1024);
+            entity.Property(x => x.LastSourceId).HasColumnName("last_source_id").HasMaxLength(1024);
+            entity.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64);
         });
         builder.Entity<EncryptedSecretRecord>(entity =>
         {
