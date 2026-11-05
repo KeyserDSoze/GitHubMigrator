@@ -721,7 +721,8 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var loadedChunk = JsonDocument.Parse(await chunkResponse.Content.ReadAsStringAsync());
         var firstItem = loadedChunk.RootElement.GetProperty("items")[0];
         Assert.Equal(64, firstItem.GetProperty("fingerprint").GetString()!.Length);
-        Assert.Equal(Sha, firstItem.GetProperty("properties").GetProperty("ObjectId").GetString());
+        Assert.Equal(new string('a', 40),
+            firstItem.GetProperty("properties").GetProperty("ObjectId").GetString());
         using var deniedManifest = await harness.Client.GetAsync(
             $"/api/jobs/{jobId}/ref-manifest");
         Assert.Equal(HttpStatusCode.Unauthorized, deniedManifest.StatusCode);
