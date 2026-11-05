@@ -88,6 +88,9 @@ builder.Services.AddScoped<IncrementalReviewService>();
 builder.Services.AddScoped<IIncrementalTargetPreflightRepository,
     PostgresIncrementalTargetPreflightRepository>();
 builder.Services.AddScoped<IncrementalTargetPreflightService>();
+builder.Services.AddScoped<IIncrementalOperationPlanRepository,
+    PostgresIncrementalOperationPlanRepository>();
+builder.Services.AddScoped<IncrementalOperationPlanService>();
 builder.Services.AddScoped<IncrementalPreparationProcessor>();
 builder.Services.AddHostedService<IncrementalPreparationBackgroundWorker>();
 builder.Services.AddScoped<IIdentitySnapshotReader, PostgresIdentitySnapshotReader>();

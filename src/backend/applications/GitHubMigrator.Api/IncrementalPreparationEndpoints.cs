@@ -168,6 +168,91 @@ public static class IncrementalPreparationEndpoints
             { return Results.Conflict(new { error = ex.Code }); }
         });
 
+        // F-029: immutable, non-executable operational manifest. Only the
+        // denied-only authorization audit can be written, never a target.
+        routes.MapPost("/{id:guid}/operation-plans", async Task<IResult> (
+            Guid id, CreateOperationPlanRequest request,
+            ClaimsPrincipal principal, IncrementalOperationPlanService service,
+            CancellationToken ct) =>
+        {
+            if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor))
+                return Results.Unauthorized();
+            try
+            {
+                var plan = await service.CreateAsync(id, actor,
+                    request.ExpectedPreflightSha256 ?? "", ct);
+                return Results.Ok(plan);
+            }
+            catch (KeyNotFoundException)
+            { return Results.NotFound(new { error = "PreparationNotFound" }); }
+            catch (IncrementalOperationPlanException ex)
+            { return OperationPlanError(ex); }
+            catch (IncrementalTargetPreflightException ex)
+            { return Results.Conflict(new { error = ex.Code }); }
+        }).RequireRateLimiting("incremental-review");
+
+        routes.MapGet("/{id:guid}/operation-plans", async Task<IResult> (
+            Guid id, IncrementalOperationPlanService service, CancellationToken ct) =>
+        {
+            try { return Results.Ok(await service.ListAsync(id, ct)); }
+            catch (IncrementalOperationPlanException ex)
+            { return OperationPlanError(ex); }
+            catch (IncrementalTargetPreflightException ex)
+            { return Results.Conflict(new { error = ex.Code }); }
+        });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}",
+            async Task<IResult> (Guid id, Guid planId,
+                IncrementalOperationPlanService service, CancellationToken ct) =>
+            {
+                try
+                {
+                    var plan = await service.GetAsync(id, planId, ct);
+                    return plan is null
+                        ? Results.NotFound(new { error = "OperationPlanNotFound" })
+                        : Results.Ok(plan);
+                }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/execution-authorization",
+            async Task<IResult> (Guid id, Guid planId,
+                AuthorizeOperationPlanRequest request, ClaimsPrincipal principal,
+                IncrementalOperationPlanService service, CancellationToken ct) =>
+            {
+                if (!principal.IsInRole("superadmin")) return Results.Forbid();
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                        out var actor))
+                    return Results.Unauthorized();
+                try
+                {
+                    // Always denied with a safe code; the attempt is audited.
+                    var attempt = await service.RequestAuthorizationAsync(
+                        id, planId, actor, request.ExpectedManifestSha256 ?? "",
+                        request.AcknowledgeBlockedOperations, ct);
+                    return Results.Conflict(attempt);
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "OperationPlanNotFound" }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("incremental-review");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/authorization-attempts",
+            async Task<IResult> (Guid id, Guid planId,
+                IncrementalOperationPlanService service, CancellationToken ct) =>
+            {
+                if (await service.GetAsync(id, planId, ct) is null)
+                    return Results.NotFound(new { error = "OperationPlanNotFound" });
+                return Results.Ok(await service.EventsAsync(id, planId, ct));
+            });
+
         routes.MapGet("/{id:guid}/target-preflight/events", async Task<IResult> (
             Guid id, IncrementalTargetPreflightService service, CancellationToken ct) =>
         {
@@ -193,6 +278,13 @@ public static class IncrementalPreparationEndpoints
         });
     }
 
+    private static IResult OperationPlanError(IncrementalOperationPlanException ex) =>
+        ex.Code is "InvalidOperationPlanRequest" or
+            "InvalidExecutionAuthorizationRequest" or
+            "ExplicitRiskAcknowledgmentRequired"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
+
     private static IResult ReviewError(IncrementalReviewException ex) =>
         ex.Code is "InvalidReviewContext" or "InvalidReviewDecision"
             ? Results.BadRequest(new { error = ex.Code })
@@ -207,3 +299,6 @@ public sealed record RevokeIncrementalReviewRequest(
     string? ExpectedDryRunSha256, string? ReasonCode);
 public sealed record LiveTargetPreflightRequest(
     string? ExpectedReviewSha256, IReadOnlyList<PlanSelectionInput>? Repositories);
+public sealed record CreateOperationPlanRequest(string? ExpectedPreflightSha256);
+public sealed record AuthorizeOperationPlanRequest(
+    string? ExpectedManifestSha256, bool AcknowledgeBlockedOperations);
