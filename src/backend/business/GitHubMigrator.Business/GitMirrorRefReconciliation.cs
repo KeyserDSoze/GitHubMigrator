@@ -47,6 +47,18 @@ public static class GitMirrorRefReconciler
     // is required for repositories larger than this in-memory comparison.
     public const int MaxRefsPerSide = 25_000;
 
+    // Shared conservative parser/normalizer for read-only provider evidence.
+    // A duplicate, case alias or malformed ref must never be silently ignored.
+    public static IReadOnlyList<GitMirrorRef> CanonicalizeObservedRefs(
+        IReadOnlyList<GitMirrorRef> refs)
+    {
+        if (refs is null || refs.Count > MaxRefsPerSide)
+            throw new GitMirrorRefReconciliationException("RefSelectionLimit");
+        var validated = Validate(refs, "Target");
+        return validated.OrderBy(x => x.Key, StringComparer.Ordinal)
+            .Select(x => new GitMirrorRef(x.Key, x.Value)).ToArray();
+    }
+
     public static GitMirrorRefReconciliation Compare(
         GitMirrorRefReconciliationRequest request)
     {
