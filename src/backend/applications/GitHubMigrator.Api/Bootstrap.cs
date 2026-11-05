@@ -153,6 +153,18 @@ public static class Bootstrap
             );
             CREATE INDEX IF NOT EXISTS ix_discovery_ref_observations_repo
                 ON discovery_ref_observations(job_id, repository_id);
+            CREATE TABLE IF NOT EXISTS discovery_identity_observations (
+                job_id uuid NOT NULL REFERENCES migration_jobs(id) ON DELETE CASCADE,
+                source_id varchar(1024) NOT NULL,
+                fingerprint varchar(64) NOT NULL,
+                payload_json jsonb NOT NULL,
+                resource_key varchar(256) NOT NULL,
+                page_index integer NOT NULL,
+                PRIMARY KEY (job_id, source_id),
+                FOREIGN KEY (job_id, resource_key, page_index)
+                    REFERENCES discovery_page_checkpoints(job_id, resource_key, page_index)
+                    ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS discovery_ref_manifests (
                 job_id uuid PRIMARY KEY REFERENCES migration_jobs(id) ON DELETE CASCADE,
                 source_connection_id uuid NOT NULL,
