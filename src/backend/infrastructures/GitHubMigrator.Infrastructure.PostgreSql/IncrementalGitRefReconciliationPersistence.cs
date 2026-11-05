@@ -189,6 +189,16 @@ public sealed class PostgresIncrementalGitRefReconciliationStore(
                 x.TargetRepositoryName == row.TargetRepositoryName))
             throw new IncrementalGitRefReconciliationException("ReconciliationIntegrityFailed");
 
+        // Validate which source evidence mode was sealed. An attacker
+        // cannot turn a durable F-014 observation into legacy mode simply
+        // by nulling source_manifest_root_sha256 in one SQL row.
+        var inventory = await new PostgresDiscoveryRepository(db)
+            .GetWithoutRefsAsync(row.SnapshotId, ct);
+        if (inventory is null ||
+            inventory.ConnectionId != plan.SourceConnectionId ||
+            inventory.RefsExternalized != (row.SourceManifestRootSha256 is not null))
+            throw new IncrementalGitRefReconciliationException("ReconciliationIntegrityFailed");
+
         // Never infer currency from persisted counters: F-031 may have a
         // newer, independently validated target observation, or the planning
         // review/credential may have expired.
@@ -229,6 +239,9 @@ public sealed class PostgresIncrementalGitRefReconciliationStore(
                 ?? throw new JsonException(); }
         catch (JsonException)
         { throw new IncrementalGitRefReconciliationException("ReconciliationIntegrityFailed"); }
+        if (items.Length > 2 * GitMirrorRefReconciler.MaxRefsPerSide ||
+            items.Any(x => x is null))
+            throw new IncrementalGitRefReconciliationException("ReconciliationIntegrityFailed");
 
         // Reconstruct both complete, sorted evidence sets from the persisted
         // per-ref comparisons. A changed name/OID/disposition/count/proof
