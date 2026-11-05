@@ -51,6 +51,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<IncrementalOperationPlanRecord>();
     public DbSet<IncrementalOperationStepRecord> IncrementalOperationSteps =>
         Set<IncrementalOperationStepRecord>();
+    public DbSet<IncrementalGitRefReconciliationRecord> IncrementalGitRefReconciliations =>
+        Set<IncrementalGitRefReconciliationRecord>();
     public DbSet<GitHubTargetRefEvidenceRecord> GitHubTargetRefEvidence =>
         Set<GitHubTargetRefEvidenceRecord>();
     public DbSet<IncrementalExecutionAuthorizationAttemptRecord> IncrementalExecutionAuthorizationAttempts =>
@@ -368,6 +370,42 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ChangedRefs).HasColumnName("changed_refs");
             entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
                 .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<IncrementalGitRefReconciliationRecord>(entity =>
+        {
+            entity.ToTable("incremental_git_ref_reconciliations");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id").HasMaxLength(256);
+            entity.Property(x => x.TargetRepositoryName).HasColumnName("target_repository_name").HasMaxLength(100);
+            entity.Property(x => x.TargetObservationId).HasColumnName("target_observation_id");
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.SourceEvidenceSha256).HasColumnName("source_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.SourceManifestRootSha256).HasColumnName("source_manifest_root_sha256").HasMaxLength(64);
+            entity.Property(x => x.TargetEvidenceSha256).HasColumnName("target_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReconciliationSha256).HasColumnName("reconciliation_sha256").HasMaxLength(64);
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.CreatedBy).HasColumnName("created_by");
+            entity.Property(x => x.SourceRefCount).HasColumnName("source_ref_count");
+            entity.Property(x => x.TargetRefCount).HasColumnName("target_ref_count");
+            entity.Property(x => x.MatchingCount).HasColumnName("matching_count");
+            entity.Property(x => x.CreateCandidateCount).HasColumnName("create_candidate_count");
+            entity.Property(x => x.DivergedCount).HasColumnName("diverged_count");
+            entity.Property(x => x.TargetOnlyCount).HasColumnName("target_only_count");
+            entity.Property(x => x.ItemsJson).HasColumnName("items_json").HasColumnType("jsonb");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<GitHubTargetRefEvidenceRecord>().WithMany()
+                .HasForeignKey(x => x.TargetObservationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new {
+                x.PlanId, x.SourceRepositoryId, x.TargetObservationId,
+                x.SourceEvidenceSha256
+            }).IsUnique().HasDatabaseName("ux_git_ref_reconciliations_proof");
+            entity.HasIndex(x => new { x.PlanId, x.SourceRepositoryId, x.CreatedAtUtc })
+                .HasDatabaseName("ix_git_ref_reconciliations_latest");
         });
         builder.Entity<GitHubTargetRefEvidenceRecord>(entity =>
         {
