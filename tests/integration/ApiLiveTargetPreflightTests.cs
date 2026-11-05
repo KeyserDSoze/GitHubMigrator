@@ -553,6 +553,87 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
+        // F-035 local-only export API never accepts a path, remote URL or
+        // source credential. With no trusted roots configured it fails closed.
+        var bundlePath = $"{operationalPath}/{planId}/transfer-workpacks/{workId}/source-bundle";
+        using (var denied = await harness.Client.PostAsJsonAsync(bundlePath, new {
+            expectedReconciliationSha256 = reconciliationSha
+        }))
+            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+        using (var deniedUser = await PostAsAsync(bundlePath, new {
+            expectedReconciliationSha256 = reconciliationSha
+        }, user))
+            Assert.Equal(HttpStatusCode.Forbidden, deniedUser.StatusCode);
+        using (var noLocalRoots = await PostAsAsync(bundlePath, new {
+            expectedReconciliationSha256 = reconciliationSha
+        }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, noLocalRoots.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await noLocalRoots.Content.ReadAsStringAsync());
+        }
+
+        // Verify the immutable PostgreSQL write boundary independently of
+        // local-file generation (the real Git CLI runs in its own tests).
+        // The internal store is given the exact source snapshot proof, not
+        // arbitrary ref names from the HTTP caller.
+        string sourceDigest;
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var compare = await db.IncrementalGitRefReconciliations
+                .AsNoTracking().SingleAsync(x => x.Id == diffId);
+            sourceDigest = compare.SourceEvidenceSha256;
+            var evidenceStore = scope.ServiceProvider
+                .GetRequiredService<IGitSourceBundleEvidenceStore>();
+            var artifact = new GitSourceBundleArtifact(
+                workId, sourceDigest, workId.ToString("N") + ".bundle",
+                new string('d', 64), 1024, 1, DateTimeOffset.UtcNow);
+            var saved = await evidenceStore.SaveAsync(prepId, planId,
+                workId, reconciliationSha, artifact, default);
+            Assert.True(saved.IsCurrent);
+            Assert.False(saved.ReadyForExecution);
+            Assert.Equal(sourceDigest, saved.SourceEvidenceSha256);
+            var replay = await evidenceStore.SaveAsync(prepId, planId,
+                workId, reconciliationSha, artifact, default);
+            Assert.Equal(saved.BundleSha256, replay.BundleSha256);
+            Assert.Equal(1, await db.GitSourceBundleEvidence.AsNoTracking()
+                .CountAsync(x => x.WorkpackId == workId));
+            var invalid = artifact with { BundleSha256 = new string('e', 64) };
+            var mismatch = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                evidenceStore.SaveAsync(prepId, planId, workId,
+                    reconciliationSha, invalid, default));
+            Assert.Equal("BundleProofMismatch", mismatch.Code);
+            var unsafeFlag = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE git_source_bundle_evidence
+                    SET ready_for_execution = {true}
+                    WHERE workpack_id = {workId}
+                    """));
+            Assert.Equal("23514", unsafeFlag.SqlState);
+            var unsafeName = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE git_source_bundle_evidence
+                    SET bundle_file_name = {"../../etc/passwd"}
+                    WHERE workpack_id = {workId}
+                    """));
+            Assert.Equal("23514", unsafeName.SqlState);
+        }
+        using (var audit = new HttpRequestMessage(HttpMethod.Get, bundlePath))
+        {
+            audit.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(audit);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.False(body.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.Equal(new string('d', 64),
+                body.RootElement.GetProperty("bundleSha256").GetString());
+            Assert.DoesNotContain(ApiHarness.SourceToken,
+                body.RootElement.ToString());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())
