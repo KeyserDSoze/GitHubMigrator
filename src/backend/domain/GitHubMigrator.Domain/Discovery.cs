@@ -25,6 +25,12 @@ public sealed class DiscoveryInventory
     public required DateTimeOffset CollectedAtUtc { get; init; }
     public required DiscoverySnapshot Snapshot { get; init; }
     public required IReadOnlyList<RepositoryRef> Refs { get; init; }
+    // A durable source discovery may persist refs exclusively in its F-008
+    // source pages and F-014 PostgreSQL observations. A zero-length Refs list
+    // then DOES NOT mean the source contained zero refs. Legacy snapshots omit
+    // these optional properties and retain the previous inline semantics.
+    public bool RefsExternalized { get; init; }
+    public int RefCount { get; init; }
     public required IReadOnlyList<DiscoveryIssue> Issues { get; init; }
     public required DiscoveryCompleteness Completeness { get; init; }
     // Granular coverage flag prevents calling missing Graph scope an empty identity inventory.

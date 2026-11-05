@@ -58,41 +58,64 @@ public sealed class PostgresDiscoveryRefManifestStore(AppDbContext db, TimeProvi
             job.LeaseToken != lease.LeaseToken || job.LeaseUntilUtc <= now)
             throw new DiscoveryRefManifestException("DiscoveryLeaseLost");
 
-        // Validate the immutable PostgreSQL snapshot's ref count in SQL:
-        // no deserialization of its potentially very large JSONB array.
+        // Legacy snapshots contain inline refs. New leased source discovery
+        // persists an explicit externalized ref count and an empty inline
+        // array: the provider never builds a full in-process ref collection.
+        var isExternalized = await db.Database.SqlQuery<bool>($"""
+            SELECT COALESCE((inventory ->> 'refsExternalized')::boolean, false) AS "Value"
+            FROM migration_discoveries
+            WHERE id = {lease.Id} AND connection_id = {lease.SourceConnectionId}
+            """).SingleOrDefaultAsync(ct);
         var savedRefs = await db.Database.SqlQuery<int>($"""
-            SELECT COALESCE(jsonb_array_length(inventory -> 'refs'), 0) AS "Value"
+            SELECT CASE
+                WHEN COALESCE((inventory ->> 'refsExternalized')::boolean, false)
+                THEN CASE WHEN COALESCE(jsonb_array_length(inventory -> 'refs'), 0) = 0
+                    THEN COALESCE((inventory ->> 'refCount')::integer, -1)
+                    ELSE -1 END
+                ELSE COALESCE(jsonb_array_length(inventory -> 'refs'), 0)
+                END AS "Value"
             FROM migration_discoveries
             WHERE id = {lease.Id} AND connection_id = {lease.SourceConnectionId}
             """).SingleOrDefaultAsync(ct);
         var snapshotExists = await db.Discoveries.AsNoTracking()
             .AnyAsync(x => x.Id == lease.Id && x.ConnectionId == lease.SourceConnectionId, ct);
-        if (!snapshotExists || savedRefs != expectedRefCount)
+        if (!snapshotExists || savedRefs != expectedRefCount ||
+            expectedRefCount < 0)
             throw new DiscoveryRefManifestException("RefManifestSnapshotMismatch");
 
-        // Count equality alone cannot detect one ref silently replaced with
-        // another. Compare the canonical snapshot's entire (repo,name,OID)
-        // multiset with the provisional observations in PostgreSQL, without
-        // deserializing the snapshot's ref array into process memory.
-        var mismatch = await db.Database.SqlQuery<bool>($"""
-            SELECT EXISTS (
-                SELECT 1 FROM (
-                    SELECT r."repositoryId", r.name, r."objectId"
-                    FROM migration_discoveries d
-                    CROSS JOIN LATERAL jsonb_to_recordset(d.inventory -> 'refs')
-                    AS r("repositoryId" text, name text, "objectId" text)
-                    WHERE d.id = {lease.Id}
-                    EXCEPT ALL
-                    SELECT o.source_id::jsonb ->> 0, o.source_id::jsonb ->> 1,
-                        o.payload_json ->> 'ObjectId'
-                    FROM discovery_ref_observations o
-                    WHERE o.job_id = {lease.Id}
-                ) differences
-                LIMIT 1
-            ) AS "Value"
-            """).SingleAsync(ct);
-        if (mismatch)
-            throw new DiscoveryRefManifestException("RefManifestSnapshotMismatch");
+        if (isExternalized)
+        {
+            // All ref observations are FK-bound to committed source pages.
+            // Enforce a complete count before constructing the immutable
+            // ordered chunks. Partial/failed source scans never reach here.
+            var observedRows = await db.DiscoveryRefObservations.AsNoTracking()
+                .CountAsync(x => x.JobId == lease.Id, ct);
+            if (observedRows != expectedRefCount)
+                throw new DiscoveryRefManifestException("RefManifestSnapshotMismatch");
+        }
+        else
+        {
+            // Strict backward compatibility: snapshots that carry inline refs
+            // retain exact identity/target-OID multiset verification.
+            var mismatch = await db.Database.SqlQuery<bool>($"""
+                SELECT EXISTS (
+                    SELECT 1 FROM (
+                        SELECT r."repositoryId", r.name, r."objectId"
+                        FROM migration_discoveries d
+                        CROSS JOIN LATERAL jsonb_to_recordset(d.inventory -> 'refs')
+                        AS r("repositoryId" text, name text, "objectId" text)
+                        WHERE d.id = {lease.Id}
+                        EXCEPT ALL
+                        SELECT o.source_id::jsonb ->> 0, o.source_id::jsonb ->> 1,
+                            o.payload_json ->> 'ObjectId'
+                        FROM discovery_ref_observations o
+                        WHERE o.job_id = {lease.Id}
+                    ) differences LIMIT 1
+                ) AS "Value"
+                """).SingleAsync(ct);
+            if (mismatch)
+                throw new DiscoveryRefManifestException("RefManifestSnapshotMismatch");
+        }
 
         var existing = await db.DiscoveryRefManifests.AsNoTracking()
             .SingleOrDefaultAsync(x => x.JobId == lease.Id, ct);

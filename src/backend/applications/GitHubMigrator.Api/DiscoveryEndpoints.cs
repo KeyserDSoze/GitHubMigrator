@@ -28,7 +28,8 @@ public static class DiscoveryEndpoints
                 loggerFactory.CreateLogger("Discovery").LogInformation(
                     "Source inventory collected InventoryId={InventoryId} ConnectionId={ConnectionId} Projects={ProjectCount} Refs={RefCount} IdentityCount={IdentityCount} Issues={IssueCount}",
                     inventory.Id, inventory.ConnectionId, inventory.Snapshot.Projects.Count,
-                    inventory.Refs.Count, inventory.Snapshot.Identities.Count, inventory.Issues.Count);
+                    inventory.RefsExternalized ? inventory.RefCount : inventory.Refs.Count,
+                    inventory.Snapshot.Identities.Count, inventory.Issues.Count);
                 return Results.Created($"/api/discoveries/{inventory.Id}", Summary(inventory));
             }
             catch (KeyNotFoundException) { return Results.NotFound(new { error = "ConnectionNotFound" }); }
@@ -59,7 +60,8 @@ public static class DiscoveryEndpoints
         completeness = x.Completeness.ToString().ToLowerInvariant(),
         projectCount = x.Snapshot.Projects.Count,
         repositoryCount = x.Snapshot.Projects.Sum(p => p.Repositories.Count),
-        refCount = x.Refs.Count,
+        refCount = x.RefsExternalized ? x.RefCount : x.Refs.Count,
+        x.RefsExternalized,
         identityCount = x.Snapshot.Identities.Count,
         groupCount = x.Groups.Count,
         membershipCount = x.Memberships.Count,

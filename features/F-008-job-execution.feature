@@ -44,6 +44,14 @@ Feature: Durable and verifiable migration execution
     And raw ACL allow and deny masks are preserved without unrecognized fields
     And effective GitHub permissions remain unverified
 
+  Scenario: Durable Azure DevOps source discovery avoids collecting all Git refs in RAM
+    Given a leased discovery worker reading more than one Azure DevOps refs page
+    When each page is committed into PostgreSQL with its immutable checkpoint
+    Then the source reader retains only its running ref count
+    And the immutable source snapshot has an empty inline refs array and an explicit externalized ref count
+    And the worker seals a matching ref manifest from the persisted observations
+    And legacy manual staging cannot misinterpret externalized refs as absent
+
   Scenario: Git ref staging consumes manifest chunks without a second full ref array
     Given a completed source inventory with 1250 Git refs and verified persisted chunks
     When the durable source worker normalizes the snapshot into PostgreSQL

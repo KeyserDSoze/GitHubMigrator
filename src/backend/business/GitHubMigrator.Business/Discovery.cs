@@ -118,6 +118,10 @@ public sealed class DiscoveryService(
         if (inventory.ConnectionId != connection.Id || inventory.SourceProvider != connection.ProviderKey ||
             inventory.Organization != connection.Organization)
             throw new InvalidOperationException("Source adapter returned an inventory for another connection.");
+        if (inventory.RefsExternalized &&
+            (checkpointLease is null || stableSnapshotId is null ||
+             inventory.Refs.Count != 0 || inventory.RefCount < 0))
+            throw new InvalidOperationException("Externalized refs require a durable job-owned source snapshot.");
         if (stableSnapshotId is { } fixedId)
         {
             var sourceSnapshot = inventory.Snapshot;
@@ -134,7 +138,8 @@ public sealed class DiscoveryService(
                     AccessGrants = sourceSnapshot.AccessGrants,
                     PermissionsComplete = sourceSnapshot.PermissionsComplete
                 },
-                Refs = inventory.Refs, Issues = inventory.Issues,
+                Refs = inventory.Refs, RefCount = inventory.RefCount,
+                RefsExternalized = inventory.RefsExternalized, Issues = inventory.Issues,
                 Completeness = inventory.Completeness, IdentitiesComplete = inventory.IdentitiesComplete,
                 PermissionsComplete = inventory.PermissionsComplete,
                 Groups = inventory.Groups, Memberships = inventory.Memberships,

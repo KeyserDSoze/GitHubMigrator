@@ -45,6 +45,6 @@ After the source snapshot is saved, the worker now prepares an immutable chunk m
 
 ## Current limitations / next milestones
 
-This first slice **persists Git ref observations incrementally** but still retains the final `DiscoveryInventory.Refs` collection and immutable full JSONB discovery snapshot in memory. Therefore **it is not yet full end-to-end constant-memory streaming**. No throughput or million-asset SLA has been benchmarked.
+The latest leased source reader now also **externalizes Git refs**, so the full `DiscoveryInventory.Refs` collection is not retained in memory for queued Azure DevOps jobs. The immutable JSONB snapshot holds `refs: []` with a true `refCount`; other source asset families are still collected in memory. Legacy synchronous discovery keeps inline refs. **This is not yet full end-to-end constant-memory streaming**. No throughput or million-asset SLA has been benchmarked.
 
 Next: build snapshot manifests that reference streamed chunks, stream the remaining source asset families, reconcile provisional assets into the canonical catalog after a successful scan without loading a complete inventory, introduce backpressure, retention/compaction, production schema migrations and load tests. Provider-side delta APIs and periodic scheduling remain separate work. None of this writes to Azure DevOps or GitHub.
