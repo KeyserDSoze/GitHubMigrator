@@ -70,6 +70,10 @@ The new tables are:
 - `incremental_target_preflight_events`: append-only actor/time/evidence
   SHA/status/revision for changed preflight observations.
 
+The checked-at timestamp is rounded to milliseconds **before hashing** to
+match PostgreSQL `timestamptz` precision and make read-back integrity checks
+stable across database persistence.
+
 The versioned SHA-256 preimage binds the F-027 review digest, job/snapshot/
 source/destination IDs, organization, connection validation timestamps, the
 observation time, organization membership/policy, all selected source-to-

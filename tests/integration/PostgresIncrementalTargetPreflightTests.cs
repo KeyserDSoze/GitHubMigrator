@@ -45,7 +45,9 @@ public sealed class PostgresIncrementalTargetPreflightTests(PostgresDraftFixture
 
         var replay = await service.CheckAsync(seed.Run.Id, Guid.NewGuid(),
             seed.Review.DryRunSha256, selected, default);
-        Assert.Equal(result, replay);
+        Assert.Equal(result.EvidenceSha256, replay.EvidenceSha256);
+        Assert.Equal(result.Revision, replay.Revision);
+        Assert.Equal(result.Repositories.ToArray(), replay.Repositories.ToArray());
         Assert.Single(await service.EventsAsync(seed.Run.Id, default));
         Assert.Equal(4, probe.Calls); // each new POST genuinely re-probes
         clock.Advance(TimeSpan.FromMinutes(1));

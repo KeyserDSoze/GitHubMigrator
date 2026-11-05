@@ -188,7 +188,12 @@ public sealed class IncrementalTargetPreflightService(
             run.Id, run.SnapshotId, run.SourceConnectionId,
             run.DestinationConnectionId, actorId, destination.Organization,
             review.DryRunSha256, source.ValidatedAtUtc, destination.ValidatedAtUtc,
-            clock.GetUtcNow(), accessReview.MembershipStatus,
+            // PostgreSQL timestamptz has microsecond precision; round BEFORE
+            // SHA-256 binding so a persisted/read-back timestamp hashes
+            // identically (no false integrity violation on a normal GET).
+            DateTimeOffset.FromUnixTimeMilliseconds(
+                clock.GetUtcNow().ToUnixTimeMilliseconds()),
+            accessReview.MembershipStatus,
             accessReview.MembershipRole, accessReview.PrivateRepositoryPolicy,
             observations);
         // The database must recheck the approved review and source/connection
