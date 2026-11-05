@@ -556,10 +556,10 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         // F-035 local-only export API never accepts a path, remote URL or
         // source credential. With no trusted roots configured it fails closed.
         var bundlePath = $"{operationalPath}/{planId}/transfer-workpacks/{workId}/source-bundle";
-        using (var denied = await harness.Client.PostAsJsonAsync(bundlePath, new {
+        using (var deniedBundle = await harness.Client.PostAsJsonAsync(bundlePath, new {
             expectedReconciliationSha256 = reconciliationSha
         }))
-            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+            Assert.Equal(HttpStatusCode.Unauthorized, deniedBundle.StatusCode);
         using (var deniedUser = await PostAsAsync(bundlePath, new {
             expectedReconciliationSha256 = reconciliationSha
         }, user))
