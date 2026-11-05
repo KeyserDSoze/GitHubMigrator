@@ -88,6 +88,8 @@ public sealed class ApiHarness : IAsyncLifetime
                     .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubTargetRepositoryProbe>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
+                services.AddHttpClient<GitHubRefObservationReader>()
+                    .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubDestinationAccessReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
             });
@@ -229,6 +231,16 @@ public sealed class ApiHarness : IAsyncLifetime
             return Json("""{"state":"active","role":"admin","user":{"login":"test"},"organization":{"login":"gh-org"}}""");
         if (path == "/orgs/gh-org")
             return Json("""{"login":"gh-org","members_can_create_private_repositories":true}""");
+        if (path == "/repos/gh-org/occupied/git/matching-refs/heads")
+            return Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/heads/main",
+                    @object = new { sha = Sha, type = "commit" } }
+            }));
+        if (path == "/repos/gh-org/occupied/git/matching-refs/tags")
+            return Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/tags/v1",
+                    @object = new { sha = Sha, type = "tag" } }
+            }));
         if (path == "/repos/gh-org/occupied")
             return Json("""{"full_name":"gh-org/occupied"}""");
         if (path == "/repos/gh-org/hidden")
