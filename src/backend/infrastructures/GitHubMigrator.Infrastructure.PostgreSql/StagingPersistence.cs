@@ -67,7 +67,7 @@ public sealed class PostgresStagingRepository(
                     nonRefAssets.Any(x => x.AssetType == "membership"))) ||
             manifests is null ||
             (slimInventory.IdentitiesExternalized && identities is null) ||
-            (slimInventory.MembershipsExternalized && memberships is null)
+            (slimInventory.MembershipsExternalized && memberships is null))
             throw new StagingSyncInputException("InvalidManifestSyncContext");
 
         // Verify both Graph pages and their normalized PostgreSQL observations
