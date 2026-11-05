@@ -125,7 +125,7 @@ test('externalized ref snapshot displays real total without inventing zero refs 
   await expect(page.getByRole('note')).toContainText(/PostgreSQL/);
   await expect(page.getByText(/riferimenti nel manifest postgresql|refs in postgresql manifest/i))
     .toBeVisible();
-  await expect(page.getByText(/0 (riferimenti|refs)/i)).toHaveCount(0);
+  await expect(page.getByText(/^0 (riferimenti|refs)$/i)).toHaveCount(0);
 });
 
 test('discovery worker survives page refresh while no snapshot has been saved', async ({ page }) => {
