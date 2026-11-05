@@ -28,6 +28,93 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
     }
 
     [Fact]
+    public async Task Paged_F004_identity_sources_keep_RBAC_and_validate_mapping_across_pages()
+    {
+        var snapshotId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await new PostgresDiscoveryRepository(db).SaveAsync(new DiscoveryInventory {
+                Id = snapshotId, ConnectionId = harness.SourceConnectionId,
+                SourceProvider = "azure-devops-services", Organization = "az-org",
+                CollectedAtUtc = now,
+                Snapshot = new DiscoverySnapshot {
+                    SnapshotId = snapshotId,
+                    SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                    CollectedAt = now, Projects = [], AccessGrants = [],
+                    Identities = [
+                        new SourceIdentity("aad.alpha", "Alpha", null, "legacy.alpha"),
+                        new SourceIdentity("aad.beta", "Beta", null, "legacy.beta"),
+                        new SourceIdentity("aad.gamma", "Gamma", null, "legacy.gamma")
+                    ]
+                },
+                Refs = [], Issues = [], Completeness = DiscoveryCompleteness.Partial,
+                IdentitiesComplete = true, PermissionsComplete = false
+            }, default);
+        }
+
+        var url = $"/api/identity-mappings/{snapshotId}/sources" +
+            $"?destinationConnectionId={harness.DestinationConnectionId}&take=1";
+        using var anonymous = await harness.Client.GetAsync(url);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        var userToken = await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword);
+        using (var forbiddenRequest = new HttpRequestMessage(HttpMethod.Get, url))
+        {
+            forbiddenRequest.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", userToken);
+            using var denied = await harness.Client.SendAsync(forbiddenRequest);
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        }
+        var admin = await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword);
+        using var page1Request = new HttpRequestMessage(HttpMethod.Get, url);
+        page1Request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var page1Reply = await harness.Client.SendAsync(page1Request);
+        Assert.Equal(HttpStatusCode.OK, page1Reply.StatusCode);
+        using var page1 = JsonDocument.Parse(await page1Reply.Content.ReadAsStringAsync());
+        Assert.Equal("aad.alpha",
+            page1.RootElement.GetProperty("items")[0].GetProperty("sourceIdentityId").GetString());
+        Assert.Equal("aad.alpha", page1.RootElement.GetProperty("nextAfter").GetString());
+
+        using var page2Request = new HttpRequestMessage(HttpMethod.Get,
+            url + "&after=aad.alpha");
+        page2Request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var page2Reply = await harness.Client.SendAsync(page2Request);
+        Assert.Equal(HttpStatusCode.OK, page2Reply.StatusCode);
+        using var page2 = JsonDocument.Parse(await page2Reply.Content.ReadAsStringAsync());
+        Assert.Equal("aad.beta",
+            page2.RootElement.GetProperty("items")[0].GetProperty("sourceIdentityId").GetString());
+
+        using var invalidRequest = new HttpRequestMessage(HttpMethod.Get,
+            url.Replace("take=1", "take=101", StringComparison.Ordinal));
+        invalidRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var invalid = await harness.Client.SendAsync(invalidRequest);
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+
+        using var saveRequest = new HttpRequestMessage(HttpMethod.Put,
+            $"/api/identity-mappings/{snapshotId}") {
+            Content = JsonContent.Create(new {
+                destinationConnectionId = harness.DestinationConnectionId,
+                expectedRevision = 0,
+                mappings = new [] {
+                    new { sourceIdentityId = "aad.alpha", gitHubLogin = "alpha-gh" },
+                    new { sourceIdentityId = "aad.gamma", gitHubLogin = "gamma-gh" }
+                }
+            })
+        };
+        saveRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var save = await harness.Client.SendAsync(saveRequest);
+        Assert.Equal(HttpStatusCode.OK, save.StatusCode);
+        using var saved = JsonDocument.Parse(await save.Content.ReadAsStringAsync());
+        Assert.Equal(3, saved.RootElement.GetProperty("preview")
+            .GetProperty("discoveredIdentities").GetInt32());
+        Assert.Equal(2, saved.RootElement.GetProperty("preview")
+            .GetProperty("mappedIdentities").GetInt32());
+        Assert.False(saved.RootElement.GetProperty("preview")
+            .GetProperty("readyForGrants").GetBoolean());
+    }
+
+    [Fact]
     public async Task Workload_endpoints_require_authentication_admin_role_and_completed_password_change()
     {
         using var anonymous = await PostAsync("/api/workloads/boards/preview",

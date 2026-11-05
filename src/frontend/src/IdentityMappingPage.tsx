@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, RefreshCw, Save, ShieldAlert } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary,
+import { api, type Connection, type DiscoverySummary, type IdentitySourcePage,
   type IdentityMap, type IdentityReview } from './api';
 
 const validLogin = (value: string) =>
@@ -13,7 +13,9 @@ export default function IdentityMappingPage({ token, isAdmin }: { token: string;
   const [destinations, setDestinations] = useState<Connection[]>([]);
   const [snapshotId, setSnapshotId] = useState('');
   const [destinationId, setDestinationId] = useState('');
-  const [detail, setDetail] = useState<DiscoveryDetail | null>(null);
+  const [sourcePage, setSourcePage] = useState<IdentitySourcePage | null>(null);
+  const [after, setAfter] = useState<string | null>(null);
+  const [previous, setPrevious] = useState<(string | null)[]>([]);
   const [review, setReview] = useState<IdentityReview | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState('');
@@ -42,14 +44,15 @@ export default function IdentityMappingPage({ token, isAdmin }: { token: string;
   }, [isAdmin, token, t]);
 
   useEffect(() => {
-    setDetail(null); setReview(null); setEdits({}); setDirty(false); setNotice('');
+    setSourcePage(null); setReview(null); setEdits({}); setDirty(false);
+    setAfter(null); setPrevious([]); setNotice('');
     if (!snapshotId || !destinationId || !isAdmin) return;
     let active = true;
     setLoading(true);
-    Promise.all([api.getDiscovery(token, snapshotId), api.getIdentityReview(token, snapshotId, destinationId)])
-      .then(([snapshot, result]) => {
+    api.getIdentityReview(token, snapshotId, destinationId)
+      .then(result => {
         if (!active) return;
-        setDetail(snapshot); setReview(result);
+        setReview(result);
         setEdits(Object.fromEntries(result.draft.mappings.map(x => [x.sourceIdentityId, x.gitHubLogin])));
       })
       .catch(() => { if (active) setError(t('mappingError')); })
@@ -57,9 +60,19 @@ export default function IdentityMappingPage({ token, isAdmin }: { token: string;
     return () => { active = false; };
   }, [snapshotId, destinationId, token, isAdmin, t]);
 
-  const people = useMemo(() => detail?.snapshot.identities ?? [], [detail]);
+  useEffect(() => {
+    if (!snapshotId || !destinationId || !isAdmin) return;
+    let active = true;
+    setSourcePage(null);
+    void api.listIdentitySources(token, snapshotId, destinationId, after, 100)
+      .then(page => { if (active) setSourcePage(page); })
+      .catch(() => { if (active) setError(t('mappingError')); });
+    return () => { active = false; };
+  }, [snapshotId, destinationId, after, token, isAdmin, t]);
+
+  const people = useMemo(() => sourcePage?.items ?? [], [sourcePage]);
   const displayed = useMemo(() => people.filter(user =>
-    [user.displayName, user.email || '', user.providerId].some(part =>
+    [user.displayName, user.email || '', user.sourceIdentityId].some(part =>
       part.toLowerCase().includes(filter.toLowerCase().trim()))).slice(0, 250), [people, filter]);
 
   function updateMapping(sourceId: string, login: string) {
@@ -68,10 +81,13 @@ export default function IdentityMappingPage({ token, isAdmin }: { token: string;
   }
 
   async function save() {
-    if (!snapshotId || !destinationId || !review || !detail) return;
-    const mappings: IdentityMap[] = people.map(user => ({
-      sourceIdentityId: user.providerId, gitHubLogin: (edits[user.providerId] || '').trim()
-    })).filter(m => m.gitHubLogin.length > 0);
+    if (!snapshotId || !destinationId || !review) return;
+    // A draft is a complete replacement. Preserve mappings from *all*
+    // visited and unvisited pages, not only the 100 users currently shown.
+    const mappings: IdentityMap[] = Object.entries(edits)
+      .map(([sourceIdentityId, login]) => ({
+        sourceIdentityId, gitHubLogin: login.trim()
+      })).filter(m => m.gitHubLogin.length > 0);
     const logins = mappings.map(m => m.gitHubLogin.toLowerCase());
     if (mappings.some(m => !validLogin(m.gitHubLogin)) || new Set(logins).size !== logins.length) {
       setError(t('mappingInvalid')); return;
@@ -99,7 +115,7 @@ export default function IdentityMappingPage({ token, isAdmin }: { token: string;
   }
 
   if (!isAdmin) return <section className="empty-card"><ShieldAlert size={30} /><p>{t('mappingNoAdmin')}</p></section>;
-  const currentlyMapped = people.filter(p => (edits[p.providerId] || '').trim() !== '').length;
+  const currentlyMapped = Object.values(edits).filter(login => login.trim() !== '').length;
   const issueNames: Record<string, string> = {
     SourceIdentitiesIncomplete: t('mappingIssueSourceIdentitiesIncomplete'),
     EffectivePermissionsUnverified: t('mappingIssueEffectivePermissionsUnverified'),
@@ -128,15 +144,16 @@ export default function IdentityMappingPage({ token, isAdmin }: { token: string;
     {!snapshotId || !destinationId ? <section className="empty-card"><p>{t('mappingNotFound')}</p></section> : <>
       {review && <div className="mapping-summary">
         {[
-          [t('mappingDiscoverCount'), people.length],
+          [t('mappingDiscoverCount'), review.preview.discoveredIdentities],
           [t('mappingMappedCount'), currentlyMapped],
-          [t('mappingMissingCount'), Math.max(0, people.length - currentlyMapped)]
+          [t('mappingMissingCount'),
+            Math.max(0, review.preview.discoveredIdentities - currentlyMapped)]
         ].map(([title, number]) => <div key={title} className="mapping-metric">
           <strong>{number}</strong><span>{title}</span>
         </div>)}
       </div>}
       {loading && <p className="muted">{t('mappingLoading')}</p>}
-      {!loading && detail && review && <div className="mapping-panels">
+      {!loading && sourcePage && review && <div className="mapping-panels">
         <section className="mapping-panel">
           <h2>{t('identities')}</h2>
           <div className="mapping-toolbar">
@@ -146,22 +163,36 @@ export default function IdentityMappingPage({ token, isAdmin }: { token: string;
               <RefreshCw size={15} />{t('mappingReload')}
             </button>
           </div>
-          {people.length === 0 && <p className="muted">{t('mappingNoIdentities')}</p>}
-          {displayed.map(person => <div className="mapping-user" key={person.providerId}>
+          {review.preview.discoveredIdentities === 0 &&
+            <p className="muted">{t('mappingNoIdentities')}</p>}
+          {displayed.map(person => <div className="mapping-user" key={person.sourceIdentityId}>
             <div><strong>{person.displayName}</strong>
-              <small>{person.email || person.providerId}</small>
-              <small>{person.providerId}</small>
+              <small>{person.email || person.sourceIdentityId}</small>
+              <small>{person.sourceIdentityId}</small>
             </div>
             <label>{t('connDestination')}
               <input type="text" aria-label={`${person.displayName} GitHub`}
-                className={(edits[person.providerId] || '').trim() &&
-                  !validLogin((edits[person.providerId] || '').trim()) ? 'invalid' : ''}
+                className={(edits[person.sourceIdentityId] || '').trim() &&
+                  !validLogin((edits[person.sourceIdentityId] || '').trim()) ? 'invalid' : ''}
                 autoComplete="off" spellCheck={false} maxLength={80}
-                value={edits[person.providerId] || ''} placeholder={t('mappingPlaceholder')}
-                onChange={e => updateMapping(person.providerId, e.target.value)} />
+                value={edits[person.sourceIdentityId] || ''} placeholder={t('mappingPlaceholder')}
+                onChange={e => updateMapping(person.sourceIdentityId, e.target.value)} />
             </label>
           </div>)}
-          {people.length > 250 && <p className="mapping-tip">{t('mappingLimit')}</p>}
+          <p className="mapping-tip">{t('mappingPageScope')}</p>
+          <div className="mapping-actions">
+            <button type="button" disabled={busy || previous.length === 0}
+              onClick={() => {
+                setAfter(previous[previous.length - 1] ?? null);
+                setPrevious(previous.slice(0, -1));
+              }}>{t('mappingPreviousPage')}</button>
+            <span>{t('mappingPageNumber')} {previous.length + 1}</span>
+            <button type="button" disabled={busy || !sourcePage.nextAfter}
+              onClick={() => {
+                setPrevious(cursors => [...cursors, after]);
+                setAfter(sourcePage.nextAfter);
+              }}>{t('mappingNextPage')}</button>
+          </div>
           <div className="mapping-actions">
             <span>{t('mappingRevision')}: {review.draft.revision}{dirty ? ` · ${t('mappingUnsaved')}` : ''}</span>
             <button type="button" className="primary" disabled={busy || !dirty}

@@ -17,6 +17,25 @@ public static class IdentityMappingEndpoints
             catch (MappingInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
         });
 
+        endpoints.MapGet("/{snapshotId:guid}/sources", async Task<IResult> (
+            Guid snapshotId, Guid destinationConnectionId, string? after, int? take,
+            IdentityMappingService service, CancellationToken ct) =>
+        {
+            try
+            {
+                return Results.Ok(await service.ListSourcesAsync(
+                    snapshotId, destinationConnectionId, after, take ?? 50, ct));
+            }
+            catch (KeyNotFoundException)
+            {
+                return Results.NotFound(new { error = "MappingContextNotFound" });
+            }
+            catch (MappingInputException ex)
+            {
+                return Results.BadRequest(new { error = ex.Code });
+            }
+        });
+
         endpoints.MapPut("/{snapshotId:guid}", async Task<IResult> (Guid snapshotId,
             IdentityMappingUpdate request, IdentityMappingService service,
             ILoggerFactory logs, CancellationToken ct) =>

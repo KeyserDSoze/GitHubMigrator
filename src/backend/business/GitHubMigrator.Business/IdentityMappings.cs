@@ -36,7 +36,7 @@ public sealed class IdentityMappingService(
     IDiscoveryRepository discoveries,
     IConnectionRepository connections,
     IIdentityMappingDraftRepository drafts,
-    TimeProvider clock)
+    TimeProvider clock, IIdentitySnapshotReader? identitySources = null)
 {
     private static readonly Regex GitHubLoginPattern = new(
         @"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$",
@@ -48,7 +48,7 @@ public sealed class IdentityMappingService(
         var draft = await drafts.GetAsync(snapshotId, destinationId, ct)
             ?? new IdentityMappingDraft(snapshotId, destinationId, destination.Organization,
                 0, clock.GetUtcNow(), []);
-        return new(draft, Preview(inventory, draft));
+        return await ReviewAsync(inventory, draft, ct);
     }
 
     public async Task<IdentityMappingReview> SaveAsync(Guid snapshotId, Guid destinationId,
@@ -58,8 +58,11 @@ public sealed class IdentityMappingService(
             throw new MappingInputException("InvalidMappingBatch");
 
         var (inventory, destination) = await LoadContextAsync(snapshotId, destinationId, ct);
-        var known = inventory.Snapshot.Identities.Select(i => i.ProviderId)
-            .ToHashSet(StringComparer.Ordinal);
+        var known = identitySources is null
+            ? inventory.Snapshot.Identities.Select(i => i.ProviderId)
+                .ToHashSet(StringComparer.Ordinal)
+            : await identitySources.ResolveKnownAsync(
+                snapshotId, inputs.Select(x => x?.SourceIdentityId ?? "").ToArray(), ct);
         var uniqueSource = new HashSet<string>(StringComparer.Ordinal);
         var uniqueLogins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var mappings = new List<IdentityMapping>();
@@ -83,7 +86,7 @@ public sealed class IdentityMappingService(
             mappings.OrderBy(m => m.SourceIdentityId, StringComparer.Ordinal).ToArray());
         if (!await drafts.SaveAsync(next, expectedRevision, ct))
             throw new MappingRevisionConflictException();
-        return new(next, Preview(inventory, next));
+        return await ReviewAsync(inventory, next, ct);
     }
 
     private async Task<(DiscoveryInventory inventory, MigrationConnection destination)> LoadContextAsync(
@@ -91,7 +94,9 @@ public sealed class IdentityMappingService(
     {
         if (snapshotId == Guid.Empty || destinationId == Guid.Empty)
             throw new MappingInputException("InvalidMappingContext");
-        var inventory = await discoveries.GetAsync(snapshotId, ct)
+        var inventory = await (identitySources is null
+            ? discoveries.GetAsync(snapshotId, ct)
+            : identitySources.GetMetadataAsync(snapshotId, ct))
             ?? throw new KeyNotFoundException("DiscoverySnapshotNotFound");
         var destination = await connections.GetAsync(destinationId, ct)
             ?? throw new KeyNotFoundException("DestinationConnectionNotFound");
@@ -101,6 +106,60 @@ public sealed class IdentityMappingService(
         if (destination.ValidationCode != "Verified")
             throw new MappingInputException("DestinationNotVerified");
         return (inventory, destination);
+    }
+
+    public async Task<IdentitySourcePage> ListSourcesAsync(
+        Guid snapshotId, Guid destinationId, string? after, int take, CancellationToken ct)
+    {
+        if (take is < 1 or > 100 || (after?.Length ?? 0) > 1024 ||
+            (after?.Any(char.IsControl) ?? false))
+            throw new MappingInputException("InvalidIdentitySourcePage");
+        var (inventory, _) = await LoadContextAsync(snapshotId, destinationId, ct);
+        if (identitySources is not null)
+            return await identitySources.ListAsync(snapshotId, after, take, ct);
+        var all = inventory.Snapshot.Identities
+            .Where(x => after is null ||
+                string.Compare(x.ProviderId, after, StringComparison.Ordinal) > 0)
+            .OrderBy(x => x.ProviderId, StringComparer.Ordinal)
+            .Take(take + 1).ToArray();
+        var rows = all.Take(take).Select(x => new IdentitySourceItem(
+            x.ProviderId, x.DisplayName, x.Email, x.LegacyDescriptor)).ToArray();
+        return new(snapshotId, rows,
+            all.Length > take ? rows[^1].SourceIdentityId : null);
+    }
+
+    private async Task<IdentityMappingReview> ReviewAsync(
+        DiscoveryInventory inventory, IdentityMappingDraft draft, CancellationToken ct)
+    {
+        if (identitySources is null)
+            return new(draft, Preview(inventory, draft));
+
+        var count = await identitySources.CountAsync(inventory.Id, ct);
+        var mappedIds = draft.Mappings.Select(x => x.SourceIdentityId).ToArray();
+        var validIds = await identitySources.ResolveKnownAsync(inventory.Id, mappedIds, ct);
+        if (validIds.Count != mappedIds.Distinct(StringComparer.Ordinal).Count() ||
+            count < validIds.Count)
+            throw new MappingInputException("IdentitySourceMismatch");
+        var missingCount = count - validIds.Count;
+        var missing = await identitySources.ListUnmappedAsync(
+            inventory.Id, mappedIds, 100, ct);
+        var unresolved = await identitySources.CountUnresolvedAclPrincipalsAsync(
+            inventory.Id, ct);
+        var issues = new List<IdentityMappingIssue>();
+        if (!inventory.IdentitiesComplete)
+            issues.Add(new("SourceIdentitiesIncomplete"));
+        if (!inventory.PermissionsComplete || !inventory.SecurityCoverage.EffectivePermissionsVerified)
+            issues.Add(new("EffectivePermissionsUnverified"));
+        issues.Add(new("TargetMembershipUnverified"));
+        issues.AddRange(missing.Select(x =>
+            new IdentityMappingIssue("UnmappedSourceIdentity", x)));
+        issues.AddRange(Enumerable.Range(0, Math.Min(unresolved, 25))
+            .Select(_ => new IdentityMappingIssue("AclPrincipalUnresolved")));
+
+        return new(draft, new IdentityMappingPreview(
+            count, validIds.Count, missingCount, unresolved, inventory.IdentitiesComplete,
+            inventory.PermissionsComplete && inventory.SecurityCoverage.EffectivePermissionsVerified,
+            false, false, issues));
     }
 
     public static IdentityMappingPreview Preview(DiscoveryInventory inventory, IdentityMappingDraft draft)
