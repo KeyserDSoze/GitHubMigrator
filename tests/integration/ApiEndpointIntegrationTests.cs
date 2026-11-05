@@ -641,6 +641,27 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         Assert.Equal(jobId, persisted.RootElement.GetProperty("snapshot")
             .GetProperty("snapshotId").GetGuid());
         Assert.Equal(sourceId, persisted.RootElement.GetProperty("connectionId").GetGuid());
+        Assert.True(persisted.RootElement.GetProperty("refsExternalized").GetBoolean());
+        Assert.Equal(1, persisted.RootElement.GetProperty("refCount").GetInt32());
+        Assert.Equal(0, persisted.RootElement.GetProperty("refs").GetArrayLength());
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var snapshotDb = await scope.ServiceProvider.GetRequiredService<AppDbContext>()
+                .Discoveries.AsNoTracking().SingleAsync(x => x.Id == jobId);
+            using var storedJson = JsonDocument.Parse(snapshotDb.Json);
+            Assert.True(storedJson.RootElement.GetProperty("refsExternalized").GetBoolean());
+            Assert.Equal(1, storedJson.RootElement.GetProperty("refCount").GetInt32());
+            Assert.Empty(storedJson.RootElement.GetProperty("refs").EnumerateArray());
+        }
+        using var summariesGet = new HttpRequestMessage(HttpMethod.Get, "/api/discoveries");
+        summariesGet.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+        using var summariesResponse = await harness.Client.SendAsync(summariesGet);
+        Assert.Equal(HttpStatusCode.OK, summariesResponse.StatusCode);
+        using var summaryList = JsonDocument.Parse(await summariesResponse.Content.ReadAsStringAsync());
+        var currentSummary = summaryList.RootElement.EnumerateArray()
+            .Single(x => x.GetProperty("id").GetGuid() == jobId);
+        Assert.Equal(1, currentSummary.GetProperty("refCount").GetInt32());
+        Assert.True(currentSummary.GetProperty("refsExternalized").GetBoolean());
 
         using var eventRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{jobId}/events");
         eventRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
