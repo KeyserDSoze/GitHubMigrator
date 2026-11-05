@@ -46,7 +46,8 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                 },
                 Refs = [new RepositoryRef("repo-1", "refs/heads/main", ApiHarness.Sha)],
                 Issues = [], Completeness = DiscoveryCompleteness.Complete,
-                IdentitiesComplete = false, PermissionsComplete = false
+                IdentitiesComplete = true, PermissionsComplete = true,
+                SecurityCoverage = new DiscoveryCoverage(true, true, true, true)
             };
             await new PostgresDiscoveryRepository(db).SaveAsync(snapshot, default);
             var normalized = StagingAssetNormalizer.Normalize(snapshot);
