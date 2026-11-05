@@ -59,6 +59,24 @@ public sealed class StagingAssetNormalizerTests
     }
 
     [Fact]
+    public void Graph_user_observation_uses_same_fingerprint_as_finalized_identity_asset()
+    {
+        var inventory = Sample("sha", identityIds: ["aad.user"]);
+        var canonical = StagingAssetNormalizer.Normalize(inventory).Assets
+            .Single(x => x.AssetType == "identity");
+        var page = StagingAssetNormalizer.NormalizeIdentity(
+            "aad.user", "Person", null, null);
+        Assert.Equal(canonical, page);
+        var changed = StagingAssetNormalizer.NormalizeIdentity(
+            "aad.user", "Renamed", null, null);
+        Assert.Equal(page.SourceId, changed.SourceId);
+        Assert.NotEqual(page.Fingerprint, changed.Fingerprint);
+        var invalid = Assert.Throws<StagingSyncInputException>(() =>
+            StagingAssetNormalizer.NormalizeIdentity("", "Person", null, null));
+        Assert.Equal("InvalidStagingAssetId", invalid.Code);
+    }
+
+    [Fact]
     public void Large_asset_batches_are_normalized_deterministically_without_target_calls()
     {
         var refs = Enumerable.Range(0, 3_000)
