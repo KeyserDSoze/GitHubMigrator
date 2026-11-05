@@ -103,6 +103,13 @@ export type IdentityPreview = {
   readyForGrants: boolean; issues: IdentityPreviewIssue[];
 };
 export type IdentityReview = { draft: IdentityDraft; preview: IdentityPreview };
+export type IdentitySourceItem = {
+  sourceIdentityId: string; displayName: string; email: string | null;
+  legacyDescriptor: string | null;
+};
+export type IdentitySourcePage = {
+  snapshotId: string; items: IdentitySourceItem[]; nextAfter: string | null;
+};
 
 export type PlanSelection = {
   sourceRepositoryId: string; targetRepositoryName: string; strategy: number; include: boolean;
@@ -270,6 +277,13 @@ export const api = {
       { headers: withToken(token) }),
   getIdentityReview: (token: string, snapshotId: string, destinationConnectionId: string) =>
     call<IdentityReview>(`/api/identity-mappings/${encodeURIComponent(snapshotId)}?destinationConnectionId=${encodeURIComponent(destinationConnectionId)}`,
+      { headers: withToken(token) }),
+  listIdentitySources: (token: string, snapshotId: string,
+      destinationConnectionId: string, after?: string | null, take = 100) =>
+    call<IdentitySourcePage>(
+      `/api/identity-mappings/${encodeURIComponent(snapshotId)}/sources` +
+      `?destinationConnectionId=${encodeURIComponent(destinationConnectionId)}&take=${take}` +
+      (after ? `&after=${encodeURIComponent(after)}` : ''),
       { headers: withToken(token) }),
   saveIdentityMappings: (token: string, snapshotId: string, destinationConnectionId: string,
       expectedRevision: number, mappings: IdentityMap[]) =>
