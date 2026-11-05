@@ -831,7 +831,7 @@ public sealed class PostgresDiscoveryPageCheckpointStore(AppDbContext db, TimePr
                     AS acl(item)
                 CROSS JOIN LATERAL jsonb_each(
                     CASE WHEN jsonb_typeof(acl.item -> 'acesDictionary') = 'object'
-                        THEN acl.item -> 'acesDictionary' ELSE '{}'::jsonb END)
+                        THEN acl.item -> 'acesDictionary' ELSE jsonb_build_object() END)
                     AS ace(key, value)
             ),
             page_rows AS (

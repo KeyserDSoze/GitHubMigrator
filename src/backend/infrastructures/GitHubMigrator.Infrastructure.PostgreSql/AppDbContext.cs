@@ -246,6 +246,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.PageIndex).HasColumnName("page_index");
             entity.HasIndex(x => new { x.JobId, x.SecurityToken })
                 .HasDatabaseName("ix_discovery_acl_observations_token");
+            entity.HasOne<DiscoveryPageCheckpointRecord>().WithMany()
+                .HasForeignKey(x => new { x.JobId, x.ResourceKey, x.PageIndex })
+                .OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<DiscoveryIdentityObservationRecord>(entity =>
         {
