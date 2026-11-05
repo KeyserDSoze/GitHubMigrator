@@ -87,6 +87,24 @@ public static class StagingAssetNormalizer
         return new("identity", descriptor, null, fingerprint, payload);
     }
 
+    // F-019: provisional Graph security groups share the *exact* F-013
+    // canonical source identity/payload/fingerprint representation. This is
+    // raw membership/ACL evidence, never proof of effective permission.
+    public static StagingAssetInput NormalizeGroup(
+        string descriptor, string displayName, string? legacyDescriptor)
+    {
+        if (string.IsNullOrWhiteSpace(descriptor) || descriptor.Length > 1024)
+            throw new StagingSyncInputException("InvalidStagingAssetId");
+        var payload = JsonSerializer.Serialize(new {
+            DisplayName = displayName, LegacyDescriptor = legacyDescriptor
+        });
+        if (payload.Length > 65_536)
+            throw new StagingSyncInputException("StagingAssetTooLarge");
+        var fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+            "staging-v1\ngroup\n" + payload)));
+        return new("group", descriptor, null, fingerprint, payload);
+    }
+
     public static (IReadOnlyList<StagingAssetInput> Assets, IReadOnlySet<string> CompleteTypes)
         Normalize(DiscoveryInventory inventory)
     {
@@ -144,7 +162,13 @@ public static class StagingAssetNormalizer
                 throw new StagingSyncInputException("StagingAssetLimit");
         }
         foreach (var group in inventory.Groups)
-            Add("group", group.Descriptor, null, new { group.DisplayName, group.LegacyDescriptor });
+        {
+            var asset = NormalizeGroup(group.Descriptor, group.DisplayName, group.LegacyDescriptor);
+            if (!assets.TryAdd(("group", asset.SourceId), asset))
+                throw new StagingSyncInputException("DuplicateStagingAsset");
+            if (assets.Count > MaxAssetsPerSnapshot)
+                throw new StagingSyncInputException("StagingAssetLimit");
+        }
         foreach (var edge in inventory.Memberships)
             Add("membership", JsonSerializer.Serialize(new[] { edge.GroupDescriptor, edge.MemberDescriptor }),
                 null, new { edge.GroupDescriptor, edge.MemberDescriptor });
