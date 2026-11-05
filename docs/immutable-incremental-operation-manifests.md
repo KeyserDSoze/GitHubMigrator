@@ -96,3 +96,12 @@ idempotent commands, checkpoints, retry fencing, rollback design and
 post-write verification. Neither an F-027 planning review nor an F-028
 GET-only preflight qualifies as such attestation. No F-029 path performs
 or authorizes GitHub writes.
+
+## Additional unit-level invariants
+
+The F-029 business-layer unit tests independently assert deterministic
+ordering across different repository enumeration orders, DAG dependency
+identity, SHA-256 sensitivity to every operation and proof field,
+strict rejection of non-GitMirror history strategies, duplicate targets,
+selection sizes above ten and the rule that even all-404 target probes
+never establish GitHub write authorization.
