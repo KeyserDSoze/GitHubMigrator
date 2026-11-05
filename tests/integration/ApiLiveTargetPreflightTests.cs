@@ -7,6 +7,7 @@ using GitHubMigrator.Domain;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
+using Npgsql;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -535,6 +536,20 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                 .CountAsync(x => x.ReconciliationId == diffId));
             Assert.False((await db.GitTransferWorkpacks.AsNoTracking()
                 .SingleAsync(x => x.Id == workId)).ReadyForExecution);
+            // SQL itself, not only the .NET DTO, forbids both an executable
+            // workpack and a fabricated success state.
+            var writable = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE git_transfer_workpacks SET ready_for_execution = {true}
+                    WHERE id = {workId}
+                    """));
+            Assert.Equal("23514", writable.SqlState);
+            var fabricated = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE git_transfer_workpacks SET state = {"Succeeded"}
+                    WHERE id = {workId}
+                    """));
+            Assert.Equal("23514", fabricated.SqlState);
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
