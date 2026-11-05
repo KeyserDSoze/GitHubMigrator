@@ -32,12 +32,24 @@ public sealed class PostgresIdentitySnapshotReader(AppDbContext db) : IIdentityS
 
     private async Task<bool> UseObservationsAsync(Guid snapshotId, CancellationToken ct)
     {
+        var config = await db.Database.SqlQuery<string>($"""
+            SELECT jsonb_build_object(
+                'external', COALESCE((inventory ->> 'identitiesExternalized')::boolean, false),
+                'expected', COALESCE((inventory ->> 'identityCount')::integer, -1),
+                'inline', jsonb_array_length(inventory -> 'snapshot' -> 'identities'),
+                'complete', COALESCE((inventory ->> 'identitiesComplete')::boolean, false)
+            )::text AS "Value"
+            FROM migration_discoveries WHERE id = {snapshotId}
+            """).SingleOrDefaultAsync(ct);
+        if (config is null)
+            throw new MappingInputException("IdentitySourceNotFound");
+        using var meta = JsonDocument.Parse(config);
+        var externalized = meta.RootElement.GetProperty("external").GetBoolean();
         var count = await db.DiscoveryIdentityObservations.AsNoTracking()
             .CountAsync(x => x.JobId == snapshotId, ct);
-        if (count == 0)
+        if (!externalized && count == 0)
         {
-            // A snapshot written before F-015 has no observation rows. Its
-            // immutable inline JSONB remains the read-only source of truth.
+            // A pre-F-015 immutable snapshot has only inline identities.
             return false;
         }
 
@@ -48,16 +60,57 @@ public sealed class PostgresIdentitySnapshotReader(AppDbContext db) : IIdentityS
         if (!succeeded)
             throw new MappingInputException("IdentitySourceNotReady");
 
-        var expected = await db.Database.SqlQuery<int>($"""
-            SELECT jsonb_array_length(inventory -> 'snapshot' -> 'identities') AS "Value"
-            FROM migration_discoveries WHERE id = {snapshotId}
-            """).SingleOrDefaultAsync(ct);
-        if (expected != count)
+        var expected = externalized
+            ? meta.RootElement.GetProperty("expected").GetInt32()
+            : meta.RootElement.GetProperty("inline").GetInt32();
+        if (expected != count || expected < 0 || expected > StagingAssetNormalizer.MaxAssetsPerSnapshot ||
+            (externalized && meta.RootElement.GetProperty("inline").GetInt32() != 0))
             throw new MappingInputException("IdentitySourceMismatch");
-        // A count match is insufficient: a post-success modification could
-        // replace a descriptor or its metadata while preserving row counts.
-        // Compare both immutable snapshot and page-provenanced observations in
-        // PostgreSQL before using them for F-004 review or draft validation.
+
+        if (externalized)
+        {
+            // Even a zero-user Graph discovery must have a source page if
+            // the inventory claims its Graph user coverage is complete.
+            var pages = await db.DiscoveryPageCheckpoints.AsNoTracking()
+                .CountAsync(x => x.JobId == snapshotId && x.ResourceKey == "graph-users", ct);
+            if (pages == 0 && meta.RootElement.GetProperty("complete").GetBoolean())
+                throw new MappingInputException("IdentitySourceMismatch");
+
+            // Read-only F-004/F-005 queries independently recheck snapshot
+            // evidence AFTER job success: never silently accept tampering
+            // that replaces one user with another but leaves totals equal.
+            var pageMismatch = await db.Database.SqlQuery<bool>($"""
+                WITH source_rows AS (
+                    SELECT DISTINCT item ->> 'descriptor' AS descriptor,
+                        COALESCE(item ->> 'displayName', item ->> 'descriptor') AS display_name,
+                        item ->> 'mailAddress' AS email,
+                        item ->> 'legacyDescriptor' AS legacy
+                    FROM discovery_page_checkpoints p
+                    CROSS JOIN LATERAL jsonb_array_elements(
+                        p.safe_payload_json -> 'value') item
+                    WHERE p.job_id = {snapshotId} AND p.resource_key = 'graph-users'
+                        AND NULLIF(btrim(item ->> 'descriptor'), '') IS NOT NULL
+                ),
+                observed AS (
+                    SELECT source_id AS descriptor,
+                        payload_json ->> 'DisplayName' AS display_name,
+                        payload_json ->> 'Email' AS email,
+                        payload_json ->> 'LegacyDescriptor' AS legacy
+                    FROM discovery_identity_observations WHERE job_id = {snapshotId}
+                ),
+                diff AS (
+                    (SELECT * FROM source_rows EXCEPT ALL SELECT * FROM observed)
+                    UNION ALL
+                    (SELECT * FROM observed EXCEPT ALL SELECT * FROM source_rows)
+                )
+                SELECT EXISTS(SELECT 1 FROM diff) AS "Value"
+                """).SingleAsync(ct);
+            if (pageMismatch) throw new MappingInputException("IdentitySourceMismatch");
+            return true;
+        }
+
+        // Legacy F-015 snapshots still carry inline identity data, so compare
+        // its complete source metadata against all persisted observations.
         var mismatch = await db.Database.SqlQuery<bool>($"""
             WITH saved AS (
                 SELECT i."providerId" AS id, i."displayName" AS display_name,
@@ -70,22 +123,19 @@ public sealed class PostgresIdentitySnapshotReader(AppDbContext db) : IIdentityS
                 WHERE d.id = {snapshotId}
             ),
             observed AS (
-                SELECT source_id AS id,
-                    payload_json ->> 'DisplayName' AS display_name,
+                SELECT source_id AS id, payload_json ->> 'DisplayName' AS display_name,
                     payload_json ->> 'Email' AS email,
                     payload_json ->> 'LegacyDescriptor' AS legacy
-                FROM discovery_identity_observations
-                WHERE job_id = {snapshotId}
+                FROM discovery_identity_observations WHERE job_id = {snapshotId}
             ),
-            differences AS (
+            diff AS (
                 (SELECT * FROM saved EXCEPT ALL SELECT * FROM observed)
                 UNION ALL
                 (SELECT * FROM observed EXCEPT ALL SELECT * FROM saved)
             )
-            SELECT EXISTS(SELECT 1 FROM differences) AS "Value"
+            SELECT EXISTS(SELECT 1 FROM diff) AS "Value"
             """).SingleAsync(ct);
-        if (mismatch)
-            throw new MappingInputException("IdentitySourceMismatch");
+        if (mismatch) throw new MappingInputException("IdentitySourceMismatch");
         return true;
     }
 
