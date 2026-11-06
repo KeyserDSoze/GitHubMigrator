@@ -186,10 +186,27 @@ public sealed class PostgresGitHubImportIntentStore(
             """, ct);
         var saved = await db.GitHubImportIntents.AsNoTracking()
             .SingleAsync(x => x.ReadinessId == row.ReadinessId, ct);
-        if (saved.EvidenceSha256 != hash ||
-            saved.ReadinessSha256 != draft.ExpectedReadinessSha256 ||
-            saved.RequestedBy != draft.RequestedBy)
+        if (saved.ReadinessSha256 != draft.ExpectedReadinessSha256 ||
+            saved.RequestedBy != draft.RequestedBy ||
+            saved.ManifestSha256 != draft.ManifestSha256 ||
+            saved.ReconciliationSha256 != draft.ReconciliationSha256 ||
+            saved.BundleSha256 != draft.BundleSha256 ||
+            saved.SafeRefPlanSha256 != draft.Plan.EvidenceSha256 ||
+            saved.CreateCandidates != draft.Plan.CreateCandidates ||
+            saved.AlreadyMatching != draft.Plan.AlreadyMatching ||
+            saved.DivergedBlocked != draft.Plan.DivergedBlocked ||
+            saved.TargetOnlyPreserved != draft.Plan.TargetOnlyPreserved ||
+            saved.RulesetStatus != draft.Policy.RulesetStatus ||
+            saved.RulesetCount != draft.Policy.RulesetCount ||
+            saved.ActiveRulesets != draft.Policy.ActiveRulesets ||
+            saved.DefaultBranchProtection != draft.Policy.DefaultBranchProtection ||
+            saved.ExpiresAtUtc <= now)
             throw new GitHubImportIntentException("ImportIntentConflictingReplay");
+        // The originally observed policy time is immutable. A concurrent
+        // idempotent HTTP retry may see an IDENTICAL policy seconds later;
+        // preserving the original SHA is safe, whereas a changed ruleset
+        // disposition or a different requester still fails closed.
+        _ = hash;
         await tx.CommitAsync(ct);
         return await ViewAsync(saved, ct);
     }
