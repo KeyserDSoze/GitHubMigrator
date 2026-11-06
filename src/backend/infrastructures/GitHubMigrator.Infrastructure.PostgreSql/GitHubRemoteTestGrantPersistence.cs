@@ -64,6 +64,12 @@ public sealed class PostgresGitHubRemoteTestGrantStore(
         var digest = GitHubRemoteTestGrantIntegrity.TokenDigest(token);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(f.RepositoryId, ct);
+        if (await QuarantineLockedAsync(f.RepositoryId, now, ct) > 0)
+        {
+            await tx.CommitAsync(ct);
+            throw new GitHubRemoteTestGrantException(
+                "RemoteTestGrantRecoveryRequired");
+        }
         await VerifyDependenciesAsync(input, now, ct);
 
         var previous = await db.GitHubRemoteTestGrants.AsNoTracking()
@@ -133,6 +139,12 @@ public sealed class PostgresGitHubRemoteTestGrantStore(
         var f = input.Fence;
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(f.RepositoryId, ct);
+        if (await QuarantineLockedAsync(f.RepositoryId, now, ct) > 0)
+        {
+            await tx.CommitAsync(ct);
+            throw new GitHubRemoteTestGrantException(
+                "RemoteTestGrantRecoveryRequired");
+        }
         await VerifyDependenciesAsync(input, now, ct);
         var row = await db.GitHubRemoteTestGrants.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == grantId &&
