@@ -188,6 +188,14 @@ builder.Services.AddScoped<IGitHubReadOnlyObjectMirrorRunner>(sp =>
         builder.Configuration["GitHubTrustedRemoteRead:ScratchRoot"] ?? "",
         sp.GetRequiredService<GitHubReadOnlyObjectMirrorOptions>(),
         sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<IGitSourceSnapshotMirrorMaterializer>(sp =>
+    new GitHubMigrator.Infrastructure.GitObjects.LocalGitSourceSnapshotMirrorMaterializer(
+        builder.Configuration["GitSourceBundles:BundleRoot"] ?? "",
+        builder.Configuration["GitHubTrustedRemoteRead:SourceRoot"] ?? "",
+        sp.GetRequiredService<IGitSourceBundleArtifactVerifier>(),
+        builder.Configuration.GetValue("GitHubSourceSnapshotMirror:Enabled", false)
+            && builder.Configuration.GetValue("GitSourceBundles:Enabled", false),
+        sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped<GitHubTrustedRemoteReadCoordinator>();
 
 builder.Services.AddScoped<GitHubRemoteTestGrantService>();
