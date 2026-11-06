@@ -19,6 +19,9 @@ public sealed class GitHubTransferAttemptBarrierWorker(
                 await using var scope = scopes.CreateAsyncScope();
                 var store = scope.ServiceProvider
                     .GetRequiredService<IGitHubTransferAttemptStore>();
+                // Expire abandoned human reviews first; they must not
+                // monopolize the unique active target slot indefinitely.
+                if (await store.ExpireNextStaleAsync(stoppingToken)) continue;
                 if (await store.BlockNextAtWriteBarrierAsync(stoppingToken)
                     is not null)
                     continue;
