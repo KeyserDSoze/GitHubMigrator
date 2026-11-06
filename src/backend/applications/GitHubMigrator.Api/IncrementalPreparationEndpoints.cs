@@ -499,6 +499,118 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-043: create and immediately discard a one-repository GitHub
+        // App token. The GitHub POST ONLY mints a short-lived credential:
+        // no push, branch update or repository mutation is ever issued.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/remote-fences/{fenceId:guid}/github-app-scope",
+            async Task<IResult> (Guid id, Guid planId, Guid fenceId,
+                CreateGitHubAppWriteScopeRequest request,
+                ClaimsPrincipal principal, GitHubAppWriteScopeService service,
+                CancellationToken ct) =>
+            {
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor)) return Results.Unauthorized();
+                if (request.AcknowledgementText !=
+                    "I UNDERSTAND THIS TOKEN IS DISCARDED AND DOES NOT AUTHORIZE A PUSH")
+                    return Results.BadRequest(new { error = "AppScopeAcknowledgementRequired" });
+                try
+                {
+                    return Results.Ok(await service.InspectAsync(
+                        id, planId, fenceId,
+                        request.ExpectedFenceEvidenceSha256 ?? "", actor, ct));
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "AppScopeDependencyNotFound" }); }
+                catch (GitHubAppWriteScopeException ex)
+                { return AppScopeError(ex); }
+                catch (GitHubRemoteRefFenceException ex)
+                { return RemoteFenceError(ex); }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireAuthorization(new AuthorizeAttribute { Roles = "superadmin" })
+              .RequireRateLimiting("github-app-scope");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/github-app-scopes/{scopeId:guid}",
+            async Task<IResult> (Guid id, Guid planId, Guid scopeId,
+                GitHubAppWriteScopeService service, CancellationToken ct) =>
+            {
+                try
+                {
+                    var record = await service.GetAsync(id, planId, scopeId, ct);
+                    return record is null
+                        ? Results.NotFound(new { error = "AppScopeNotFound" })
+                        : Results.Ok(record);
+                }
+                catch (GitHubAppWriteScopeException ex)
+                { return AppScopeError(ex); }
+                catch (GitHubRemoteRefFenceException ex)
+                { return RemoteFenceError(ex); }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/remote-fences/{fenceId:guid}/github-app-scopes",
+            async Task<IResult> (Guid id, Guid planId, Guid fenceId,
+                GitHubAppWriteScopeService service, CancellationToken ct) =>
+            {
+                try
+                { return Results.Ok(await service.ListAsync(id, planId, fenceId, ct)); }
+                catch (GitHubAppWriteScopeException ex)
+                { return AppScopeError(ex); }
+                catch (GitHubRemoteRefFenceException ex)
+                { return RemoteFenceError(ex); }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
         // F-042: fresh GitHub GET-only ref fence. This does not authorize
         // transport, does not create a remote ref and never issues a push.
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/git-rehearsals/{rehearsalId:guid}/remote-fences",
@@ -1151,6 +1263,11 @@ public static class IncrementalPreparationEndpoints
             ? Results.BadRequest(new { error = ex.Code })
             : Results.Conflict(new { error = ex.Code });
 
+    private static IResult AppScopeError(GitHubAppWriteScopeException ex) =>
+        ex.Code is "AppScopeRequestInvalid" or "AppScopeInspectionInvalid"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
+
     private static IResult RemoteFenceError(GitHubRemoteRefFenceException ex) =>
         ex.Code == "RemoteFenceRequestInvalid"
             ? Results.BadRequest(new { error = ex.Code })
@@ -1243,3 +1360,6 @@ public sealed record CreateGitImportRehearsalRequest(
 
 public sealed record CreateGitHubRemoteRefFenceRequest(
     string? ExpectedRehearsalEvidenceSha256);
+
+public sealed record CreateGitHubAppWriteScopeRequest(
+    string? ExpectedFenceEvidenceSha256, string? AcknowledgementText);
