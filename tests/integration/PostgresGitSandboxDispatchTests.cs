@@ -183,6 +183,13 @@ public sealed class PostgresGitSandboxDispatchTests(PostgresDraftFixture fixture
 
         await InsertReviewedBlockedAttemptAsync(db, attempt, request);
         var queued = await store.EnqueueAsync(attempt, request, default);
+        // An API replica which does not allowlist the target must not even
+        // acquire it transiently before discovering its wrong UUID.
+        var unauthorizedWorker = Store(db, Options(Guid.NewGuid()));
+        Assert.Null(await unauthorizedWorker.ClaimNextAsync(default));
+        Assert.Null(await unauthorizedWorker.ClaimInspectionAsync(default));
+        Assert.Equal(GitSandboxDispatchStates.Queued,
+            (await store.GetAsync(attempt, default))!.State);
         var disabled = Store(db, new(false, new HashSet<Guid> {
             request.SandboxId
         }));
@@ -206,6 +213,29 @@ public sealed class PostgresGitSandboxDispatchTests(PostgresDraftFixture fixture
             await Assert.ThrowsAnyAsync<Exception>(forbidden);
         Assert.False((await store.GetAsync(attempt, default))!.RemoteWritesPerformed);
         Assert.False((await store.GetAsync(attempt, default))!.ExecutionAuthorized);
+    }
+
+    [Fact]
+    public async Task Separate_attempt_cannot_enqueue_onto_an_active_local_target()
+    {
+        using var sandbox = new Sandbox();
+        var request = await sandbox.BuildAsync();
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        await using var db = fixture.NewContext();
+        await InsertReviewedBlockedAttemptAsync(db, first, request);
+        var distinctRequest = request with { Packet = request.Packet with {
+            ScopeId = Guid.NewGuid()
+        }};
+        await InsertReviewedBlockedAttemptAsync(db, second, distinctRequest);
+        var store = Store(db, Options(request.SandboxId));
+        await store.EnqueueAsync(first, request, default);
+        var error = await Assert.ThrowsAsync<GitSandboxDispatchException>(
+            () => store.EnqueueAsync(second, distinctRequest, default));
+        Assert.Equal("SandboxDispatchActiveTargetBusy", error.Code);
+        Assert.Equal(GitSandboxDispatchStates.Queued,
+            (await store.GetAsync(first, default))!.State);
+        Assert.Null(await store.GetAsync(second, default));
     }
 
     private static PostgresGitSandboxDispatchStore Store(
