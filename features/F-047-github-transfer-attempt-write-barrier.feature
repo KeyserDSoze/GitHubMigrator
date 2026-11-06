@@ -23,6 +23,13 @@ Feature: F-047 durable GitHub transfer preparation and remote write barrier
     And the state is BlockedAtWriteBarrier
     And transport_attempted and all write/authorization flags remain false
 
+  Scenario: Abandoned human review cannot block a GitHub target forever
+    Given an AwaitingIndependentReview attempt whose F-045 lease expired or was released
+    When the barrier worker polls or a new valid target preparation arrives
+    Then the old attempt becomes Expired with exactly one LeaseExpired event
+    And the target is available for a new valid preparation
+    And an expired attempt can never be reviewed or sent
+
   Scenario: PostgreSQL rejects remote execution flags regardless of role
     Given an F-047 attempt has been persisted
     When direct SQL tries to enable transport_attempted, execution_authorized or remote_writes_performed
