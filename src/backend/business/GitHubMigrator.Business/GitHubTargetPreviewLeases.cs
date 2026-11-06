@@ -125,8 +125,11 @@ public sealed class GitHubTargetPreviewLeaseService(
         // A release does NOT assert that GitHub refs still match.
         var scope = await scopes.GetAsync(preparationId, planId, scopeId, ct)
             ?? throw new KeyNotFoundException("AppScopeNotFound");
-        if (!scope.IsCurrent ||
-            !GitSourceBundleStorageCheck.ValidSha(expectedPacketSha256))
+        // Historical scope integrity is verified by its store, but its
+        // IsCurrent flag may be false solely because F-042's 30-second
+        // window expired. Releasing an existing lease must still work:
+        // the database independently checks owner/token/epoch/packet SHA.
+        if (!GitSourceBundleStorageCheck.ValidSha(expectedPacketSha256))
             throw new GitHubTargetPreviewLeaseException("PreviewLeaseProofInvalid");
         return await store.ReleaseAsync(scope.RepositoryId, actorId,
             leaseToken, generation, expectedPacketSha256, ct);
