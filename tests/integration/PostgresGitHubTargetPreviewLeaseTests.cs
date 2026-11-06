@@ -9,8 +9,21 @@ namespace GitHubMigrator.Integration.Tests;
 // Real PostgreSQL 17, independent contexts as independent ASP.NET replicas.
 // No GitHub network calls and no repository-mutating Git operations.
 public sealed class PostgresGitHubTargetPreviewLeaseTests(
-    PostgresDraftFixture fixture) : IClassFixture<PostgresDraftFixture>
+    PostgresDraftFixture fixture)
+    : IClassFixture<PostgresDraftFixture>, IAsyncLifetime
 {
+    public async Task InitializeAsync()
+    {
+        // EnsureCreated creates EF tables but does not create all custom
+        // constraints. Exercise the production additive SQL CHECK schema.
+        using var services = new ServiceCollection()
+            .AddDbContext<AppDbContext>(o => o.UseNpgsql(fixture.ConnectionString))
+            .BuildServiceProvider();
+        await GitHubTargetPreviewLeaseSchema.InitializeAsync(services);
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
+
     private static string Sha(char c) => new(c, 64);
 
     private static GitHubCreateOnlyPacket Packet(long repositoryId, char proof = 'a') =>
