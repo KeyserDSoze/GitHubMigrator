@@ -149,6 +149,11 @@ builder.Services.AddScoped<IGitHubAppWriteScopeStore, PostgresGitHubAppWriteScop
 builder.Services.AddScoped<GitHubAppWriteScopeService>();
 builder.Services.AddScoped<GitHubCreateOnlyPacketService>();
 builder.Services.AddScoped<GitHubCandidatePolicyService>();
+builder.Services.AddSingleton(new GitHubTransferAttemptOptions(
+    builder.Configuration.GetValue("GitHubTransferAttempts:Enabled", false)));
+builder.Services.AddScoped<IGitHubTransferAttemptStore, PostgresGitHubTransferAttemptStore>();
+builder.Services.AddScoped<GitHubTransferAttemptService>();
+builder.Services.AddHostedService<GitHubTransferAttemptBarrierWorker>();
 builder.Services.AddSingleton(new GitHubTargetPreviewLeaseOptions(
     builder.Configuration.GetValue("GitHubTargetPreviewLeases:Enabled", false)));
 builder.Services.AddScoped<IGitHubTargetPreviewLeaseStore, PostgresGitHubTargetPreviewLeaseStore>();
@@ -367,6 +372,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("github-transfer-attempts", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     // Enqueueing work is cheap; it must not consume the shared external-API
     // budget used by Boards, Pipelines and legacy synchronous discovery.
     options.AddFixedWindowLimiter("discovery-queue", limiter =>
@@ -414,6 +425,7 @@ await GitImportRehearsalSchema.InitializeAsync(app.Services);
 await GitHubRemoteRefFenceSchema.InitializeAsync(app.Services);
 await GitHubAppWriteScopeSchema.InitializeAsync(app.Services);
 await GitHubTargetPreviewLeaseSchema.InitializeAsync(app.Services);
+await GitHubTransferAttemptSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
@@ -488,6 +500,7 @@ app.MapStagingEndpoints();
 app.MapIncrementalPreparationEndpoints();
 app.MapGitHubTargetPreviewLeaseEndpoints();
 app.MapGitHubCandidatePolicyEndpoints();
+app.MapGitHubTransferAttemptEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
 app.MapMigrationPlanEndpoints();
