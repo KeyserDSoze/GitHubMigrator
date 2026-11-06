@@ -43,6 +43,9 @@ public sealed class LocalGitCreateOnlyTransferRunner(
                 // Launch Git only from our fresh private working directory,
                 // identical to the already tested F-041 process boundary.
                 Directory.CreateDirectory(working);
+                if (!Directory.Exists(working))
+                    throw new LocalGitCreateOnlyTransferException(
+                        "SandboxScratchCreationFailed");
                 await AssertBareAndFormatAsync(paths.Destination,
                     request.SourceRefs[0].ObjectId.Length == 40 ? "sha1" : "sha256",
                     working, ct);
@@ -303,7 +306,10 @@ public sealed class LocalGitCreateOnlyTransferRunner(
             FileName = "/usr/bin/git",
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardError = true, RedirectStandardOutput = true,
-            WorkingDirectory = work
+            // Every Git path argument is an independently derived ABSOLUTE
+            // path. A constant cwd avoids dependence on ephemeral scratch
+            // path lookup at subprocess creation.
+            WorkingDirectory = "/"
         };
         process.StartInfo.Environment.Clear();
         process.StartInfo.Environment["PATH"] = "/usr/bin:/bin";
@@ -323,8 +329,8 @@ public sealed class LocalGitCreateOnlyTransferRunner(
         // Fail early with fixed, non-sensitive diagnostic codes.
         if (!File.Exists("/usr/bin/git"))
             throw new LocalGitCreateOnlyTransferException("SandboxGitBinaryMissing");
-        if (!Directory.Exists(work))
-            throw new LocalGitCreateOnlyTransferException("SandboxGitWorkdirMissing");
+        if (!Path.IsPathFullyQualified(work))
+            throw new LocalGitCreateOnlyTransferException("SandboxGitWorkdirInvalid");
         var started = false;
         var stage = "Launch";
         try
