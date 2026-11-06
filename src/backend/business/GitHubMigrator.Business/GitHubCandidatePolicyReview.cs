@@ -82,7 +82,8 @@ public static class GitHubCandidatePolicyIntegrity
             var item = observation.Items[i];
             if (item.RefNameSha256 != expected[i].Hash ||
                 item.Kind != expected[i].Kind || item.ActiveRules < 0 ||
-                item.ActiveRules > 99 || item.ProviderStatus.Length > 32 ||
+                item.ActiveRules > 99 || item.ProviderStatus is null ||
+                item.ProviderStatus.Length > 32 ||
                 item.ProviderStatus.Any(x => !char.IsAsciiLetterOrDigit(x)) ||
                 item.Status is not (
                     GitHubCandidatePolicyStates.NoActiveRulesReported or
@@ -172,9 +173,16 @@ public sealed class GitHubCandidatePolicyService(
         using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
             deadline.CancelAfter(TimeSpan.FromSeconds(18));
-            observed = await reader.ReadAsync(source.Packet.Organization,
-                source.Packet.Repository, source.Packet.RepositoryId, token,
-                source.Candidates, deadline.Token);
+            try
+            {
+                observed = await reader.ReadAsync(source.Packet.Organization,
+                    source.Packet.Repository, source.Packet.RepositoryId, token,
+                    source.Candidates, deadline.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new GitHubCandidatePolicyException("CandidatePolicyProviderTimeout");
+            }
         }
 
         // A 30-second F-042 fence may expire while provider GETs complete.
