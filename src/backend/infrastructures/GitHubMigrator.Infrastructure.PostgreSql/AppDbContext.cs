@@ -59,6 +59,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<GitSandboxDispatchRecord>();
     public DbSet<GitSandboxDispatchEventRecord> GitSandboxDispatchEvents =>
         Set<GitSandboxDispatchEventRecord>();
+    public DbSet<GitHubRemoteTestGrantRecord> GitHubRemoteTestGrants =>
+        Set<GitHubRemoteTestGrantRecord>();
+    public DbSet<GitHubRemoteTestGrantEventRecord> GitHubRemoteTestGrantEvents =>
+        Set<GitHubRemoteTestGrantEventRecord>();
     public DbSet<GitHubRemoteSandboxFenceRecord> GitHubRemoteSandboxFences =>
         Set<GitHubRemoteSandboxFenceRecord>();
     public DbSet<GitHubRemoteSandboxFenceEventRecord> GitHubRemoteSandboxFenceEvents =>
@@ -506,6 +510,55 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => new { x.DispatchId, x.Id })
                 .HasDatabaseName("ix_git_sandbox_dispatch_events");
+        });
+        builder.Entity<GitHubRemoteTestGrantRecord>(entity =>
+        {
+            entity.ToTable("github_remote_test_grants");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(100);
+            entity.Property(x => x.Repository).HasColumnName("repository").HasMaxLength(100);
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.ScopeId).HasColumnName("scope_id");
+            entity.Property(x => x.AttemptId).HasColumnName("attempt_id");
+            entity.Property(x => x.FenceRequestId).HasColumnName("fence_request_id");
+            entity.Property(x => x.FenceGeneration).HasColumnName("fence_generation");
+            entity.Property(x => x.PacketSha256).HasColumnName("packet_sha256").HasMaxLength(64);
+            entity.Property(x => x.CandidateSetSha256).HasColumnName("candidate_set_sha256").HasMaxLength(64);
+            entity.Property(x => x.OriginalPolicySha256).HasColumnName("original_policy_sha256").HasMaxLength(64);
+            entity.Property(x => x.BaselineSha256).HasColumnName("baseline_sha256").HasMaxLength(64);
+            entity.Property(x => x.PreflightSha256).HasColumnName("preflight_sha256").HasMaxLength(64);
+            entity.Property(x => x.CancellationTokenSha256).HasColumnName("cancellation_token_sha256").HasMaxLength(64);
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(32);
+            entity.Property(x => x.RequestedBy).HasColumnName("requested_by");
+            entity.Property(x => x.ReviewedBy).HasColumnName("reviewed_by");
+            entity.Property(x => x.DeadlineUtc).HasColumnName("deadline_utc");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.ExecutionAuthorized).HasColumnName("execution_authorized");
+            entity.Property(x => x.RemoteWritesPerformed).HasColumnName("remote_writes_performed");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasIndex(x => new { x.FenceRequestId, x.FenceGeneration })
+                .HasDatabaseName("uq_remote_test_grant_fence_epoch").IsUnique();
+            entity.HasOne<GitHubRemoteSandboxFenceRecord>().WithMany()
+                .HasForeignKey(x => x.RepositoryId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubTransferAttemptRecord>().WithMany()
+                .HasForeignKey(x => x.AttemptId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<GitHubRemoteTestGrantEventRecord>(entity =>
+        {
+            entity.ToTable("github_remote_test_grant_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.GrantId).HasColumnName("grant_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(32);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitHubRemoteTestGrantRecord>().WithMany()
+                .HasForeignKey(x => x.GrantId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.GrantId, x.Id })
+                .HasDatabaseName("ix_remote_test_grant_events");
         });
         builder.Entity<GitHubRemoteSandboxFenceRecord>(entity =>
         {
