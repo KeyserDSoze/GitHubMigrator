@@ -87,11 +87,14 @@ public sealed class GitHubCreateOnlyPacketTests
             Assert.Throws<GitHubCreateOnlyPacketException>(() =>
                 (x with { Scope = x.Scope with { ActorId = x.Intent.RequestedBy } })
                     .Build()).Code);
-        Assert.Equal("PacketLineageMismatch",
-            Assert.Throws<GitHubCreateOnlyPacketException>(() =>
-                (x with { Plan = x.Plan with { DestinationConnectionId = Guid.NewGuid() } })
-                    .Build()).Code == "PacketLineageMismatch"
-                    ? "" : ""); // A different verified destination affects the seal, not the lineage.
+        // Connection identity is part of the immutable packet seal:
+        // changing the destination produces different evidence even if
+        // the current view still reports the same repository.
+        var changedDestination = x with {
+            Plan = x.Plan with { DestinationConnectionId = Guid.NewGuid() }
+        };
+        Assert.NotEqual(x.Build().EvidenceSha256,
+            changedDestination.Build().EvidenceSha256);
     }
 
     [Fact]
