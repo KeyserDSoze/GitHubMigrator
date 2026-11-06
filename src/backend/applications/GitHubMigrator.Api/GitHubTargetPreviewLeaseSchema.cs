@@ -56,7 +56,7 @@ public static class GitHubTargetPreviewLeaseSchema
                         AND organization <> '' AND repository <> ''
                         AND length(organization) <= 100
                         AND length(repository) <= 100
-                        AND packet_sha256 ~ '^[0-9a-f]{64}$'
+                        AND packet_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND state IN ('Held','Released','RecoveryRequired')
                         AND ((state = 'Held') = (lease_until_utc IS NOT NULL))
                         AND (lease_until_utc IS NULL OR
@@ -76,7 +76,7 @@ public static class GitHubTargetPreviewLeaseSchema
                     ALTER TABLE github_target_preview_lease_events
                     ADD CONSTRAINT ck_github_target_preview_lease_event_safety CHECK (
                         repository_id > 0 AND generation > 0
-                        AND packet_sha256 ~ '^[0-9a-f]{64}$'
+                        AND packet_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND type IN ('Acquired','Renewed','Released','Quarantined','Recovered')
                     );
                 END IF;
