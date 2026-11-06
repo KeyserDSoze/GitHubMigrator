@@ -1043,8 +1043,16 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                 review.SourceBundleSha256, safePlan, policySnapshot, requester);
             var a = MakeRepo(first);
             var b = MakeRepo(second);
+            // Distinct observation timestamps are expected across real
+            // concurrent HTTP requests. An identical policy must replay
+            // the first SHA-bound intention, not duplicate or overwrite it.
             var concurrent = await Task.WhenAll(
-                a.CreateAsync(draft, default), b.CreateAsync(draft, default));
+                a.CreateAsync(draft, default),
+                b.CreateAsync(draft with {
+                    Policy = policySnapshot with {
+                        ObservedAtUtc = policySnapshot.ObservedAtUtc.AddMilliseconds(-250)
+                    }
+                }, default));
             safeIntentId = concurrent[0].Id;
             Assert.Equal(safeIntentId, concurrent[1].Id);
             Assert.Equal("Pending", concurrent[0].State);
@@ -1055,6 +1063,28 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             Assert.False(concurrent[0].WriteCapabilityVerified);
             Assert.Equal(1, await first.GetRequiredService<AppDbContext>()
                 .GitHubImportIntentEvents.CountAsync(x => x.IntentId == safeIntentId));
+            var neverRead = new F040UnexpectedPolicyReader();
+            var service = new GitHubImportIntentService(
+                first.GetRequiredService<IGitHubImportReadinessStore>(),
+                first.GetRequiredService<IGitTransferWorkpackRepository>(),
+                first.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                first.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                new F039TestOnlyDiskVerifier(),
+                first.GetRequiredService<IIncrementalOperationPlanRepository>(),
+                first.GetRequiredService<IConnectionRepository>(),
+                first.GetRequiredService<IConnectionSecretStore>(),
+                neverRead, a);
+            var replay = await service.CreateAsync(
+                prepId, planId, safeWorkpackId, safeReadinessId,
+                safeReadinessSha, requester, default);
+            Assert.Equal(safeIntentId, replay.Id);
+            Assert.Equal(0, neverRead.Calls);
+            Assert.Equal("ImportIntentConflictingReplay",
+                (await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
+                    service.CreateAsync(prepId, planId, safeWorkpackId,
+                        safeReadinessId, safeReadinessSha, Guid.NewGuid(),
+                        default))).Code);
+
 
             var myself = await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
                 a.DecideAsync(prepId, planId, safeIntentId, requester,
