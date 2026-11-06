@@ -56,7 +56,11 @@ public sealed class LocalGitObjectClosureAuditorTests
         git.Git("--git-dir=" + git.Target, "prune-packed");
         var pack = Assert.Single(Directory.GetFiles(
             Path.Combine(git.Target, "objects", "pack"), "*.pack"));
-        // Destructive byte corruption only in this private target fixture.
+        // Git intentionally stores pack files as read-only. This Linux-only
+        // test explicitly chmods ONLY its private temporary target pack.
+        // The production auditor never modifies or chmods any object.
+        File.SetUnixFileMode(pack,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite);
         File.WriteAllBytes(pack, [1, 2, 3, 4, 5, 6]);
         var ex = await Assert.ThrowsAsync<GitObjectClosureAuditException>(
             () => git.Runner().AuditAsync(request, default));
