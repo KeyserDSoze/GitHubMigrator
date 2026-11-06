@@ -147,6 +147,7 @@ builder.Services.AddSingleton(new GitHubAppWriteCredentialOptions(
     builder.Configuration["GitHubAppWriteCredential:AllowedRepository"] ?? ""));
 builder.Services.AddScoped<IGitHubAppWriteScopeStore, PostgresGitHubAppWriteScopeStore>();
 builder.Services.AddScoped<GitHubAppWriteScopeService>();
+builder.Services.AddScoped<GitHubCreateOnlyPacketService>();
 builder.Services.AddScoped<IGitImportRehearsalRunner>(_ =>
     new GitHubMigrator.Infrastructure.GitObjects.LocalGitImportRehearsalRunner(
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
