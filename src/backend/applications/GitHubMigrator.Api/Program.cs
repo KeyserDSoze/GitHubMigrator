@@ -472,6 +472,7 @@ app.MapConnectionEndpoints();
 app.MapDiscoveryEndpoints();
 app.MapStagingEndpoints();
 app.MapIncrementalPreparationEndpoints();
+app.MapGitHubTargetPreviewLeaseEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
 app.MapMigrationPlanEndpoints();
