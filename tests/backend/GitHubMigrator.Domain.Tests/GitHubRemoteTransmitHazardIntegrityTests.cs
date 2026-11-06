@@ -44,6 +44,12 @@ public sealed class GitHubRemoteTransmitHazardIntegrityTests
         Refuse(e with { Attempt = e.Attempt with {
             PolicySha256 = Sha('e') } });
         Refuse(e with { Fence = e.Fence with {
+            Organization = "different-org" } });
+        Refuse(e with { Fence = e.Fence with {
+            ScopeId = Guid.NewGuid() } });
+        Refuse(e with { Attempt = e.Attempt with {
+            Repository = "different-repository" } });
+        Refuse(e with { Fence = e.Fence with {
             DeadlineUtc = e.Now.AddSeconds(-1) } });
         Refuse(e with { Options = new(false, e.Options.AllowedRepositoryId,
             e.Options.AllowedRepository) }, expected: "RemoteTransmitHazardDisabled");
