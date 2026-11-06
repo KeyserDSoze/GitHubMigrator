@@ -76,6 +76,30 @@ public sealed class LocalGitObjectClosureAuditor(
         finally { Gate.Release(); }
     }
 
+    // F-060: reuse the SAME strict fsck, complete refs, no-alternates,
+    // no-shallow/promisor and bounded sorted-object hashing checks as
+    // F-056, but verify a single newly materialized source mirror.
+    internal static async Task<(int Count, string Digest)> VerifyOneAsync(
+        string root, Guid mirrorId,
+        IReadOnlyList<GitMirrorRef> expected, CancellationToken ct)
+    {
+        if (expected is null || expected.Count == 0)
+            throw new GitObjectClosureAuditException("GitClosureRefOutputInvalid");
+        var canonical = GitMirrorRefReconciler.CanonicalizeObservedRefs(expected);
+        if (!canonical.SequenceEqual(expected))
+            throw new GitObjectClosureAuditException("GitClosureRefsChanged");
+        var format = expected[0].ObjectId.Length == 40 ? "sha1" : "sha256";
+        var path = SafeBarePath(root, mirrorId);
+        await VerifyRepositoryAsync(path, expected, format, ct);
+        var first = await ReachableAsync(path, expected, format, ct);
+        await VerifyRepositoryAsync(path, expected, format, ct);
+        var second = await ReachableAsync(path, expected, format, ct);
+        if (first != second)
+            throw new GitObjectClosureAuditException("GitClosureChangedDuringAudit");
+        CheckBare(path);
+        return first;
+    }
+
     private static string SafeBarePath(string root, Guid id)
     {
         if (string.IsNullOrWhiteSpace(root) || id == Guid.Empty ||
