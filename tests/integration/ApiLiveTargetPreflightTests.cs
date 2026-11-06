@@ -1228,7 +1228,7 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                 services.GetRequiredService<IIncrementalOperationPlanRepository>(),
                 services.GetRequiredService<IGitTransferWorkpackRepository>());
 
-            var now = DateTimeOffset.UtcNow;
+            var rehearsalNow = DateTimeOffset.UtcNow;
             var actor = Guid.NewGuid();
             var candidate = new GitImportRehearsalInput(
                 prepId, planId, safeWorkpackId, safeIntentId,
@@ -1244,7 +1244,7 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                     .SafeRefPlanSha256,
                 new GitImportRehearsalArtifact(
                     "sha1", new string('a',64), 1, 0, 0,
-                    1, new string('b',64), now), actor);
+                    1, new string('b',64), rehearsalNow), actor);
 
             var first = Make(one.ServiceProvider);
             var second = Make(two.ServiceProvider);
@@ -1252,7 +1252,7 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                 first.SaveAsync(candidate, default),
                 second.SaveAsync(candidate with {
                     Artifact = candidate.Artifact with {
-                        CompletedAtUtc = now.AddMilliseconds(-100)
+                        CompletedAtUtc = rehearsalNow.AddMilliseconds(-100)
                     }
                 }, default));
             rehearsalId = together[0].Id;
@@ -1276,10 +1276,10 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             {
                 var sql = "UPDATE git_import_rehearsals SET " + column +
                     " = true WHERE id = @rehearsal";
-                var denied = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                var rehearsalWriteDenial = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
                     db.Database.ExecuteSqlRawAsync(sql,
                         new Npgsql.NpgsqlParameter("rehearsal", rehearsalId)));
-                Assert.Equal("23514", denied.SqlState);
+                Assert.Equal("23514", rehearsalWriteDenial.SqlState);
             }
         }
         using (var readRehearsal = new HttpRequestMessage(HttpMethod.Get,
@@ -1292,12 +1292,12 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             var body = await result.Content.ReadAsStringAsync();
             Assert.DoesNotContain(ApiHarness.TargetToken, body);
             Assert.DoesNotContain(ApiHarness.SourceToken, body);
-            using var json = JsonDocument.Parse(body);
+            using var rehearsalJson = JsonDocument.Parse(body);
             Assert.Equal("sha1",
-                json.RootElement.GetProperty("gitObjectFormat").GetString());
-            Assert.False(json.RootElement.GetProperty("destinationWritesPerformed").GetBoolean());
-            Assert.False(json.RootElement.GetProperty("executionAuthorized").GetBoolean());
-            Assert.False(json.RootElement.GetProperty("readyForExecution").GetBoolean());
+                rehearsalJson.RootElement.GetProperty("gitObjectFormat").GetString());
+            Assert.False(rehearsalJson.RootElement.GetProperty("destinationWritesPerformed").GetBoolean());
+            Assert.False(rehearsalJson.RootElement.GetProperty("executionAuthorized").GetBoolean());
+            Assert.False(rehearsalJson.RootElement.GetProperty("readyForExecution").GetBoolean());
         }
         using (var listRehearsals = new HttpRequestMessage(HttpMethod.Get,
             $"{operationalPath}/{planId}/transfer-workpacks/{safeWorkpackId}/git-rehearsals"))
@@ -1306,9 +1306,9 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                 new AuthenticationHeaderValue("Bearer", admin);
             using var result = await harness.Client.SendAsync(listRehearsals);
             Assert.Equal(HttpStatusCode.OK, result.StatusCode);
-            using var json = JsonDocument.Parse(
+            using var rehearsalJson = JsonDocument.Parse(
                 await result.Content.ReadAsStringAsync());
-            Assert.Single(json.RootElement.EnumerateArray());
+            Assert.Single(rehearsalJson.RootElement.EnumerateArray());
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
