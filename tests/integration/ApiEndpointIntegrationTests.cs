@@ -98,6 +98,9 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             $"/operation-plans/{Guid.NewGuid()}" +
             $"/github-app-scopes/{Guid.NewGuid()}" +
             "/create-only-packet/candidate-policy";
+        var priorPolicyCalls = harness.Calls.Count(x =>
+            x.Url.AbsolutePath.Contains("/rules/branches/", StringComparison.Ordinal) ||
+            x.Url.AbsolutePath.EndsWith("/rulesets", StringComparison.Ordinal));
         async Task<HttpResponseMessage> ReviewAsync(
             string? jwt, string expectedPacketSha)
         {
@@ -133,9 +136,9 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
             await missing.Content.ReadAsStringAsync());
 
         // No provider GET is allowed before server evidence is recovered.
-        Assert.DoesNotContain(harness.Calls, x =>
+        Assert.Equal(priorPolicyCalls, harness.Calls.Count(x =>
             x.Url.AbsolutePath.Contains("/rules/branches/", StringComparison.Ordinal) ||
-            x.Url.AbsolutePath.EndsWith("/rulesets", StringComparison.Ordinal));
+            x.Url.AbsolutePath.EndsWith("/rulesets", StringComparison.Ordinal)));
     }
 
     [Fact]
