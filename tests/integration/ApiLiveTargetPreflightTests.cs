@@ -1312,6 +1312,166 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
+        // F-042 HTTP requires a real, SHA-verified physical Git bundle.
+        // These F-040/F-041 synthetic PostgreSQL fixtures must not be
+        // confused with validated external Git objects.
+        string sealedRehearsalSha;
+        await using (var context = harness.Host.Services.CreateAsyncScope())
+        {
+            var proof = await context.ServiceProvider
+                .GetRequiredService<IGitImportRehearsalStore>()
+                .GetAsync(prepId, planId, rehearsalId, default);
+            Assert.NotNull(proof);
+            sealedRehearsalSha = proof!.EvidenceSha256;
+        }
+        var fencePostPath =
+            $"{operationalPath}/{planId}/git-rehearsals/{rehearsalId}/remote-fences";
+        var fenceRequest = new {
+            expectedRehearsalEvidenceSha256 = sealedRehearsalSha
+        };
+        using (var noAuthFence = await harness.Client.PostAsJsonAsync(
+            fencePostPath, fenceRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, noAuthFence.StatusCode);
+        using (var userFence = await PostAsAsync(
+            fencePostPath, fenceRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userFence.StatusCode);
+        using (var forgedFence = await PostAsAsync(
+            fencePostPath, new {
+                expectedRehearsalEvidenceSha256 = new string('f',64)
+            }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, forgedFence.StatusCode);
+            Assert.Contains("RemoteFenceRehearsalStale",
+                await forgedFence.Content.ReadAsStringAsync());
+        }
+        using (var noPhysicalFence = await PostAsAsync(
+            fencePostPath, fenceRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, noPhysicalFence.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await noPhysicalFence.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // PostgreSQL-only fixture: explicit test verifier isolates the
+        // advisory transaction + immutable SQL safety from the separately
+        // real-Git-tested F-038/F-041 disk layer.
+        Guid fenceId;
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            static PostgresGitHubRemoteRefFenceStore MakeFence(
+                IServiceProvider provider) => new(
+                provider.GetRequiredService<AppDbContext>(),
+                TimeProvider.System,
+                provider.GetRequiredService<IIncrementalOperationPlanRepository>(),
+                provider.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                provider.GetRequiredService<IGitHubTargetRefEvidenceStore>(),
+                provider.GetRequiredService<IGitHubImportIntentStore>(),
+                provider.GetRequiredService<IGitImportRehearsalStore>(),
+                provider.GetRequiredService<IGitHubImportReadinessStore>(),
+                provider.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                new F039TestOnlyDiskVerifier());
+
+            var first = one.ServiceProvider;
+            var db = first.GetRequiredService<AppDbContext>();
+            var plan = await first.GetRequiredService<IIncrementalOperationPlanRepository>()
+                .GetAsync(prepId, planId, default);
+            Assert.NotNull(plan);
+            var intent = await first.GetRequiredService<IGitHubImportIntentStore>()
+                .GetAsync(prepId, planId, safeIntentId, default);
+            Assert.NotNull(intent);
+            var review = await first.GetRequiredService<IGitHubImportReadinessStore>()
+                .GetAsync(prepId, planId, safeReadinessId, default);
+            Assert.NotNull(review);
+            var diff = await first.GetRequiredService<IIncrementalGitRefReconciliationStore>()
+                .PageAsync(prepId, planId, review!.ReconciliationId, null, 1, default);
+            Assert.NotNull(diff);
+            var dest = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == target);
+
+            // The certified F-031 baseline is EMPTY for this F-040
+            // create-candidate. A newly present GitHub main ref is drift.
+            var remoteProof = GitHubRefObservationIntegrity.Seal(
+                "gh-org", "occupied", DateTimeOffset.UtcNow,
+                [new GitHubObservedRef("refs/heads/main", ApiHarness.Sha, "commit")]);
+            var drift = GitHubRemoteRefFenceIntegrity.Compare(
+                [], remoteProof);
+            Assert.Equal("RemoteDriftBlocked", drift.Status);
+            Assert.Equal(1, drift.ChangedRefs);
+            var fenceInput = new GitHubRemoteRefFenceInput(
+                prepId, planId, safeWorkpackId, safeIntentId,
+                rehearsalId, diff!.Reconciliation.TargetObservationId,
+                target, dest.ValidatedAtUtc, planSha,
+                intent!.ReconciliationSha256,
+                intent.BundleSha256, intent.EvidenceSha256,
+                sealedRehearsalSha, review.TargetEvidenceSha256,
+                remoteProof.EvidenceSha256, drift, Guid.NewGuid());
+
+            var a = MakeFence(first);
+            var b = MakeFence(two.ServiceProvider);
+            var both = await Task.WhenAll(
+                a.SaveAsync(fenceInput, default),
+                b.SaveAsync(fenceInput, default));
+            fenceId = both[0].Id;
+            Assert.Equal(fenceId, both[1].Id);
+            Assert.Equal("RemoteDriftBlocked", both[0].Status);
+            Assert.False(both[0].IsCurrent);
+            Assert.False(both[0].RemoteWritesPerformed);
+            Assert.False(both[0].WriteCapabilityVerified);
+            Assert.False(both[0].ExecutionAuthorized);
+            Assert.False(both[0].ReadyForExecution);
+            Assert.Equal(1, await db.GitHubRemoteRefFences.AsNoTracking()
+                .CountAsync(x => x.RehearsalId == rehearsalId));
+
+            var alteredInput = fenceInput with {
+                BundleSha256 = new string('f',64)
+            };
+            Assert.Equal("RemoteFenceLineageChanged",
+                (await Assert.ThrowsAsync<GitHubRemoteRefFenceException>(() =>
+                    a.SaveAsync(alteredInput, default))).Code);
+            foreach (var column in new[] {
+                "remote_writes_performed", "write_capability_verified",
+                "execution_authorized", "ready_for_execution"
+            })
+            {
+                var sql = "UPDATE github_remote_ref_fences SET " + column +
+                    " = true WHERE id = @fenceId";
+                var denial = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlRawAsync(sql,
+                        new Npgsql.NpgsqlParameter("fenceId", fenceId)));
+                Assert.Equal("23514", denial.SqlState);
+            }
+        }
+        using (var readFence = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/remote-fences/{fenceId}"))
+        {
+            readFence.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(readFence);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var fenceBody = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, fenceBody);
+            Assert.DoesNotContain(ApiHarness.SourceToken, fenceBody);
+            using var fenceJson = JsonDocument.Parse(fenceBody);
+            Assert.Equal("RemoteDriftBlocked",
+                fenceJson.RootElement.GetProperty("status").GetString());
+            Assert.False(fenceJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.False(fenceJson.RootElement.GetProperty("remoteWritesPerformed").GetBoolean());
+        }
+        using (var listFence = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/git-rehearsals/{rehearsalId}/remote-fences"))
+        {
+            listFence.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(listFence);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var fenceJson = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(fenceJson.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())
