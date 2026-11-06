@@ -99,7 +99,7 @@ public sealed record GitHubImportIntentView(
     Guid Id, Guid PreparationId, Guid PlanId, Guid WorkpackId,
     Guid ImportReadinessId, string ImportReadinessSha256,
     string ManifestSha256, string ReconciliationSha256, string BundleSha256,
-    string SafeRefPlanSha256, string PolicySha256,
+    string SafeRefPlanSha256, string PolicySha256, string EvidenceSha256,
     int CreateCandidates, int AlreadyMatching, int DivergedBlocked,
     int TargetOnlyPreserved, string RulesetStatus, int RulesetCount,
     int ActiveRulesets, string DefaultBranchProtection,

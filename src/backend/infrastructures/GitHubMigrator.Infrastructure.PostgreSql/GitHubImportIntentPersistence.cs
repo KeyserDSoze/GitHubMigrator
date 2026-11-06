@@ -376,7 +376,7 @@ public sealed class PostgresGitHubImportIntentStore(
         return new(row.Id, row.PreparationId, row.PlanId, row.WorkpackId,
             row.ReadinessId, row.ReadinessSha256, row.ManifestSha256,
             row.ReconciliationSha256, row.BundleSha256,
-            row.SafeRefPlanSha256, row.PolicySha256,
+            row.SafeRefPlanSha256, row.PolicySha256, row.EvidenceSha256,
             row.CreateCandidates, row.AlreadyMatching, row.DivergedBlocked,
             row.TargetOnlyPreserved, row.RulesetStatus, row.RulesetCount,
             row.ActiveRulesets, row.DefaultBranchProtection, row.State,
