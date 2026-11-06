@@ -143,6 +143,105 @@ public sealed class GitHubAppWriteCredentialInspectorTests
         Assert.Equal(2, calls);
     }
 
+    [Theory]
+    [InlineData("root-token")]
+    [InlineData("permission")]
+    [InlineData("repository-id")]
+    [InlineData("owner-login")]
+    [InlineData("nested-owner-data")]
+    public async Task Duplicate_claims_in_mint_response_are_rejected_before_token_use(
+        string alteration)
+    {
+        using var rsa = RSA.Create(2048);
+        var original = MintReply();
+        var altered = alteration switch {
+            "root-token" => original.Replace(
+                "\"token\":", "\"token\":\"conflicting\",\"token\":",
+                StringComparison.Ordinal),
+            "permission" => original.Replace(
+                "\"contents\":", "\"contents\":\"read\",\"contents\":",
+                StringComparison.Ordinal),
+            "repository-id" => original.Replace(
+                "\"id\":2468", "\"id\":9999,\"id\":2468",
+                StringComparison.Ordinal),
+            "owner-login" => original.Replace(
+                "\"login\":\"gh-org\"",
+                "\"login\":\"untrusted\",\"login\":\"gh-org\"",
+                StringComparison.Ordinal),
+            "nested-owner-data" => original.Replace(
+                "\"owner\":{", "\"owner\":{\"extra\":{\"a\":1,\"a\":2},",
+                StringComparison.Ordinal),
+            _ => throw new ArgumentOutOfRangeException(nameof(alteration))
+        };
+        Assert.NotEqual(original, altered);
+        using var parsed = JsonDocument.Parse(altered);
+        Assert.Equal(JsonValueKind.Object, parsed.RootElement.ValueKind);
+        var calls = 0;
+        using var client = new HttpClient(new Handler(req =>
+        {
+            calls++;
+            Assert.Equal(HttpMethod.Post, req.Method);
+            Assert.Equal(1, calls);
+            return Json(201, altered);
+        }));
+
+        var error = await Assert.ThrowsAsync<GitHubAppWriteScopeException>(() =>
+            new GitHubAppScopedWriteCredentialInspector(
+                client, TimeProvider.System).InspectAsync(
+                1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
+                Owner, RepoName, default));
+        Assert.Equal("AppScopeMintNotRestricted", error.Code);
+        Assert.Equal(1, calls);
+    }
+
+    [Theory]
+    [InlineData("archived")]
+    [InlineData("owner-login")]
+    [InlineData("nested-owner-data")]
+    public async Task Duplicate_claims_in_token_bound_repository_GET_are_rejected(
+        string alteration)
+    {
+        using var rsa = RSA.Create(2048);
+        var original = RepoReply();
+        var altered = alteration switch {
+            "archived" => original.Replace(
+                "\"archived\":false", "\"archived\":true,\"archived\":false",
+                StringComparison.Ordinal),
+            "owner-login" => original.Replace(
+                "\"login\":\"gh-org\"",
+                "\"login\":\"untrusted\",\"login\":\"gh-org\"",
+                StringComparison.Ordinal),
+            "nested-owner-data" => original.Replace(
+                "\"owner\":{", "\"owner\":{\"extra\":{\"a\":1,\"a\":2},",
+                StringComparison.Ordinal),
+            _ => throw new ArgumentOutOfRangeException(nameof(alteration))
+        };
+        Assert.NotEqual(original, altered);
+        using var parsed = JsonDocument.Parse(altered);
+        Assert.Equal(JsonValueKind.Object, parsed.RootElement.ValueKind);
+        var calls = 0;
+        using var client = new HttpClient(new Handler(req =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                Assert.Equal(HttpMethod.Post, req.Method);
+                return Json(201, MintReply());
+            }
+            Assert.Equal(2, calls);
+            Assert.Equal(HttpMethod.Get, req.Method);
+            Assert.Equal(AccessToken, req.Headers.Authorization?.Parameter);
+            return Json(200, altered);
+        }));
+        var error = await Assert.ThrowsAsync<GitHubAppWriteScopeException>(() =>
+            new GitHubAppScopedWriteCredentialInspector(
+                client, TimeProvider.System).InspectAsync(
+                1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
+                Owner, RepoName, default));
+        Assert.Equal("AppScopeRepositoryChanged", error.Code);
+        Assert.Equal(2, calls);
+    }
+
     [Fact]
     public async Task Bogus_private_key_fails_without_http_or_secret_exposure()
     {
