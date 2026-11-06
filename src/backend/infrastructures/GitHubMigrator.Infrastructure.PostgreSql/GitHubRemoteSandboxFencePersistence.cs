@@ -58,7 +58,15 @@ public sealed class PostgresGitHubRemoteSandboxFenceStore(
         var deadline = now.Add(GitHubRemoteSandboxFenceIntegrity.ReviewWindow);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(packet.RepositoryId, ct);
-        await QuarantineLockedAsync(packet.RepositoryId, now, ct);
+        if (await QuarantineLockedAsync(packet.RepositoryId, now, ct) != 0)
+        {
+            // The quarantine must COMMIT even when a new request is
+            // rejected; throwing inside an uncommitted transaction would
+            // silently roll back this critical safety transition.
+            await tx.CommitAsync(ct);
+            throw new GitHubRemoteSandboxFenceException(
+                "RemoteFenceAlreadyHeldOrQuarantined");
+        }
         var old = await db.GitHubRemoteSandboxFences.AsNoTracking()
             .SingleOrDefaultAsync(x => x.RepositoryId == packet.RepositoryId, ct);
 
@@ -136,7 +144,12 @@ public sealed class PostgresGitHubRemoteSandboxFenceStore(
         var now = clock.GetUtcNow();
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(input.Packet.RepositoryId, ct);
-        await QuarantineLockedAsync(input.Packet.RepositoryId, now, ct);
+        if (await QuarantineLockedAsync(input.Packet.RepositoryId, now, ct) != 0)
+        {
+            await tx.CommitAsync(ct);
+            throw new GitHubRemoteSandboxFenceException(
+                "RemoteFenceReviewStaleOrSameActor");
+        }
         var row = await db.GitHubRemoteSandboxFences.AsNoTracking()
             .SingleOrDefaultAsync(x => x.RepositoryId == input.Packet.RepositoryId, ct)
             ?? throw new GitHubRemoteSandboxFenceException("RemoteFenceMissing");
@@ -228,8 +241,9 @@ public sealed class PostgresGitHubRemoteSandboxFenceStore(
         if (!options.Enabled) return false;
         var now = clock.GetUtcNow();
         var repoId = await db.GitHubRemoteSandboxFences.AsNoTracking()
-            .Where(x => (x.State == GitHubRemoteSandboxFenceStates.Proposed ||
-                    x.State == GitHubRemoteSandboxFenceStates.ReviewedWriteDisabled) &&
+            .Where(x => x.RepositoryId == options.AllowedRepositoryId &&
+                (x.State == GitHubRemoteSandboxFenceStates.Proposed ||
+                 x.State == GitHubRemoteSandboxFenceStates.ReviewedWriteDisabled) &&
                 x.DeadlineUtc <= now)
             .OrderBy(x => x.DeadlineUtc)
             .Select(x => (long?)x.RepositoryId)
@@ -256,6 +270,8 @@ public sealed class PostgresGitHubRemoteSandboxFenceStore(
         var repoId = freshInput.Packet.RepositoryId;
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(repoId, ct);
+        // Recover is permitted when this same call discovers the expired
+        // row; it must preserve the quarantine even if the actor is invalid.
         await QuarantineLockedAsync(repoId, now, ct);
         var row = await db.GitHubRemoteSandboxFences.AsNoTracking()
             .SingleOrDefaultAsync(x => x.RepositoryId == repoId, ct)
