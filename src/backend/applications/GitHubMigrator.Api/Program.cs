@@ -133,6 +133,8 @@ builder.Services.AddScoped<IGitSourceBundleArtifactVerifier>(_ =>
             GitHubMigrator.Infrastructure.GitObjects.LocalGitBundleArtifactStore.DefaultMaxStorageBytes)));
 builder.Services.AddScoped<IGitHubImportReadinessStore, PostgresGitHubImportReadinessStore>();
 builder.Services.AddScoped<GitHubImportReadinessService>();
+builder.Services.AddScoped<IGitHubImportIntentStore, PostgresGitHubImportIntentStore>();
+builder.Services.AddScoped<GitHubImportIntentService>();
 builder.Services.AddScoped<GitSourceBundleService>();
 builder.Services.AddScoped<IGitTransferWorkpackRepository, PostgresGitTransferWorkpackRepository>();
 builder.Services.AddScoped<GitTransferWorkpackService>();
@@ -150,6 +152,11 @@ builder.Services.AddScoped<BoardReconciliationService>();
 builder.Services.AddHttpClient<GitHubDestinationAccessReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubDestinationAccessReader>(s => s.GetRequiredService<GitHubDestinationAccessReader>());
+builder.Services.AddHttpClient<GitHubImportPolicyReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubImportPolicyReader>(
+    provider => provider.GetRequiredService<GitHubImportPolicyReader>());
 builder.Services.AddHttpClient<GitHubImportRepositoryReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() =>
         new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
@@ -278,6 +285,13 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    // Independently bounded F-040 intent creation/policy reads and human decisions.
+    options.AddFixedWindowLimiter("import-intent", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     // Enqueueing work is cheap; it must not consume the shared external-API
     // budget used by Boards, Pipelines and legacy synchronous discovery.
     options.AddFixedWindowLimiter("discovery-queue", limiter =>
@@ -320,6 +334,7 @@ await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Env
 await GitTransferWorkpackSchema.InitializeAsync(app.Services);
 await GitSourceBundleSchema.InitializeAsync(app.Services);
 await GitHubImportReadinessSchema.InitializeAsync(app.Services);
+await GitHubImportIntentSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));

@@ -922,6 +922,253 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
+        // F-040 positive end-to-end PostgreSQL lineage. Capture a new
+        // *complete empty* GitHub target-ref observation; the proven source
+        // main ref is now a non-destructive CREATE candidate. No HTTP writer.
+        Guid safeIntentId;
+        Guid safeWorkpackId;
+        Guid safeReadinessId;
+        string safeReadinessSha;
+        Guid requester = Guid.NewGuid();
+        await using (var fixture = harness.Host.Services.CreateAsyncScope())
+        {
+            var provider = fixture.ServiceProvider;
+            var db = provider.GetRequiredService<AppDbContext>();
+            var plan = await provider.GetRequiredService<IIncrementalOperationPlanRepository>()
+                .GetAsync(prepId, planId, default);
+            Assert.NotNull(plan);
+            var dest = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == target);
+            var targetEmpty = GitHubRefObservationIntegrity.Seal(
+                "gh-org", "occupied", DateTimeOffset.UtcNow, []);
+            var targetView = await provider.GetRequiredService<IGitHubTargetRefEvidenceStore>()
+                .SaveAsync(plan!, "repo-1", Guid.NewGuid(),
+                    dest.ValidatedAtUtc, targetEmpty, default);
+            Assert.True(targetView.IsCurrent);
+            Assert.Equal(0, targetView.RefCount);
+            var reconciled = await provider
+                .GetRequiredService<IIncrementalGitRefReconciliationStore>()
+                .CreateAsync(prepId, planId, "repo-1", targetView.Id,
+                    planSha, targetView.EvidenceSha256, Guid.NewGuid(), default);
+            Assert.Equal(1, reconciled.CreateCandidateCount);
+            Assert.Equal(0, reconciled.DivergedCount);
+            var work = await provider.GetRequiredService<IGitTransferWorkpackRepository>()
+                .EnqueueAsync(prepId, planId, reconciled.Id, planSha,
+                    reconciled.ReconciliationSha256, Guid.NewGuid(), default);
+            safeWorkpackId = work.Id;
+            var leases = provider.GetRequiredService<IGitTransferWorkpackRepository>();
+            var lease = await leases.ClaimAsync(Guid.NewGuid(),
+                TimeSpan.FromMinutes(2), default);
+            Assert.NotNull(lease);
+            Assert.Equal(work.Id, lease!.Id);
+            Assert.True(await leases.CheckpointEvidenceAsync(lease, default));
+            Assert.True(await leases.BlockAtWriteBarrierAsync(lease, default));
+
+            var storedBundle = await provider.GetRequiredService<IGitSourceBundleEvidenceStore>()
+                .SaveAsync(prepId, planId, work.Id, reconciled.ReconciliationSha256,
+                    new GitSourceBundleArtifact(work.Id,
+                        reconciled.SourceEvidenceSha256,
+                        work.Id.ToString("N") + ".bundle", new string('e',64),
+                        1024, 1, DateTimeOffset.UtcNow), default);
+            Assert.True(storedBundle.IsCurrent);
+
+            var readinessStore = new PostgresGitHubImportReadinessStore(
+                db, TimeProvider.System,
+                provider.GetRequiredService<IGitTransferWorkpackRepository>(),
+                provider.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                new F039TestOnlyDiskVerifier(),
+                provider.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                provider.GetRequiredService<IIncrementalOperationPlanRepository>());
+            var readinessInput = new GitHubImportReadinessInput(
+                prepId, planId, work.Id, reconciled.Id,
+                "repo-1", "occupied", "gh-org", target,
+                dest.ValidatedAtUtc, planSha, reconciled.ReconciliationSha256,
+                targetView.EvidenceSha256, storedBundle.BundleSha256,
+                0, 0, new GitHubImportRepositoryObservation(
+                    "Visible", "ReportedAllowed", false, false,
+                    DateTimeOffset.UtcNow), Guid.NewGuid());
+            var recorded = await readinessStore.SaveAsync(readinessInput, default);
+            Assert.True(recorded.IsCurrent);
+            safeReadinessId = recorded.Id;
+            safeReadinessSha = recorded.EvidenceSha256;
+        }
+
+        // The production API refuses a synthetic DB-only bundle before
+        // opening an external GitHub connection. The separate PG contract
+        // below tests only transactions, actor fencing and DB constraints.
+        var intentPostPath = $"{operationalPath}/{planId}/transfer-workpacks/{safeWorkpackId}/import-readiness/{safeReadinessId}/intents";
+        using (var noAuthIntent = await harness.Client.PostAsJsonAsync(intentPostPath,
+            new { expectedReadinessSha256 = safeReadinessSha }))
+            Assert.Equal(HttpStatusCode.Unauthorized, noAuthIntent.StatusCode);
+        using (var userIntent = await PostAsAsync(intentPostPath,
+            new { expectedReadinessSha256 = safeReadinessSha }, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userIntent.StatusCode);
+        using (var syntheticBundleDenied = await PostAsAsync(intentPostPath,
+            new { expectedReadinessSha256 = safeReadinessSha }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, syntheticBundleDenied.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await syntheticBundleDenied.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        var policySnapshot = new GitHubImportPolicyObservation(
+            "Observed", 1, 1, "ProtectionVisible", DateTimeOffset.UtcNow);
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            var first = one.ServiceProvider;
+            var second = two.ServiceProvider;
+            static PostgresGitHubImportIntentStore MakeRepo(IServiceProvider provider) =>
+                new(
+                    provider.GetRequiredService<AppDbContext>(),
+                    TimeProvider.System,
+                    provider.GetRequiredService<IGitHubImportReadinessStore>(),
+                    provider.GetRequiredService<IGitTransferWorkpackRepository>(),
+                    provider.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                    new F039TestOnlyDiskVerifier(),
+                    provider.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                    provider.GetRequiredService<IIncrementalOperationPlanRepository>());
+            var review = await first.GetRequiredService<IGitHubImportReadinessStore>()
+                .GetAsync(prepId, planId, safeReadinessId, default);
+            Assert.NotNull(review);
+            var safePlan = await GitHubImportIntentService.BuildVerifiedPlanAsync(
+                first.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                prepId, planId, review!.ReconciliationId, review, default);
+            Assert.Equal(1, safePlan.CreateCandidates);
+            Assert.True(safePlan.HasOnlyNonDestructiveCandidates);
+            var draft = new GitHubImportIntentDraft(
+                prepId, planId, safeWorkpackId, safeReadinessId,
+                safeReadinessSha, planSha, review.ReconciliationSha256,
+                review.SourceBundleSha256, safePlan, policySnapshot, requester);
+            var a = MakeRepo(first);
+            var b = MakeRepo(second);
+            // Distinct observation timestamps are expected across real
+            // concurrent HTTP requests. An identical policy must replay
+            // the first SHA-bound intention, not duplicate or overwrite it.
+            var concurrent = await Task.WhenAll(
+                a.CreateAsync(draft, default),
+                b.CreateAsync(draft with {
+                    Policy = policySnapshot with {
+                        ObservedAtUtc = policySnapshot.ObservedAtUtc.AddMilliseconds(-250)
+                    }
+                }, default));
+            safeIntentId = concurrent[0].Id;
+            Assert.Equal(safeIntentId, concurrent[1].Id);
+            Assert.Equal("Pending", concurrent[0].State);
+            Assert.Equal(1, concurrent[0].CreateCandidates);
+            Assert.Equal(0, concurrent[0].DivergedBlocked);
+            Assert.False(concurrent[0].ReadyForExecution);
+            Assert.False(concurrent[0].ExecutionAuthorized);
+            Assert.False(concurrent[0].WriteCapabilityVerified);
+            Assert.Equal(1, await first.GetRequiredService<AppDbContext>()
+                .GitHubImportIntentEvents.CountAsync(x => x.IntentId == safeIntentId));
+            var neverRead = new F040UnexpectedPolicyReader();
+            var service = new GitHubImportIntentService(
+                first.GetRequiredService<IGitHubImportReadinessStore>(),
+                first.GetRequiredService<IGitTransferWorkpackRepository>(),
+                first.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                first.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                new F039TestOnlyDiskVerifier(),
+                first.GetRequiredService<IIncrementalOperationPlanRepository>(),
+                first.GetRequiredService<IConnectionRepository>(),
+                first.GetRequiredService<IConnectionSecretStore>(),
+                neverRead, a);
+            var replay = await service.CreateAsync(
+                prepId, planId, safeWorkpackId, safeReadinessId,
+                safeReadinessSha, requester, default);
+            Assert.Equal(safeIntentId, replay.Id);
+            Assert.Equal(0, neverRead.Calls);
+            Assert.Equal("ImportIntentConflictingReplay",
+                (await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
+                    service.CreateAsync(prepId, planId, safeWorkpackId,
+                        safeReadinessId, safeReadinessSha, Guid.NewGuid(),
+                        default))).Code);
+
+
+            var myself = await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
+                a.DecideAsync(prepId, planId, safeIntentId, requester,
+                    safeReadinessSha, "Acknowledge", default));
+            Assert.Equal("ImportIntentDecisionNotAllowed", myself.Code);
+            var wrongSha = await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
+                a.DecideAsync(prepId, planId, safeIntentId, Guid.NewGuid(),
+                    new string('f', 64), "Acknowledge", default));
+            Assert.Equal("ImportIntentDecisionNotAllowed", wrongSha.Code);
+
+            var reviewer = Guid.NewGuid();
+            var accepted = await b.DecideAsync(prepId, planId, safeIntentId,
+                reviewer, safeReadinessSha, "Acknowledge", default);
+            Assert.Equal("Acknowledged", accepted.State);
+            Assert.Equal(reviewer, accepted.ReviewedBy);
+            Assert.False(accepted.ExecutionAuthorized);
+            Assert.False(accepted.ReadyForExecution);
+            Assert.Equal(new[] { "Requested", "Acknowledged" },
+                (await a.EventsAsync(prepId, planId, safeIntentId, default))
+                .Select(x => x.Kind).ToArray());
+            var duplicate = await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
+                a.DecideAsync(prepId, planId, safeIntentId, Guid.NewGuid(),
+                    safeReadinessSha, "Acknowledge", default));
+            Assert.Equal("ImportIntentDecisionNotAllowed", duplicate.Code);
+
+            var db = first.GetRequiredService<AppDbContext>();
+            foreach (var column in new[] {
+                "write_capability_verified", "execution_authorized", "ready_for_execution"
+            })
+            {
+                var sql = "UPDATE github_import_intents SET " + column +
+                    " = true WHERE id = @intentId";
+                var denial = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlRawAsync(sql,
+                        new Npgsql.NpgsqlParameter("intentId", safeIntentId)));
+                Assert.Equal("23514", denial.SqlState);
+            }
+        }
+
+        using (var readIntent = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/import-intents/{safeIntentId}"))
+        {
+            readIntent.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(readIntent);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            using var intentJson = JsonDocument.Parse(body);
+            Assert.Equal("Acknowledged",
+                intentJson.RootElement.GetProperty("state").GetString());
+            Assert.False(intentJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.False(intentJson.RootElement.GetProperty("executionAuthorized").GetBoolean());
+        }
+        var decisionPath = $"{operationalPath}/{planId}/import-intents/{safeIntentId}/decision";
+        using (var untrustedDecision = await harness.Client.PostAsJsonAsync(
+            decisionPath, new {
+                expectedReadinessSha256 = safeReadinessSha,
+                decision = "Acknowledge",
+                acknowledgementText = "I UNDERSTAND THIS DOES NOT AUTHORIZE A GITHUB PUSH"
+            }))
+            Assert.Equal(HttpStatusCode.Unauthorized, untrustedDecision.StatusCode);
+        using (var noSuperadmin = await PostAsAsync(decisionPath, new {
+            expectedReadinessSha256 = safeReadinessSha,
+            decision = "Acknowledge",
+            acknowledgementText = "I UNDERSTAND THIS DOES NOT AUTHORIZE A GITHUB PUSH"
+        }, admin))
+            Assert.Equal(HttpStatusCode.Forbidden, noSuperadmin.StatusCode);
+        var superadmin = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        using (var authorizedReviewer = await PostAsAsync(decisionPath, new {
+            expectedReadinessSha256 = safeReadinessSha,
+            decision = "Acknowledge",
+            acknowledgementText = "I UNDERSTAND THIS DOES NOT AUTHORIZE A GITHUB PUSH"
+        }, superadmin))
+        {
+            // Superadmin passes RBAC, but the second decision is refused by
+            // the one-shot PostgreSQL state machine after first acknowledgment.
+            Assert.Equal(HttpStatusCode.Conflict, authorizedReviewer.StatusCode);
+            Assert.Contains("ImportIntentDecisionNotAllowed",
+                await authorizedReviewer.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())

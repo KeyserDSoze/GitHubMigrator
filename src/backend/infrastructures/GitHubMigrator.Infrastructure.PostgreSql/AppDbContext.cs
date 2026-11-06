@@ -55,6 +55,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<AzureGitFetchJobRecord>();
     public DbSet<AzureGitFetchJobEventRecord> AzureGitFetchJobEvents =>
         Set<AzureGitFetchJobEventRecord>();
+    public DbSet<GitHubImportIntentRecord> GitHubImportIntents => Set<GitHubImportIntentRecord>();
+    public DbSet<GitHubImportIntentEventRecord> GitHubImportIntentEvents =>
+        Set<GitHubImportIntentEventRecord>();
     public DbSet<GitHubImportReadinessRecord> GitHubImportReadiness =>
         Set<GitHubImportReadinessRecord>();
     public DbSet<GitSourceBundleEvidenceRecord> GitSourceBundleEvidence =>
@@ -434,6 +437,64 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => new { x.JobId, x.Id })
                 .HasDatabaseName("ix_azure_git_fetch_events");
+        });
+        builder.Entity<GitHubImportIntentRecord>(entity =>
+        {
+            entity.ToTable("github_import_intents");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.ReadinessId).HasColumnName("readiness_id");
+            entity.Property(x => x.ReadinessSha256).HasColumnName("readiness_sha256").HasMaxLength(64);
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReconciliationSha256).HasColumnName("reconciliation_sha256").HasMaxLength(64);
+            entity.Property(x => x.BundleSha256).HasColumnName("bundle_sha256").HasMaxLength(64);
+            entity.Property(x => x.SafeRefPlanSha256).HasColumnName("safe_ref_plan_sha256").HasMaxLength(64);
+            entity.Property(x => x.PolicySha256).HasColumnName("policy_sha256").HasMaxLength(64);
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.CreateCandidates).HasColumnName("create_candidates");
+            entity.Property(x => x.AlreadyMatching).HasColumnName("already_matching");
+            entity.Property(x => x.DivergedBlocked).HasColumnName("diverged_blocked");
+            entity.Property(x => x.TargetOnlyPreserved).HasColumnName("target_only_preserved");
+            entity.Property(x => x.RulesetStatus).HasColumnName("ruleset_status").HasMaxLength(24);
+            entity.Property(x => x.RulesetCount).HasColumnName("ruleset_count");
+            entity.Property(x => x.ActiveRulesets).HasColumnName("active_rulesets");
+            entity.Property(x => x.DefaultBranchProtection).HasColumnName("default_branch_protection").HasMaxLength(32);
+            entity.Property(x => x.PolicyObservedAtUtc).HasColumnName("policy_observed_at_utc");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(16);
+            entity.Property(x => x.RequestedBy).HasColumnName("requested_by");
+            entity.Property(x => x.ReviewedBy).HasColumnName("reviewed_by");
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.ExpiresAtUtc).HasColumnName("expires_at_utc");
+            entity.Property(x => x.ReviewedAtUtc).HasColumnName("reviewed_at_utc");
+            entity.Property(x => x.WriteCapabilityVerified).HasColumnName("write_capability_verified");
+            entity.Property(x => x.ExecutionAuthorized).HasColumnName("execution_authorized");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<GitHubImportReadinessRecord>().WithOne()
+                .HasForeignKey<GitHubImportIntentRecord>(x => x.ReadinessId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.ReadinessId).IsUnique()
+                .HasDatabaseName("ux_github_import_intent_readiness");
+            entity.HasIndex(x => new { x.PlanId, x.CreatedAtUtc, x.Id })
+                .HasDatabaseName("ix_github_import_intent_plan");
+            entity.HasIndex(x => new { x.WorkpackId, x.CreatedAtUtc, x.Id })
+                .HasDatabaseName("ix_github_import_intent_workpack");
+        });
+        builder.Entity<GitHubImportIntentEventRecord>(entity =>
+        {
+            entity.ToTable("github_import_intent_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.IntentId).HasColumnName("intent_id");
+            entity.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(20);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitHubImportIntentRecord>().WithMany()
+                .HasForeignKey(x => x.IntentId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.IntentId, x.Id })
+                .HasDatabaseName("ix_github_import_intent_events");
         });
         builder.Entity<GitHubImportReadinessRecord>(entity =>
         {
