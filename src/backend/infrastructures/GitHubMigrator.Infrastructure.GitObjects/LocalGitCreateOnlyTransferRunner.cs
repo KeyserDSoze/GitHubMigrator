@@ -47,8 +47,9 @@ public sealed class LocalGitCreateOnlyTransferRunner(
                     throw new LocalGitCreateOnlyTransferException(
                         "SandboxScratchCreationFailed");
                 await AssertBareAndFormatAsync(paths.Destination,
+                    working,
                     request.SourceRefs[0].ObjectId.Length == 40 ? "sha1" : "sha256",
-                    working, ct);
+                    ct);
                 var source = Path.Combine(working, "source.git");
                 var bundleFile = Path.Combine(verifier.Root,
                     request.Bundle.BundleFileName);
@@ -155,8 +156,9 @@ public sealed class LocalGitCreateOnlyTransferRunner(
             await using var targetLock = await LockTargetAsync(paths.Lock, ct);
             paths = PathsFor(request.SandboxId);
             await AssertBareAndFormatAsync(paths.Destination,
+                paths.Scratch,
                 request.SourceRefs[0].ObjectId.Length == 40 ? "sha1" : "sha256",
-                paths.Scratch, ct);
+                ct);
             var actual = await ReadRefsAsync(
                 paths.Destination, paths.Scratch, ct);
             return LocalGitCreateOnlyTransferIntegrity.Inspect(request, actual);
@@ -306,10 +308,7 @@ public sealed class LocalGitCreateOnlyTransferRunner(
             FileName = "/usr/bin/git",
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardError = true, RedirectStandardOutput = true,
-            // Every Git path argument is an independently derived ABSOLUTE
-            // path. A constant cwd avoids dependence on ephemeral scratch
-            // path lookup at subprocess creation.
-            WorkingDirectory = "/"
+            WorkingDirectory = work
         };
         process.StartInfo.Environment.Clear();
         process.StartInfo.Environment["PATH"] = "/usr/bin:/bin";
@@ -329,17 +328,15 @@ public sealed class LocalGitCreateOnlyTransferRunner(
         // Fail early with fixed, non-sensitive diagnostic codes.
         if (!File.Exists("/usr/bin/git"))
             throw new LocalGitCreateOnlyTransferException("SandboxGitBinaryMissing");
-        if (!Path.IsPathFullyQualified(work))
-            throw new LocalGitCreateOnlyTransferException("SandboxGitWorkdirInvalid");
+        if (!Directory.Exists(work))
+            throw new LocalGitCreateOnlyTransferException("SandboxGitWorkdirMissing");
         var started = false;
-        var stage = "Launch";
         try
         {
             if (!process.Start())
                 throw new LocalGitCreateOnlyTransferException(
                     "SandboxGitUnavailable");
             started = true;
-            stage = "Wait";
             var stdout = ReadBoundedAsync(process.StandardOutput, deadline.Token);
             var stderr = ReadBoundedAsync(process.StandardError, deadline.Token);
             await process.WaitForExitAsync(deadline.Token);
@@ -352,13 +349,8 @@ public sealed class LocalGitCreateOnlyTransferRunner(
         }
         catch (OperationCanceledException) when (!external.IsCancellationRequested)
         { throw new LocalGitCreateOnlyTransferException("SandboxGitDeadline"); }
-        catch (System.ComponentModel.Win32Exception ex)
-        {
-            // Numeric errno is safe diagnostic evidence: never include
-            // executable paths, raw process arguments or stderr.
-            throw new LocalGitCreateOnlyTransferException(
-                "SandboxGitUnavailable" + stage + ex.NativeErrorCode);
-        }
+        catch (System.ComponentModel.Win32Exception)
+        { throw new LocalGitCreateOnlyTransferException("SandboxGitUnavailable"); }
         finally
         {
             if (started && !process.HasExited)
