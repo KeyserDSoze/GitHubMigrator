@@ -281,8 +281,14 @@ public sealed class PostgresGitHubRemoteSandboxFenceStore(
             row.RequestId != expectedOldRequestId ||
             freshInput.ActorId == row.RequestedBy ||
             freshInput.ActorId == row.ReviewedBy)
+        {
+            // If this recovery call was also the first to discover an
+            // expired fence, persist its quarantine even when the recovery
+            // actor is ineligible. An exception must not roll it back.
+            await tx.CommitAsync(ct);
             throw new GitHubRemoteSandboxFenceException(
                 "RemoteFenceRecoveryMustBeIndependent");
+        }
 
         // F-050 has *no* transport. This explicit operator attestation can
         // clear only an F-050 no-write fence, never a future send attempt.
