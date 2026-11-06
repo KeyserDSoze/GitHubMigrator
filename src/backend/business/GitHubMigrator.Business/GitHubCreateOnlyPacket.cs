@@ -149,6 +149,8 @@ public static class GitHubCreateOnlyPacketIntegrity
         // inside F-041's disposable local bare destination.
         var sourceRefs = refs.Where(x => x.SourceObjectId is not null)
             .Select(x => new GitMirrorRef(x.Name, x.SourceObjectId!)).ToArray();
+        var targetRefs = refs.Where(x => x.TargetObjectId is not null)
+            .Select(x => new GitMirrorRef(x.Name, x.TargetObjectId!)).ToArray();
         var creates = refs.Where(x => x.Disposition ==
             GitMirrorRefDisposition.CreateCandidate)
             .Select(x => new GitMirrorRef(x.Name, x.SourceObjectId!)).ToArray();
@@ -156,10 +158,13 @@ public static class GitHubCreateOnlyPacketIntegrity
         {
             if (!GitMirrorRefReconciler.CanonicalizeObservedRefs(sourceRefs)
                     .SequenceEqual(sourceRefs) ||
+                !GitMirrorRefReconciler.CanonicalizeObservedRefs(targetRefs)
+                    .SequenceEqual(targetRefs) ||
                 !GitMirrorRefReconciler.CanonicalizeObservedRefs(creates)
                     .SequenceEqual(creates) ||
-                sourceRefs.Count() != bundle.RefCount ||
-                sourceRefs.Select(x => x.ObjectId.Length).Distinct().Count() != 1)
+                sourceRefs.Length != bundle.RefCount ||
+                sourceRefs.Concat(targetRefs).Select(x => x.ObjectId.Length)
+                    .Distinct().Count() != 1)
                 throw new GitHubCreateOnlyPacketException("PacketRefSetInvalid");
         }
         catch (GitMirrorRefReconciliationException)
