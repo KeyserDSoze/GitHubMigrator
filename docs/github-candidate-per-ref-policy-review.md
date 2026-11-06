@@ -25,7 +25,7 @@ from the complete PostgreSQL reconciliation and re-hashed physical Git
 bundle. For safety this initial online probe is bounded to **1–16 CREATE
 candidates**; larger workpacks fail with
 \`CandidatePolicyOnlineBudgetExceeded\` instead of exhausting GitHub API
-requests. A separate 4/minute server limiter also protects the provider.
+requests. A separate 6/minute server limiter also protects the provider.
 
 ## What is checked
 
