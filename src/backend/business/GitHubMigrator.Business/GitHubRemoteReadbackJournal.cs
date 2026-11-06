@@ -20,7 +20,7 @@ public sealed class GitHubRemoteReadbackException(string code)
 
 public sealed record GitHubRemoteReadbackEvidence(
     Guid GrantId, long RepositoryId, Guid ObserverId,
-    IReadOnlyList<GitMirrorRef> Baseline,
+    IReadOnlyList<GitHubObservedRef> Baseline,
     IReadOnlyList<GitMirrorRef> CreateCandidates,
     GitHubRemoteTipSnapshot Snapshot);
 
@@ -81,17 +81,27 @@ public static class GitHubRemoteReadbackIntegrity
         IReadOnlyList<GitMirrorRef> creates;
         try
         {
-            baseline = GitMirrorRefReconciler.CanonicalizeObservedRefs(
-                evidence.Baseline);
-            creates = GitHubRemoteTipIntegrity.CanonicalCandidates(
-                evidence.CreateCandidates);
-            if (!baseline.SequenceEqual(evidence.Baseline))
+            // Preserve annotated tag *object types* from the original full
+            // F-051 baseline, rather than guessing that tags are commits.
+            var canonicalBaseline = GitHubRefObservationIntegrity.Seal(
+                remote.Organization, remote.Repository,
+                remote.ObservedAtUtc, evidence.Baseline);
+            if (!canonicalBaseline.Refs.SequenceEqual(evidence.Baseline))
                 throw new GitHubRemoteReadbackException(
                     "RemoteReadbackInputInvalid");
+            baseline = GitMirrorRefReconciler.CanonicalizeObservedRefs(
+                evidence.Baseline.Select(x =>
+                    new GitMirrorRef(x.Name, x.ObjectId)).ToArray());
+            creates = GitHubRemoteTipIntegrity.CanonicalCandidates(
+                evidence.CreateCandidates);
             assessment = GitHubRemoteTipIntegrity.Inspect(
                 baseline, creates, remote, tip);
         }
         catch (GitMirrorRefReconciliationException)
+        {
+            throw new GitHubRemoteReadbackException("RemoteReadbackInputInvalid");
+        }
+        catch (GitHubRefObservationException)
         {
             throw new GitHubRemoteReadbackException("RemoteReadbackInputInvalid");
         }
@@ -105,14 +115,7 @@ public static class GitHubRemoteReadbackIntegrity
         }
 
         var baselineSha = GitHubRemoteRefFenceIntegrity.Fingerprint(
-            baseline.Select(x => new GitHubObservedRef(x.Name,
-                x.ObjectId, "commit")).ToArray());
-        // Fingerprint() is a ref/oid fingerprint. For tag baseline refs, the
-        // caller must supply the original exact F-051 SHA via stored grant;
-        // without a known object-type the baseline cannot be reconstructed.
-        // The record is still never actionable, but refuse inferred types.
-        if (baseline.Any(x => x.Name.StartsWith("refs/tags/", StringComparison.Ordinal)))
-            throw new GitHubRemoteReadbackException("RemoteReadbackBaselineTypeUnknown");
+            evidence.Baseline);
 
         var candidatesSha = GitImportRehearsalIntegrity.SealRefs(
             "f044-create-only-candidate-refs-v1", creates);
