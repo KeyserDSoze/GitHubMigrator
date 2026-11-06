@@ -46,15 +46,15 @@ public sealed class GitHubRemoteAppPreflightReaderTests
             Assert.Equal(HttpMethod.Get, req.Method);
             Assert.Equal(Token, req.Headers.Authorization?.Parameter);
             if (path.EndsWith("/git/matching-refs/heads", StringComparison.Ordinal))
-                return Reply(200, $$"""
-                    [{"ref":"refs/heads/main",
-                      "object":{"sha":"{{MainOid}}","type":"commit"}}]
-                    """);
+                return Reply(200, JsonSerializer.Serialize(new[] {
+                    new { @ref = "refs/heads/main", @object =
+                        new { sha = MainOid, type = "commit" } }
+                }));
             if (path.EndsWith("/git/matching-refs/tags", StringComparison.Ordinal))
-                return Reply(200, $$"""
-                    [{"ref":"refs/tags/v1",
-                      "object":{"sha":"{{AnnotatedTagOid}}","type":"tag"}}]
-                    """);
+                return Reply(200, JsonSerializer.Serialize(new[] {
+                    new { @ref = "refs/tags/v1", @object =
+                        new { sha = AnnotatedTagOid, type = "tag" } }
+                }));
             if (path.EndsWith("/rulesets", StringComparison.Ordinal))
                 return Reply(200, "[]");
             if (path.Contains("/rules/branches/", StringComparison.Ordinal))
