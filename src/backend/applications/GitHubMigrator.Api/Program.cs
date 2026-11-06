@@ -115,6 +115,12 @@ builder.Services.AddScoped<IAzureGitMirrorFetcher>(_ =>
             ? builder.Configuration["GitSourceBundles:SourceRoot"] ?? ""
             : ""));
 builder.Services.AddScoped<AzureGitSourceAcquisitionService>();
+builder.Services.AddScoped<IAzureGitSourceAcquisition>(provider =>
+    provider.GetRequiredService<AzureGitSourceAcquisitionService>());
+builder.Services.AddScoped<IAzureGitFetchJobRepository, PostgresAzureGitFetchJobRepository>();
+builder.Services.AddScoped<AzureGitFetchJobService>();
+builder.Services.AddScoped<AzureGitFetchJobProcessor>();
+builder.Services.AddHostedService<AzureGitFetchBackgroundWorker>();
 builder.Services.AddScoped<GitSourceBundleService>();
 builder.Services.AddScoped<IGitTransferWorkpackRepository, PostgresGitTransferWorkpackRepository>();
 builder.Services.AddScoped<GitTransferWorkpackService>();
@@ -288,6 +294,7 @@ app.UseAuthorization();
 await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Environment, app.Logger);
 await GitTransferWorkpackSchema.InitializeAsync(app.Services);
 await GitSourceBundleSchema.InitializeAsync(app.Services);
+await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
 app.MapGet("/api/ready", async Task<IResult> (AppDbContext db, CancellationToken ct) =>

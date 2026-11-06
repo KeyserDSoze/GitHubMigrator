@@ -19,6 +19,15 @@ public interface IAzureGitSourceLocationResolver
         CancellationToken ct);
 }
 
+public interface IAzureGitSourceAcquisition
+{
+    Task FetchMirrorAsync(Guid preparationId, Guid planId, Guid workpackId,
+        string expectedReconciliationSha256, CancellationToken ct);
+    Task<GitSourceBundleView> BundleVerifiedMirrorAsync(
+        Guid preparationId, Guid planId, Guid workpackId,
+        string expectedReconciliationSha256, CancellationToken ct);
+}
+
 public interface IAzureGitMirrorFetcher
 {
     Task FetchAsync(AzureGitMirrorFetchRequest request, CancellationToken ct);
@@ -37,8 +46,24 @@ public sealed class AzureGitSourceAcquisitionService(
     IIncrementalGitRefReconciliationStore reconciliations,
     IVerifiedSourceGitRefReader refs,
     GitSourceBundleService bundles)
+    : IAzureGitSourceAcquisition
 {
     public async Task<GitSourceBundleView> FetchAndBundleAsync(
+        Guid preparationId, Guid planId, Guid workpackId,
+        string expectedReconciliationSha256, CancellationToken ct)
+    {
+        var existing = await GetExistingAsync(
+            preparationId, planId, workpackId, expectedReconciliationSha256, ct);
+        if (existing is not null) return existing;
+        await FetchMirrorAsync(preparationId, planId, workpackId,
+            expectedReconciliationSha256, ct);
+        return await BundleVerifiedMirrorAsync(
+            preparationId, planId, workpackId, expectedReconciliationSha256, ct);
+    }
+
+    // F-037: durable worker checkpoints ONLY after the full mirror is
+    // re-verified; an interrupted fetch leaves no successful DB event.
+    public async Task FetchMirrorAsync(
         Guid preparationId, Guid planId, Guid workpackId,
         string expectedReconciliationSha256, CancellationToken ct)
     {
@@ -75,8 +100,8 @@ public sealed class AzureGitSourceAcquisitionService(
             source.SourceEvidenceSha256 != comparison.Reconciliation.SourceEvidenceSha256)
             throw new GitSourceBundleException("BundleSourceEvidenceMismatch");
 
-        // Replayed requests never re-fetch or replace a finalized bundle.
-        // The existing evidence reader verifies its DB provenance.
+        // A previously finalized bundle makes the remote fetch unnecessary.
+        // The queued worker will still re-verify its DB proof.
         var prior = await bundles.GetAsync(preparationId, planId, workpackId, ct);
         if (prior is not null)
         {
@@ -84,7 +109,7 @@ public sealed class AzureGitSourceAcquisitionService(
                 prior.SourceEvidenceSha256 != source.SourceEvidenceSha256 ||
                 prior.ReconciliationSha256 != expectedReconciliationSha256)
                 throw new GitSourceBundleException("BundleProofMismatch");
-            return prior;
+            return;
         }
 
         var location = await locations.ResolveAsync(plan.SnapshotId,
@@ -106,11 +131,28 @@ public sealed class AzureGitSourceAcquisitionService(
         // environment. Never persist it or include it in exception messages.
         await fetcher.FetchAsync(new(location, token, source.Refs), ct);
 
-        // F-035 independently validates actual refs, full Git object graph,
-        // bundle SHA and current proofs again under the PostgreSQL lock.
-        return await bundles.AcquireAsync(
-            preparationId, planId, workpackId,
+        // The F-036 adapter already atomically promotes only exact-ref and
+        // fsck-validated mirrors; F-037 records a separate leased checkpoint.
+    }
+
+    public Task<GitSourceBundleView> BundleVerifiedMirrorAsync(
+        Guid preparationId, Guid planId, Guid workpackId,
+        string expectedReconciliationSha256, CancellationToken ct) =>
+        bundles.AcquireAsync(preparationId, planId, workpackId,
             expectedReconciliationSha256, ct);
+
+    public async Task<GitSourceBundleView?> GetExistingAsync(
+        Guid preparationId, Guid planId, Guid workpackId,
+        string expectedReconciliationSha256, CancellationToken ct)
+    {
+        if (!ValidSha(expectedReconciliationSha256))
+            throw new GitSourceBundleException("InvalidBundleRequest");
+        var prior = await bundles.GetAsync(preparationId, planId, workpackId, ct);
+        if (prior is not null &&
+            (!prior.IsCurrent ||
+             prior.ReconciliationSha256 != expectedReconciliationSha256))
+            throw new GitSourceBundleException("BundleProofMismatch");
+        return prior;
     }
 
     private static bool ValidSha(string? sha) => sha is { Length: 64 } &&

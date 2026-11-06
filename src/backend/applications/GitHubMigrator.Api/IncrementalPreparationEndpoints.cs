@@ -504,8 +504,13 @@ public static class IncrementalPreparationEndpoints
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/source-bundle/fetch-azure",
             async Task<IResult> (Guid id, Guid planId, Guid workpackId,
                 CreateGitSourceBundleRequest request,
-                AzureGitSourceAcquisitionService acquisitions, CancellationToken ct) =>
+                AzureGitSourceAcquisitionService acquisitions,
+                IConfiguration config, CancellationToken ct) =>
             {
+                // When durable acquisition is enabled, no synchronous fetch
+                // may bypass the leased worker or its global concurrency cap.
+                if (config.GetValue("AzureGitQueue:Enabled", false))
+                    return Results.Conflict(new { error = "UseAzureGitAcquisitionQueue" });
                 try
                 {
                     var result = await acquisitions.FetchAndBundleAsync(
@@ -530,6 +535,99 @@ public static class IncrementalPreparationEndpoints
                 catch (IncrementalTargetPreflightException ex)
                 { return Results.Conflict(new { error = ex.Code }); }
             }).RequireRateLimiting("incremental-review");
+
+        // F-037: enqueue instead of performing remote network I/O on the
+        // HTTP request thread. One immutable queued source job per workpack.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/source-acquisitions",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                CreateGitSourceBundleRequest request, ClaimsPrincipal principal,
+                IConfiguration config, AzureGitFetchJobService service,
+                CancellationToken ct) =>
+            {
+                if (!config.GetValue("Jobs:Enabled", true) ||
+                    !config.GetValue("GitSourceBundles:Enabled", false) ||
+                    !config.GetValue("AzureGitFetch:Enabled", false) ||
+                    !config.GetValue("AzureGitQueue:Enabled", false))
+                    return Results.Conflict(new { error = "AzureGitQueueDisabled" });
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor)) return Results.Unauthorized();
+                try
+                {
+                    var job = await service.EnqueueAsync(id, planId, workpackId,
+                        request.ExpectedReconciliationSha256 ?? "", actor, ct);
+                    return Results.Accepted(
+                        $"/api/incremental-preparations/{id}/operation-plans/{planId}/source-acquisitions/{job.Id}",
+                        job);
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "AzureGitAcquisitionDependencyNotFound" }); }
+                catch (AzureGitFetchJobException ex)
+                { return AzureGitQueueError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("incremental-review");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/source-acquisitions",
+            async Task<IResult> (Guid id, Guid planId,
+                AzureGitFetchJobService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.ListAsync(id, planId, ct)); }
+                catch (AzureGitFetchJobException ex) { return AzureGitQueueError(ex); }
+                catch (GitTransferWorkpackException ex) { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex) { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex) { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/source-acquisitions/{jobId:guid}",
+            async Task<IResult> (Guid id, Guid planId, Guid jobId,
+                AzureGitFetchJobService service, CancellationToken ct) =>
+            {
+                try
+                {
+                    var job = await service.GetAsync(id, planId, jobId, ct);
+                    return job is null ? Results.NotFound(new { error = "AzureGitFetchJobNotFound" })
+                        : Results.Ok(job);
+                }
+                catch (AzureGitFetchJobException ex) { return AzureGitQueueError(ex); }
+                catch (GitTransferWorkpackException ex) { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex) { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex) { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/source-acquisitions/{jobId:guid}/events",
+            async Task<IResult> (Guid id, Guid planId, Guid jobId,
+                AzureGitFetchJobService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.EventsAsync(id, planId, jobId, ct)); }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "AzureGitFetchJobNotFound" }); }
+                catch (AzureGitFetchJobException ex) { return AzureGitQueueError(ex); }
+                catch (GitTransferWorkpackException ex) { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex) { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex) { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
 
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/execution-authorization",
             async Task<IResult> (Guid id, Guid planId,
@@ -589,6 +687,11 @@ public static class IncrementalPreparationEndpoints
             return Results.Ok(await service.EventsAsync(id, ct));
         });
     }
+
+    private static IResult AzureGitQueueError(AzureGitFetchJobException ex) =>
+        ex.Code == "InvalidAzureGitFetchJobRequest"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
 
     private static IResult BundleError(GitSourceBundleException ex) =>
         ex.Code is "InvalidBundleRequest" or "InvalidBundleRefs"

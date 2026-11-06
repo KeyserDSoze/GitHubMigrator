@@ -672,6 +672,127 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
+        // F-037: the new HTTP entrypoint only queues authenticated source
+        // reads. Its default off state must prevent all Git subprocesses.
+        var acquisitionPath =
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}/source-acquisitions";
+        using (var unauthQueue = await harness.Client.PostAsJsonAsync(
+            acquisitionPath, new { expectedReconciliationSha256 = reconciliationSha }))
+            Assert.Equal(HttpStatusCode.Unauthorized, unauthQueue.StatusCode);
+        using (var userQueue = await PostAsAsync(acquisitionPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userQueue.StatusCode);
+        using (var disabledQueue = await PostAsAsync(acquisitionPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, disabledQueue.StatusCode);
+            Assert.Contains("AzureGitQueueDisabled",
+                await disabledQueue.Content.ReadAsStringAsync());
+        }
+
+        // Direct PostgreSQL tests exercise the same validated store as the
+        // production admin endpoint. No Azure PAT or GitHub write is needed.
+        Guid sourceJobId;
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            var a = one.ServiceProvider.GetRequiredService<IAzureGitFetchJobRepository>();
+            var b = two.ServiceProvider.GetRequiredService<IAzureGitFetchJobRepository>();
+            var jobs = await Task.WhenAll(
+                a.EnqueueAsync(prepId, planId, workId, reconciliationSha,
+                    Guid.NewGuid(), default),
+                b.EnqueueAsync(prepId, planId, workId, reconciliationSha,
+                    Guid.NewGuid(), default));
+            Assert.Equal(jobs[0].Id, jobs[1].Id);
+            sourceJobId = jobs[0].Id;
+            Assert.Equal("Queued", jobs[0].State);
+            Assert.False(jobs[0].ReadyForExecution);
+            var wrong = await Assert.ThrowsAsync<AzureGitFetchJobException>(() =>
+                a.EnqueueAsync(prepId, planId, workId,
+                    new string('f', 64), Guid.NewGuid(), default));
+            Assert.Equal("AzureGitFetchProofNotCurrent", wrong.Code);
+
+            var leases = await Task.WhenAll(
+                a.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default),
+                b.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default));
+            var first = Assert.Single(leases, x => x is not null)!;
+            Assert.Equal(1, first.Attempt);
+            Assert.Equal("Pending", first.Phase);
+            Assert.True(await a.MirrorVerifiedAsync(first, default));
+            Assert.False(await a.MirrorVerifiedAsync(first, default));
+
+            // Crash after PostgreSQL's MirrorVerified event. Another worker
+            // resumes at the *bundle* phase, never re-fetching Azure data.
+            var db = one.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.AzureGitFetchJobs.Where(x => x.Id == sourceJobId)
+                .ExecuteUpdateAsync(update => update.SetProperty(
+                    x => x.LeaseUntilUtc, DateTimeOffset.UtcNow.AddMinutes(-1)));
+            var recoveredLease = await b.ClaimAsync(
+                Guid.NewGuid(), TimeSpan.FromMinutes(5), default);
+            Assert.NotNull(recoveredLease);
+            Assert.Equal(2, recoveredLease!.Attempt);
+            Assert.Equal("MirrorVerified", recoveredLease.Phase);
+            Assert.False(await a.BundleVerifiedAsync(
+                first, new string('d', 64), default));
+            Assert.True(await b.BundleVerifiedAsync(
+                recoveredLease, new string('d', 64), default));
+            Assert.False(await a.FailAsync(
+                first, "AzureGitFetchOrFsckFailed", false, default));
+            Assert.False(await b.BundleVerifiedAsync(
+                recoveredLease, new string('d', 64), default));
+            Assert.Null(await a.ClaimAsync(
+                Guid.NewGuid(), TimeSpan.FromMinutes(5), default));
+        }
+        using (var query = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/source-acquisitions/{sourceJobId}"))
+        {
+            query.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(query);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var fetchJobJson = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Equal("Completed", fetchJobJson.RootElement.GetProperty("state").GetString());
+            Assert.Equal("BundleVerified", fetchJobJson.RootElement.GetProperty("phase").GetString());
+            Assert.False(fetchJobJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.DoesNotContain(ApiHarness.SourceToken,
+                fetchJobJson.RootElement.ToString());
+        }
+        using (var eventsRead = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/source-acquisitions/{sourceJobId}/events"))
+        {
+            eventsRead.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(eventsRead);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var fetchJobJson = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Equal(new[] {
+                "Queued", "Claimed", "MirrorVerified", "Claimed", "BundleVerified"
+            }, fetchJobJson.RootElement.EnumerateArray()
+                .Select(x => x.GetProperty("type").GetString()).ToArray());
+        }
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.AzureGitFetchJobs.AsNoTracking()
+                .CountAsync(x => x.WorkpackId == workId));
+            Assert.Equal(5, await db.AzureGitFetchJobEvents.AsNoTracking()
+                .CountAsync(x => x.JobId == sourceJobId));
+            var deniedWrite = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE azure_git_fetch_jobs SET ready_for_execution = {true}
+                    WHERE id = {sourceJobId}
+                    """));
+            Assert.Equal("23514", deniedWrite.SqlState);
+            var fakeSourceSuccess = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE azure_git_fetch_jobs SET bundle_sha256 = {new string('e', 64)},
+                        phase = {"Pending"}, state = {"Completed"}
+                    WHERE id = {sourceJobId}
+                    """));
+            Assert.Equal("23514", fakeSourceSuccess.SqlState);
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())
