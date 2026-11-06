@@ -142,7 +142,7 @@ public sealed class LocalGitObjectClosureAuditor(
             "rev-parse", "--is-shallow-repository")).Trim() != "false")
             throw new GitObjectClosureAuditException("GitClosureNotSelfContained");
         var partialClone = await GitAsync(path, ct, null,
-            "config", "--local", "--get-regexp", "^extensions\\.partialClone$",
+            "config", "--local", "--get-regexp", "^extensions\\.partialclone$",
             acceptExitCode1: true);
         if (partialClone.Length > 0)
             throw new GitObjectClosureAuditException("GitClosureNotSelfContained");
