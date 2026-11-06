@@ -106,7 +106,10 @@ builder.Services.AddScoped<IGitSourceBundleAcquirer>(provider =>
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
             ? builder.Configuration["GitSourceBundles:SourceRoot"] ?? "" : "",
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
-            ? builder.Configuration["GitSourceBundles:BundleRoot"] ?? "" : ""));
+            ? builder.Configuration["GitSourceBundles:BundleRoot"] ?? "" : "",
+        maxStoreBytes: builder.Configuration.GetValue<long>(
+            "GitSourceBundles:MaxStorageBytes",
+            GitHubMigrator.Infrastructure.GitObjects.LocalGitBundleArtifactStore.DefaultMaxStorageBytes)));
 builder.Services.AddScoped<IAzureGitSourceLocationResolver, PostgresAzureGitSourceLocationResolver>();
 builder.Services.AddScoped<IAzureGitMirrorFetcher>(_ =>
     new GitHubMigrator.Infrastructure.GitObjects.AzureDevOpsGitMirrorFetcher(
@@ -124,7 +127,10 @@ builder.Services.AddHostedService<AzureGitFetchBackgroundWorker>();
 builder.Services.AddScoped<IGitSourceBundleArtifactVerifier>(_ =>
     new GitHubMigrator.Infrastructure.GitObjects.LocalGitBundleArtifactStore(
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
-            ? builder.Configuration["GitSourceBundles:BundleRoot"] ?? "" : ""));
+            ? builder.Configuration["GitSourceBundles:BundleRoot"] ?? "" : "",
+        maxStorageBytes: builder.Configuration.GetValue<long>(
+            "GitSourceBundles:MaxStorageBytes",
+            GitHubMigrator.Infrastructure.GitObjects.LocalGitBundleArtifactStore.DefaultMaxStorageBytes)));
 builder.Services.AddScoped<GitSourceBundleService>();
 builder.Services.AddScoped<IGitTransferWorkpackRepository, PostgresGitTransferWorkpackRepository>();
 builder.Services.AddScoped<GitTransferWorkpackService>();
