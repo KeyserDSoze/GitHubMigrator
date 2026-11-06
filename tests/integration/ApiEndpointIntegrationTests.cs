@@ -48,6 +48,50 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
     }
 
     [Fact]
+    public async Task F045_preview_lease_endpoint_is_superadmin_only_and_disabled_by_default()
+    {
+        var root = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}";
+        var url = root + "/target-preview-leases";
+        async Task<HttpResponseMessage> AcquireAsync(string? jwt)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) {
+                Content = JsonContent.Create(new { durationSeconds = 10 })
+            };
+            if (jwt is not null)
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+            return await harness.Client.SendAsync(req);
+        }
+
+        using var anonymous = await AcquireAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var user = await AcquireAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, user.StatusCode);
+        using var admin = await AcquireAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await AcquireAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.Conflict, superadmin.StatusCode);
+        Assert.Contains("PreviewLeaseDisabled",
+            await superadmin.Content.ReadAsStringAsync());
+
+        // A malformed client cannot bypass the feature flag via GET.
+        using var get = new HttpRequestMessage(
+            HttpMethod.Get, root + "/target-preview-lease");
+        get.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer", await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        using var status = await harness.Client.SendAsync(get);
+        Assert.Equal(HttpStatusCode.Conflict, status.StatusCode);
+        Assert.Contains("PreviewLeaseDisabled",
+            await status.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task Health_and_readiness_are_served_by_real_API_and_database()
     {
         using var health = await harness.Client.GetAsync("/api/health");

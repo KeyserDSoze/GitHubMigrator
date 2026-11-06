@@ -55,6 +55,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<AzureGitFetchJobRecord>();
     public DbSet<AzureGitFetchJobEventRecord> AzureGitFetchJobEvents =>
         Set<AzureGitFetchJobEventRecord>();
+    public DbSet<GitHubTargetPreviewLeaseRecord> GitHubTargetPreviewLeases =>
+        Set<GitHubTargetPreviewLeaseRecord>();
+    public DbSet<GitHubTargetPreviewLeaseEventRecord> GitHubTargetPreviewLeaseEvents =>
+        Set<GitHubTargetPreviewLeaseEventRecord>();
     public DbSet<GitHubAppWriteScopeRecord> GitHubAppWriteScopes =>
         Set<GitHubAppWriteScopeRecord>();
     public DbSet<GitHubRemoteRefFenceRecord> GitHubRemoteRefFences =>
@@ -443,6 +447,45 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => new { x.JobId, x.Id })
                 .HasDatabaseName("ix_azure_git_fetch_events");
+        });
+        builder.Entity<GitHubTargetPreviewLeaseRecord>(entity =>
+        {
+            entity.ToTable("github_target_preview_leases");
+            entity.HasKey(x => x.RepositoryId);
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(100);
+            entity.Property(x => x.Repository).HasColumnName("repository").HasMaxLength(100);
+            entity.Property(x => x.LeaseToken).HasColumnName("lease_token");
+            entity.Property(x => x.Generation).HasColumnName("generation");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.PacketSha256).HasColumnName("packet_sha256").HasMaxLength(64);
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(24);
+            entity.Property(x => x.AcquiredAtUtc).HasColumnName("acquired_at_utc");
+            entity.Property(x => x.LeaseUntilUtc).HasColumnName("lease_until_utc");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.ExecutionAuthorized).HasColumnName("execution_authorized");
+            entity.Property(x => x.RemoteWritesPerformed).HasColumnName("remote_writes_performed");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasIndex(x => x.LeaseToken).IsUnique()
+                .HasDatabaseName("ux_github_target_preview_lease_token");
+            entity.HasIndex(x => new { x.State, x.LeaseUntilUtc })
+                .HasDatabaseName("ix_github_target_preview_lease_state");
+        });
+        builder.Entity<GitHubTargetPreviewLeaseEventRecord>(entity =>
+        {
+            entity.ToTable("github_target_preview_lease_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.Generation).HasColumnName("generation");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(24);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.PacketSha256).HasColumnName("packet_sha256").HasMaxLength(64);
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitHubTargetPreviewLeaseRecord>().WithMany()
+                .HasForeignKey(x => x.RepositoryId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.RepositoryId, x.Id })
+                .HasDatabaseName("ix_github_target_preview_lease_events");
         });
         builder.Entity<GitHubAppWriteScopeRecord>(entity =>
         {
