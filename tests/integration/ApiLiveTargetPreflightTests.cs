@@ -1153,6 +1153,20 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             acknowledgementText = "I UNDERSTAND THIS DOES NOT AUTHORIZE A GITHUB PUSH"
         }, admin))
             Assert.Equal(HttpStatusCode.Forbidden, noSuperadmin.StatusCode);
+        var superadmin = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        using (var authorizedReviewer = await PostAsAsync(decisionPath, new {
+            expectedReadinessSha256 = safeReadinessSha,
+            decision = "Acknowledge",
+            acknowledgementText = "I UNDERSTAND THIS DOES NOT AUTHORIZE A GITHUB PUSH"
+        }, superadmin))
+        {
+            // Superadmin passes RBAC, but the second decision is refused by
+            // the one-shot PostgreSQL state machine after first acknowledgment.
+            Assert.Equal(HttpStatusCode.Conflict, authorizedReviewer.StatusCode);
+            Assert.Contains("ImportIntentDecisionNotAllowed",
+                await authorizedReviewer.Content.ReadAsStringAsync());
+        }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
         // A connection re-validation invalidates even previously persisted GET
