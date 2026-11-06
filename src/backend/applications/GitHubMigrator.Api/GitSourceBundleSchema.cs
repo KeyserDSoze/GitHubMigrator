@@ -41,10 +41,10 @@ public static class GitSourceBundleSchema
                         ready_for_execution = false
                         AND bundle_bytes BETWEEN 1 AND 536870912
                         AND ref_count BETWEEN 1 AND 25000
-                        AND bundle_file_name ~ '^[0-9a-f]{32}[.]bundle$'
-                        AND bundle_sha256 ~ '^[0-9a-f]{64}$'
-                        AND source_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND reconciliation_sha256 ~ '^[0-9a-f]{64}$'
+                        AND bundle_file_name ~ '^[0-9a-f]{{32}}[.]bundle$'
+                        AND bundle_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND source_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND reconciliation_sha256 ~ '^[0-9a-f]{{64}}$'
                     );
                 END IF;
             END
