@@ -680,6 +680,127 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
+        // F-039: the HTTP endpoint MUST NOT treat a synthetic DB SHA as a
+        // real source bundle. A forged digest cannot even reach GitHub GETs.
+        var importPath =
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}/import-readiness";
+        var importRequest = new {
+            expectedReconciliationSha256 = reconciliationSha,
+            expectedBundleSha256 = new string('d', 64)
+        };
+        using (var anonymousImport = await harness.Client.PostAsJsonAsync(
+            importPath, importRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousImport.StatusCode);
+        using (var userImport = await PostAsAsync(importPath, importRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userImport.StatusCode);
+        using (var forgedImport = await PostAsAsync(importPath, new {
+            expectedReconciliationSha256 = reconciliationSha,
+            expectedBundleSha256 = new string('f', 64)
+        }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, forgedImport.StatusCode);
+            Assert.Contains("ImportReadinessBundleMismatch",
+                await forgedImport.Content.ReadAsStringAsync());
+        }
+        using (var noStoredBundle = await PostAsAsync(
+            importPath, importRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, noStoredBundle.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await noStoredBundle.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // Test the real PostgreSQL immutability, advisory lock and F-032
+        // reconciliation binding with an explicit test-only disk verifier.
+        // Physical SHA-256 validation is separately exercised by F-038's
+        // real Git bundle tests; production always uses the real verifier.
+        Guid importId;
+        await using (var scopeOne = harness.Host.Services.CreateAsyncScope())
+        await using (var scopeTwo = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scopeOne.ServiceProvider.GetRequiredService<AppDbContext>();
+            var dest = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == target);
+            var input = new GitHubImportReadinessInput(
+                prepId, planId, workId, diffId, "repo-1", "occupied",
+                "gh-org", target, dest.ValidatedAtUtc, planSha,
+                reconciliationSha, targetRefSha, new string('d', 64),
+                0, 1,
+                new GitHubImportRepositoryObservation(
+                    "Visible", "ReportedAllowed", false, false,
+                    DateTimeOffset.UtcNow), Guid.NewGuid());
+
+            static PostgresGitHubImportReadinessStore Repository(IServiceProvider provider) =>
+                new(
+                    provider.GetRequiredService<AppDbContext>(),
+                    TimeProvider.System,
+                    provider.GetRequiredService<IGitTransferWorkpackRepository>(),
+                    provider.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                    new F039TestOnlyDiskVerifier(),
+                    provider.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                    provider.GetRequiredService<IIncrementalOperationPlanRepository>());
+
+            var one = Repository(scopeOne.ServiceProvider);
+            var two = Repository(scopeTwo.ServiceProvider);
+            var saved = await Task.WhenAll(
+                one.SaveAsync(input, default), two.SaveAsync(input, default));
+            importId = saved[0].Id;
+            Assert.Equal(importId, saved[1].Id);
+            Assert.False(saved[0].WriteCapabilityVerified);
+            Assert.False(saved[0].ReadyForExecution);
+            Assert.True(saved[0].IsCurrent);
+            Assert.Equal("ReportedAllowed", saved[0].ReportedPush);
+            Assert.Contains("ContentsWriteScopeNotVerified", saved[0].Blockers);
+            Assert.Contains("BranchRulesNotVerified", saved[0].Blockers);
+            Assert.Contains("TargetOnlyRefsPreserved", saved[0].Blockers);
+            Assert.Contains("WriteAuthorizationNotGranted", saved[0].Blockers);
+            Assert.Equal(1, await db.GitHubImportReadiness.AsNoTracking()
+                .CountAsync(x => x.WorkpackId == workId));
+            var tampered = input with { SourceBundleSha256 = new string('e',64) };
+            var ex = await Assert.ThrowsAsync<GitHubImportReadinessException>(() =>
+                one.SaveAsync(tampered, default));
+            Assert.Equal("ImportReadinessContextChanged", ex.Code);
+
+            var noWrite = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE github_import_readiness SET ready_for_execution = {true}
+                    WHERE id = {importId}
+                    """));
+            Assert.Equal("23514", noWrite.SqlState);
+            var fakeCapability = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE github_import_readiness
+                    SET write_capability_verified = {true}
+                    WHERE id = {importId}
+                    """));
+            Assert.Equal("23514", fakeCapability.SqlState);
+        }
+        using (var getImport = new HttpRequestMessage(
+            HttpMethod.Get, $"{operationalPath}/{planId}/import-readiness/{importId}"))
+        {
+            getImport.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(getImport);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var payload = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.SourceToken, payload);
+            Assert.DoesNotContain(ApiHarness.TargetToken, payload);
+            using var importJson = JsonDocument.Parse(payload);
+            Assert.Equal(importId, importJson.RootElement.GetProperty("id").GetGuid());
+            Assert.False(importJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.False(importJson.RootElement.GetProperty("writeCapabilityVerified").GetBoolean());
+        }
+        using (var listImport = new HttpRequestMessage(HttpMethod.Get, importPath))
+        {
+            listImport.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(listImport);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var importJson = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(importJson.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // F-037: the new HTTP entrypoint only queues authenticated source
         // reads. Its default off state must prevent all Git subprocesses.
         var acquisitionPath =
