@@ -201,6 +201,7 @@ public sealed class LocalGitCreateOnlyTransferRunner(
         foreach (var name in new[] { "HEAD", "config", "packed-refs", "objects",
             "objects/info", "objects/pack", "refs", "hooks" })
             CheckNoLinks(Path.Combine(destination, name));
+        CheckTreeNoLinks(destination);
         return (root, scratch, destination, lockFile);
     }
 
@@ -229,6 +230,42 @@ public sealed class LocalGitCreateOnlyTransferRunner(
             }
             if (item.Directory is null) break;
         }
+    }
+
+    private static void CheckTreeNoLinks(string root)
+    {
+        // Git can follow a symlink in refs/heads, refs/tags or objects even
+        // when its outer bare directory is safe. Traverse manually: never
+        // recurse through a link before evaluating its metadata. Bound work.
+        var dirs = new Stack<(string Path, int Depth)>();
+        dirs.Push((root, 0));
+        var entries = 0;
+        try
+        {
+            while (dirs.Count > 0)
+            {
+                var (folder, depth) = dirs.Pop();
+                if (depth > 32)
+                    throw new LocalGitCreateOnlyTransferException(
+                        "SandboxTreeDepthExceeded");
+                foreach (var entry in Directory.EnumerateFileSystemEntries(folder))
+                {
+                    if (++entries > 250_000)
+                        throw new LocalGitCreateOnlyTransferException(
+                            "SandboxTreeEntryLimit");
+                    var attributes = File.GetAttributes(entry);
+                    if (attributes.HasFlag(FileAttributes.ReparsePoint))
+                        throw new LocalGitCreateOnlyTransferException(
+                            "SandboxSymlinkBlocked");
+                    if (attributes.HasFlag(FileAttributes.Directory))
+                        dirs.Push((entry, depth + 1));
+                }
+            }
+        }
+        catch (IOException)
+        { throw new LocalGitCreateOnlyTransferException("SandboxTreeUnreadable"); }
+        catch (UnauthorizedAccessException)
+        { throw new LocalGitCreateOnlyTransferException("SandboxTreeUnreadable"); }
     }
 
     private static async Task<FileStream> LockTargetAsync(
