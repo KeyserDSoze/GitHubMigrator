@@ -230,7 +230,15 @@ public sealed class PostgresGitHubImportReadinessStore(
             page.Reconciliation.SourceRepositoryId != row.SourceRepositoryId ||
             page.Reconciliation.TargetRepositoryName != row.TargetRepositoryName ||
             bundle.BundleSha256 != row.SourceBundleSha256 ||
-            plan.ManifestSha256 != row.ManifestSha256)
+            plan.ManifestSha256 != row.ManifestSha256 ||
+            plan.DestinationConnectionId != row.DestinationConnectionId ||
+            !string.Equals(plan.Organization, row.Organization,
+                StringComparison.OrdinalIgnoreCase) ||
+            pack.TargetRepositoryName != row.TargetRepositoryName ||
+            pack.SourceRepositoryId != row.SourceRepositoryId ||
+            page.Reconciliation.DivergedCount != row.DivergedRefs ||
+            page.Reconciliation.TargetOnlyCount != row.TargetOnlyRefs ||
+            page.Reconciliation.ManifestSha256 != row.ManifestSha256)
             throw new GitHubImportReadinessException("ImportReadinessIntegrityFailed");
 
         var newer = await db.GitHubImportReadiness.AsNoTracking()
