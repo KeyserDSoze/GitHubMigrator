@@ -160,6 +160,13 @@ builder.Services.AddSingleton(new GitHubRemoteSandboxFenceOptions(
 builder.Services.AddScoped<IGitHubRemoteSandboxFenceStore, PostgresGitHubRemoteSandboxFenceStore>();
 builder.Services.AddScoped<GitHubRemoteSandboxFenceService>();
 builder.Services.AddScoped<GitHubRemoteAppPreflightService>();
+builder.Services.AddSingleton(new GitHubRemoteTestGrantOptions(
+    builder.Configuration.GetValue("GitHubRemoteTestGrant:Enabled", false),
+    builder.Configuration.GetValue<long>("GitHubRemoteTestGrant:AllowedRepositoryId", 0),
+    builder.Configuration["GitHubRemoteTestGrant:AllowedRepository"] ?? ""));
+builder.Services.AddScoped<IGitHubRemoteTestGrantStore, PostgresGitHubRemoteTestGrantStore>();
+builder.Services.AddScoped<GitHubRemoteTestGrantService>();
+builder.Services.AddHostedService<GitHubRemoteTestGrantBackgroundWorker>();
 builder.Services.AddHostedService<GitHubRemoteSandboxFenceBackgroundWorker>();
 builder.Services.AddHostedService<GitHubTransferAttemptBarrierWorker>();
 var localSandboxIds = (builder.Configuration["LocalGitSandboxDispatch:AllowedSandboxIds"] ?? "")
@@ -420,6 +427,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("github-remote-test-grant", limiter =>
+    {
+        limiter.PermitLimit = 5;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     options.AddFixedWindowLimiter("git-local-sandbox-dispatch", limiter =>
     {
         limiter.PermitLimit = 6;
@@ -476,6 +489,7 @@ await GitHubTargetPreviewLeaseSchema.InitializeAsync(app.Services);
 await GitHubTransferAttemptSchema.InitializeAsync(app.Services);
 await GitSandboxDispatchSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxFenceSchema.InitializeAsync(app.Services);
+await GitHubRemoteTestGrantSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
@@ -553,6 +567,7 @@ app.MapGitHubCandidatePolicyEndpoints();
 app.MapGitHubTransferAttemptEndpoints();
 app.MapGitHubRemoteSandboxFenceEndpoints();
 app.MapGitHubRemoteAppPreflightEndpoints();
+app.MapGitHubRemoteTestGrantEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
