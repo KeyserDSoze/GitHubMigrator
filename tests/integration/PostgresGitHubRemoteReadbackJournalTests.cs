@@ -153,7 +153,7 @@ public sealed class PostgresGitHubRemoteReadbackJournalTests(
             SET state='ReviewedWriteDisabled'
             WHERE repository_id={evidence.RepositoryId}
             """);
-        var wrongObserver = evidence with { ObserverId = actors.F052Reviewer };
+        var wrongObserver = evidence with { ObserverId = actors };
         ex = await Assert.ThrowsAsync<GitHubRemoteReadbackException>(() =>
             Journal(db, evidence.RepositoryId)
                 .RecordAsync(wrongObserver, default));
@@ -206,7 +206,7 @@ public sealed class PostgresGitHubRemoteReadbackJournalTests(
             baseline, creates, new(remote, tips));
     }
 
-    private static async Task<(Guid F052Reviewer)> SeedAsync(
+    private static async Task<Guid> SeedAsync(
         AppDbContext db, GitHubRemoteReadbackEvidence evidence)
     {
         var now = DateTimeOffset.UtcNow;
@@ -274,6 +274,6 @@ public sealed class PostgresGitHubRemoteReadbackJournalTests(
                 'ReviewedWriteDisabled',{f052Proposer},{f052Reviewer},
                 {now.AddMinutes(2)},{now},false,false,false)
             """);
-        return (f052Reviewer);
+        return f052Reviewer;
     }
 }
