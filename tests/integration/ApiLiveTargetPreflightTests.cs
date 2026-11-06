@@ -553,6 +553,30 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
+        // F-036 remote source acquisition is deliberately disabled by
+        // default. HTTP accepts neither an Azure URI nor a PAT, and it
+        // cannot bypass the sealed F-029/F-032/F-034 source proofs.
+        var azureFetchPath =
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}/source-bundle/fetch-azure";
+        using (var anonymousFetch = await harness.Client.PostAsJsonAsync(
+            azureFetchPath, new { expectedReconciliationSha256 = reconciliationSha }))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousFetch.StatusCode);
+        using (var normalUserFetch = await PostAsAsync(azureFetchPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, user))
+            Assert.Equal(HttpStatusCode.Forbidden, normalUserFetch.StatusCode);
+        using (var forgedFetch = await PostAsAsync(azureFetchPath,
+            new { expectedReconciliationSha256 = new string('f', 64) }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, forgedFetch.StatusCode);
+        using (var disabledFetch = await PostAsAsync(azureFetchPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, disabledFetch.StatusCode);
+            var body = await disabledFetch.Content.ReadAsStringAsync();
+            Assert.Contains("AzureGitSourceRootNotConfigured", body);
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // F-035 local-only export API never accepts a path, remote URL or
         // source credential. With no trusted roots configured it fails closed.
         var bundlePath = $"{operationalPath}/{planId}/transfer-workpacks/{workId}/source-bundle";
@@ -619,6 +643,20 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                     """));
             Assert.Equal("23514", unsafeName.SqlState);
         }
+        // After the immutable bundle is stored, repeating the authenticated
+        // Azure request must return the certified checkpoint without any
+        // second Git fetch or secret-bearing provider call.
+        using (var recovered = await PostAsAsync(azureFetchPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, admin))
+        {
+            Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
+            using var check = JsonDocument.Parse(
+                await recovered.Content.ReadAsStringAsync());
+            Assert.Equal(new string('d', 64),
+                check.RootElement.GetProperty("bundleSha256").GetString());
+            Assert.False(check.RootElement.GetProperty("readyForExecution").GetBoolean());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
         using (var audit = new HttpRequestMessage(HttpMethod.Get, bundlePath))
         {
             audit.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);

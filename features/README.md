@@ -16,7 +16,8 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-032 | Snapshot-bound Azure DevOps ↔ GitHub branch/tag reconciliation | F-014/F-031 proofs joined in immutable PostgreSQL, compared by F-030, HTTP history/paging; no writes |
 | F-033 | Read-only React Git ref evidence and reconciliation workbench | Admin UI for F-029/F-031/F-032, safe capture/compare, immutable history, paginated decisions and Playwright tests; no execution |
 | F-034 | Durable, resumable Git transfer preparation workpacks | PostgreSQL lease-fenced evidence checkpoints, audit events, hard denied write barrier; no Git executor |
-| F-035 | Offline Git source object export to checksum-bound bundles | Real local-only Git CLI, exact F-014/F-032 ref proof, fsck, bounded Git bundle, PostgreSQL immutable SHA-256; no remote Azure fetch or GitHub writes |
+| F-035 | Offline Git source object export to checksum-bound bundles | Real local-only Git CLI, exact F-014/F-032 ref proof, fsck, bounded Git bundle, PostgreSQL immutable SHA-256; no GitHub writes |
+| F-036 | Read-only authenticated Azure DevOps Services Git acquisition | Fixed-host HTTPS Git fetch with scoped source credentials, bounded bare mirrors, sealed source-ref verification and F-035 bundle proof; no GitHub writes |
 | F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
 | F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |
