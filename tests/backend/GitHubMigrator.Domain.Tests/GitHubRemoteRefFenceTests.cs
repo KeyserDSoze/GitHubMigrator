@@ -16,8 +16,8 @@ public sealed class GitHubRemoteRefFenceTests
         var same = GitHubRemoteRefFenceIntegrity.Compare(baseline, observed);
         Assert.Equal("RefSetUnchanged", same.Status);
         Assert.Equal(0, same.ChangedRefs);
-        Assert.Equal(baseline.Count, same.BaselineCount);
-        Assert.Equal(baseline.Count, same.RemoteCount);
+        Assert.Equal(baseline.Length, same.BaselineCount);
+        Assert.Equal(baseline.Length, same.RemoteCount);
         Assert.Equal(64, same.RemoteRefFingerprintSha256.Length);
 
         var tagChanged = GitHubRefObservationIntegrity.Seal(
