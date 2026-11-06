@@ -134,6 +134,20 @@ public sealed class GitHubCreateOnlyPacketTests
     }
 
     [Fact]
+    public void Target_only_refs_are_canonical_even_when_they_are_not_created()
+    {
+        var x = Fixture.Create();
+        var refs = x.Refs.ToArray();
+        var targetOnly = Array.FindIndex(refs, item =>
+            item.Disposition == GitMirrorRefDisposition.TargetOnlyPreserved);
+        Assert.True(targetOnly >= 0);
+        refs[targetOnly] = refs[targetOnly] with { Name = "refs/pull/100/head" };
+        var error = Assert.Throws<GitHubCreateOnlyPacketException>(
+            () => (x with { Refs = refs }).Build());
+        Assert.Equal("PacketRefSetInvalid", error.Code);
+    }
+
+    [Fact]
     public void Candidate_count_cannot_exceed_the_real_git_rehearsal_limit()
     {
         var x = Fixture.Create();
