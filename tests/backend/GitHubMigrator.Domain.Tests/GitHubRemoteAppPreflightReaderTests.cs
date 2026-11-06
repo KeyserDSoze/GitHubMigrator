@@ -185,7 +185,7 @@ public sealed class GitHubRemoteAppPreflightReaderTests
             Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
             2468, Owner, Repo, Sha('1'), Sha('2'), Sha('3'),
             Sha('4'), Sha('5'), Sha('6'), Sha('7'), Sha('8'),
-            Sha('9'), Sha('a'), digest, Sha('b'), 1, 1, 1,
+            Sha('9'), digest, Sha('b'), 1, 1, 1,
             GitHubCreateOnlyPacketIntegrity.State,
             false, false, false, false), [candidate]);
     }
