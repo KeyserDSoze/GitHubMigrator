@@ -93,6 +93,6 @@ public sealed class PostgresGitHubTrustedRemoteReadPlanTests(
         return new(db, clock,
             new PostgresIncrementalOperationPlanRepository(db, clock),
             new PostgresVerifiedSourceGitRefReader(db, null!),
-            f.Options);
+            null!, f.Options);
     }
 }

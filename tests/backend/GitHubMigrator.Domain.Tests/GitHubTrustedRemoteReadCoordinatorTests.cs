@@ -14,6 +14,7 @@ public sealed class GitHubTrustedRemoteReadCoordinatorTests
         Assert.Equal(2, fixture.PlanReader.Reads);
         Assert.Equal(1, fixture.Provider.Reads);
         Assert.Equal(1, fixture.Mirror.Reads);
+        Assert.Equal(2, fixture.Materializer.Reads);
         Assert.Equal(1, fixture.Journal.Writes);
         Assert.Equal(fixture.Evidence.MirrorReceipt.EvidenceSha256,
             fixture.Journal.Last!.MirrorReceipt.EvidenceSha256);
@@ -98,7 +99,12 @@ public sealed class GitHubTrustedRemoteReadCoordinatorTests
         var fixture = new Fixture();
         fixture.PlanReader.AfterFirst = p =>
         {
-            var updated = p with { SourceSnapshotId = Guid.NewGuid() };
+            var snapshot = Guid.NewGuid();
+            var updated = p with {
+                SourceSnapshotId = snapshot,
+                SourceMirrorId = GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+                    snapshot, p.SourceBundle!.WorkpackId)
+            };
             return updated with {
                 PlanEvidenceSha256 = GitHubTrustedRemoteReadCoordinator.Fingerprint(updated)
             };
@@ -139,36 +145,71 @@ public sealed class GitHubTrustedRemoteReadCoordinatorTests
         public FakePlans PlanReader { get; }
         public FakeProvider Provider { get; }
         public FakeMirror Mirror { get; }
+        public FakeMaterializer Materializer { get; }
         public FakeJournal Journal { get; }
 
         public Fixture()
         {
-            (Evidence, Options) = GitHubRemoteObjectReconciliationIntegrityTests.Valid();
+            var (original, options) =
+                GitHubRemoteObjectReconciliationIntegrityTests.Valid();
+            Options = options;
+            var snapshot = Guid.NewGuid();
+            var workpack = Guid.NewGuid();
+            var mirrorId = GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+                snapshot, workpack);
+            var request = original.MirrorRequest with {
+                SourceSnapshotId = mirrorId
+            };
+            var old = original.MirrorReceipt;
+            var closure = GitObjectClosureAuditIntegrity.Seal(new(
+                mirrorId, Guid.NewGuid(), request.ExpectedSourceRefs,
+                request.ExpectedRemoteRefs.AsMirrorRefs()), "sha1",
+                old.SourceObjectSetSha256, old.SourceObjectSetSha256,
+                old.VerifiedReachableObjects, old.VerifiedReachableObjects,
+                request.ExpectedRemoteRefs.ObservedAtUtc);
+            var receipt = GitHubReadOnlyObjectMirrorIntegrity.Seal(
+                request, new(closure.TargetSandboxId,
+                    request.ExpectedRemoteRefs.AsMirrorRefs(), closure),
+                Options, DateTimeOffset.UtcNow);
+            Evidence = original with {
+                MirrorRequest = request, MirrorReceipt = receipt
+            };
             var decision = GitHubRemoteObjectReconciliationIntegrity.Verify(
                 Evidence, Options, DateTimeOffset.UtcNow);
+            var bundle = new GitSourceBundleView(workpack,
+                Guid.NewGuid(), Guid.NewGuid(), "f060-repo",
+                new string('a', 64), new string('b', 64),
+                workpack.ToString("N") + ".bundle", new string('c', 64),
+                4096, request.ExpectedSourceRefs.Count,
+                DateTimeOffset.UtcNow, true, false);
             Command = new(Evidence.GrantId, Evidence.ReadbackId,
                 Evidence.HazardId, Evidence.RepositoryId, Evidence.ObserverId,
                 Evidence.OriginalBaseline, Evidence.CreateCandidates,
                 Evidence.MirrorRequest.TokenExpiresAtUtc);
             var raw = new GitHubTrustedRemoteReadPlan(
-                Evidence.MirrorRequest.SourceSnapshotId,
+                snapshot,
                 Evidence.MirrorRequest.Organization,
                 Evidence.MirrorRequest.Repository,
                 new string('a', 64),
                 Evidence.MirrorRequest.ExpectedSourceRefs,
                 decision.OriginalBaselineSha256,
                 decision.CandidateSetSha256,
-                decision.TargetRefSetSha256, "");
+                decision.TargetRefSetSha256, "")
+            {
+                SourceMirrorId = mirrorId,
+                SourceBundle = bundle
+            };
             PlanReader = new(raw with {
                 PlanEvidenceSha256 = GitHubTrustedRemoteReadCoordinator.Fingerprint(raw)
             });
             Provider = new(Evidence.MirrorRequest.ExpectedRemoteRefs);
             Mirror = new(Evidence.MirrorReceipt);
+            Materializer = new();
             Journal = new(Options);
         }
 
         public GitHubTrustedRemoteReadCoordinator Coordinator(bool enabled = true) =>
-            new(PlanReader, Provider, Mirror, Journal, Options,
+            new(PlanReader, Provider, Mirror, Materializer, Journal, Options,
                 new(enabled), TimeProvider.System);
     }
 
@@ -219,6 +260,24 @@ public sealed class GitHubTrustedRemoteReadCoordinatorTests
                 throw new GitHubReadOnlyObjectMirrorException(
                     "SyntheticReadOnlyGitFetchFailure");
             return Task.FromResult(receipt);
+        }
+    }
+
+    private sealed class FakeMaterializer : IGitSourceSnapshotMirrorMaterializer
+    {
+        public int Reads { get; private set; }
+        public bool Fail { get; set; }
+
+        public Task<GitSourceSnapshotMirrorProof> MaterializeAsync(
+            GitHubTrustedRemoteReadPlan plan, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Reads++;
+            if (Fail)
+                throw new GitSourceSnapshotMirrorException(
+                    "SyntheticPhysicalSourceFailure");
+            return Task.FromResult(GitSourceSnapshotMirrorIntegrity.Seal(
+                plan, new string('e', 64), 20, DateTimeOffset.UtcNow));
         }
     }
 
