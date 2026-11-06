@@ -191,6 +191,23 @@ public sealed class LocalGitCreateOnlyTransferTests
         Assert.Equal(2, fixture.ReadTargetRefs().Count);
     }
 
+    [Fact]
+    public async Task Nested_symlink_under_bare_refs_is_blocked_before_push()
+    {
+        using var fixture = new Fixture();
+        var request = await fixture.PrepareAsync();
+        var external = Path.Combine(fixture.Root, "external-ref-folder");
+        Directory.CreateDirectory(external);
+        Directory.CreateSymbolicLink(
+            Path.Combine(fixture.Target, "refs", "malicious-link"), external);
+        var before = fixture.ReadTargetRefs();
+        var error = await Assert.ThrowsAsync<LocalGitCreateOnlyTransferException>(
+            () => fixture.Runner().RunAsync(request, default));
+        Assert.Equal("SandboxSymlinkBlocked", error.Code);
+        Assert.Equal(before, fixture.ReadTargetRefs());
+        Assert.Empty(Directory.GetFileSystemEntries(fixture.ScratchRoot));
+    }
+
     private sealed class Fixture : IDisposable
     {
         public string Root { get; } = Path.Combine(Path.GetTempPath(),
