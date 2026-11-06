@@ -206,7 +206,7 @@ public static class GitHubCreateOnlyPacketIntegrity
 // no body-supplied ref names, remote URLs, Git commands or credentials.
 public sealed class GitHubCreateOnlyPacketService(
     IGitHubAppWriteScopeStore scopes, IGitHubRemoteRefFenceStore fences,
-    IGitHubImportIntentStore intents, IGitImportReadinessStore readiness,
+    IGitHubImportIntentStore intents, IGitHubImportReadinessStore readiness,
     IGitImportRehearsalStore rehearsals, IGitSourceBundleEvidenceStore bundles,
     IGitSourceBundleArtifactVerifier disk,
     IIncrementalGitRefReconciliationStore reconciliations,
