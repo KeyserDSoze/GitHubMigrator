@@ -17,6 +17,7 @@ public sealed record GitSourceSnapshotMirrorProof(
     Guid SourceSnapshotId, Guid PhysicalMirrorId, Guid WorkpackId,
     string BundleSha256, string SourceEvidenceSha256,
     string SourceRefSetSha256, int VerifiedRefCount,
+    string ObjectSetSha256, int VerifiedObjectCount,
     string EvidenceSha256, DateTimeOffset VerifiedAtUtc,
     bool RemotePushInvoked, bool RemoteWritesAuthorized,
     bool MayAutomaticallyRetry, bool MigrationComplete);
@@ -97,9 +98,14 @@ public static class GitSourceSnapshotMirrorIntegrity
     }
 
     public static GitSourceSnapshotMirrorProof Seal(
-        GitHubTrustedRemoteReadPlan plan, DateTimeOffset when)
+        GitHubTrustedRemoteReadPlan plan, string objectSetSha,
+        int objectCount, DateTimeOffset when)
     {
         RequirePlan(plan);
+        if (!GitSourceBundleStorageCheck.ValidSha(objectSetSha) ||
+            objectCount is < 1 or > GitObjectClosureAuditIntegrity.MaxObjects)
+            throw new GitSourceSnapshotMirrorException(
+                "SourceMirrorObjectsInvalid");
         if (when == default)
             throw new GitSourceSnapshotMirrorException(
                 "SourceMirrorTimeInvalid");
@@ -112,11 +118,12 @@ public static class GitSourceSnapshotMirrorIntegrity
                 plan.SourceMirrorId.ToString("D"),
                 b.WorkpackId.ToString("D"),
                 b.BundleSha256, b.SourceEvidenceSha256,
-                refSha, b.RefCount, false, false, false, false
+                refSha, b.RefCount, objectSetSha, objectCount,
+                false, false, false, false
             }))));
         return new(plan.SourceSnapshotId, plan.SourceMirrorId,
             b.WorkpackId, b.BundleSha256, b.SourceEvidenceSha256,
-            refSha, b.RefCount, evidence, when,
+            refSha, b.RefCount, objectSetSha, objectCount, evidence, when,
             false, false, false, false);
     }
 }
