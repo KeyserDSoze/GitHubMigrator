@@ -91,9 +91,9 @@ public sealed class LocalGitSourceBundleAcquirer(
         // recovering; never overwrite the existing file.
         if (File.Exists(final))
         {
-            await CheckBundleRefsAsync(repo, final, expected, ct);
             var recovered = await storage.InspectExistingAsync(
                 request.WorkpackId, ct);
+            await CheckBundleRefsAsync(repo, final, expected, ct);
             return new(request.WorkpackId, request.SourceEvidenceSha256,
                 Path.GetFileName(final), recovered.Sha256, recovered.Bytes,
                 expected.Count, _clock.GetUtcNow());
