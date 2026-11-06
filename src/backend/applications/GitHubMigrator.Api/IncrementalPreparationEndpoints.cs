@@ -499,6 +499,34 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-038: live disk attestation is separate from the immutable DB
+        // proof. No source/target API calls, no GitHub writes and no path input.
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/source-bundle/storage-integrity",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                GitSourceBundleService bundles, CancellationToken ct) =>
+            {
+                try
+                {
+                    var check = await bundles.VerifyStoredAsync(
+                        id, planId, workpackId, ct);
+                    return check is null
+                        ? Results.NotFound(new { error = "SourceBundleNotFound" })
+                        : Results.Ok(check);
+                }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
         // F-036: exact F-014 source snapshot -> HTTPS dev.azure.com read-only
         // Git fetch -> F-035 verified bundle; no caller-supplied URI/PAT/path.
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/source-bundle/fetch-azure",
