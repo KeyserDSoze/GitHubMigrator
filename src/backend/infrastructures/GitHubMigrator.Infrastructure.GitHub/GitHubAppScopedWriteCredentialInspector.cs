@@ -12,11 +12,59 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 // repository API write, no Git push, no token returned or persisted.
 public sealed class GitHubAppScopedWriteCredentialInspector(
     HttpClient client, TimeProvider clock)
-    : IGitHubAppScopedWriteCredentialInspector
+    : IGitHubAppScopedWriteCredentialInspector, IGitHubRemoteAppPreflightReader
 {
     private const int MaxReplyBytes = 32_768;
 
     public async Task<GitHubAppWriteScopeObservation> InspectAsync(
+        long appId, long installationId, string privateKeyPem,
+        string organization, string repository, CancellationToken ct) =>
+        (await MintVerifiedTokenAsync(appId, installationId, privateKeyPem,
+            organization, repository, ct)).Observation;
+
+    // F-051 consumes a newly minted one-repository GitHub App token only
+    // INSIDE this infrastructure adapter, making strictly GET-only calls.
+    // No access token can escape via a domain DTO or persistence method.
+    public async Task<GitHubRemoteAppPreflightObservation> InspectAsync(
+        long appId, long installationId, string privateKeyPem,
+        GitHubCreateOnlyCandidatePacket packet, CancellationToken ct)
+    {
+        if (packet is null || packet.Packet is null ||
+            packet.Candidates is null ||
+            packet.Candidates.Count is < 1 or >
+                GitHubCandidatePolicyIntegrity.MaxOnlineCandidates ||
+            packet.Packet.State != GitHubCreateOnlyPacketIntegrity.State ||
+            packet.Packet.ExecutionAuthorized || packet.Packet.RemoteWritesPerformed ||
+            packet.Packet.WriteCapabilityVerified || packet.Packet.ReadyForExecution ||
+            packet.Candidates.Count != packet.Packet.CreateCandidates ||
+            packet.Packet.CandidateSetSha256 !=
+                GitImportRehearsalIntegrity.SealRefs(
+                    "f044-create-only-candidate-refs-v1", packet.Candidates))
+            throw new GitHubRemoteAppPreflightException(
+                "RemotePreflightPacketInvalid");
+
+        var target = packet.Packet;
+        var minted = await MintVerifiedTokenAsync(
+            appId, installationId, privateKeyPem,
+            target.Organization, target.Repository, ct);
+        if (minted.Observation.RepositoryId != target.RepositoryId ||
+            minted.Observation.InstallationId != installationId)
+            throw new GitHubRemoteAppPreflightException(
+                "RemotePreflightRepositoryIdentityChanged");
+
+        // Each reader has only fixed api.github.com GET paths. Even the
+        // GitHub App's contents:write token cannot enter a mutation path.
+        var refs = await new GitHubRefObservationReader(client, clock).ReadAsync(
+            target.Organization, target.Repository, minted.Token, ct);
+        var policies = await new GitHubCandidatePolicyReader(client, clock)
+            .ReadAsync(target.Organization, target.Repository,
+                target.RepositoryId, minted.Token, packet.Candidates, ct);
+        return new(installationId, target.RepositoryId, refs,
+            policies, minted.Observation.TokenExpiresAtUtc);
+    }
+
+    private async Task<(GitHubAppWriteScopeObservation Observation,
+        string Token)> MintVerifiedTokenAsync(
         long appId, long installationId, string privateKeyPem,
         string organization, string repository, CancellationToken ct)
     {
@@ -138,9 +186,9 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
             disabled.ValueKind != JsonValueKind.False)
             throw new GitHubAppWriteScopeException("AppScopeRepositoryChanged");
 
-        return new(installationId, repoId,
-            GitHubAppWriteScopeIntegrity.Issued,
-            clock.GetUtcNow(), tokenExpiry.ToUniversalTime());
+        return (new GitHubAppWriteScopeObservation(
+            installationId, repoId, GitHubAppWriteScopeIntegrity.Issued,
+            clock.GetUtcNow(), tokenExpiry.ToUniversalTime()), token);
     }
 
     // Validate recursively: even duplicate nested owner/permission fields are
