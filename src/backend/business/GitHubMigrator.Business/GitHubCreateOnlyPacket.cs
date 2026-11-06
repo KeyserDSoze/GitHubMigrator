@@ -113,6 +113,7 @@ public static class GitHubCreateOnlyPacketIntegrity
             fence.IntentEvidenceSha256 != intent.EvidenceSha256 ||
             fence.RehearsalEvidenceSha256 != rehearsal.EvidenceSha256 ||
             fence.ReconciliationSha256 != readiness.ReconciliationSha256 ||
+            fence.TargetEvidenceSha256 != readiness.TargetEvidenceSha256 ||
             intent.ReconciliationSha256 != readiness.ReconciliationSha256 ||
             rehearsal.ReconciliationSha256 != readiness.ReconciliationSha256 ||
             bundle.ReconciliationSha256 != readiness.ReconciliationSha256 ||
