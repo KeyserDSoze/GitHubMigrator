@@ -21,8 +21,10 @@ public sealed class PostgresVerifiedSourceGitRefReaderTests(PostgresDraftFixture
         var jobs = new PostgresMigrationJobRepository(db, clock);
         var job = await jobs.EnqueueDiscoveryAsync(
             sourceId, Guid.NewGuid(), Guid.NewGuid(), default);
-        var lease = (await jobs.ClaimAsync(
-            Guid.NewGuid(), TimeSpan.FromMinutes(3), default))!;
+        // Other integration fixtures can enqueue unrelated jobs concurrently.
+        // Claim only this source so the F-014 proof test never consumes their lease.
+        var lease = (await jobs.ClaimForSourceAsync(
+            sourceId, Guid.NewGuid(), TimeSpan.FromMinutes(3), default))!;
         Assert.Equal(job.Id, lease.Id);
         var now = clock.GetUtcNow();
         var refs = Enumerable.Range(0, 275).Select(i => new RepositoryRef(
