@@ -143,9 +143,11 @@ public sealed class PostgresGitHubRemoteTestGrantTests(
         Assert.True(await store.RecoverAsync(claim.Status.Id,
             evidence.Fence.RepositoryId, Guid.NewGuid(),
             GitHubRemoteTestGrantIntegrity.RecoveryText, default));
-        Assert.False(await store.RecoverAsync(claim.Status.Id,
-            evidence.Fence.RepositoryId, Guid.NewGuid(),
-            GitHubRemoteTestGrantIntegrity.RecoveryText, default));
+        var repeated = await Assert.ThrowsAsync<GitHubRemoteTestGrantException>(
+            () => store.RecoverAsync(claim.Status.Id,
+                evidence.Fence.RepositoryId, Guid.NewGuid(),
+                GitHubRemoteTestGrantIntegrity.RecoveryText, default));
+        Assert.Equal("RemoteTestGrantRecoveryMustBeIndependent", repeated.Code);
         Assert.Equal(new[] { "Proposed", "RecoveryRequired", "RecoveredNoWrites" },
             (await store.EventsAsync(claim.Status.Id,
                 evidence.Fence.RepositoryId, default)).Select(x => x.Type));
