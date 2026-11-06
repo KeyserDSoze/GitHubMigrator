@@ -103,6 +103,12 @@ public static class GitHubRemoteTransmitHazardIntegrity
                 grant.Organization + "/" + grant.Repository,
                 StringComparison.OrdinalIgnoreCase) ||
             fence.RepositoryId != grant.RepositoryId ||
+            fence.PreparationId != grant.PreparationId ||
+            fence.PlanId != grant.PlanId ||
+            fence.ScopeId != grant.ScopeId ||
+            !string.Equals(fence.Organization + "/" + fence.Repository,
+                grant.Organization + "/" + grant.Repository,
+                StringComparison.OrdinalIgnoreCase) ||
             fence.State != GitHubRemoteSandboxFenceStates.ReviewedWriteDisabled ||
             fence.DeadlineUtc <= now ||
             fence.RequestId != grant.FenceRequestId ||
@@ -120,6 +126,9 @@ public static class GitHubRemoteTransmitHazardIntegrity
             attempt.PlanId != grant.PlanId ||
             attempt.ScopeId != grant.ScopeId ||
             attempt.RepositoryId != grant.RepositoryId ||
+            !string.Equals(attempt.Organization + "/" + attempt.Repository,
+                grant.Organization + "/" + grant.Repository,
+                StringComparison.OrdinalIgnoreCase) ||
             attempt.State != GitHubTransferAttemptStates.BlockedAtWriteBarrier ||
             attempt.PacketSha256 != grant.PacketSha256 ||
             attempt.CandidateSetSha256 != grant.CandidateSetSha256 ||
