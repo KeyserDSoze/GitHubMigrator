@@ -142,8 +142,18 @@ public sealed class GitHubCreateOnlyPacketTests
             item.Disposition == GitMirrorRefDisposition.TargetOnlyPreserved);
         Assert.True(targetOnly >= 0);
         refs[targetOnly] = refs[targetOnly] with { Name = "refs/pull/100/head" };
+        // Even if an attacker could rewrite BOTH safe-plan digests, the
+        // packet independently validates the complete target ref set.
+        var forgedPlan = GitHubSafeRefPlanner.Build(x.Plan.Id,
+            x.Plan.ManifestSha256, x.Readiness.ReconciliationSha256,
+            x.Bundle.BundleSha256, refs);
+        var forged = x with {
+            Refs = refs,
+            Intent = x.Intent with { SafeRefPlanSha256 = forgedPlan.EvidenceSha256 },
+            Rehearsal = x.Rehearsal with { SafeRefPlanSha256 = forgedPlan.EvidenceSha256 }
+        };
         var error = Assert.Throws<GitHubCreateOnlyPacketException>(
-            () => (x with { Refs = refs }).Build());
+            () => forged.Build());
         Assert.Equal("PacketRefSetInvalid", error.Code);
     }
 
