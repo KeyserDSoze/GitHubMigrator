@@ -9,7 +9,8 @@ namespace GitHubMigrator.Infrastructure.GitObjects;
 // bare mirror; it neither knows an Azure/GitHub URL nor accepts one from HTTP.
 // Git is invoked without a shell, inherited environment, hooks or networking.
 public sealed class LocalGitSourceBundleAcquirer(
-    string sourceRoot, string bundleRoot, TimeProvider? clock = null)
+    string sourceRoot, string bundleRoot, TimeProvider? clock = null,
+    long maxStoreBytes = LocalGitBundleArtifactStore.DefaultMaxStorageBytes)
     : IGitSourceBundleAcquirer
 {
     public const long MaxBundleBytes = 512L * 1024 * 1024;
@@ -80,8 +81,23 @@ public sealed class LocalGitSourceBundleAcquirer(
             request.WorkpackId.ToString("N") + "." + Guid.NewGuid().ToString("N") + ".tmp");
         var final = Path.Combine(bundleRoot,
             request.WorkpackId.ToString("N") + ".bundle");
+        var storage = new LocalGitBundleArtifactStore(
+            bundleRoot, maxStoreBytes, _clock);
+        await using var writeLock = await storage.LockWritesAsync(ct);
+        storage.AssertWithinQuota();
+
+        // A crash may leave an atomically promoted bundle without its DB
+        // checkpoint. Validate the COMPLETE object/ref proof before safely
+        // recovering; never overwrite the existing file.
         if (File.Exists(final))
-            throw new GitSourceBundleException("BundleAlreadyExists");
+        {
+            await CheckBundleRefsAsync(repo, final, expected, ct);
+            var recovered = await storage.InspectExistingAsync(
+                request.WorkpackId, ct);
+            return new(request.WorkpackId, request.SourceEvidenceSha256,
+                Path.GetFileName(final), recovered.Sha256, recovered.Bytes,
+                expected.Count, _clock.GetUtcNow());
+        }
         try
         {
             await RunGitAsync(repo, temp, ct,
@@ -92,12 +108,8 @@ public sealed class LocalGitSourceBundleAcquirer(
             if (info.Length is <= 0 or > MaxBundleBytes)
                 throw new GitSourceBundleException("BundleSizeLimitExceeded");
 
-            await RunGitAsync(repo, null, ct, "bundle", "verify", temp);
-            var listed = await RunGitAsync(repo, null, ct, "bundle", "list-heads", temp);
-            var bundleRefs = CanonicalizeRefLines(
-                listed, tabDelimited: false, skipHead: true);
-            if (!bundleRefs.SequenceEqual(expected))
-                throw new GitSourceBundleException("BundleHeadMismatch");
+            await CheckBundleRefsAsync(repo, temp, expected, ct);
+            storage.AssertWithinQuota();
 
             // One hash over the complete, verified binary bundle; no pack
             // contents, credentials or local paths enter API/DB responses.
@@ -124,6 +136,19 @@ public sealed class LocalGitSourceBundleAcquirer(
             // Aborted exports do not leave partially consumable .bundle files.
             try { if (File.Exists(temp)) File.Delete(temp); } catch (IOException) { }
         }
+    }
+
+    private static async Task CheckBundleRefsAsync(
+        string repo, string bundle, IReadOnlyList<GitMirrorRef> expected,
+        CancellationToken ct)
+    {
+        await RunGitAsync(repo, null, ct, "bundle", "verify", bundle);
+        var heads = await RunGitAsync(repo, null, ct,
+            "bundle", "list-heads", bundle);
+        var actual = CanonicalizeRefLines(
+            heads, tabDelimited: false, skipHead: true);
+        if (!actual.SequenceEqual(expected))
+            throw new GitSourceBundleException("BundleHeadMismatch");
     }
 
     private static bool ValidSha(string? value) => value is { Length: 64 } &&

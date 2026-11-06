@@ -121,6 +121,10 @@ builder.Services.AddScoped<IAzureGitFetchJobRepository, PostgresAzureGitFetchJob
 builder.Services.AddScoped<AzureGitFetchJobService>();
 builder.Services.AddScoped<AzureGitFetchJobProcessor>();
 builder.Services.AddHostedService<AzureGitFetchBackgroundWorker>();
+builder.Services.AddScoped<IGitSourceBundleArtifactVerifier>(_ =>
+    new GitHubMigrator.Infrastructure.GitObjects.LocalGitBundleArtifactStore(
+        builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
+            ? builder.Configuration["GitSourceBundles:BundleRoot"] ?? "" : ""));
 builder.Services.AddScoped<GitSourceBundleService>();
 builder.Services.AddScoped<IGitTransferWorkpackRepository, PostgresGitTransferWorkpackRepository>();
 builder.Services.AddScoped<GitTransferWorkpackService>();
