@@ -159,6 +159,7 @@ builder.Services.AddSingleton(new GitHubRemoteSandboxFenceOptions(
     builder.Configuration["GitHubRemoteSandboxFence:AllowedRepository"] ?? ""));
 builder.Services.AddScoped<IGitHubRemoteSandboxFenceStore, PostgresGitHubRemoteSandboxFenceStore>();
 builder.Services.AddScoped<GitHubRemoteSandboxFenceService>();
+builder.Services.AddScoped<GitHubRemoteAppPreflightService>();
 builder.Services.AddHostedService<GitHubRemoteSandboxFenceBackgroundWorker>();
 builder.Services.AddHostedService<GitHubTransferAttemptBarrierWorker>();
 var localSandboxIds = (builder.Configuration["LocalGitSandboxDispatch:AllowedSandboxIds"] ?? "")
@@ -222,6 +223,8 @@ builder.Services.AddHttpClient<GitHubAppScopedWriteCredentialInspector>(
     .ConfigurePrimaryHttpMessageHandler(() =>
         new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubAppScopedWriteCredentialInspector>(
+    p => p.GetRequiredService<GitHubAppScopedWriteCredentialInspector>());
+builder.Services.AddTransient<IGitHubRemoteAppPreflightReader>(
     p => p.GetRequiredService<GitHubAppScopedWriteCredentialInspector>());
 builder.Services.AddHttpClient<GitHubImportPolicyReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() =>
@@ -411,6 +414,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("github-remote-app-preflight", limiter =>
+    {
+        limiter.PermitLimit = 4;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     options.AddFixedWindowLimiter("git-local-sandbox-dispatch", limiter =>
     {
         limiter.PermitLimit = 6;
@@ -543,6 +552,7 @@ app.MapGitHubTargetPreviewLeaseEndpoints();
 app.MapGitHubCandidatePolicyEndpoints();
 app.MapGitHubTransferAttemptEndpoints();
 app.MapGitHubRemoteSandboxFenceEndpoints();
+app.MapGitHubRemoteAppPreflightEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
