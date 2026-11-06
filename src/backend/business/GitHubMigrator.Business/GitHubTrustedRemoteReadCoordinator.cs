@@ -20,7 +20,13 @@ public sealed record GitHubTrustedRemoteReadPlan(
     Guid SourceSnapshotId, string Organization, string Repository,
     string SourceEvidenceSha256, IReadOnlyList<GitMirrorRef> SourceRefs,
     string BaselineSha256, string CandidateSetSha256,
-    string RefSetSha256, string PlanEvidenceSha256);
+    string RefSetSha256, string PlanEvidenceSha256)
+{
+    // F-060 is materialized from F-038's persisted workpack bundle;
+    // this ID is distinct from the F-029 source snapshot ID.
+    public Guid SourceMirrorId { get; init; }
+    public GitSourceBundleView? SourceBundle { get; init; }
+}
 
 public interface IGitHubTrustedRemoteReadPlanReader
 {
@@ -38,6 +44,7 @@ public sealed class GitHubTrustedRemoteReadCoordinator(
     IGitHubTrustedRemoteReadPlanReader plans,
     IGitHubRefObservationReader providerRefs,
     IGitHubReadOnlyObjectMirrorRunner mirror,
+    IGitSourceSnapshotMirrorMaterializer materializer,
     IGitHubRemoteObjectReconciliationJournal journal,
     GitHubReadOnlyObjectMirrorOptions options,
     GitHubTrustedRemoteReadOptions orchestrationOptions,
@@ -68,6 +75,12 @@ public sealed class GitHubTrustedRemoteReadCoordinator(
             command.TokenExpiresAtUtc > now.AddMinutes(65))
             throw new GitHubTrustedRemoteReadException("TrustedRemoteReadTokenStale");
 
+        // F-060 imports/rehashes the original F-038 source bundle
+        // locally BEFORE any GitHub I/O. Missing or divergent physical
+        // source mirrors cannot be treated as staged Git objects.
+        var physicalBefore = await materializer.MaterializeAsync(before, ct);
+        ValidatePhysical(physicalBefore, before);
+
         var observed = await providerRefs.ReadAsync(
             before.Organization, before.Repository,
             ephemeralInstallationToken, ct);
@@ -89,7 +102,7 @@ public sealed class GitHubTrustedRemoteReadCoordinator(
             throw new GitHubTrustedRemoteReadException("TrustedRemoteReadRefsDrift");
 
         var request = new GitHubReadOnlyObjectMirrorRequest(
-            before.SourceSnapshotId, command.RepositoryId,
+            before.SourceMirrorId, command.RepositoryId,
             before.Organization, before.Repository,
             before.SourceRefs, observed, command.TokenExpiresAtUtc);
         var receipt = await mirror.VerifyAsync(
@@ -101,10 +114,17 @@ public sealed class GitHubTrustedRemoteReadCoordinator(
         ValidatePlan(after, command);
         if (after.PlanEvidenceSha256 != before.PlanEvidenceSha256 ||
             after.SourceSnapshotId != before.SourceSnapshotId ||
+            after.SourceMirrorId != before.SourceMirrorId ||
             after.SourceEvidenceSha256 != before.SourceEvidenceSha256 ||
             !after.SourceRefs.SequenceEqual(before.SourceRefs) ||
             after.RefSetSha256 != before.RefSetSha256)
             throw new GitHubTrustedRemoteReadException("TrustedRemoteReadPlanChanged");
+        var physicalAfter = await materializer.MaterializeAsync(after, ct);
+        ValidatePhysical(physicalAfter, after);
+        if (physicalAfter.EvidenceSha256 != physicalBefore.EvidenceSha256)
+            throw new GitHubTrustedRemoteReadException(
+                "TrustedRemoteReadPhysicalSourceChanged");
+
         if (receipt.VerifiedAtUtc > clock.GetUtcNow().AddSeconds(5))
             throw new GitHubTrustedRemoteReadException("TrustedRemoteReadClockInvalid");
 
@@ -116,6 +136,22 @@ public sealed class GitHubTrustedRemoteReadCoordinator(
             command.RepositoryId, command.ObserverId,
             command.OriginalBaseline, command.CreateCandidates,
             request, receipt), ct);
+    }
+
+    private static void ValidatePhysical(
+        GitSourceSnapshotMirrorProof proof, GitHubTrustedRemoteReadPlan plan)
+    {
+        if (proof is null || proof.SourceSnapshotId != plan.SourceSnapshotId ||
+            proof.PhysicalMirrorId != plan.SourceMirrorId ||
+            proof.WorkpackId != plan.SourceBundle?.WorkpackId ||
+            proof.BundleSha256 != plan.SourceBundle.BundleSha256 ||
+            proof.SourceEvidenceSha256 != plan.SourceEvidenceSha256 ||
+            proof.SourceRefSetSha256 !=
+                GitSourceSnapshotMirrorIntegrity.SourceRefsSha(plan.SourceRefs) ||
+            proof.RemotePushInvoked || proof.RemoteWritesAuthorized ||
+            proof.MayAutomaticallyRetry || proof.MigrationComplete)
+            throw new GitHubTrustedRemoteReadException(
+                "TrustedRemoteReadPhysicalSourceMismatch");
     }
 
     private void ValidatePlan(GitHubTrustedRemoteReadPlan plan,
@@ -134,6 +170,15 @@ public sealed class GitHubTrustedRemoteReadCoordinator(
                 StringComparison.OrdinalIgnoreCase))
             throw new GitHubTrustedRemoteReadException("TrustedRemoteReadPlanInvalid");
 
+        try
+        {
+            GitSourceSnapshotMirrorIntegrity.RequirePlan(plan);
+        }
+        catch (GitSourceSnapshotMirrorException)
+        {
+            throw new GitHubTrustedRemoteReadException(
+                "TrustedRemoteReadPlanInvalid");
+        }
         try
         {
             var source = GitMirrorRefReconciler.CanonicalizeObservedRefs(
@@ -177,6 +222,13 @@ public sealed class GitHubTrustedRemoteReadCoordinator(
                 plan.Organization.ToLowerInvariant(),
                 plan.Repository.ToLowerInvariant(),
                 plan.SourceEvidenceSha256,
+                plan.SourceMirrorId.ToString("D"),
+                plan.SourceBundle?.WorkpackId.ToString("D"),
+                plan.SourceBundle?.SourceRepositoryId,
+                plan.SourceBundle?.ReconciliationSha256,
+                plan.SourceBundle?.BundleSha256,
+                plan.SourceBundle?.BundleBytes,
+                plan.SourceBundle?.RefCount,
                 GitImportRehearsalIntegrity.SealRefs(
                     "f059-source-refs-v1", plan.SourceRefs),
                 plan.BaselineSha256, plan.CandidateSetSha256,
