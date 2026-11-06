@@ -153,6 +153,13 @@ builder.Services.AddSingleton(new GitHubTransferAttemptOptions(
     builder.Configuration.GetValue("GitHubTransferAttempts:Enabled", false)));
 builder.Services.AddScoped<IGitHubTransferAttemptStore, PostgresGitHubTransferAttemptStore>();
 builder.Services.AddScoped<GitHubTransferAttemptService>();
+builder.Services.AddSingleton(new GitHubRemoteSandboxFenceOptions(
+    builder.Configuration.GetValue("GitHubRemoteSandboxFence:Enabled", false),
+    builder.Configuration.GetValue<long>("GitHubRemoteSandboxFence:AllowedRepositoryId", 0),
+    builder.Configuration["GitHubRemoteSandboxFence:AllowedRepository"] ?? ""));
+builder.Services.AddScoped<IGitHubRemoteSandboxFenceStore, PostgresGitHubRemoteSandboxFenceStore>();
+builder.Services.AddScoped<GitHubRemoteSandboxFenceService>();
+builder.Services.AddHostedService<GitHubRemoteSandboxFenceBackgroundWorker>();
 builder.Services.AddHostedService<GitHubTransferAttemptBarrierWorker>();
 var localSandboxIds = (builder.Configuration["LocalGitSandboxDispatch:AllowedSandboxIds"] ?? "")
     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -398,6 +405,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("github-remote-sandbox-fence", limiter =>
+    {
+        limiter.PermitLimit = 5;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     options.AddFixedWindowLimiter("git-local-sandbox-dispatch", limiter =>
     {
         limiter.PermitLimit = 6;
@@ -453,6 +466,7 @@ await GitHubAppWriteScopeSchema.InitializeAsync(app.Services);
 await GitHubTargetPreviewLeaseSchema.InitializeAsync(app.Services);
 await GitHubTransferAttemptSchema.InitializeAsync(app.Services);
 await GitSandboxDispatchSchema.InitializeAsync(app.Services);
+await GitHubRemoteSandboxFenceSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
@@ -528,6 +542,7 @@ app.MapIncrementalPreparationEndpoints();
 app.MapGitHubTargetPreviewLeaseEndpoints();
 app.MapGitHubCandidatePolicyEndpoints();
 app.MapGitHubTransferAttemptEndpoints();
+app.MapGitHubRemoteSandboxFenceEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
