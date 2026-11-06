@@ -46,7 +46,7 @@ public sealed class GitHubRemoteTransmitHazardIntegrityTests
         Refuse(e with { Fence = e.Fence with {
             DeadlineUtc = e.Now.AddSeconds(-1) } });
         Refuse(e with { Options = new(false, e.Options.AllowedRepositoryId,
-            e.Options.AllowedRepository) }, "RemoteTransmitHazardDisabled");
+            e.Options.AllowedRepository) }, expected: "RemoteTransmitHazardDisabled");
     }
 
     private static void Refuse(
