@@ -198,6 +198,20 @@ public sealed class PostgresGitHubRemoteTestGrantTests(
             () => store.ProposeAsync(altered, default));
         Assert.Equal("RemoteTestGrantEvidenceInvalid", ex.Code);
 
+        altered = evidence with { Preflight = evidence.Preflight with {
+            ExpectedBaselineSha256 = Sha('7')
+        }};
+        ex = await Assert.ThrowsAsync<GitHubRemoteTestGrantException>(
+            () => store.ProposeAsync(altered, default));
+        Assert.Equal("RemoteTestGrantEvidenceInvalid", ex.Code);
+
+        altered = evidence with { Attempt = evidence.Attempt with {
+            ReviewedBy = Guid.NewGuid()
+        }};
+        ex = await Assert.ThrowsAsync<GitHubRemoteTestGrantException>(
+            () => store.ProposeAsync(altered, default));
+        Assert.Equal("RemoteTestGrantStoredBarrierChanged", ex.Code);
+
         ex = await Assert.ThrowsAsync<GitHubRemoteTestGrantException>(
             () => new PostgresGitHubRemoteTestGrantStore(db,
                 TimeProvider.System, new(true,
