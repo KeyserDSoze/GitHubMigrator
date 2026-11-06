@@ -643,19 +643,27 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                     """));
             Assert.Equal("23514", unsafeName.SqlState);
         }
-        // After the immutable bundle is stored, repeating the authenticated
-        // Azure request must return the certified checkpoint without any
-        // second Git fetch or secret-bearing provider call.
+        // F-038: a synthetic PostgreSQL proof without a corresponding real
+        // local bundle can never be replayed as successfully verified.
         using (var recovered = await PostAsAsync(azureFetchPath,
             new { expectedReconciliationSha256 = reconciliationSha }, admin))
         {
-            Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
-            using var check = JsonDocument.Parse(
+            Assert.Equal(HttpStatusCode.Conflict, recovered.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
                 await recovered.Content.ReadAsStringAsync());
-            Assert.Equal(new string('d', 64),
-                check.RootElement.GetProperty("bundleSha256").GetString());
-            Assert.False(check.RootElement.GetProperty("readyForExecution").GetBoolean());
         }
+        using (var storage = new HttpRequestMessage(HttpMethod.Get,
+            bundlePath + "/storage-integrity"))
+        {
+            storage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var result = await harness.Client.SendAsync(storage);
+            Assert.Equal(HttpStatusCode.Conflict, result.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await result.Content.ReadAsStringAsync());
+        }
+        using (var anonymousStorage = await harness.Client.GetAsync(
+            bundlePath + "/storage-integrity"))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousStorage.StatusCode);
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
         using (var audit = new HttpRequestMessage(HttpMethod.Get, bundlePath))
         {

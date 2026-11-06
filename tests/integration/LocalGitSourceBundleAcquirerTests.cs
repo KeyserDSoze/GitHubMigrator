@@ -75,9 +75,11 @@ public sealed class LocalGitSourceBundleAcquirerTests
         var (_, refs, _) = root.ProvisionBareMirror();
         var request = root.Request(refs);
         var prior = await root.Acquirer.AcquireAsync(request, default);
-        var ex = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
-            root.Acquirer.AcquireAsync(request, default));
-        Assert.Equal("BundleAlreadyExists", ex.Code);
+        // If a process crashed after atomic promotion but before the DB
+        // checkpoint, the verified file is recovered without a rewrite.
+        var replay = await root.Acquirer.AcquireAsync(request, default);
+        Assert.Equal(prior.BundleSha256, replay.BundleSha256);
+        Assert.Equal(prior.BundleBytes, replay.BundleBytes);
         var path = Path.Combine(root.BundleRoot, prior.BundleFileName);
         await using var file = File.OpenRead(path);
         Assert.Equal(prior.BundleSha256,
@@ -106,6 +108,103 @@ public sealed class LocalGitSourceBundleAcquirerTests
         Assert.Equal("LocalBundleSymlinkBlocked",
             (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
                 unsafeAcquirer.AcquireAsync(request, default))).Code);
+    }
+
+    [Fact]
+    public async Task Persisted_bundle_checksum_is_rehashed_and_byte_tampering_fails_closed()
+    {
+        using var root = new LocalFixture();
+        var (_, refs, _) = root.ProvisionBareMirror();
+        var artifact = await root.Acquirer.AcquireAsync(root.Request(refs), default);
+        var stored = new GitSourceBundleView(
+            root.WorkpackId, Guid.NewGuid(), Guid.NewGuid(),
+            root.RepositoryId, artifact.SourceEvidenceSha256,
+            new string('a', 64), artifact.BundleFileName,
+            artifact.BundleSha256, artifact.BundleBytes,
+            artifact.RefCount, artifact.AcquiredAtUtc, true, false);
+        var verifier = new LocalGitBundleArtifactStore(root.BundleRoot);
+        var verified = await verifier.VerifyAsync(stored, default);
+        Assert.Equal(artifact.BundleSha256, verified.BundleSha256);
+        Assert.False(verified.ReadyForExecution);
+
+        var path = Path.Combine(root.BundleRoot, artifact.BundleFileName);
+        await File.WriteAllBytesAsync(path, new byte[checked((int)artifact.BundleBytes)]);
+        var tamper = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            verifier.VerifyAsync(stored, default));
+        Assert.Equal("BundleStoredDigestMismatch", tamper.Code);
+
+        var orphan = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            root.Acquirer.AcquireAsync(root.Request(refs), default));
+        Assert.Equal("GitObjectVerificationFailed", orphan.Code);
+    }
+
+    [Fact]
+    public async Task Missing_or_symlinked_persisted_files_never_count_as_verified()
+    {
+        using var root = new LocalFixture();
+        var (_, refs, _) = root.ProvisionBareMirror();
+        var artifact = await root.Acquirer.AcquireAsync(root.Request(refs), default);
+        var evidence = new GitSourceBundleView(
+            root.WorkpackId, Guid.NewGuid(), Guid.NewGuid(),
+            root.RepositoryId, artifact.SourceEvidenceSha256,
+            new string('a', 64), artifact.BundleFileName,
+            artifact.BundleSha256, artifact.BundleBytes,
+            artifact.RefCount, artifact.AcquiredAtUtc, true, false);
+        var verifier = new LocalGitBundleArtifactStore(root.BundleRoot);
+        var path = Path.Combine(root.BundleRoot, artifact.BundleFileName);
+        var safeCopy = Path.Combine(root.Temp, "copy.bundle");
+        File.Copy(path, safeCopy);
+        File.Delete(path);
+        Assert.Equal("BundleStoredFileMissing",
+            (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                verifier.VerifyAsync(evidence, default))).Code);
+        File.CreateSymbolicLink(path, safeCopy);
+        Assert.Equal("LocalBundleSymlinkBlocked",
+            (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                verifier.VerifyAsync(evidence, default))).Code);
+    }
+
+    [Fact]
+    public async Task Quota_is_checked_before_atomic_promotion_and_aborted_temp_is_deleted()
+    {
+        using var root = new LocalFixture();
+        var (_, refs, _) = root.ProvisionBareMirror();
+        var restricted = new LocalGitSourceBundleAcquirer(
+            root.SourceRoot, root.BundleRoot, maxStoreBytes: 128);
+        var rejected = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            restricted.AcquireAsync(root.Request(refs), default));
+        Assert.Equal("BundleStoreQuotaExceeded", rejected.Code);
+        Assert.Empty(Directory.GetFiles(root.BundleRoot, "*.bundle"));
+        Assert.Empty(Directory.GetFiles(root.BundleRoot, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task Cleanup_only_removes_old_recognized_temp_files_never_bundles()
+    {
+        using var root = new LocalFixture();
+        var store = new LocalGitBundleArtifactStore(root.BundleRoot);
+        var name = root.WorkpackId.ToString("N");
+        var obsolete = Path.Combine(root.BundleRoot,
+            name + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        var active = Path.Combine(root.BundleRoot,
+            name + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        var unknown = Path.Combine(root.BundleRoot, "other.tmp");
+        var proof = Path.Combine(root.BundleRoot, name + ".bundle");
+        await File.WriteAllTextAsync(obsolete, "abandoned staging");
+        await File.WriteAllTextAsync(active, "active staging");
+        await File.WriteAllTextAsync(unknown, "unrecognized temp");
+        await File.WriteAllTextAsync(proof, "protected bundle");
+        File.SetLastWriteTimeUtc(obsolete, DateTime.UtcNow.AddDays(-2));
+        File.SetLastWriteTimeUtc(unknown, DateTime.UtcNow.AddDays(-2));
+        Assert.Equal(1, await store.CleanupStaleTempsAsync(
+            TimeSpan.FromHours(24), default));
+        Assert.False(File.Exists(obsolete));
+        Assert.True(File.Exists(active));
+        Assert.True(File.Exists(unknown));
+        Assert.True(File.Exists(proof));
+        Assert.Equal("BundleCleanupAgeTooShort",
+            (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                store.CleanupStaleTempsAsync(TimeSpan.FromHours(1), default))).Code);
     }
 
     private sealed class LocalFixture : IDisposable

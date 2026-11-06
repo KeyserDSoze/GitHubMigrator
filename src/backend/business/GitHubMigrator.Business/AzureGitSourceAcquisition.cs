@@ -109,6 +109,7 @@ public sealed class AzureGitSourceAcquisitionService(
                 prior.SourceEvidenceSha256 != source.SourceEvidenceSha256 ||
                 prior.ReconciliationSha256 != expectedReconciliationSha256)
                 throw new GitSourceBundleException("BundleProofMismatch");
+            await bundles.VerifyStoredAsync(preparationId, planId, workpackId, ct);
             return;
         }
 
@@ -148,10 +149,13 @@ public sealed class AzureGitSourceAcquisitionService(
         if (!ValidSha(expectedReconciliationSha256))
             throw new GitSourceBundleException("InvalidBundleRequest");
         var prior = await bundles.GetAsync(preparationId, planId, workpackId, ct);
-        if (prior is not null &&
-            (!prior.IsCurrent ||
-             prior.ReconciliationSha256 != expectedReconciliationSha256))
-            throw new GitSourceBundleException("BundleProofMismatch");
+        if (prior is not null)
+        {
+            if (!prior.IsCurrent ||
+                prior.ReconciliationSha256 != expectedReconciliationSha256)
+                throw new GitSourceBundleException("BundleProofMismatch");
+            await bundles.VerifyStoredAsync(preparationId, planId, workpackId, ct);
+        }
         return prior;
     }
 

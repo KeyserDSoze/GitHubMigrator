@@ -25,6 +25,22 @@ public sealed class GitSourceBundleException(string code)
     public string Code { get; } = code;
 }
 
+// A stored database checksum is not proof that on-disk bytes still match.
+// Every actual reuse must re-hash the named local file (no arbitrary paths).
+public sealed record GitSourceBundleStorageCheck(
+    Guid WorkpackId, string BundleSha256, long BundleBytes,
+    DateTimeOffset VerifiedAtUtc, bool IsCurrent, bool ReadyForExecution)
+{
+    public static bool ValidSha(string? sha) => sha is { Length: 64 } &&
+        sha.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+}
+
+public interface IGitSourceBundleArtifactVerifier
+{
+    Task<GitSourceBundleStorageCheck> VerifyAsync(
+        GitSourceBundleView evidence, CancellationToken ct);
+}
+
 public interface IGitSourceBundleAcquirer
 {
     Task<GitSourceBundleArtifact> AcquireAsync(
@@ -50,7 +66,8 @@ public sealed class GitSourceBundleService(
     IGitTransferWorkpackRepository workpacks,
     IIncrementalGitRefReconciliationStore reconciliations,
     IIncrementalOperationPlanRepository plans,
-    IVerifiedSourceGitRefReader sourceRefs)
+    IVerifiedSourceGitRefReader sourceRefs,
+    IGitSourceBundleArtifactVerifier verifier)
 {
     public async Task<GitSourceBundleView> AcquireAsync(
         Guid preparationId, Guid planId, Guid workpackId,
@@ -99,6 +116,7 @@ public sealed class GitSourceBundleService(
                 existing.ReconciliationSha256 != expectedReconciliationSha256 ||
                 existing.SourceEvidenceSha256 != source.SourceEvidenceSha256)
                 throw new GitSourceBundleException("BundleProofMismatch");
+            await verifier.VerifyAsync(existing, ct);
             return existing;
         }
 
@@ -110,14 +128,26 @@ public sealed class GitSourceBundleService(
         // Revalidate all mutable-current checks under the DB source lock
         // inside SaveAsync. A provider/plan change during bundle export must
         // not result in falsely current saved evidence.
-        return await store.SaveAsync(preparationId, planId, workpackId,
+        var saved = await store.SaveAsync(preparationId, planId, workpackId,
             expectedReconciliationSha256, artifact, ct);
+        await verifier.VerifyAsync(saved, ct);
+        return saved;
     }
 
     public Task<GitSourceBundleView?> GetAsync(
         Guid preparationId, Guid planId, Guid workpackId,
         CancellationToken ct) =>
         store.GetAsync(preparationId, planId, workpackId, ct);
+
+    // Dedicated non-mutating endpoint/consumer check; raw GET keeps exposing
+    // only immutable DB metadata, not an assertion about live filesystem.
+    public async Task<GitSourceBundleStorageCheck?> VerifyStoredAsync(
+        Guid preparationId, Guid planId, Guid workpackId, CancellationToken ct)
+    {
+        var evidence = await store.GetAsync(
+            preparationId, planId, workpackId, ct);
+        return evidence is null ? null : await verifier.VerifyAsync(evidence, ct);
+    }
 
     private static bool ValidSha(string? value) => value is { Length: 64 } &&
         value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
