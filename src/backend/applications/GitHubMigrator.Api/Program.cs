@@ -148,6 +148,10 @@ builder.Services.AddSingleton(new GitHubAppWriteCredentialOptions(
 builder.Services.AddScoped<IGitHubAppWriteScopeStore, PostgresGitHubAppWriteScopeStore>();
 builder.Services.AddScoped<GitHubAppWriteScopeService>();
 builder.Services.AddScoped<GitHubCreateOnlyPacketService>();
+builder.Services.AddSingleton(new GitHubTargetPreviewLeaseOptions(
+    builder.Configuration.GetValue("GitHubTargetPreviewLeases:Enabled", false)));
+builder.Services.AddScoped<IGitHubTargetPreviewLeaseStore, PostgresGitHubTargetPreviewLeaseStore>();
+builder.Services.AddScoped<GitHubTargetPreviewLeaseService>();
 builder.Services.AddScoped<IGitImportRehearsalRunner>(_ =>
     new GitHubMigrator.Infrastructure.GitObjects.LocalGitImportRehearsalRunner(
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
@@ -343,6 +347,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("github-preview-lease", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     // Enqueueing work is cheap; it must not consume the shared external-API
     // budget used by Boards, Pipelines and legacy synchronous discovery.
     options.AddFixedWindowLimiter("discovery-queue", limiter =>
@@ -389,6 +399,7 @@ await GitHubImportIntentSchema.InitializeAsync(app.Services);
 await GitImportRehearsalSchema.InitializeAsync(app.Services);
 await GitHubRemoteRefFenceSchema.InitializeAsync(app.Services);
 await GitHubAppWriteScopeSchema.InitializeAsync(app.Services);
+await GitHubTargetPreviewLeaseSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
