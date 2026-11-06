@@ -16,6 +16,15 @@ public sealed class LocalGitCreateOnlyTransferRunner(
     private const int MaxGitOutput = 2 * 1024 * 1024;
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(55);
     private static readonly SemaphoreSlim Gate = new(2, 2);
+    // Linux fcntl byte-range locks are process-scoped: two tasks inside one
+    // .NET replica could both acquire the SAME file lock. A bounded striped
+    // in-process gate fixes this without retaining one semaphore per repo.
+    // The OS file lock still coordinates separate replicas/processes.
+    private static readonly SemaphoreSlim[] TargetStripes =
+        Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+    private static SemaphoreSlim Stripe(Guid sandboxId) =>
+        TargetStripes[(int)((uint)sandboxId.GetHashCode() %
+            (uint)TargetStripes.Length)];
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     public async Task<LocalGitCreateOnlyTransferReceipt> RunAsync(
@@ -31,8 +40,12 @@ public sealed class LocalGitCreateOnlyTransferRunner(
             throw new LocalGitCreateOnlyTransferException("SandboxBundleChanged");
 
         await Gate.WaitAsync(ct);
+        var stripe = Stripe(request.SandboxId);
+        var stripeHeld = false;
         try
         {
+            await stripe.WaitAsync(ct);
+            stripeHeld = true;
             await using var targetLock = await LockTargetAsync(paths.Lock, ct);
             // Revalidate root, repo and symlink boundaries AFTER waiting.
             paths = PathsFor(request.SandboxId);
@@ -141,7 +154,11 @@ public sealed class LocalGitCreateOnlyTransferRunner(
                 catch (UnauthorizedAccessException) { }
             }
         }
-        finally { Gate.Release(); }
+        finally
+        {
+            if (stripeHeld) stripe.Release();
+            Gate.Release();
+        }
     }
 
     public async Task<LocalGitCreateOnlyTransferInspection> InspectAsync(
@@ -151,8 +168,12 @@ public sealed class LocalGitCreateOnlyTransferRunner(
         LocalGitCreateOnlyTransferIntegrity.Verify(request);
         var paths = PathsFor(request.SandboxId);
         await Gate.WaitAsync(ct);
+        var stripe = Stripe(request.SandboxId);
+        var stripeHeld = false;
         try
         {
+            await stripe.WaitAsync(ct);
+            stripeHeld = true;
             await using var targetLock = await LockTargetAsync(paths.Lock, ct);
             paths = PathsFor(request.SandboxId);
             await AssertBareAndFormatAsync(paths.Destination,
@@ -163,7 +184,11 @@ public sealed class LocalGitCreateOnlyTransferRunner(
                 paths.Destination, paths.Scratch, ct);
             return LocalGitCreateOnlyTransferIntegrity.Inspect(request, actual);
         }
-        finally { Gate.Release(); }
+        finally
+        {
+            if (stripeHeld) stripe.Release();
+            Gate.Release();
+        }
     }
 
     private void EnsureEnabled()
