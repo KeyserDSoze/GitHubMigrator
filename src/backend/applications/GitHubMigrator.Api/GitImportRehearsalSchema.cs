@@ -57,14 +57,14 @@ public static class GitImportRehearsalSchema
                         AND already_matching BETWEEN 0 AND 25000
                         AND target_only_not_materialized BETWEEN 0 AND 25000
                         AND destination_created = create_candidates
-                        AND intent_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND manifest_sha256 ~ '^[0-9a-f]{64}$'
-                        AND reconciliation_sha256 ~ '^[0-9a-f]{64}$'
-                        AND bundle_sha256 ~ '^[0-9a-f]{64}$'
-                        AND safe_ref_plan_sha256 ~ '^[0-9a-f]{64}$'
-                        AND evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND verified_source_refs_sha256 ~ '^[0-9a-f]{64}$'
-                        AND created_refs_sha256 ~ '^[0-9a-f]{64}$'
+                        AND intent_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND manifest_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND reconciliation_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND bundle_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND safe_ref_plan_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND verified_source_refs_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND created_refs_sha256 ~ '^[0-9a-f]{{64}}$'
                     );
                 END IF;
             END
