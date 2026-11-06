@@ -55,6 +55,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<AzureGitFetchJobRecord>();
     public DbSet<AzureGitFetchJobEventRecord> AzureGitFetchJobEvents =>
         Set<AzureGitFetchJobEventRecord>();
+    public DbSet<GitSandboxDispatchRecord> GitSandboxDispatches =>
+        Set<GitSandboxDispatchRecord>();
+    public DbSet<GitSandboxDispatchEventRecord> GitSandboxDispatchEvents =>
+        Set<GitSandboxDispatchEventRecord>();
     public DbSet<GitHubTransferAttemptRecord> GitHubTransferAttempts =>
         Set<GitHubTransferAttemptRecord>();
     public DbSet<GitHubTransferAttemptEventRecord> GitHubTransferAttemptEvents =>
@@ -451,6 +455,53 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => new { x.JobId, x.Id })
                 .HasDatabaseName("ix_azure_git_fetch_events");
+        });
+        builder.Entity<GitSandboxDispatchRecord>(entity =>
+        {
+            entity.ToTable("git_sandbox_dispatches");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.AttemptId).HasColumnName("attempt_id");
+            entity.Property(x => x.SandboxId).HasColumnName("sandbox_id");
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.PacketSha256).HasColumnName("packet_sha256")
+                .HasMaxLength(64);
+            entity.Property(x => x.PayloadSha256).HasColumnName("payload_sha256")
+                .HasMaxLength(64);
+            entity.Property(x => x.PayloadJson).HasColumnName("payload_json");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(32);
+            entity.Property(x => x.ClaimToken).HasColumnName("claim_token");
+            entity.Property(x => x.ClaimUntilUtc).HasColumnName("claim_until_utc");
+            entity.Property(x => x.OutcomeSha256).HasColumnName("outcome_sha256")
+                .HasMaxLength(64);
+            entity.Property(x => x.OutcomeCode).HasColumnName("outcome_code")
+                .HasMaxLength(40);
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.RemoteWritesPerformed)
+                .HasColumnName("remote_writes_performed");
+            entity.Property(x => x.ExecutionAuthorized)
+                .HasColumnName("execution_authorized");
+            entity.Property(x => x.ReadyForExecution)
+                .HasColumnName("ready_for_execution");
+            entity.HasIndex(x => x.AttemptId).IsUnique()
+                .HasDatabaseName("ux_git_sandbox_dispatch_attempt");
+            entity.HasIndex(x => new { x.State, x.CreatedAtUtc, x.Id })
+                .HasDatabaseName("ix_git_sandbox_dispatch_poll");
+        });
+        builder.Entity<GitSandboxDispatchEventRecord>(entity =>
+        {
+            entity.ToTable("git_sandbox_dispatch_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.DispatchId).HasColumnName("dispatch_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(32);
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitSandboxDispatchRecord>().WithMany()
+                .HasForeignKey(x => x.DispatchId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.DispatchId, x.Id })
+                .HasDatabaseName("ix_git_sandbox_dispatch_events");
         });
         builder.Entity<GitHubTransferAttemptRecord>(entity =>
         {

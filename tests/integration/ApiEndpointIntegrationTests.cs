@@ -184,6 +184,39 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
     }
 
     [Fact]
+    public async Task F049_local_sandbox_dispatch_requires_superadmin_and_never_accepts_missing_attempt()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}" +
+            $"/transfer-attempts/{Guid.NewGuid()}/local-sandbox";
+        async Task<HttpResponseMessage> SubmitAsync(string? token)
+        {
+            using var message = new HttpRequestMessage(HttpMethod.Post, url) {
+                Content = JsonContent.Create(new { sandboxId = Guid.NewGuid() })
+            };
+            if (token is not null)
+                message.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(message);
+        }
+        using var anonymous = await SubmitAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await SubmitAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await SubmitAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await SubmitAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.NotFound, superadmin.StatusCode);
+        Assert.Contains("SandboxDependencyNotFound",
+            await superadmin.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task Health_and_readiness_are_served_by_real_API_and_database()
     {
         using var health = await harness.Client.GetAsync("/api/health");
