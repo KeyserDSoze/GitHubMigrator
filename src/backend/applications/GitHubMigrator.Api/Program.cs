@@ -363,7 +363,7 @@ builder.Services.AddRateLimiter(options =>
     });
     options.AddFixedWindowLimiter("github-candidate-policy", limiter =>
     {
-        limiter.PermitLimit = 4;
+        limiter.PermitLimit = 6;
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
