@@ -532,7 +532,7 @@ public static class IncrementalPreparationEndpoints
                 { return OperationPlanError(ex); }
                 catch (IncrementalTargetPreflightException ex)
                 { return Results.Conflict(new { error = ex.Code }); }
-            }).RequireRateLimiting("incremental-review");
+            }).RequireRateLimiting("import-readiness");
 
         routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/import-readiness",
             async Task<IResult> (Guid id, Guid planId, Guid workpackId,
