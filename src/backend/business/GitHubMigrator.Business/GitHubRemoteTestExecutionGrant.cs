@@ -79,6 +79,11 @@ public static class GitHubRemoteTestGrantIntegrity
             !GitSourceBundleStorageCheck.ValidSha(preflight.OriginalPolicySha256) ||
             !GitSourceBundleStorageCheck.ValidSha(preflight.CurrentPolicySha256) ||
             !GitSourceBundleStorageCheck.ValidSha(preflight.ObservedBaselineSha256) ||
+            preflight.ExpectedBaselineSha256 !=
+                preflight.ObservedBaselineSha256 ||
+            preflight.MatchingBaselineRefs < 0 ||
+            preflight.AbsentCreateCandidates is < 1 or >
+                GitHubCandidatePolicyIntegrity.MaxOnlineCandidates ||
             preflight.RepositoryId != options.AllowedRepositoryId ||
             preflight.AbsentCreateCandidates is < 1 or >
                 GitHubCandidatePolicyIntegrity.MaxOnlineCandidates ||
@@ -109,6 +114,9 @@ public static class GitHubRemoteTestGrantIntegrity
             attempt.PlanId != fence.PlanId ||
             attempt.ScopeId != fence.ScopeId ||
             attempt.RepositoryId != fence.RepositoryId ||
+            !string.Equals(attempt.Organization + "/" + attempt.Repository,
+                fence.Organization + "/" + fence.Repository,
+                StringComparison.OrdinalIgnoreCase) ||
             attempt.PacketSha256 != preflight.PacketSha256 ||
             attempt.CandidateSetSha256 != preflight.CandidateSetSha256 ||
             attempt.PolicySha256 != preflight.OriginalPolicySha256 ||
