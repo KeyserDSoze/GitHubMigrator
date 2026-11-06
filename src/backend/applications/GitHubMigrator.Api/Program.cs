@@ -131,6 +131,8 @@ builder.Services.AddScoped<IGitSourceBundleArtifactVerifier>(_ =>
         maxStorageBytes: builder.Configuration.GetValue<long>(
             "GitSourceBundles:MaxStorageBytes",
             GitHubMigrator.Infrastructure.GitObjects.LocalGitBundleArtifactStore.DefaultMaxStorageBytes)));
+builder.Services.AddScoped<IGitHubImportReadinessStore, PostgresGitHubImportReadinessStore>();
+builder.Services.AddScoped<GitHubImportReadinessService>();
 builder.Services.AddScoped<GitSourceBundleService>();
 builder.Services.AddScoped<IGitTransferWorkpackRepository, PostgresGitTransferWorkpackRepository>();
 builder.Services.AddScoped<GitTransferWorkpackService>();
@@ -148,6 +150,11 @@ builder.Services.AddScoped<BoardReconciliationService>();
 builder.Services.AddHttpClient<GitHubDestinationAccessReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubDestinationAccessReader>(s => s.GetRequiredService<GitHubDestinationAccessReader>());
+builder.Services.AddHttpClient<GitHubImportRepositoryReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubImportRepositoryReader>(
+    provider => provider.GetRequiredService<GitHubImportRepositoryReader>());
 builder.Services.AddHttpClient<GitHubTargetRepositoryProbe>(c => c.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubTargetRepositoryProbe>(s => s.GetRequiredService<GitHubTargetRepositoryProbe>());
@@ -304,6 +311,7 @@ app.UseAuthorization();
 await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Environment, app.Logger);
 await GitTransferWorkpackSchema.InitializeAsync(app.Services);
 await GitSourceBundleSchema.InitializeAsync(app.Services);
+await GitHubImportReadinessSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
