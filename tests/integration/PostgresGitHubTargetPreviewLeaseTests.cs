@@ -61,7 +61,7 @@ public sealed class PostgresGitHubTargetPreviewLeaseTests(
         }
 
         var results = await Task.WhenAll(actors.Select(Attempt));
-        var winner = Assert.Single(results.Where(x => x is not null))!;
+        var winner = Assert.Single(results, x => x is not null)!;
         Assert.Equal(1, winner.Generation);
         Assert.False(winner.ExecutionAuthorized);
         Assert.False(winner.RemoteWritesPerformed);
@@ -72,8 +72,8 @@ public sealed class PostgresGitHubTargetPreviewLeaseTests(
         Assert.Equal(GitHubTargetPreviewLeaseIntegrity.Held, status!.State);
         Assert.DoesNotContain("leaseToken", System.Text.Json.JsonSerializer.Serialize(status),
             StringComparison.OrdinalIgnoreCase);
-        Assert.Single((await store.EventsAsync(packet.RepositoryId, default))
-            .Where(x => x.Type == "Acquired"));
+        Assert.Single(await store.EventsAsync(packet.RepositoryId, default),
+            x => x.Type == "Acquired");
         Assert.True(await store.ReleaseAsync(packet.RepositoryId,
             winner.ActorId, winner.LeaseToken, winner.Generation,
             winner.PacketSha256, default));
@@ -185,15 +185,16 @@ public sealed class PostgresGitHubTargetPreviewLeaseTests(
         var store = Store(db);
         var claim = await store.AcquireAsync(packet, Guid.NewGuid(),
             TimeSpan.FromSeconds(10), default);
-        foreach (var column in new[] {
-            "execution_authorized", "remote_writes_performed", "ready_for_execution" })
-        {
-            // These columns are literal trusted test constants, never input.
-            await Assert.ThrowsAnyAsync<Exception>(() =>
-                db.Database.ExecuteSqlRawAsync(
-                    $"UPDATE github_target_preview_leases SET {column} = true " +
-                    $"WHERE repository_id = {packet.RepositoryId}"));
-        }
+        var forbiddenWrites = new Func<Task>[] {
+            () => db.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE github_target_preview_leases SET execution_authorized = {true} WHERE repository_id = {packet.RepositoryId}"),
+            () => db.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE github_target_preview_leases SET remote_writes_performed = {true} WHERE repository_id = {packet.RepositoryId}"),
+            () => db.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE github_target_preview_leases SET ready_for_execution = {true} WHERE repository_id = {packet.RepositoryId}")
+        };
+        foreach (var denied in forbiddenWrites)
+            await Assert.ThrowsAnyAsync<Exception>(denied);
         Assert.True(await store.ReleaseAsync(packet.RepositoryId,
             claim.ActorId, claim.LeaseToken, claim.Generation,
             claim.PacketSha256, default));
