@@ -782,10 +782,10 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             getImport.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
             using var response = await harness.Client.SendAsync(getImport);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            var payload = await response.Content.ReadAsStringAsync();
-            Assert.DoesNotContain(ApiHarness.SourceToken, payload);
-            Assert.DoesNotContain(ApiHarness.TargetToken, payload);
-            using var importJson = JsonDocument.Parse(payload);
+            var importBody = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.SourceToken, importBody);
+            Assert.DoesNotContain(ApiHarness.TargetToken, importBody);
+            using var importJson = JsonDocument.Parse(importBody);
             Assert.Equal(importId, importJson.RootElement.GetProperty("id").GetGuid());
             Assert.False(importJson.RootElement.GetProperty("readyForExecution").GetBoolean());
             Assert.False(importJson.RootElement.GetProperty("writeCapabilityVerified").GetBoolean());
