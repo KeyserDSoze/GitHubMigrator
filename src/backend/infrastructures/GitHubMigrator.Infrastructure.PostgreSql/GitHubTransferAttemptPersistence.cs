@@ -197,16 +197,11 @@ public sealed class PostgresGitHubTransferAttemptStore(
             return null;
         }
         var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
-            WITH selected AS (
-                SELECT id FROM github_transfer_attempts
-                WHERE state = 'Reviewed'
-                ORDER BY created_at_utc, id
-                FOR UPDATE SKIP LOCKED LIMIT 1
-            ), blocked AS (
+            WITH blocked AS (
                 UPDATE github_transfer_attempts a
                 SET state = 'BlockedAtWriteBarrier',
                     blocked_at_utc = {now}
-                FROM selected s WHERE a.id = s.id
+                WHERE a.id = {id.Value}
                     AND a.state = 'Reviewed'
                     AND a.transport_attempted = false
                     AND a.execution_authorized = false
@@ -220,19 +215,11 @@ public sealed class PostgresGitHubTransferAttemptStore(
             """, ct);
         await tx.CommitAsync(ct);
         if (changed == 0) return null;
-        // Return only a successfully changed row. Another replica may
-        // have claimed a different job; do not report that as this one.
-        return await db.GitHubTransferAttempts.AsNoTracking()
-            .Where(x => x.State == GitHubTransferAttemptStates.BlockedAtWriteBarrier &&
-                x.BlockedAtUtc == now)
-            .OrderByDescending(x => x.Id).Select(x => new GitHubTransferAttemptView(
-                x.Id, x.PreparationId, x.PlanId, x.ScopeId, x.RepositoryId,
-                x.Organization, x.Repository, x.PacketSha256, x.PolicySha256,
-                x.CandidateSetSha256, x.CandidateCount, x.LeaseGeneration,
-                x.State, x.RequestedBy, x.ReviewedBy, x.CreatedAtUtc,
-                x.ReviewedAtUtc, x.BlockedAtUtc, x.TransportAttempted,
-                x.ExecutionAuthorized, x.RemoteWritesPerformed,
-                x.ReadyForExecution)).FirstOrDefaultAsync(ct);
+        // Only this exact selected attempt can be reported. A competing
+        // replica may have updated the same row first: then changed == 0.
+        return Map(await db.GitHubTransferAttempts.AsNoTracking()
+            .SingleAsync(x => x.Id == id.Value &&
+                x.State == GitHubTransferAttemptStates.BlockedAtWriteBarrier, ct));
     }
 
     public async Task<GitHubTransferAttemptView?> GetAsync(
@@ -271,8 +258,8 @@ public sealed class PostgresGitHubTransferAttemptStore(
             x.LeaseUntilUtc > now && x.ActorId == actorId &&
             x.LeaseToken == leaseToken && x.Generation == generation &&
             x.PacketSha256 == packetSha256 &&
-            x.Organization.ToLower() == organization.ToLower() &&
-            x.Repository.ToLower() == repository.ToLower() &&
+            x.Organization == organization &&
+            x.Repository == repository &&
             !x.ExecutionAuthorized && !x.RemoteWritesPerformed &&
             !x.ReadyForExecution, ct);
     }
