@@ -107,7 +107,6 @@ public sealed class PostgresGitHubTrustedRemoteReadPlanReader(
             input.ObserverId == hazard.MarkedBy)
             throw Reject("TrustedRemoteReadBarrierChanged");
 
-        IReadOnlyList<GitMirrorRef> original;
         IReadOnlyList<GitMirrorRef> candidates;
         try
         {
@@ -116,9 +115,6 @@ public sealed class PostgresGitHubTrustedRemoteReadPlanReader(
                 input.OriginalBaseline);
             if (!baseline.Refs.SequenceEqual(input.OriginalBaseline))
                 throw Reject("TrustedRemoteReadBaselineInvalid");
-            original = GitMirrorRefReconciler.CanonicalizeObservedRefs(
-                input.OriginalBaseline.Select(x =>
-                    new GitMirrorRef(x.Name, x.ObjectId)).ToArray());
             candidates = GitHubRemoteTipIntegrity.CanonicalCandidates(
                 input.CreateCandidates);
         }
@@ -143,13 +139,9 @@ public sealed class PostgresGitHubTrustedRemoteReadPlanReader(
             candidatesSha != grant.CandidateSetSha256)
             throw Reject("TrustedRemoteReadStoredHashesMismatch");
 
-        var expected = GitMirrorRefReconciler.CanonicalizeObservedRefs(
-            original.Concat(candidates).ToArray());
-        var targetSha = GitImportRehearsalIntegrity.SealRefs(
-            "f052-complete-ref-set-v1", expected);
-        // F-052's RefSetSha256 is a provider typed-ref fingerprint;
-        // do NOT infer the type of annotated tags from OIDs. F-058 will
-        // compare the actual provider-sealed observation against it.
+        // F-054 stores a SHA of provider-typed refs. It is not possible
+        // to reconstruct annotated tag object types from an OID alone.
+        // The actual provider observation is checked by F-059/F-058.
         var plan = await planRepository.GetAsync(
             grant.PreparationId, grant.PlanId, ct)
             ?? throw Reject("TrustedRemoteReadSourcePlanUnavailable");
