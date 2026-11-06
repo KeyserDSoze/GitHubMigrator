@@ -36,15 +36,16 @@ public sealed class LocalGitCreateOnlyTransferRunner(
             await using var targetLock = await LockTargetAsync(paths.Lock, ct);
             // Revalidate root, repo and symlink boundaries AFTER waiting.
             paths = PathsFor(request.SandboxId);
-            await AssertBareAndFormatAsync(paths.Destination,
-                request.SourceRefs[0].ObjectId.Length == 40 ? "sha1" : "sha256",
-                paths.Root, ct);
-
             var working = Path.Combine(paths.Scratch,
                 request.SandboxId.ToString("N") + "-" + Guid.NewGuid().ToString("N"));
             try
             {
+                // Launch Git only from our fresh private working directory,
+                // identical to the already tested F-041 process boundary.
                 Directory.CreateDirectory(working);
+                await AssertBareAndFormatAsync(paths.Destination,
+                    request.SourceRefs[0].ObjectId.Length == 40 ? "sha1" : "sha256",
+                    working, ct);
                 var source = Path.Combine(working, "source.git");
                 var bundleFile = Path.Combine(verifier.Root,
                     request.Bundle.BundleFileName);
@@ -152,9 +153,9 @@ public sealed class LocalGitCreateOnlyTransferRunner(
             paths = PathsFor(request.SandboxId);
             await AssertBareAndFormatAsync(paths.Destination,
                 request.SourceRefs[0].ObjectId.Length == 40 ? "sha1" : "sha256",
-                paths.Root, ct);
+                paths.Scratch, ct);
             var actual = await ReadRefsAsync(
-                paths.Destination, paths.Root, ct);
+                paths.Destination, paths.Scratch, ct);
             return LocalGitCreateOnlyTransferIntegrity.Inspect(request, actual);
         }
         finally { Gate.Release(); }
@@ -338,8 +339,13 @@ public sealed class LocalGitCreateOnlyTransferRunner(
         }
         catch (OperationCanceledException) when (!external.IsCancellationRequested)
         { throw new LocalGitCreateOnlyTransferException("SandboxGitDeadline"); }
-        catch (System.ComponentModel.Win32Exception)
-        { throw new LocalGitCreateOnlyTransferException("SandboxGitUnavailable"); }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // Numeric errno is safe diagnostic evidence: never include
+            // executable paths, raw process arguments or stderr.
+            throw new LocalGitCreateOnlyTransferException(
+                "SandboxGitUnavailable" + ex.NativeErrorCode);
+        }
         finally
         {
             if (started && !process.HasExited)
