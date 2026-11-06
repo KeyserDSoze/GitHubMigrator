@@ -499,6 +499,102 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-041: runs an explicitly enabled, OFFLINE Git import rehearsal
+        // against a disposable local bare repo. NEVER writes to GitHub.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/import-intents/{intentId:guid}/git-rehearsals",
+            async Task<IResult> (Guid id, Guid planId, Guid intentId,
+                CreateGitImportRehearsalRequest request, ClaimsPrincipal principal,
+                GitImportRehearsalService service, CancellationToken ct) =>
+            {
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor)) return Results.Unauthorized();
+                try
+                {
+                    var evidence = await service.RehearseAsync(id, planId, intentId,
+                        request.ExpectedIntentEvidenceSha256 ?? "", actor, ct);
+                    return Results.Accepted(
+                        $"/api/incremental-preparations/{id}/operation-plans/{planId}/git-rehearsals/{evidence.Id}",
+                        evidence);
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "GitRehearsalDependencyNotFound" }); }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("git-rehearsal");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/git-rehearsals/{rehearsalId:guid}",
+            async Task<IResult> (Guid id, Guid planId, Guid rehearsalId,
+                GitImportRehearsalService service, CancellationToken ct) =>
+            {
+                try
+                {
+                    var record = await service.GetAsync(id, planId, rehearsalId, ct);
+                    return record is null
+                        ? Results.NotFound(new { error = "GitRehearsalNotFound" })
+                        : Results.Ok(record);
+                }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/git-rehearsals",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                GitImportRehearsalService service, CancellationToken ct) =>
+            {
+                try
+                { return Results.Ok(await service.ListAsync(id, planId, workpackId, ct)); }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
         // F-040: two-person, expiring acknowledgment of a non-destructive
         // Git REF CREATE plan. It is NOT a GitHub write authorization.
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/import-readiness/{readinessId:guid}/intents",
@@ -954,6 +1050,11 @@ public static class IncrementalPreparationEndpoints
             ? Results.BadRequest(new { error = ex.Code })
             : Results.Conflict(new { error = ex.Code });
 
+    private static IResult GitRehearsalError(GitImportRehearsalException ex) =>
+        ex.Code is "GitRehearsalRequestInvalid" or "GitRehearsalEvidenceInvalid"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
+
     private static IResult ImportIntentError(GitHubImportIntentException ex) =>
         ex.Code is "InvalidImportIntentRequest" or "InvalidImportIntentDecision"
             or "ImportPolicyInvalidDestination"
@@ -1030,3 +1131,6 @@ public sealed record CreateGitHubImportReadinessRequest(
 public sealed record CreateGitHubImportIntentRequest(string? ExpectedReadinessSha256);
 public sealed record DecideGitHubImportIntentRequest(
     string? ExpectedReadinessSha256, string? Decision, string? AcknowledgementText);
+
+public sealed record CreateGitImportRehearsalRequest(
+    string? ExpectedIntentEvidenceSha256);
