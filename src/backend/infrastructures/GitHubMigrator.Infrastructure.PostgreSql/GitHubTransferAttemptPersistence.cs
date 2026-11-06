@@ -27,6 +27,7 @@ public sealed class GitHubTransferAttemptRecord
     public DateTimeOffset CreatedAtUtc { get; set; }
     public DateTimeOffset? ReviewedAtUtc { get; set; }
     public DateTimeOffset? BlockedAtUtc { get; set; }
+    public DateTimeOffset? ExpiredAtUtc { get; set; }
     public string State { get; set; } = "";
     public bool TransportAttempted { get; set; }
     public bool ExecutionAuthorized { get; set; }
@@ -68,6 +69,7 @@ public sealed class PostgresGitHubTransferAttemptStore(
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockRepositoryAsync(draft.RepositoryId, ct);
+        await ExpireStaleForRepositoryAsync(draft.RepositoryId, now, ct);
         if (!await LeaseMatchesAsync(draft.RepositoryId, draft.RequestedBy,
             draft.LeaseToken, draft.LeaseGeneration, draft.PacketSha256,
             draft.Organization, draft.Repository, now, ct))
@@ -107,7 +109,7 @@ public sealed class PostgresGitHubTransferAttemptStore(
                 organization, repository, packet_sha256, policy_sha256,
                 candidate_set_sha256, candidate_count, policy_observed_at_utc,
                 lease_token, lease_generation, requested_by, reviewed_by,
-                created_at_utc, reviewed_at_utc, blocked_at_utc, state,
+                created_at_utc, reviewed_at_utc, blocked_at_utc, expired_at_utc, state,
                 transport_attempted, execution_authorized,
                 remote_writes_performed, ready_for_execution)
             VALUES ({id}, {draft.PreparationId}, {draft.PlanId},
@@ -117,7 +119,7 @@ public sealed class PostgresGitHubTransferAttemptStore(
                 {draft.CandidateSetSha256}, {draft.CandidateCount},
                 {draft.PolicyObservedAtUtc}, {draft.LeaseToken},
                 {draft.LeaseGeneration}, {draft.RequestedBy}, NULL,
-                {now}, NULL, NULL, 'AwaitingIndependentReview',
+                {now}, NULL, NULL, NULL, 'AwaitingIndependentReview',
                 false, false, false, false)
             """, ct);
         await EventAsync(id, "Prepared", draft.RequestedBy, now, ct);
@@ -178,6 +180,66 @@ public sealed class PostgresGitHubTransferAttemptStore(
         return Map((await db.GitHubTransferAttempts.AsNoTracking()
             .SingleAsync(x => x.Id == attemptId, ct)));
     }
+
+    public async Task<bool> ExpireNextStaleAsync(CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var repositoryId = await db.GitHubTransferAttempts.AsNoTracking()
+            .Where(a => a.State == GitHubTransferAttemptStates.AwaitingIndependentReview
+                && !db.GitHubTargetPreviewLeases.Any(l =>
+                    l.RepositoryId == a.RepositoryId &&
+                    l.State == GitHubTargetPreviewLeaseIntegrity.Held &&
+                    l.LeaseToken == a.LeaseToken &&
+                    l.Generation == a.LeaseGeneration &&
+                    l.ActorId == a.RequestedBy &&
+                    l.PacketSha256 == a.PacketSha256 &&
+                    l.LeaseUntilUtc > now))
+            .OrderBy(a => a.CreatedAtUtc)
+            .Select(a => (long?)a.RepositoryId).FirstOrDefaultAsync(ct);
+        if (repositoryId is null)
+        {
+            await tx.CommitAsync(ct);
+            return false;
+        }
+        await LockRepositoryAsync(repositoryId.Value, ct);
+        var changed = await ExpireStaleForRepositoryAsync(
+            repositoryId.Value, now, ct);
+        await tx.CommitAsync(ct);
+        return changed > 0;
+    }
+
+    // Expiration is always read-only. This CAS can run both on worker polls
+    // and proactively during a fresh prepare, so disabling background
+    // polling never leaves an abandoned unique active target slot forever.
+    private Task<int> ExpireStaleForRepositoryAsync(
+        long repositoryId, DateTimeOffset now, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH expired AS (
+                UPDATE github_transfer_attempts a
+                SET state = 'Expired', expired_at_utc = {now}
+                WHERE a.repository_id = {repositoryId}
+                  AND a.state = 'AwaitingIndependentReview'
+                  AND a.transport_attempted = false
+                  AND a.execution_authorized = false
+                  AND a.remote_writes_performed = false
+                  AND a.ready_for_execution = false
+                  AND NOT EXISTS (
+                      SELECT 1 FROM github_target_preview_leases l
+                      WHERE l.repository_id = a.repository_id
+                        AND l.state = 'Held'
+                        AND l.lease_token = a.lease_token
+                        AND l.generation = a.lease_generation
+                        AND l.actor_id = a.requested_by
+                        AND l.packet_sha256 = a.packet_sha256
+                        AND l.lease_until_utc > {now}
+                  )
+                RETURNING a.id
+            )
+            INSERT INTO github_transfer_attempt_events
+                (attempt_id, type, actor_id, occurred_at_utc)
+            SELECT id, 'LeaseExpired', {Guid.Empty}, {now} FROM expired
+            """, ct);
 
     public async Task<GitHubTransferAttemptView?> BlockNextAtWriteBarrierAsync(
         CancellationToken ct)
@@ -283,7 +345,8 @@ public sealed class PostgresGitHubTransferAttemptStore(
             x.Organization, x.Repository, x.PacketSha256, x.PolicySha256,
             x.CandidateSetSha256, x.CandidateCount, x.LeaseGeneration,
             x.State, x.RequestedBy, x.ReviewedBy, x.CreatedAtUtc,
-            x.ReviewedAtUtc, x.BlockedAtUtc, x.TransportAttempted,
+            x.ReviewedAtUtc, x.BlockedAtUtc, x.ExpiredAtUtc,
+            x.TransportAttempted,
             x.ExecutionAuthorized, x.RemoteWritesPerformed,
             x.ReadyForExecution);
 }
