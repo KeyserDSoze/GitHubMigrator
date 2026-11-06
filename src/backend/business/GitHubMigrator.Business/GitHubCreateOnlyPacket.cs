@@ -210,7 +210,7 @@ public sealed class GitHubCreateOnlyPacketService(
     IGitImportRehearsalStore rehearsals, IGitSourceBundleEvidenceStore bundles,
     IGitSourceBundleArtifactVerifier disk,
     IIncrementalGitRefReconciliationStore reconciliations,
-    IIncrementalOperationPlanRepository plans)
+    IIncrementalOperationPlanRepository plans, TimeProvider clock)
 {
     public async Task<GitHubCreateOnlyPacket> PreviewAsync(
         Guid preparationId, Guid planId, Guid scopeId, CancellationToken ct)
@@ -243,6 +243,7 @@ public sealed class GitHubCreateOnlyPacketService(
             !rehearsal.IsCurrent || !plan.IsCurrent || !review.IsCurrent ||
             !bundle.IsCurrent)
             throw new GitHubCreateOnlyPacketException("PacketDependencyStale");
+        EnsureFresh(scope, fence, intent, clock.GetUtcNow());
         await VerifyDiskAsync(bundle, disk, ct);
 
         var refs = new List<GitMirrorRefComparison>();
@@ -272,10 +273,38 @@ public sealed class GitHubCreateOnlyPacketService(
             throw new GitHubCreateOnlyPacketException("PacketPaginationInvalid");
 
         await VerifyDiskAsync(bundle, disk, ct);
-        // This method is read-only and does not obtain a source transaction
-        // lock. Freshness can be invalidated immediately after it returns.
+        // Fence and human-intent expiry can pass during 2x full disk hashing
+        // or while paginating a large comparison. Refuse a stale response.
+        EnsureFresh(scope, fence, intent, clock.GetUtcNow());
+        var latestScope = await scopes.GetAsync(preparationId, planId, scopeId, ct);
+        var latestFence = await fences.GetAsync(preparationId, planId, fence.Id, ct);
+        var latestIntent = await intents.GetAsync(preparationId, planId, intent.Id, ct);
+        var latestPlan = await plans.GetAsync(preparationId, planId, ct);
+        if (latestScope is not { IsCurrent: true } ||
+            latestFence is not { IsCurrent: true } ||
+            latestIntent is not { IsCurrent: true, IsExpired: false } ||
+            latestPlan is not { IsCurrent: true } ||
+            latestScope.EvidenceSha256 != scope.EvidenceSha256 ||
+            latestFence.EvidenceSha256 != fence.EvidenceSha256 ||
+            latestIntent.EvidenceSha256 != intent.EvidenceSha256 ||
+            latestPlan.ManifestSha256 != plan.ManifestSha256)
+            throw new GitHubCreateOnlyPacketException("PacketDependencyStale");
+
+        // This method is read-only: these rechecks do NOT constitute a
+        // transaction/lease over external GitHub state.
         return GitHubCreateOnlyPacketIntegrity.Build(
-            scope, fence, intent, rehearsal, plan, review, bundle, refs);
+            latestScope, latestFence, latestIntent,
+            rehearsal, latestPlan, review, bundle, refs);
+
+    }
+
+    private static void EnsureFresh(
+        GitHubAppWriteScopeView scope, GitHubRemoteRefFenceView fence,
+        GitHubImportIntentView intent, DateTimeOffset now)
+    {
+        if (now >= fence.ExpiresAtUtc || now >= intent.ExpiresAtUtc ||
+            now >= scope.TokenExpiresAtUtc || now < fence.ObservedAtUtc.AddSeconds(-5))
+            throw new GitHubCreateOnlyPacketException("PacketDependencyStale");
     }
 
     private static async Task VerifyDiskAsync(
