@@ -1169,6 +1169,149 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
+        // F-041: a real HTTP request cannot mistake a PostgreSQL-only
+        // synthetic F-035 bundle for physically verified Git objects. The
+        // built-in rehearsal feature is OFF, and no Git subprocess launches.
+        var rehearsalPath =
+            $"{operationalPath}/{planId}/import-intents/{safeIntentId}/git-rehearsals";
+        string safeIntentDigest;
+        await using (var context = harness.Host.Services.CreateAsyncScope())
+        {
+            var current = await context.ServiceProvider
+                .GetRequiredService<IGitHubImportIntentStore>()
+                .GetAsync(prepId, planId, safeIntentId, default);
+            Assert.NotNull(current);
+            safeIntentDigest = current!.EvidenceSha256;
+            Assert.Equal(64, safeIntentDigest.Length);
+        }
+        var rehearseRequest = new { expectedIntentEvidenceSha256 = safeIntentDigest };
+        using (var anonymousRehearsal = await harness.Client.PostAsJsonAsync(
+            rehearsalPath, rehearseRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousRehearsal.StatusCode);
+        using (var nonAdminRehearsal = await PostAsAsync(
+            rehearsalPath, rehearseRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, nonAdminRehearsal.StatusCode);
+        using (var forgedRehearsal = await PostAsAsync(
+            rehearsalPath, new { expectedIntentEvidenceSha256 = new string('f',64) },
+            admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, forgedRehearsal.StatusCode);
+            Assert.Contains("GitRehearsalIntentNotCurrent",
+                await forgedRehearsal.Content.ReadAsStringAsync());
+        }
+        using (var unverifiedBundleRehearsal = await PostAsAsync(
+            rehearsalPath, rehearseRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict,
+                unverifiedBundleRehearsal.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await unverifiedBundleRehearsal.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // The real F-041 Git transport is tested with a real bundle in
+        // LocalGitImportRehearsalTests. This PostgreSQL integration uses an
+        // explicit test-only disk verifier, solely to isolate the source
+        // advisory transaction, unique replay and SQL no-write constraints.
+        Guid rehearsalId;
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            static PostgresGitImportRehearsalStore Make(
+                IServiceProvider services) => new(
+                services.GetRequiredService<AppDbContext>(),
+                TimeProvider.System,
+                services.GetRequiredService<IGitHubImportIntentStore>(),
+                services.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                services.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                new F039TestOnlyDiskVerifier(),
+                services.GetRequiredService<IIncrementalOperationPlanRepository>(),
+                services.GetRequiredService<IGitTransferWorkpackRepository>());
+
+            var now = DateTimeOffset.UtcNow;
+            var actor = Guid.NewGuid();
+            var candidate = new GitImportRehearsalInput(
+                prepId, planId, safeWorkpackId, safeIntentId,
+                safeIntentDigest, planSha,
+                (await one.ServiceProvider
+                    .GetRequiredService<IGitHubImportIntentStore>()
+                    .GetAsync(prepId, planId, safeIntentId, default))!
+                    .ReconciliationSha256,
+                new string('e',64),
+                (await one.ServiceProvider
+                    .GetRequiredService<IGitHubImportIntentStore>()
+                    .GetAsync(prepId, planId, safeIntentId, default))!
+                    .SafeRefPlanSha256,
+                new GitImportRehearsalArtifact(
+                    "sha1", new string('a',64), 1, 0, 0,
+                    1, new string('b',64), now), actor);
+
+            var first = Make(one.ServiceProvider);
+            var second = Make(two.ServiceProvider);
+            var together = await Task.WhenAll(
+                first.SaveAsync(candidate, default),
+                second.SaveAsync(candidate with {
+                    Artifact = candidate.Artifact with {
+                        CompletedAtUtc = now.AddMilliseconds(-100)
+                    }
+                }, default));
+            rehearsalId = together[0].Id;
+            Assert.Equal(rehearsalId, together[1].Id);
+            Assert.Equal(1, together[0].DestinationCreated);
+            Assert.False(together[0].DestinationWritesPerformed);
+            Assert.False(together[0].ExecutionAuthorized);
+            Assert.False(together[0].ReadyForExecution);
+
+            var db = one.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.GitImportRehearsals.AsNoTracking()
+                .CountAsync(x => x.IntentId == safeIntentId));
+            var mismatched = candidate with { BundleSha256 = new string('f', 64) };
+            var rejected = await Assert.ThrowsAsync<GitImportRehearsalException>(() =>
+                first.SaveAsync(mismatched, default));
+            Assert.Equal("GitRehearsalProofNotCurrent", rejected.Code);
+            foreach (var column in new[] {
+                "destination_writes_performed", "execution_authorized",
+                "ready_for_execution"
+            })
+            {
+                var sql = "UPDATE git_import_rehearsals SET " + column +
+                    " = true WHERE id = @rehearsal";
+                var denied = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlRawAsync(sql,
+                        new Npgsql.NpgsqlParameter("rehearsal", rehearsalId)));
+                Assert.Equal("23514", denied.SqlState);
+            }
+        }
+        using (var readRehearsal = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/git-rehearsals/{rehearsalId}"))
+        {
+            readRehearsal.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var result = await harness.Client.SendAsync(readRehearsal);
+            Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+            var body = await result.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            using var json = JsonDocument.Parse(body);
+            Assert.Equal("sha1",
+                json.RootElement.GetProperty("gitObjectFormat").GetString());
+            Assert.False(json.RootElement.GetProperty("destinationWritesPerformed").GetBoolean());
+            Assert.False(json.RootElement.GetProperty("executionAuthorized").GetBoolean());
+            Assert.False(json.RootElement.GetProperty("readyForExecution").GetBoolean());
+        }
+        using (var listRehearsals = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/transfer-workpacks/{safeWorkpackId}/git-rehearsals"))
+        {
+            listRehearsals.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var result = await harness.Client.SendAsync(listRehearsals);
+            Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+            using var json = JsonDocument.Parse(
+                await result.Content.ReadAsStringAsync());
+            Assert.Single(json.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())
