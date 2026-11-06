@@ -148,6 +148,7 @@ builder.Services.AddSingleton(new GitHubAppWriteCredentialOptions(
 builder.Services.AddScoped<IGitHubAppWriteScopeStore, PostgresGitHubAppWriteScopeStore>();
 builder.Services.AddScoped<GitHubAppWriteScopeService>();
 builder.Services.AddScoped<GitHubCreateOnlyPacketService>();
+builder.Services.AddScoped<GitHubCandidatePolicyService>();
 builder.Services.AddSingleton(new GitHubTargetPreviewLeaseOptions(
     builder.Configuration.GetValue("GitHubTargetPreviewLeases:Enabled", false)));
 builder.Services.AddScoped<IGitHubTargetPreviewLeaseStore, PostgresGitHubTargetPreviewLeaseStore>();
@@ -177,6 +178,13 @@ builder.Services.AddScoped<BoardReconciliationService>();
 builder.Services.AddHttpClient<GitHubDestinationAccessReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubDestinationAccessReader>(s => s.GetRequiredService<GitHubDestinationAccessReader>());
+// Fixed-host, bounded GET-only F-046 policy review. No auto redirects.
+builder.Services.AddHttpClient<GitHubCandidatePolicyReader>(
+        c => c.Timeout = TimeSpan.FromSeconds(10))
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubCandidatePolicyReader>(
+    p => p.GetRequiredService<GitHubCandidatePolicyReader>());
 builder.Services.AddHttpClient<GitHubAppScopedWriteCredentialInspector>(
         c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() =>
@@ -353,6 +361,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("github-candidate-policy", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     // Enqueueing work is cheap; it must not consume the shared external-API
     // budget used by Boards, Pipelines and legacy synchronous discovery.
     options.AddFixedWindowLimiter("discovery-queue", limiter =>
@@ -473,6 +487,7 @@ app.MapDiscoveryEndpoints();
 app.MapStagingEndpoints();
 app.MapIncrementalPreparationEndpoints();
 app.MapGitHubTargetPreviewLeaseEndpoints();
+app.MapGitHubCandidatePolicyEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
 app.MapMigrationPlanEndpoints();

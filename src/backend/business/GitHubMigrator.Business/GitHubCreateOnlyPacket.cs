@@ -210,6 +210,12 @@ public static class GitHubCreateOnlyPacketIntegrity
 
 // Independently regenerates the packet from server-side immutable evidence;
 // no body-supplied ref names, remote URLs, Git commands or credentials.
+// Server-side only: do not expose raw candidate names or object IDs in
+// F-044's public packet response.
+public sealed record GitHubCreateOnlyCandidatePacket(
+    GitHubCreateOnlyPacket Packet,
+    IReadOnlyList<GitMirrorRef> Candidates);
+
 public sealed class GitHubCreateOnlyPacketService(
     IGitHubAppWriteScopeStore scopes, IGitHubRemoteRefFenceStore fences,
     IGitHubImportIntentStore intents, IGitHubImportReadinessStore readiness,
@@ -219,6 +225,14 @@ public sealed class GitHubCreateOnlyPacketService(
     IIncrementalOperationPlanRepository plans, TimeProvider clock)
 {
     public async Task<GitHubCreateOnlyPacket> PreviewAsync(
+        Guid preparationId, Guid planId, Guid scopeId, CancellationToken ct) =>
+        (await PreviewWithCandidatesAsync(preparationId, planId, scopeId, ct))
+            .Packet;
+
+    // F-046 may consume the same complete, physically verified F-044
+    // evidence without reading the entire reconciliation a second time.
+    // The candidate list never becomes caller-controlled.
+    public async Task<GitHubCreateOnlyCandidatePacket> PreviewWithCandidatesAsync(
         Guid preparationId, Guid planId, Guid scopeId, CancellationToken ct)
     {
         if (preparationId == Guid.Empty || planId == Guid.Empty ||
@@ -298,9 +312,18 @@ public sealed class GitHubCreateOnlyPacketService(
 
         // This method is read-only: these rechecks do NOT constitute a
         // transaction/lease over external GitHub state.
-        return GitHubCreateOnlyPacketIntegrity.Build(
+        var packet = GitHubCreateOnlyPacketIntegrity.Build(
             latestScope, latestFence, latestIntent,
             rehearsal, latestPlan, review, bundle, refs);
+        var candidates = refs
+            .Where(x => x.Disposition == GitMirrorRefDisposition.CreateCandidate)
+            .Select(x => new GitMirrorRef(x.Name, x.SourceObjectId!)).ToArray();
+        if (candidates.Length != packet.CreateCandidates ||
+            GitImportRehearsalIntegrity.SealRefs(
+                "f044-create-only-candidate-refs-v1", candidates)
+                != packet.CandidateSetSha256)
+            throw new GitHubCreateOnlyPacketException("PacketRefPlanChanged");
+        return new GitHubCreateOnlyCandidatePacket(packet, candidates);
 
     }
 

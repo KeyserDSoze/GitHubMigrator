@@ -92,6 +92,56 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
     }
 
     [Fact]
+    public async Task F046_policy_review_only_accepts_superadmin_SHA_bound_request()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}" +
+            "/create-only-packet/candidate-policy";
+        var priorPolicyCalls = harness.Calls.Count(x =>
+            x.Url.AbsolutePath.Contains("/rules/branches/", StringComparison.Ordinal) ||
+            x.Url.AbsolutePath.EndsWith("/rulesets", StringComparison.Ordinal));
+        async Task<HttpResponseMessage> ReviewAsync(
+            string? jwt, string expectedPacketSha)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url) {
+                Content = JsonContent.Create(new {
+                    expectedPacketSha256 = expectedPacketSha
+                })
+            };
+            if (jwt is not null)
+                request.Headers.Authorization = new AuthenticationHeaderValue(
+                    "Bearer", jwt);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await ReviewAsync(null, new string('a', 64));
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var user = await ReviewAsync(await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword), new string('a', 64));
+        Assert.Equal(HttpStatusCode.Forbidden, user.StatusCode);
+        using var admin = await ReviewAsync(await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword), new string('a', 64));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        var superadminJwt = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        using var malformed = await ReviewAsync(superadminJwt, "fake");
+        Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+        Assert.Contains("CandidatePolicyRequestInvalid",
+            await malformed.Content.ReadAsStringAsync());
+        using var missing = await ReviewAsync(
+            superadminJwt, new string('a', 64));
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Contains("CandidatePolicyDependencyMissing",
+            await missing.Content.ReadAsStringAsync());
+
+        // No provider GET is allowed before server evidence is recovered.
+        Assert.Equal(priorPolicyCalls, harness.Calls.Count(x =>
+            x.Url.AbsolutePath.Contains("/rules/branches/", StringComparison.Ordinal) ||
+            x.Url.AbsolutePath.EndsWith("/rulesets", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task Health_and_readiness_are_served_by_real_API_and_database()
     {
         using var health = await harness.Client.GetAsync("/api/health");
