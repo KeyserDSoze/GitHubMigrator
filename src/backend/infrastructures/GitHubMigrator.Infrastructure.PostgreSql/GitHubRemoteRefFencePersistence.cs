@@ -93,7 +93,8 @@ public sealed class PostgresGitHubRemoteRefFenceStore(
             intent is not { IsCurrent: true, IsExpired: false,
                 State: GitHubImportIntentStates.Acknowledged } ||
             rehearsal is not { IsCurrent: true,
-                RemoteWritesPerformed: false } ||
+                DestinationWritesPerformed: false,
+                ExecutionAuthorized: false, ReadyForExecution: false } ||
             review is not { IsCurrent: true } ||
             reconciliation is null || !reconciliation.Reconciliation.IsCurrent ||
             bundle is not { IsCurrent: true, ReadyForExecution: false } ||
