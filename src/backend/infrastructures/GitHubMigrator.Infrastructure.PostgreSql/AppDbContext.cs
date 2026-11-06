@@ -475,6 +475,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
             entity.Property(x => x.ReviewedAtUtc).HasColumnName("reviewed_at_utc");
             entity.Property(x => x.BlockedAtUtc).HasColumnName("blocked_at_utc");
+            entity.Property(x => x.ExpiredAtUtc).HasColumnName("expired_at_utc");
             entity.Property(x => x.State).HasColumnName("state").HasMaxLength(32);
             entity.Property(x => x.TransportAttempted).HasColumnName("transport_attempted");
             entity.Property(x => x.ExecutionAuthorized).HasColumnName("execution_authorized");
