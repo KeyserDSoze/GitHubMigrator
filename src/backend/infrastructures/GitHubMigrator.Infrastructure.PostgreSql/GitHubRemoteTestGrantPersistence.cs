@@ -324,6 +324,12 @@ public sealed class PostgresGitHubRemoteTestGrantStore(
             .SingleOrDefaultAsync(x => x.Id == f.AttemptId, ct);
         if (storedFence is null ||
             storedFence.State != GitHubRemoteSandboxFenceStates.ReviewedWriteDisabled ||
+            !string.Equals(storedFence.Organization, f.Organization,
+                StringComparison.Ordinal) ||
+            !string.Equals(storedFence.Repository, f.Repository,
+                StringComparison.Ordinal) ||
+            storedFence.RequestedBy != f.RequestedBy ||
+            storedFence.ReviewedBy != f.ReviewedBy ||
             storedFence.RequestId != f.RequestId ||
             storedFence.Generation != f.Generation ||
             storedFence.DeadlineUtc <= now ||
@@ -334,6 +340,12 @@ public sealed class PostgresGitHubRemoteTestGrantStore(
             storedFence.ReadyForExecution ||
             storedAttempt is null ||
             storedAttempt.State != GitHubTransferAttemptStates.BlockedAtWriteBarrier ||
+            storedAttempt.RequestedBy != input.Attempt.RequestedBy ||
+            storedAttempt.ReviewedBy != input.Attempt.ReviewedBy ||
+            !string.Equals(storedAttempt.Organization, f.Organization,
+                StringComparison.Ordinal) ||
+            !string.Equals(storedAttempt.Repository, f.Repository,
+                StringComparison.Ordinal) ||
             storedAttempt.Id != f.AttemptId ||
             storedAttempt.RepositoryId != f.RepositoryId ||
             storedAttempt.PreparationId != f.PreparationId ||
