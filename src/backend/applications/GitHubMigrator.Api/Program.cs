@@ -166,6 +166,12 @@ builder.Services.AddSingleton(new GitHubRemoteTestGrantOptions(
     builder.Configuration["GitHubRemoteTestGrant:AllowedRepository"] ?? ""));
 builder.Services.AddScoped<IGitHubRemoteTestGrantStore, PostgresGitHubRemoteTestGrantStore>();
 builder.Services.AddScoped<IGitHubRemoteReadbackJournal, PostgresGitHubRemoteReadbackJournal>();
+builder.Services.AddSingleton(new GitHubRemoteTransmitHazardOptions(
+    builder.Configuration.GetValue("GitHubRemoteTransmitHazard:Enabled", false),
+    builder.Configuration.GetValue<long>("GitHubRemoteTransmitHazard:AllowedRepositoryId", 0),
+    builder.Configuration["GitHubRemoteTransmitHazard:AllowedRepository"] ?? ""));
+builder.Services.AddScoped<IGitHubRemoteTransmitHazardJournal,
+    PostgresGitHubRemoteTransmitHazardJournal>();
 builder.Services.AddScoped<GitHubRemoteTestGrantService>();
 builder.Services.AddHostedService<GitHubRemoteTestGrantBackgroundWorker>();
 builder.Services.AddHostedService<GitHubRemoteSandboxFenceBackgroundWorker>();
@@ -492,6 +498,7 @@ await GitSandboxDispatchSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxFenceSchema.InitializeAsync(app.Services);
 await GitHubRemoteTestGrantSchema.InitializeAsync(app.Services);
 await GitHubRemoteReadbackSchema.InitializeAsync(app.Services);
+await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
