@@ -295,6 +295,47 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
     }
 
     [Fact]
+    public async Task F052_remote_test_grant_uses_four_person_control_and_is_off_by_default()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}" +
+            $"/transfer-attempts/{Guid.NewGuid()}/remote-test-grants";
+        async Task<HttpResponseMessage> ProposeAsync(string? token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(new {
+                    fenceRequestId = Guid.NewGuid(),
+                    generation = 1,
+                    expectedPacketSha256 = new string('a', 64)
+                })
+            };
+            if (token is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await ProposeAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await ProposeAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await ProposeAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await ProposeAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.Conflict, superadmin.StatusCode);
+        var response = await superadmin.Content.ReadAsStringAsync();
+        Assert.Contains("RemoteTestGrantDisabled", response);
+        Assert.DoesNotContain("cancellationToken", response);
+        Assert.DoesNotContain("ghs_", response);
+    }
+
+    [Fact]
     public async Task Health_and_readiness_are_served_by_real_API_and_database()
     {
         using var health = await harness.Client.GetAsync("/api/health");
