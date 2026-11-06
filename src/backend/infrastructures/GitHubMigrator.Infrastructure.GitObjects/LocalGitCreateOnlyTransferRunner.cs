@@ -182,6 +182,11 @@ public sealed class LocalGitCreateOnlyTransferRunner(
                 ct);
             var actual = await ReadRefsAsync(
                 paths.Destination, paths.Scratch, ct);
+            // An observed ref SHA alone is insufficient: the target might
+            // contain missing or corrupt objects after an uncertain send.
+            // Inspection must verify object reachability without a push.
+            await GitAsync(paths.Scratch, ct, "--git-dir=" + paths.Destination,
+                "fsck", "--full", "--strict", "--no-reflogs", "--no-progress");
             return LocalGitCreateOnlyTransferIntegrity.Inspect(request, actual);
         }
         finally
