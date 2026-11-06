@@ -61,7 +61,9 @@ public static class GitHubCandidatePolicyIntegrity
             source.Packet.State != GitHubCreateOnlyPacketIntegrity.State ||
             source.Packet.ExecutionAuthorized || source.Packet.WriteCapabilityVerified ||
             source.Packet.RemoteWritesPerformed || source.Packet.ReadyForExecution ||
-            observation.Items.Count != source.Candidates.Count)
+            observation.Items.Count != source.Candidates.Count ||
+            observation.RulesetCatalogStatus is not (
+                "Observed" or "RepoUnverified" or "CatalogUnverified"))
             throw new GitHubCandidatePolicyException("CandidatePolicyObservationInvalid");
 
         var expected = source.Candidates.Select(x => new {
@@ -91,8 +93,11 @@ public static class GitHubCandidatePolicyIntegrity
                     GitHubCandidatePolicyStates.PolicyUnverified) ||
                 (item.Status == GitHubCandidatePolicyStates.RulesRequireReview
                     && item.ActiveRules == 0) ||
+                (item.Status != GitHubCandidatePolicyStates.PolicyUnverified &&
+                    (observation.RulesetCatalogStatus != "Observed" ||
+                     item.ProviderStatus != "Observed")) ||
                 (item.Status == GitHubCandidatePolicyStates.NoActiveRulesReported
-                    && (item.ActiveRules != 0 || item.ProviderStatus != "Observed")))
+                    && item.ActiveRules != 0))
                 throw new GitHubCandidatePolicyException("CandidatePolicyObservationInvalid");
             if (item.Status == GitHubCandidatePolicyStates.NoActiveRulesReported) safe++;
             if (item.Status == GitHubCandidatePolicyStates.RulesRequireReview) review++;
