@@ -115,6 +115,8 @@ builder.Services.AddScoped<IAzureGitMirrorFetcher>(_ =>
             ? builder.Configuration["GitSourceBundles:SourceRoot"] ?? ""
             : ""));
 builder.Services.AddScoped<AzureGitSourceAcquisitionService>();
+builder.Services.AddScoped<IAzureGitSourceAcquisition>(provider =>
+    provider.GetRequiredService<AzureGitSourceAcquisitionService>());
 builder.Services.AddScoped<IAzureGitFetchJobRepository, PostgresAzureGitFetchJobRepository>();
 builder.Services.AddScoped<AzureGitFetchJobService>();
 builder.Services.AddScoped<AzureGitFetchJobProcessor>();

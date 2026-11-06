@@ -91,7 +91,7 @@ public sealed class AzureGitFetchJobService(IAzureGitFetchJobRepository reposito
 
 public sealed class AzureGitFetchJobProcessor(
     IAzureGitFetchJobRepository jobs,
-    AzureGitSourceAcquisitionService acquisition)
+    IAzureGitSourceAcquisition acquisition)
 {
     // F-036 commands are bounded at 115 seconds; the process phase deadline
     // must be strictly less than its durable lease to fence a timed-out worker.

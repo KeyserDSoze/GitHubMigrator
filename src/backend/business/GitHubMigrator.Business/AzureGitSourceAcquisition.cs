@@ -19,6 +19,15 @@ public interface IAzureGitSourceLocationResolver
         CancellationToken ct);
 }
 
+public interface IAzureGitSourceAcquisition
+{
+    Task FetchMirrorAsync(Guid preparationId, Guid planId, Guid workpackId,
+        string expectedReconciliationSha256, CancellationToken ct);
+    Task<GitSourceBundleView> BundleVerifiedMirrorAsync(
+        Guid preparationId, Guid planId, Guid workpackId,
+        string expectedReconciliationSha256, CancellationToken ct);
+}
+
 public interface IAzureGitMirrorFetcher
 {
     Task FetchAsync(AzureGitMirrorFetchRequest request, CancellationToken ct);
@@ -37,6 +46,7 @@ public sealed class AzureGitSourceAcquisitionService(
     IIncrementalGitRefReconciliationStore reconciliations,
     IVerifiedSourceGitRefReader refs,
     GitSourceBundleService bundles)
+    : IAzureGitSourceAcquisition
 {
     public async Task<GitSourceBundleView> FetchAndBundleAsync(
         Guid preparationId, Guid planId, Guid workpackId,
