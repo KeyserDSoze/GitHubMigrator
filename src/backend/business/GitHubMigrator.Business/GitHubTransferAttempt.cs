@@ -8,6 +8,7 @@ public static class GitHubTransferAttemptStates
     public const string AwaitingIndependentReview = "AwaitingIndependentReview";
     public const string Reviewed = "Reviewed";
     public const string Rejected = "Rejected";
+    public const string Expired = "Expired";
     public const string BlockedAtWriteBarrier = "BlockedAtWriteBarrier";
 }
 
@@ -25,7 +26,8 @@ public sealed record GitHubTransferAttemptView(
     int CandidateCount, long LeaseGeneration, string State,
     Guid RequestedBy, Guid? ReviewedBy,
     DateTimeOffset CreatedAtUtc, DateTimeOffset? ReviewedAtUtc,
-    DateTimeOffset? BlockedAtUtc, bool TransportAttempted,
+    DateTimeOffset? BlockedAtUtc, DateTimeOffset? ExpiredAtUtc,
+    bool TransportAttempted,
     bool ExecutionAuthorized, bool RemoteWritesPerformed,
     bool ReadyForExecution);
 
@@ -104,6 +106,7 @@ public interface IGitHubTransferAttemptStore
     // remote executor needs a distinct, later authorization mechanism.
     Task<GitHubTransferAttemptView?> BlockNextAtWriteBarrierAsync(
         CancellationToken ct);
+    Task<bool> ExpireNextStaleAsync(CancellationToken ct);
 }
 
 public sealed class GitHubTransferAttemptService(
