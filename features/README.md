@@ -20,6 +20,7 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-036 | Read-only authenticated Azure DevOps Services Git acquisition | Fixed-host HTTPS Git fetch with scoped source credentials, bounded bare mirrors, sealed source-ref verification and F-035 bundle proof; no GitHub writes |
 | F-037 | Durable async Azure Git acquisition queue | PostgreSQL cross-replica two-slot leases, verified mirror/bundle checkpoints, restart recovery, safe audit events and polling API; no GitHub writes |
 | F-038 | Physical Git bundle integrity, orphan recovery and bounded local storage | Rehash on reuse, verify/promote orphan bundles without overwrite, per-root quota locking, conservative stale-temp cleanup and tests; no GitHub writes |
+| F-039 | GitHub destination import-readiness evidence (GET-only) | Exact F-032/F-038 SHA-binding, visible destination + advisory reported push, immutable PostgreSQL blockers and no-write SQL CHECK; no GitHub import |
 | F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
 | F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |

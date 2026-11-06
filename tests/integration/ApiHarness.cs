@@ -90,6 +90,8 @@ public sealed class ApiHarness : IAsyncLifetime
                     .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubRefObservationReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
+                services.AddHttpClient<GitHubImportRepositoryReader>()
+                    .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubDestinationAccessReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
             });
@@ -242,7 +244,7 @@ public sealed class ApiHarness : IAsyncLifetime
                     @object = new { sha = Sha, type = "tag" } }
             }));
         if (path == "/repos/gh-org/occupied")
-            return Json("""{"full_name":"gh-org/occupied"}""");
+            return Json("""{"full_name":"gh-org/occupied","owner":{"login":"gh-org"},"archived":false,"disabled":false,"permissions":{"push":true}}""");
         if (path == "/repos/gh-org/hidden")
             return new(HttpStatusCode.NotFound);
         if (path == "/repos/gh-org/denied")
