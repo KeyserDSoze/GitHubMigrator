@@ -178,7 +178,10 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
             length += n;
         }
         if (length > MaxReplyBytes) return null;
-        try { return JsonDocument.Parse(bytes.AsMemory(0, length)); }
+        // JsonDocument.Parse(ReadOnlyMemory<byte>) may borrow the input
+        // buffer. Copy only the bounded payload into document-owned storage
+        // BEFORE zeroing the temporary read buffer.
+        try { return JsonDocument.Parse(bytes.AsMemory(0, length).ToArray()); }
         catch (JsonException) { return null; }
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
