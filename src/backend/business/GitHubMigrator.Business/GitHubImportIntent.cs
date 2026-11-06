@@ -161,7 +161,7 @@ public sealed class GitHubImportIntentService(
             !GitSourceBundleStorageCheck.ValidSha(expectedReadinessSha256))
             throw new GitHubImportIntentException("InvalidImportIntentRequest");
 
-        var review = await readiness.GetAsync(preparationId, planId, readinessId)
+        var review = await readiness.GetAsync(preparationId, planId, readinessId, ct)
             ?? throw new KeyNotFoundException("ImportReadinessNotFound");
         if (!review.IsCurrent || review.WorkpackId != workpackId ||
             review.EvidenceSha256 != expectedReadinessSha256 ||
