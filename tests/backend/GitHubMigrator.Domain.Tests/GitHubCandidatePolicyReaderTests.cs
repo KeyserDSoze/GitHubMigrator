@@ -40,8 +40,8 @@ public sealed class GitHubCandidatePolicyReaderTests
         var observed = await Reader(http).ReadAsync(
             "gh-org", "sandbox", 2468, Token, Candidates, default);
         Assert.Equal(3, calls.Count);
-        Assert.Contains("/rulesets?includes_parents=true&per_page=100", calls);
-        Assert.Contains("/rules/branches/new-branch?per_page=100", calls);
+        Assert.Contains("/repos/gh-org/sandbox/rulesets?includes_parents=true&per_page=100", calls);
+        Assert.Contains("/repos/gh-org/sandbox/rules/branches/new-branch?per_page=100", calls);
         Assert.All(observed.Items, x => {
             Assert.Equal(GitHubCandidatePolicyStates.NoActiveRulesReported, x.Status);
             Assert.Equal("Observed", x.ProviderStatus);
