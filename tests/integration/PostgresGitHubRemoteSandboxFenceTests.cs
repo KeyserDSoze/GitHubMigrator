@@ -106,6 +106,15 @@ public sealed class PostgresGitHubRemoteSandboxFenceTests(
         var first = await store.ProposeAsync(input, default);
         clock.Advance(TimeSpan.FromSeconds(26));
 
+        // A stale-fence recovery request from the original actor must
+        // quarantine durably even though the recovery itself is rejected.
+        var staleSelfRecovery = await Assert.ThrowsAsync<GitHubRemoteSandboxFenceException>(
+            () => store.RecoverAsync(input, first.RequestId, first.Generation,
+                GitHubRemoteSandboxFenceIntegrity.RecoveryText, default));
+        Assert.Equal("RemoteFenceRecoveryMustBeIndependent",
+            staleSelfRecovery.Code);
+        Assert.Equal(GitHubRemoteSandboxFenceStates.RecoveryRequired,
+            (await store.GetAsync(input.Packet.RepositoryId, default))!.State);
         var rejected = await Assert.ThrowsAsync<GitHubRemoteSandboxFenceException>(
             () => store.ProposeAsync(input, default));
         Assert.Equal("RemoteFenceAlreadyHeldOrQuarantined", rejected.Code);
