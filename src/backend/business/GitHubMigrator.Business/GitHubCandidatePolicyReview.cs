@@ -122,8 +122,9 @@ public static class GitHubCandidatePolicyIntegrity
 public interface IGitHubCandidatePolicyReader
 {
     Task<GitHubCandidatePolicyObservation> ReadAsync(
-        string organization, string repository, string readOnlyToken,
-        IReadOnlyList<GitMirrorRef> candidates, CancellationToken ct);
+        string organization, string repository, long expectedRepositoryId,
+        string readOnlyToken, IReadOnlyList<GitMirrorRef> candidates,
+        CancellationToken ct);
 }
 
 public sealed class GitHubCandidatePolicyService(
@@ -172,7 +173,8 @@ public sealed class GitHubCandidatePolicyService(
         {
             deadline.CancelAfter(TimeSpan.FromSeconds(18));
             observed = await reader.ReadAsync(source.Packet.Organization,
-                source.Packet.Repository, token, source.Candidates, deadline.Token);
+                source.Packet.Repository, source.Packet.RepositoryId, token,
+                source.Candidates, deadline.Token);
         }
 
         // A 30-second F-042 fence may expire while provider GETs complete.
