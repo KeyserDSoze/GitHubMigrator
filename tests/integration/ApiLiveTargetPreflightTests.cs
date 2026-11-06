@@ -749,13 +749,13 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             query.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
             using var response = await harness.Client.SendAsync(query);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            using var json = JsonDocument.Parse(
+            using var fetchJobJson = JsonDocument.Parse(
                 await response.Content.ReadAsStringAsync());
-            Assert.Equal("Completed", json.RootElement.GetProperty("state").GetString());
-            Assert.Equal("BundleVerified", json.RootElement.GetProperty("phase").GetString());
-            Assert.False(json.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.Equal("Completed", fetchJobJson.RootElement.GetProperty("state").GetString());
+            Assert.Equal("BundleVerified", fetchJobJson.RootElement.GetProperty("phase").GetString());
+            Assert.False(fetchJobJson.RootElement.GetProperty("readyForExecution").GetBoolean());
             Assert.DoesNotContain(ApiHarness.SourceToken,
-                json.RootElement.ToString());
+                fetchJobJson.RootElement.ToString());
         }
         using (var eventsRead = new HttpRequestMessage(HttpMethod.Get,
             $"{operationalPath}/{planId}/source-acquisitions/{sourceJobId}/events"))
@@ -763,11 +763,11 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             eventsRead.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
             using var response = await harness.Client.SendAsync(eventsRead);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            using var json = JsonDocument.Parse(
+            using var fetchJobJson = JsonDocument.Parse(
                 await response.Content.ReadAsStringAsync());
             Assert.Equal(new[] {
                 "Queued", "Claimed", "MirrorVerified", "Claimed", "BundleVerified"
-            }, json.RootElement.EnumerateArray()
+            }, fetchJobJson.RootElement.EnumerateArray()
                 .Select(x => x.GetProperty("type").GetString()).ToArray());
         }
         await using (var scope = harness.Host.Services.CreateAsyncScope())
