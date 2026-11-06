@@ -304,7 +304,7 @@ builder.Services.AddRateLimiter(options =>
     });
     options.AddFixedWindowLimiter("git-rehearsal", limiter =>
     {
-        limiter.PermitLimit = 2;
+        limiter.PermitLimit = 6;
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });

@@ -12,6 +12,9 @@ public sealed class LocalGitImportRehearsalRunner(
     TimeProvider? clock = null) : IGitImportRehearsalRunner
 {
     public const int MaxCommandOutput = 2 * 1024 * 1024;
+    // Bound simultaneous Git work *per process*; multi-replica global
+    // admission / durable leases must be added before remote execution.
+    private static readonly SemaphoreSlim Gate = new(2, 2);
     private static readonly TimeSpan CommandDeadline = TimeSpan.FromSeconds(55);
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
@@ -67,9 +70,10 @@ public sealed class LocalGitImportRehearsalRunner(
             request.WorkpackId.ToString("N") + "-" + Guid.NewGuid().ToString("N"));
         // Directories are private, unpredictable and only created by this
         // method; neither the operator nor request body can choose a remote.
-        Directory.CreateDirectory(sandbox);
+        await Gate.WaitAsync(ct);
         try
         {
+            Directory.CreateDirectory(sandbox);
             var source = Path.Combine(sandbox, "source.git");
             var destination = Path.Combine(sandbox, "destination.git");
             var path = Path.Combine(storage.Root, request.Bundle.BundleFileName);
@@ -133,6 +137,7 @@ public sealed class LocalGitImportRehearsalRunner(
             try { Directory.Delete(sandbox, recursive: true); }
             catch (IOException) { } // Never delete outside our private sandbox.
             catch (UnauthorizedAccessException) { }
+            Gate.Release();
         }
     }
 
