@@ -139,6 +139,14 @@ builder.Services.AddScoped<IGitImportRehearsalStore, PostgresGitImportRehearsalS
 builder.Services.AddScoped<GitImportRehearsalService>();
 builder.Services.AddScoped<IGitHubRemoteRefFenceStore, PostgresGitHubRemoteRefFenceStore>();
 builder.Services.AddScoped<GitHubRemoteRefFenceService>();
+builder.Services.AddSingleton(new GitHubAppWriteCredentialOptions(
+    builder.Configuration.GetValue("GitHubAppWriteCredential:Enabled", false),
+    builder.Configuration.GetValue("GitHubAppWriteCredential:AppId", 0L),
+    builder.Configuration.GetValue("GitHubAppWriteCredential:InstallationId", 0L),
+    builder.Configuration["GitHubAppWriteCredential:PrivateKeySecretReference"] ?? "",
+    builder.Configuration["GitHubAppWriteCredential:AllowedRepository"] ?? ""));
+builder.Services.AddScoped<IGitHubAppWriteScopeStore, PostgresGitHubAppWriteScopeStore>();
+builder.Services.AddScoped<GitHubAppWriteScopeService>();
 builder.Services.AddScoped<IGitImportRehearsalRunner>(_ =>
     new GitHubMigrator.Infrastructure.GitObjects.LocalGitImportRehearsalRunner(
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
@@ -164,6 +172,12 @@ builder.Services.AddScoped<BoardReconciliationService>();
 builder.Services.AddHttpClient<GitHubDestinationAccessReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubDestinationAccessReader>(s => s.GetRequiredService<GitHubDestinationAccessReader>());
+builder.Services.AddHttpClient<GitHubAppScopedWriteCredentialInspector>(
+        c => c.Timeout = TimeSpan.FromSeconds(12))
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubAppScopedWriteCredentialInspector>(
+    p => p.GetRequiredService<GitHubAppScopedWriteCredentialInspector>());
 builder.Services.AddHttpClient<GitHubImportPolicyReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() =>
         new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
@@ -316,6 +330,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("github-app-scope", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     // Enqueueing work is cheap; it must not consume the shared external-API
     // budget used by Boards, Pipelines and legacy synchronous discovery.
     options.AddFixedWindowLimiter("discovery-queue", limiter =>
@@ -361,6 +381,7 @@ await GitHubImportReadinessSchema.InitializeAsync(app.Services);
 await GitHubImportIntentSchema.InitializeAsync(app.Services);
 await GitImportRehearsalSchema.InitializeAsync(app.Services);
 await GitHubRemoteRefFenceSchema.InitializeAsync(app.Services);
+await GitHubAppWriteScopeSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));

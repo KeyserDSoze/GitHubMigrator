@@ -55,6 +55,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<AzureGitFetchJobRecord>();
     public DbSet<AzureGitFetchJobEventRecord> AzureGitFetchJobEvents =>
         Set<AzureGitFetchJobEventRecord>();
+    public DbSet<GitHubAppWriteScopeRecord> GitHubAppWriteScopes =>
+        Set<GitHubAppWriteScopeRecord>();
     public DbSet<GitHubRemoteRefFenceRecord> GitHubRemoteRefFences =>
         Set<GitHubRemoteRefFenceRecord>();
     public DbSet<GitImportRehearsalRecord> GitImportRehearsals =>
@@ -441,6 +443,46 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => new { x.JobId, x.Id })
                 .HasDatabaseName("ix_azure_git_fetch_events");
+        });
+        builder.Entity<GitHubAppWriteScopeRecord>(entity =>
+        {
+            entity.ToTable("github_app_write_scopes");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.FenceId).HasColumnName("fence_id");
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.IntentId).HasColumnName("intent_id");
+            entity.Property(x => x.RehearsalId).HasColumnName("rehearsal_id");
+            entity.Property(x => x.DestinationConnectionId).HasColumnName("destination_connection_id");
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(100);
+            entity.Property(x => x.Repository).HasColumnName("repository").HasMaxLength(100);
+            entity.Property(x => x.InstallationId).HasColumnName("installation_id");
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.BundleSha256).HasColumnName("bundle_sha256").HasMaxLength(64);
+            entity.Property(x => x.IntentEvidenceSha256).HasColumnName("intent_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.RehearsalEvidenceSha256).HasColumnName("rehearsal_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.FenceEvidenceSha256).HasColumnName("fence_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.RemoteRefFingerprintSha256).HasColumnName("remote_ref_fingerprint_sha256").HasMaxLength(64);
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(32);
+            entity.Property(x => x.ObservedAtUtc).HasColumnName("observed_at_utc");
+            entity.Property(x => x.TokenExpiresAtUtc).HasColumnName("token_expires_at_utc");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.ScopedContentsWriteReported).HasColumnName("scoped_contents_write_reported");
+            entity.Property(x => x.WriteCapabilityVerified).HasColumnName("write_capability_verified");
+            entity.Property(x => x.ExecutionAuthorized).HasColumnName("execution_authorized");
+            entity.Property(x => x.RemoteWritesPerformed).HasColumnName("remote_writes_performed");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<GitHubRemoteRefFenceRecord>().WithOne()
+                .HasForeignKey<GitHubAppWriteScopeRecord>(x => x.FenceId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.FenceId).IsUnique()
+                .HasDatabaseName("ux_github_app_write_scope_fence");
+            entity.HasIndex(x => new { x.IntentId, x.ObservedAtUtc, x.Id })
+                .HasDatabaseName("ix_github_app_write_scope_intent");
         });
         builder.Entity<GitHubRemoteRefFenceRecord>(entity =>
         {
