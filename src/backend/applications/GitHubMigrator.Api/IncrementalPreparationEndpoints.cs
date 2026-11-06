@@ -499,6 +499,89 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-039: check a SOURCE bundle and GET-only GitHub destination
+        // metadata; returns a non-authorizing, immutable PostgreSQL review.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/import-readiness",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                CreateGitHubImportReadinessRequest request, ClaimsPrincipal principal,
+                GitHubImportReadinessService service, CancellationToken ct) =>
+            {
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor)) return Results.Unauthorized();
+                try
+                {
+                    var review = await service.CheckAsync(
+                        id, planId, workpackId,
+                        request.ExpectedReconciliationSha256 ?? "",
+                        request.ExpectedBundleSha256 ?? "", actor, ct);
+                    return Results.Ok(review);
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "ImportReadinessDependencyNotFound" }); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("import-readiness");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/import-readiness",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                GitHubImportReadinessService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.ListAsync(id, planId, workpackId, ct)); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/import-readiness/{reviewId:guid}",
+            async Task<IResult> (Guid id, Guid planId, Guid reviewId,
+                GitHubImportReadinessService service, CancellationToken ct) =>
+            {
+                try
+                {
+                    var result = await service.GetAsync(id, planId, reviewId, ct);
+                    return result is null
+                        ? Results.NotFound(new { error = "ImportReadinessNotFound" })
+                        : Results.Ok(result);
+                }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
         // F-038: live disk attestation is separate from the immutable DB
         // proof. No source/target API calls, no GitHub writes and no path input.
         routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/source-bundle/storage-integrity",
@@ -721,6 +804,11 @@ public static class IncrementalPreparationEndpoints
             ? Results.BadRequest(new { error = ex.Code })
             : Results.Conflict(new { error = ex.Code });
 
+    private static IResult ImportReadinessError(GitHubImportReadinessException ex) =>
+        ex.Code is "InvalidImportReadinessRequest" or "ImportReadinessProbeInvalid"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
+
     private static IResult BundleError(GitSourceBundleException ex) =>
         ex.Code is "InvalidBundleRequest" or "InvalidBundleRefs"
             ? Results.BadRequest(new { error = ex.Code })
@@ -779,3 +867,6 @@ public sealed record CreateGitTransferWorkpackRequest(
     string? ExpectedManifestSha256, string? ExpectedReconciliationSha256);
 
 public sealed record CreateGitSourceBundleRequest(string? ExpectedReconciliationSha256);
+
+public sealed record CreateGitHubImportReadinessRequest(
+    string? ExpectedReconciliationSha256, string? ExpectedBundleSha256);

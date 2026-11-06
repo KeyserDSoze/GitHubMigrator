@@ -55,6 +55,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<AzureGitFetchJobRecord>();
     public DbSet<AzureGitFetchJobEventRecord> AzureGitFetchJobEvents =>
         Set<AzureGitFetchJobEventRecord>();
+    public DbSet<GitHubImportReadinessRecord> GitHubImportReadiness =>
+        Set<GitHubImportReadinessRecord>();
     public DbSet<GitSourceBundleEvidenceRecord> GitSourceBundleEvidence =>
         Set<GitSourceBundleEvidenceRecord>();
     public DbSet<GitTransferWorkpackRecord> GitTransferWorkpacks =>
@@ -432,6 +434,46 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => new { x.JobId, x.Id })
                 .HasDatabaseName("ix_azure_git_fetch_events");
+        });
+        builder.Entity<GitHubImportReadinessRecord>(entity =>
+        {
+            entity.ToTable("github_import_readiness");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.ReconciliationId).HasColumnName("reconciliation_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id").HasMaxLength(256);
+            entity.Property(x => x.TargetRepositoryName).HasColumnName("target_repository_name").HasMaxLength(100);
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(100);
+            entity.Property(x => x.DestinationConnectionId).HasColumnName("destination_connection_id");
+            entity.Property(x => x.DestinationValidatedAtUtc).HasColumnName("destination_validated_at_utc");
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReconciliationSha256).HasColumnName("reconciliation_sha256").HasMaxLength(64);
+            entity.Property(x => x.TargetEvidenceSha256).HasColumnName("target_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.SourceBundleSha256).HasColumnName("source_bundle_sha256").HasMaxLength(64);
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.ObservedAtUtc).HasColumnName("observed_at_utc");
+            entity.Property(x => x.RepositoryStatus).HasColumnName("repository_status").HasMaxLength(32);
+            entity.Property(x => x.ReportedPush).HasColumnName("reported_push").HasMaxLength(24);
+            entity.Property(x => x.Archived).HasColumnName("archived");
+            entity.Property(x => x.Disabled).HasColumnName("disabled");
+            entity.Property(x => x.DivergedRefs).HasColumnName("diverged_refs");
+            entity.Property(x => x.TargetOnlyRefs).HasColumnName("target_only_refs");
+            entity.Property(x => x.CreatedBy).HasColumnName("created_by");
+            entity.Property(x => x.WriteCapabilityVerified).HasColumnName("write_capability_verified");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<GitTransferWorkpackRecord>().WithMany()
+                .HasForeignKey(x => x.WorkpackId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<IncrementalGitRefReconciliationRecord>().WithMany()
+                .HasForeignKey(x => x.ReconciliationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.WorkpackId, x.EvidenceSha256 }).IsUnique()
+                .HasDatabaseName("ux_github_import_readiness_proof");
+            entity.HasIndex(x => new { x.PlanId, x.ObservedAtUtc, x.Id })
+                .HasDatabaseName("ix_github_import_readiness_plan");
+            entity.HasIndex(x => new { x.WorkpackId, x.ObservedAtUtc, x.Id })
+                .HasDatabaseName("ix_github_import_readiness_workpack");
         });
         builder.Entity<GitSourceBundleEvidenceRecord>(entity =>
         {

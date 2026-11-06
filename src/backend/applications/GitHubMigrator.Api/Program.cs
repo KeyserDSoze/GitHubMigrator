@@ -131,6 +131,8 @@ builder.Services.AddScoped<IGitSourceBundleArtifactVerifier>(_ =>
         maxStorageBytes: builder.Configuration.GetValue<long>(
             "GitSourceBundles:MaxStorageBytes",
             GitHubMigrator.Infrastructure.GitObjects.LocalGitBundleArtifactStore.DefaultMaxStorageBytes)));
+builder.Services.AddScoped<IGitHubImportReadinessStore, PostgresGitHubImportReadinessStore>();
+builder.Services.AddScoped<GitHubImportReadinessService>();
 builder.Services.AddScoped<GitSourceBundleService>();
 builder.Services.AddScoped<IGitTransferWorkpackRepository, PostgresGitTransferWorkpackRepository>();
 builder.Services.AddScoped<GitTransferWorkpackService>();
@@ -148,6 +150,11 @@ builder.Services.AddScoped<BoardReconciliationService>();
 builder.Services.AddHttpClient<GitHubDestinationAccessReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubDestinationAccessReader>(s => s.GetRequiredService<GitHubDestinationAccessReader>());
+builder.Services.AddHttpClient<GitHubImportRepositoryReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubImportRepositoryReader>(
+    provider => provider.GetRequiredService<GitHubImportRepositoryReader>());
 builder.Services.AddHttpClient<GitHubTargetRepositoryProbe>(c => c.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubTargetRepositoryProbe>(s => s.GetRequiredService<GitHubTargetRepositoryProbe>());
@@ -263,6 +270,14 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    // F-039 GET-only GitHub metadata review: independent small provider
+    // budget so it cannot starve existing F-027/F-038 human review routes.
+    options.AddFixedWindowLimiter("import-readiness", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     // Enqueueing work is cheap; it must not consume the shared external-API
     // budget used by Boards, Pipelines and legacy synchronous discovery.
     options.AddFixedWindowLimiter("discovery-queue", limiter =>
@@ -304,6 +319,7 @@ app.UseAuthorization();
 await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Environment, app.Logger);
 await GitTransferWorkpackSchema.InitializeAsync(app.Services);
 await GitSourceBundleSchema.InitializeAsync(app.Services);
+await GitHubImportReadinessSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
