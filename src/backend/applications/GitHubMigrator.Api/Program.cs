@@ -154,6 +154,26 @@ builder.Services.AddSingleton(new GitHubTransferAttemptOptions(
 builder.Services.AddScoped<IGitHubTransferAttemptStore, PostgresGitHubTransferAttemptStore>();
 builder.Services.AddScoped<GitHubTransferAttemptService>();
 builder.Services.AddHostedService<GitHubTransferAttemptBarrierWorker>();
+var localSandboxIds = (builder.Configuration["LocalGitSandboxDispatch:AllowedSandboxIds"] ?? "")
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    .Select(x => Guid.TryParse(x, out var id) ? id : Guid.Empty)
+    .Where(x => x != Guid.Empty).ToHashSet();
+builder.Services.AddSingleton(new GitSandboxDispatchOptions(
+    builder.Configuration.GetValue("LocalGitSandboxDispatch:Enabled", false),
+    localSandboxIds));
+builder.Services.AddScoped<IGitSandboxDispatchStore, PostgresGitSandboxDispatchStore>();
+builder.Services.AddScoped<GitSandboxDispatchService>();
+builder.Services.AddScoped<ILocalGitCreateOnlyTransferRunner>(_ =>
+    new GitHubMigrator.Infrastructure.GitObjects.LocalGitCreateOnlyTransferRunner(
+        builder.Configuration.GetValue("LocalGitSandboxDispatch:Enabled", false)
+            ? builder.Configuration["GitSourceBundles:BundleRoot"] ?? "" : "",
+        builder.Configuration.GetValue("LocalGitSandboxDispatch:Enabled", false)
+            ? builder.Configuration["LocalGitSandboxDispatch:DestinationRoot"] ?? "" : "",
+        builder.Configuration.GetValue("LocalGitSandboxDispatch:Enabled", false)
+            ? builder.Configuration["LocalGitSandboxDispatch:ScratchRoot"] ?? "" : "",
+        enabled: builder.Configuration.GetValue("LocalGitSandboxDispatch:Enabled", false)));
+builder.Services.AddScoped<GitSandboxDispatchProcessor>();
+builder.Services.AddHostedService<GitSandboxDispatchBackgroundWorker>();
 builder.Services.AddSingleton(new GitHubTargetPreviewLeaseOptions(
     builder.Configuration.GetValue("GitHubTargetPreviewLeases:Enabled", false)));
 builder.Services.AddScoped<IGitHubTargetPreviewLeaseStore, PostgresGitHubTargetPreviewLeaseStore>();
@@ -378,6 +398,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("git-local-sandbox-dispatch", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     // Enqueueing work is cheap; it must not consume the shared external-API
     // budget used by Boards, Pipelines and legacy synchronous discovery.
     options.AddFixedWindowLimiter("discovery-queue", limiter =>
@@ -426,6 +452,7 @@ await GitHubRemoteRefFenceSchema.InitializeAsync(app.Services);
 await GitHubAppWriteScopeSchema.InitializeAsync(app.Services);
 await GitHubTargetPreviewLeaseSchema.InitializeAsync(app.Services);
 await GitHubTransferAttemptSchema.InitializeAsync(app.Services);
+await GitSandboxDispatchSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
@@ -501,6 +528,7 @@ app.MapIncrementalPreparationEndpoints();
 app.MapGitHubTargetPreviewLeaseEndpoints();
 app.MapGitHubCandidatePolicyEndpoints();
 app.MapGitHubTransferAttemptEndpoints();
+app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
 app.MapMigrationPlanEndpoints();
