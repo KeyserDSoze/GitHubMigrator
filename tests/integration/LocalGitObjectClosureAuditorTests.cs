@@ -192,6 +192,7 @@ public sealed class LocalGitObjectClosureAuditorTests
             File.WriteAllText(Path.Combine(work, "readme.txt"), "updated\n");
             Git("-C", work, "add", ".");
             Git("-C", work, "commit", "-q", "-m", "main change");
+            Git("-C", work, "merge", "--no-ff", "-m", "merge feature", "feature");
             Git("-C", work, "tag", "-a", "v1", "-m", "annotated release");
 
             Git("clone", "--mirror", "--no-hardlinks", "-q", work, Source);
