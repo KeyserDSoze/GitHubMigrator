@@ -99,8 +99,14 @@ No status means `writeCapabilityVerified=true`.
 
 ## Durability and concurrency
 
-`github_import_intents` is unique per F-039 readiness ID. Enqueue is
-idempotent only for the *exact* same actor, policy/ref SHA, and request.
+`github_import_intents` is unique per F-039 readiness ID. A
+repeated request by the **same actor**, for the same current review and
+the exact same SHA-256-bound ref plan, returns the original immutable
+intention without repeating GitHub policy GETs. Across concurrent
+replicas, differing observation timestamps are tolerated **only** if
+all categorically observed policy controls are identical; the original
+observed timestamp and SHA are retained. Changes in any ruleset status,
+count, protection classification or requesting actor are rejected.
 The source-scoped PostgreSQL advisory lock serializes creation and
 single-shot decision changes across API replicas. The audit events
 (`Requested`, `Acknowledged`, `Rejected`) append transactionally
