@@ -178,6 +178,18 @@ builder.Services.AddSingleton(new GitHubReadOnlyObjectMirrorOptions(
     builder.Configuration["GitHubRemoteObjectReconciliation:AllowedRepository"] ?? ""));
 builder.Services.AddScoped<IGitHubRemoteObjectReconciliationJournal,
     PostgresGitHubRemoteObjectReconciliationJournal>();
+builder.Services.AddSingleton(new GitHubTrustedRemoteReadOptions(
+    builder.Configuration.GetValue("GitHubTrustedRemoteRead:Enabled", false)));
+builder.Services.AddScoped<IGitHubTrustedRemoteReadPlanReader,
+    PostgresGitHubTrustedRemoteReadPlanReader>();
+builder.Services.AddScoped<IGitHubReadOnlyObjectMirrorRunner>(sp =>
+    new GitHubMigrator.Infrastructure.GitObjects.GitHubReadOnlyObjectMirrorRunner(
+        builder.Configuration["GitHubTrustedRemoteRead:SourceRoot"] ?? "",
+        builder.Configuration["GitHubTrustedRemoteRead:ScratchRoot"] ?? "",
+        sp.GetRequiredService<GitHubReadOnlyObjectMirrorOptions>(),
+        sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<GitHubTrustedRemoteReadCoordinator>();
+
 builder.Services.AddScoped<GitHubRemoteTestGrantService>();
 builder.Services.AddHostedService<GitHubRemoteTestGrantBackgroundWorker>();
 builder.Services.AddHostedService<GitHubRemoteSandboxFenceBackgroundWorker>();
