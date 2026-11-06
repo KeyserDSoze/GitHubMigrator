@@ -18,7 +18,7 @@ public static class GitHubRemoteRefFenceSchema
                 workpack_id uuid NOT NULL REFERENCES git_transfer_workpacks(id),
                 intent_id uuid NOT NULL REFERENCES github_import_intents(id),
                 rehearsal_id uuid NOT NULL REFERENCES git_import_rehearsals(id),
-                target_observation_id uuid NOT NULL REFERENCES github_target_ref_evidence(id),
+                target_observation_id uuid NOT NULL REFERENCES incremental_target_ref_evidence(id),
                 destination_connection_id uuid NOT NULL REFERENCES migration_connections(id),
                 destination_validated_at_utc timestamptz NULL,
                 manifest_sha256 varchar(64) NOT NULL,
