@@ -191,6 +191,25 @@ public sealed class GitHubImportIntentService(
         if (!safe.HasOnlyNonDestructiveCandidates || safe.CreateCandidates < 1)
             throw new GitHubImportIntentException("ImportIntentNoSafeCreateCandidates");
 
+        // Repeated HTTP submissions of one currently valid review return
+        // the original immutable intent, without a fresh policy GET (which
+        // would legitimately have a different observation timestamp).
+        var existing = (await store.ListAsync(
+            preparationId, planId, workpackId, ct))
+            .SingleOrDefault(x => x.ImportReadinessId == readinessId);
+        if (existing is not null)
+        {
+            if (!existing.IsCurrent || existing.IsExpired ||
+                existing.RequestedBy != actorId ||
+                existing.ImportReadinessSha256 != expectedReadinessSha256 ||
+                existing.ManifestSha256 != review.ManifestSha256 ||
+                existing.ReconciliationSha256 != review.ReconciliationSha256 ||
+                existing.BundleSha256 != review.SourceBundleSha256 ||
+                existing.SafeRefPlanSha256 != safe.EvidenceSha256)
+                throw new GitHubImportIntentException("ImportIntentConflictingReplay");
+            return existing;
+        }
+
         var destination = await connections.GetAsync(plan.DestinationConnectionId, ct)
             ?? throw new GitHubImportIntentException("ImportIntentDestinationMissing");
         if (destination.Direction != GitHubMigrator.Domain.ConnectionDirection.Destination ||
