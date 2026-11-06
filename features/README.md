@@ -25,6 +25,7 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-041 | Verified offline Git create-only import rehearsal | Actual local bare Git clone/push --atomic + absent-ref leases, on-disk SHA-256/fsck, no GitHub writes, isolated scratch and PostgreSQL proof |
 | F-042 | Fresh GitHub target ref drift fence | GET-only complete ref/OID/type comparison to immutable F-031 baseline, 30-second SHA-sealed PostgreSQL history, no write authorization |
 | F-043 | GitHub App single-repository Contents:write credential attestation | Disabled-by-default RSA/JWT GitHub App token issuance scoped to one allowlisted repository, minted token immediately discarded, source-locked PostgreSQL receipt and SQL deny-execution constraints; no repository writes |
+| F-044 | Sealed create-only execution candidate packet | SHA-256-verified, ref-limited (max 128) read-only derivation of exact missing refs from F-032/F-041/F-042/F-043, physical bundle rehash before/after, superadmin-only GET, permanently blocked execution; no GitHub push |
 | F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
 | F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |

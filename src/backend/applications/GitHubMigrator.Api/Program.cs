@@ -147,6 +147,7 @@ builder.Services.AddSingleton(new GitHubAppWriteCredentialOptions(
     builder.Configuration["GitHubAppWriteCredential:AllowedRepository"] ?? ""));
 builder.Services.AddScoped<IGitHubAppWriteScopeStore, PostgresGitHubAppWriteScopeStore>();
 builder.Services.AddScoped<GitHubAppWriteScopeService>();
+builder.Services.AddScoped<GitHubCreateOnlyPacketService>();
 builder.Services.AddScoped<IGitImportRehearsalRunner>(_ =>
     new GitHubMigrator.Infrastructure.GitObjects.LocalGitImportRehearsalRunner(
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
@@ -331,6 +332,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.QueueLimit = 0;
     });
     options.AddFixedWindowLimiter("github-app-scope", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
+    options.AddFixedWindowLimiter("github-create-packet", limiter =>
     {
         limiter.PermitLimit = 6;
         limiter.Window = TimeSpan.FromMinutes(1);

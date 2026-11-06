@@ -611,6 +611,37 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-044: read-only, deterministic, SHA-256-sealed candidate packet.
+        // It rehashes physical Git bytes and pages the full reconciliation.
+        // The response never contains a credential, Git command or write grant.
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/github-app-scopes/{scopeId:guid}/create-only-packet",
+            async Task<IResult> (Guid id, Guid planId, Guid scopeId,
+                GitHubCreateOnlyPacketService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.PreviewAsync(id, planId, scopeId, ct)); }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "PacketDependencyNotFound" }); }
+                catch (GitHubCreateOnlyPacketException ex)
+                { return ex.Code == "PacketRequestInvalid"
+                    ? Results.BadRequest(new { error = ex.Code })
+                    : Results.Conflict(new { error = ex.Code }); }
+                catch (GitHubAppWriteScopeException ex)
+                { return AppScopeError(ex); }
+                catch (GitHubRemoteRefFenceException ex)
+                { return RemoteFenceError(ex); }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+            }).RequireAuthorization(new AuthorizeAttribute { Roles = "superadmin" })
+              .RequireRateLimiting("github-create-packet");
+
         // F-042: fresh GitHub GET-only ref fence. This does not authorize
         // transport, does not create a remote ref and never issues a push.
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/git-rehearsals/{rehearsalId:guid}/remote-fences",

@@ -18,6 +18,36 @@ namespace GitHubMigrator.Integration.Tests;
 public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixture<ApiHarness>
 {
     [Fact]
+    public async Task F044_packet_preview_is_superadmin_only_and_missing_proofs_are_not_invented()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}/create-only-packet";
+        async Task<HttpResponseMessage> GetAsync(string? bearer = null)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (bearer is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", bearer);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await GetAsync();
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await GetAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await GetAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await GetAsync(
+            await harness.LoginAsync(harness.SuperadminName, ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.NotFound, superadmin.StatusCode);
+        Assert.Contains("PacketDependencyNotFound",
+            await superadmin.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task Health_and_readiness_are_served_by_real_API_and_database()
     {
         using var health = await harness.Client.GetAsync("/api/health");
