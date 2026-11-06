@@ -107,6 +107,14 @@ builder.Services.AddScoped<IGitSourceBundleAcquirer>(provider =>
             ? builder.Configuration["GitSourceBundles:SourceRoot"] ?? "" : "",
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
             ? builder.Configuration["GitSourceBundles:BundleRoot"] ?? "" : ""));
+builder.Services.AddScoped<IAzureGitSourceLocationResolver, PostgresAzureGitSourceLocationResolver>();
+builder.Services.AddScoped<IAzureGitMirrorFetcher>(_ =>
+    new GitHubMigrator.Infrastructure.GitObjects.AzureDevOpsGitMirrorFetcher(
+        builder.Configuration.GetValue("GitSourceBundles:Enabled", false) &&
+        builder.Configuration.GetValue("AzureGitFetch:Enabled", false)
+            ? builder.Configuration["GitSourceBundles:SourceRoot"] ?? ""
+            : ""));
+builder.Services.AddScoped<AzureGitSourceAcquisitionService>();
 builder.Services.AddScoped<GitSourceBundleService>();
 builder.Services.AddScoped<IGitTransferWorkpackRepository, PostgresGitTransferWorkpackRepository>();
 builder.Services.AddScoped<GitTransferWorkpackService>();

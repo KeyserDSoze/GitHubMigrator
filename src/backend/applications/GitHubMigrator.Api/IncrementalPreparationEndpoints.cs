@@ -499,6 +499,38 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-036: exact F-014 source snapshot -> HTTPS dev.azure.com read-only
+        // Git fetch -> F-035 verified bundle; no caller-supplied URI/PAT/path.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/source-bundle/fetch-azure",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                CreateGitSourceBundleRequest request,
+                AzureGitSourceAcquisitionService acquisitions, CancellationToken ct) =>
+            {
+                try
+                {
+                    var result = await acquisitions.FetchAndBundleAsync(
+                        id, planId, workpackId,
+                        request.ExpectedReconciliationSha256 ?? "", ct);
+                    return Results.Ok(result);
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "AzureGitSourceDependencyNotFound" }); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (DiscoveryRefManifestException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("incremental-review");
+
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/execution-authorization",
             async Task<IResult> (Guid id, Guid planId,
                 AuthorizeOperationPlanRequest request, ClaimsPrincipal principal,
