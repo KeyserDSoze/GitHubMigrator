@@ -320,13 +320,20 @@ public sealed class LocalGitCreateOnlyTransferRunner(
         process.StartInfo.Environment["GIT_CONFIG_VALUE_1"] = "never";
         foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
 
+        // Fail early with fixed, non-sensitive diagnostic codes.
+        if (!File.Exists("/usr/bin/git"))
+            throw new LocalGitCreateOnlyTransferException("SandboxGitBinaryMissing");
+        if (!Directory.Exists(work))
+            throw new LocalGitCreateOnlyTransferException("SandboxGitWorkdirMissing");
         var started = false;
+        var stage = "Launch";
         try
         {
             if (!process.Start())
                 throw new LocalGitCreateOnlyTransferException(
                     "SandboxGitUnavailable");
             started = true;
+            stage = "Wait";
             var stdout = ReadBoundedAsync(process.StandardOutput, deadline.Token);
             var stderr = ReadBoundedAsync(process.StandardError, deadline.Token);
             await process.WaitForExitAsync(deadline.Token);
@@ -344,7 +351,7 @@ public sealed class LocalGitCreateOnlyTransferRunner(
             // Numeric errno is safe diagnostic evidence: never include
             // executable paths, raw process arguments or stderr.
             throw new LocalGitCreateOnlyTransferException(
-                "SandboxGitUnavailable" + ex.NativeErrorCode);
+                "SandboxGitUnavailable" + stage + ex.NativeErrorCode);
         }
         finally
         {
