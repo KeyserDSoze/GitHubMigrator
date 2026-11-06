@@ -112,8 +112,11 @@ public sealed class PostgresGitSandboxDispatchStore(
     public async Task<GitSandboxDispatchClaim?> ClaimNextAsync(CancellationToken ct)
     {
         if (!options.Enabled) return null;
+        var allowed = options.AllowedSandboxIds.ToArray();
+        if (allowed.Length == 0) return null;
         var row = await db.GitSandboxDispatches.AsNoTracking()
-            .Where(x => x.State == GitSandboxDispatchStates.Queued)
+            .Where(x => allowed.Contains(x.SandboxId) &&
+                x.State == GitSandboxDispatchStates.Queued)
             .OrderBy(x => x.CreatedAtUtc).ThenBy(x => x.Id)
             .FirstOrDefaultAsync(ct);
         if (row is null) return null;
@@ -160,12 +163,15 @@ public sealed class PostgresGitSandboxDispatchStore(
         CancellationToken ct)
     {
         if (!options.Enabled) return null;
+        var allowed = options.AllowedSandboxIds.ToArray();
+        if (allowed.Length == 0) return null;
         var now = clock.GetUtcNow();
         var row = await db.GitSandboxDispatches.AsNoTracking()
-            .Where(x => x.State == GitSandboxDispatchStates.InspectionRequired ||
+            .Where(x => allowed.Contains(x.SandboxId) &&
+                (x.State == GitSandboxDispatchStates.InspectionRequired ||
                 ((x.State == GitSandboxDispatchStates.MayHaveTransmitted ||
                   x.State == GitSandboxDispatchStates.Inspecting) &&
-                 x.ClaimUntilUtc < now))
+                 x.ClaimUntilUtc < now)))
             .OrderBy(x => x.CreatedAtUtc).ThenBy(x => x.Id)
             .FirstOrDefaultAsync(ct);
         if (row is null) return null;
