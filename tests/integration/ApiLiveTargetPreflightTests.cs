@@ -1472,6 +1472,187 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 6, harness.Calls.Count);
 
+        // F-043: GitHub App write scopes are a distinct, superadmin-only,
+        // *disabled-by-default* capability. No live App key or GitHub token
+        // is available to this integration fixture. First persist a fresh,
+        // unchanged F-042 remote fence with an explicit test-only disk
+        // verifier; the preceding F-042 case persisted changed refs.
+        Guid safeFenceId;
+        string safeFenceDigest;
+        Guid appScopeId;
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            static PostgresGitHubRemoteRefFenceStore FenceStore(IServiceProvider p) =>
+                new(
+                    p.GetRequiredService<AppDbContext>(), TimeProvider.System,
+                    p.GetRequiredService<IIncrementalOperationPlanRepository>(),
+                    p.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                    p.GetRequiredService<IGitHubTargetRefEvidenceStore>(),
+                    p.GetRequiredService<IGitHubImportIntentStore>(),
+                    p.GetRequiredService<IGitImportRehearsalStore>(),
+                    p.GetRequiredService<IGitHubImportReadinessStore>(),
+                    p.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                    new F039TestOnlyDiskVerifier());
+
+            var provider = one.ServiceProvider;
+            var db = provider.GetRequiredService<AppDbContext>();
+            var intent = await provider.GetRequiredService<IGitHubImportIntentStore>()
+                .GetAsync(prepId, planId, safeIntentId, default);
+            Assert.NotNull(intent);
+            Assert.NotNull(intent!.ReviewedBy);
+            var review = await provider.GetRequiredService<IGitHubImportReadinessStore>()
+                .GetAsync(prepId, planId, safeReadinessId, default);
+            Assert.NotNull(review);
+            var rec = await provider.GetRequiredService<IIncrementalGitRefReconciliationStore>()
+                .PageAsync(prepId, planId, review!.ReconciliationId, null, 1, default);
+            Assert.NotNull(rec);
+            var dest = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == target);
+            var clearRemote = GitHubRefObservationIntegrity.Seal(
+                "gh-org", "occupied", DateTimeOffset.UtcNow, []);
+            var stable = GitHubRemoteRefFenceIntegrity.Compare([], clearRemote);
+            Assert.Equal("RefSetUnchanged", stable.Status);
+            var snapshot = new GitHubRemoteRefFenceInput(
+                prepId, planId, safeWorkpackId, safeIntentId, rehearsalId,
+                rec!.Reconciliation.TargetObservationId, target,
+                dest.ValidatedAtUtc, planSha,
+                intent.ReconciliationSha256, intent.BundleSha256,
+                intent.EvidenceSha256, sealedRehearsalSha,
+                review.TargetEvidenceSha256, clearRemote.EvidenceSha256,
+                stable, Guid.NewGuid());
+            var fence = await FenceStore(provider).SaveAsync(snapshot, default);
+            Assert.True(fence.IsCurrent);
+            safeFenceId = fence.Id;
+            safeFenceDigest = fence.EvidenceSha256;
+
+            static PostgresGitHubAppWriteScopeStore ScopeStore(
+                IServiceProvider p) => new(
+                    p.GetRequiredService<AppDbContext>(), TimeProvider.System,
+                    new GitHubAppWriteCredentialOptions(
+                        true, 123, 77, "dedicated-app-key", "gh-org/occupied"),
+                    p.GetRequiredService<IGitHubRemoteRefFenceStore>(),
+                    p.GetRequiredService<IGitHubImportIntentStore>(),
+                    p.GetRequiredService<IGitHubImportReadinessStore>(),
+                    p.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                    new F039TestOnlyDiskVerifier(),
+                    p.GetRequiredService<IIncrementalOperationPlanRepository>());
+            var observation = new GitHubAppWriteScopeObservation(
+                77, 2468, GitHubAppWriteScopeIntegrity.Issued,
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(45));
+            var input = new GitHubAppWriteScopeInput(
+                prepId, planId, safeFenceId, safeWorkpackId, safeIntentId,
+                rehearsalId, target, "gh-org", "occupied",
+                planSha, intent.BundleSha256, intent.EvidenceSha256,
+                sealedRehearsalSha, safeFenceDigest,
+                fence.RemoteRefFingerprintSha256,
+                observation, intent.ReviewedBy.Value);
+
+            // Simulate two API replicas saving the independently tested
+            // GitHub token mint response. Only SHA metadata is stored.
+            var a = ScopeStore(provider);
+            var b = ScopeStore(two.ServiceProvider);
+            var receipts = await Task.WhenAll(
+                a.SaveAsync(input, default),
+                b.SaveAsync(input with {
+                    Observation = input.Observation with {
+                        ObservedAtUtc = input.Observation.ObservedAtUtc.AddMilliseconds(-250)
+                    }
+                }, default));
+            appScopeId = receipts[0].Id;
+            Assert.Equal(appScopeId, receipts[1].Id);
+            Assert.True(receipts[0].ScopedContentsWriteReported);
+            Assert.False(receipts[0].ExecutionAuthorized);
+            Assert.False(receipts[0].ReadyForExecution);
+            Assert.False(receipts[0].RemoteWritesPerformed);
+            Assert.False(receipts[0].WriteCapabilityVerified);
+            Assert.Equal(1, await db.GitHubAppWriteScopes.AsNoTracking()
+                .CountAsync(x => x.FenceId == safeFenceId));
+            var wrongTarget = input with { Repository = "another-repo" };
+            Assert.Equal("AppScopeObservationStaleOrUnconfigured",
+                (await Assert.ThrowsAsync<GitHubAppWriteScopeException>(() =>
+                    a.SaveAsync(wrongTarget, default))).Code);
+            var wrongReviewer = input with { ActorId = Guid.NewGuid() };
+            Assert.Equal("AppScopeLineageChanged",
+                (await Assert.ThrowsAsync<GitHubAppWriteScopeException>(() =>
+                    a.SaveAsync(wrongReviewer, default))).Code);
+            foreach (var column in new[] {
+                "write_capability_verified", "execution_authorized",
+                "remote_writes_performed", "ready_for_execution"
+            })
+            {
+                var sql = "UPDATE github_app_write_scopes SET " + column +
+                    " = true WHERE id = @scopeId";
+                var refusal = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlRawAsync(sql,
+                        new Npgsql.NpgsqlParameter("scopeId", appScopeId)));
+                Assert.Equal("23514", refusal.SqlState);
+            }
+        }
+
+        var scopePostPath =
+            $"{operationalPath}/{planId}/remote-fences/{safeFenceId}/github-app-scope";
+        var scopeRequest = new {
+            expectedFenceEvidenceSha256 = safeFenceDigest,
+            acknowledgementText =
+                "I UNDERSTAND THIS TOKEN IS DISCARDED AND DOES NOT AUTHORIZE A PUSH"
+        };
+        using (var noAuthScope = await harness.Client.PostAsJsonAsync(
+            scopePostPath, scopeRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, noAuthScope.StatusCode);
+        using (var userScope = await PostAsAsync(scopePostPath, scopeRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userScope.StatusCode);
+        using (var adminScope = await PostAsAsync(scopePostPath, scopeRequest, admin))
+            Assert.Equal(HttpStatusCode.Forbidden, adminScope.StatusCode);
+        using (var missingAcknowledgement = await PostAsAsync(
+            scopePostPath, new { expectedFenceEvidenceSha256 = safeFenceDigest,
+                acknowledgementText = "wrong" }, superadmin))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest,
+                missingAcknowledgement.StatusCode);
+            Assert.Contains("AppScopeAcknowledgementRequired",
+                await missingAcknowledgement.Content.ReadAsStringAsync());
+        }
+        using (var disabledScope = await PostAsAsync(
+            scopePostPath, scopeRequest, superadmin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, disabledScope.StatusCode);
+            Assert.Contains("AppScopeDisabledOrUnconfigured",
+                await disabledScope.Content.ReadAsStringAsync());
+        }
+        using (var getScope = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/github-app-scopes/{appScopeId}"))
+        {
+            getScope.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var result = await harness.Client.SendAsync(getScope);
+            Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+            var jsonText = await result.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, jsonText);
+            Assert.DoesNotContain(ApiHarness.SourceToken, jsonText);
+            Assert.DoesNotContain("ghs_", jsonText);
+            Assert.DoesNotContain("BEGIN PRIVATE KEY", jsonText);
+            using var parsedScope = JsonDocument.Parse(jsonText);
+            Assert.True(parsedScope.RootElement
+                .GetProperty("scopedContentsWriteReported").GetBoolean());
+            Assert.False(parsedScope.RootElement
+                .GetProperty("executionAuthorized").GetBoolean());
+            Assert.False(parsedScope.RootElement
+                .GetProperty("readyForExecution").GetBoolean());
+        }
+        using (var listScope = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/remote-fences/{safeFenceId}/github-app-scopes"))
+        {
+            listScope.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(listScope);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var listed = JsonDocument.Parse(
+                await reply.Content.ReadAsStringAsync());
+            Assert.Single(listed.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())
