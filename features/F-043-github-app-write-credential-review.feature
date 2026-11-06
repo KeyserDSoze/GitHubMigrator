@@ -33,3 +33,11 @@ Feature: F-043 one-repository GitHub App write credential attestation
     When a client sets writeCapabilityVerified, executionAuthorized,
       remoteWritesPerformed or readyForExecution true
     Then PostgreSQL rejects the mutation
+
+  Scenario: Reject ambiguous JSON member names in GitHub responses
+    Given GitHub returns duplicate token, permission or repository-identity fields
+    Or duplicate JSON members nested within a repository owner object
+    When the inspection parses a bounded token or repository response
+    Then the inspection fails closed without a positive attestation
+    And a duplicate claim in the mint response is never used for a follow-up GET
+    And no repository writes are performed

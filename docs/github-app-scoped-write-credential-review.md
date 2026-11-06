@@ -129,3 +129,15 @@ authorization.
 References:
 - https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app
 - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
+
+## Defensive parsing of GitHub responses
+
+The F-043 inspector rejects **duplicate JSON member names at every nesting
+level**, not only duplicate top-level token or permission fields. JSON with
+two `contents`, `token`, `id`, or `owner.login` values is ambiguous:
+different parsers may choose different occurrences. Such a mint response
+fails with `AppScopeMintNotRestricted` **before** the token-bound repository
+GET; duplicate members in that GET fail with `AppScopeRepositoryChanged`.
+Both responses remain capped at 32 KiB. This is defense-in-depth: a
+contradictory or malformed provider response must never be a positive
+write-scope attestation, and none of these checks enable repository writes.

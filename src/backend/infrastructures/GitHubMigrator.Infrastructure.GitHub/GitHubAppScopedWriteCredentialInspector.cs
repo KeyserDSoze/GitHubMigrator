@@ -77,7 +77,11 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
             throw new GitHubAppWriteScopeException("AppScopeMintMalformed");
 
         var node = minted.RootElement;
-        if (!TryText(node, "token", out var token) ||
+        // System.Text.Json accepts duplicate object members and TryGetProperty
+        // resolves the last occurrence. A contradictory GitHub response must
+        // never become a positive permission attestation.
+        if (!HasUniqueProperties(node) ||
+            !TryText(node, "token", out var token) ||
             token.Length is < 10 or > 4096 || token.Any(char.IsControl) ||
             !TryText(node, "repository_selection", out var selection) ||
             selection != "selected" ||
@@ -125,6 +129,7 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
             throw new GitHubAppWriteScopeException("AppScopeRepositoryNotVisible");
         using var reply = await BoundedJsonAsync(visible, ct);
         if (reply is null || reply.RootElement.ValueKind != JsonValueKind.Object ||
+            !HasUniqueProperties(reply.RootElement) ||
             !ValidRepo(reply.RootElement, organization, repository, out var currentId) ||
             currentId != repoId ||
             !reply.RootElement.TryGetProperty("archived", out var archived) ||
@@ -136,6 +141,25 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         return new(installationId, repoId,
             GitHubAppWriteScopeIntegrity.Issued,
             clock.GetUtcNow(), tokenExpiry.ToUniversalTime());
+    }
+
+    // Validate recursively: even duplicate nested owner/permission fields are
+    // ambiguous. Both JSON responses are bounded to 32 KiB before parsing.
+    private static bool HasUniqueProperties(JsonElement node)
+    {
+        if (node.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in node.EnumerateObject())
+                if (!names.Add(property.Name) || !HasUniqueProperties(property.Value))
+                    return false;
+        }
+        else if (node.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in node.EnumerateArray())
+                if (!HasUniqueProperties(child)) return false;
+        }
+        return true;
     }
 
     private static bool ValidRepo(JsonElement node, string org, string repo,
