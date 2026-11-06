@@ -499,6 +499,107 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-042: fresh GitHub GET-only ref fence. This does not authorize
+        // transport, does not create a remote ref and never issues a push.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/git-rehearsals/{rehearsalId:guid}/remote-fences",
+            async Task<IResult> (Guid id, Guid planId, Guid rehearsalId,
+                CreateGitHubRemoteRefFenceRequest request, ClaimsPrincipal principal,
+                GitHubRemoteRefFenceService service, CancellationToken ct) =>
+            {
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor)) return Results.Unauthorized();
+                try
+                {
+                    var proof = await service.CheckAsync(id, planId, rehearsalId,
+                        request.ExpectedRehearsalEvidenceSha256 ?? "", actor, ct);
+                    return Results.Ok(proof);
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "RemoteFenceDependencyNotFound" }); }
+                catch (GitHubRemoteRefFenceException ex)
+                { return RemoteFenceError(ex); }
+                catch (GitHubRefObservationException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("github-remote-fence");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/remote-fences/{fenceId:guid}",
+            async Task<IResult> (Guid id, Guid planId, Guid fenceId,
+                GitHubRemoteRefFenceService service, CancellationToken ct) =>
+            {
+                try
+                {
+                    var value = await service.GetAsync(id, planId, fenceId, ct);
+                    return value is null
+                        ? Results.NotFound(new { error = "RemoteFenceNotFound" })
+                        : Results.Ok(value);
+                }
+                catch (GitHubRemoteRefFenceException ex)
+                { return RemoteFenceError(ex); }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/git-rehearsals/{rehearsalId:guid}/remote-fences",
+            async Task<IResult> (Guid id, Guid planId, Guid rehearsalId,
+                GitHubRemoteRefFenceService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.ListAsync(id, planId, rehearsalId, ct)); }
+                catch (GitHubRemoteRefFenceException ex)
+                { return RemoteFenceError(ex); }
+                catch (GitImportRehearsalException ex)
+                { return GitRehearsalError(ex); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
         // F-041: runs an explicitly enabled, OFFLINE Git import rehearsal
         // against a disposable local bare repo. NEVER writes to GitHub.
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/import-intents/{intentId:guid}/git-rehearsals",
@@ -1050,6 +1151,11 @@ public static class IncrementalPreparationEndpoints
             ? Results.BadRequest(new { error = ex.Code })
             : Results.Conflict(new { error = ex.Code });
 
+    private static IResult RemoteFenceError(GitHubRemoteRefFenceException ex) =>
+        ex.Code == "RemoteFenceRequestInvalid"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
+
     private static IResult GitRehearsalError(GitImportRehearsalException ex) =>
         ex.Code is "GitRehearsalRequestInvalid" or "GitRehearsalEvidenceInvalid"
             ? Results.BadRequest(new { error = ex.Code })
@@ -1134,3 +1240,6 @@ public sealed record DecideGitHubImportIntentRequest(
 
 public sealed record CreateGitImportRehearsalRequest(
     string? ExpectedIntentEvidenceSha256);
+
+public sealed record CreateGitHubRemoteRefFenceRequest(
+    string? ExpectedRehearsalEvidenceSha256);

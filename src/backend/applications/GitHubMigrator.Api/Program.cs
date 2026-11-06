@@ -137,6 +137,8 @@ builder.Services.AddScoped<IGitHubImportIntentStore, PostgresGitHubImportIntentS
 builder.Services.AddScoped<GitHubImportIntentService>();
 builder.Services.AddScoped<IGitImportRehearsalStore, PostgresGitImportRehearsalStore>();
 builder.Services.AddScoped<GitImportRehearsalService>();
+builder.Services.AddScoped<IGitHubRemoteRefFenceStore, PostgresGitHubRemoteRefFenceStore>();
+builder.Services.AddScoped<GitHubRemoteRefFenceService>();
 builder.Services.AddScoped<IGitImportRehearsalRunner>(_ =>
     new GitHubMigrator.Infrastructure.GitObjects.LocalGitImportRehearsalRunner(
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
@@ -308,6 +310,12 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    options.AddFixedWindowLimiter("github-remote-fence", limiter =>
+    {
+        limiter.PermitLimit = 6;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     // Enqueueing work is cheap; it must not consume the shared external-API
     // budget used by Boards, Pipelines and legacy synchronous discovery.
     options.AddFixedWindowLimiter("discovery-queue", limiter =>
@@ -352,6 +360,7 @@ await GitSourceBundleSchema.InitializeAsync(app.Services);
 await GitHubImportReadinessSchema.InitializeAsync(app.Services);
 await GitHubImportIntentSchema.InitializeAsync(app.Services);
 await GitImportRehearsalSchema.InitializeAsync(app.Services);
+await GitHubRemoteRefFenceSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
