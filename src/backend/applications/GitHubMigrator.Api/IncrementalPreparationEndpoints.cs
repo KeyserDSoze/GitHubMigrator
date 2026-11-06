@@ -499,6 +499,156 @@ public static class IncrementalPreparationEndpoints
                 { return Results.Conflict(new { error = ex.Code }); }
             });
 
+        // F-040: two-person, expiring acknowledgment of a non-destructive
+        // Git REF CREATE plan. It is NOT a GitHub write authorization.
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/import-readiness/{readinessId:guid}/intents",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                Guid readinessId, CreateGitHubImportIntentRequest request,
+                ClaimsPrincipal principal, GitHubImportIntentService service,
+                CancellationToken ct) =>
+            {
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor)) return Results.Unauthorized();
+                try
+                {
+                    var intent = await service.CreateAsync(id, planId,
+                        workpackId, readinessId,
+                        request.ExpectedReadinessSha256 ?? "", actor, ct);
+                    return Results.Accepted(
+                        $"/api/incremental-preparations/{id}/operation-plans/{planId}/import-intents/{intent.Id}",
+                        intent);
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "ImportIntentDependencyNotFound" }); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireRateLimiting("import-intent");
+
+        routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/import-intents/{intentId:guid}/decision",
+            async Task<IResult> (Guid id, Guid planId, Guid intentId,
+                DecideGitHubImportIntentRequest request, ClaimsPrincipal principal,
+                GitHubImportIntentService service, CancellationToken ct) =>
+            {
+                // Distinct superadmin is required. Even an Acknowledged result
+                // is a human review record, NEVER an execution authorization.
+                if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier),
+                    out var actor)) return Results.Unauthorized();
+                if (request.Decision == "Acknowledge" &&
+                    request.AcknowledgementText !=
+                        "I UNDERSTAND THIS DOES NOT AUTHORIZE A GITHUB PUSH")
+                    return Results.BadRequest(new { error = "ImportIntentAcknowledgementRequired" });
+                try
+                {
+                    return Results.Ok(await service.DecideAsync(
+                        id, planId, intentId, actor,
+                        request.ExpectedReadinessSha256 ?? "",
+                        request.Decision ?? "", ct));
+                }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "ImportIntentNotFound" }); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitSourceBundleException ex)
+                { return BundleError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            }).RequireAuthorization(new AuthorizeAttribute { Roles = "superadmin" })
+              .RequireRateLimiting("import-intent");
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/import-intents",
+            async Task<IResult> (Guid id, Guid planId, Guid workpackId,
+                GitHubImportIntentService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.ListAsync(id, planId, workpackId, ct)); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/import-intents/{intentId:guid}",
+            async Task<IResult> (Guid id, Guid planId, Guid intentId,
+                GitHubImportIntentService service, CancellationToken ct) =>
+            {
+                try
+                {
+                    var intent = await service.GetAsync(id, planId, intentId, ct);
+                    return intent is null ? Results.NotFound(new { error = "ImportIntentNotFound" })
+                        : Results.Ok(intent);
+                }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
+        routes.MapGet("/{id:guid}/operation-plans/{planId:guid}/import-intents/{intentId:guid}/events",
+            async Task<IResult> (Guid id, Guid planId, Guid intentId,
+                GitHubImportIntentService service, CancellationToken ct) =>
+            {
+                try { return Results.Ok(await service.EventsAsync(id, planId, intentId, ct)); }
+                catch (KeyNotFoundException)
+                { return Results.NotFound(new { error = "ImportIntentNotFound" }); }
+                catch (GitHubImportIntentException ex)
+                { return ImportIntentError(ex); }
+                catch (GitHubImportReadinessException ex)
+                { return ImportReadinessError(ex); }
+                catch (GitTransferWorkpackException ex)
+                { return TransferWorkpackError(ex); }
+                catch (IncrementalGitRefReconciliationException ex)
+                { return ReconciliationError(ex); }
+                catch (GitHubTargetRefEvidenceException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+                catch (IncrementalOperationPlanException ex)
+                { return OperationPlanError(ex); }
+                catch (IncrementalTargetPreflightException ex)
+                { return Results.Conflict(new { error = ex.Code }); }
+            });
+
         // F-039: check a SOURCE bundle and GET-only GitHub destination
         // metadata; returns a non-authorizing, immutable PostgreSQL review.
         routes.MapPost("/{id:guid}/operation-plans/{planId:guid}/transfer-workpacks/{workpackId:guid}/import-readiness",
@@ -804,6 +954,12 @@ public static class IncrementalPreparationEndpoints
             ? Results.BadRequest(new { error = ex.Code })
             : Results.Conflict(new { error = ex.Code });
 
+    private static IResult ImportIntentError(GitHubImportIntentException ex) =>
+        ex.Code is "InvalidImportIntentRequest" or "InvalidImportIntentDecision"
+            or "ImportPolicyInvalidDestination"
+            ? Results.BadRequest(new { error = ex.Code })
+            : Results.Conflict(new { error = ex.Code });
+
     private static IResult ImportReadinessError(GitHubImportReadinessException ex) =>
         ex.Code is "InvalidImportReadinessRequest" or "ImportReadinessProbeInvalid"
             ? Results.BadRequest(new { error = ex.Code })
@@ -870,3 +1026,7 @@ public sealed record CreateGitSourceBundleRequest(string? ExpectedReconciliation
 
 public sealed record CreateGitHubImportReadinessRequest(
     string? ExpectedReconciliationSha256, string? ExpectedBundleSha256);
+
+public sealed record CreateGitHubImportIntentRequest(string? ExpectedReadinessSha256);
+public sealed record DecideGitHubImportIntentRequest(
+    string? ExpectedReadinessSha256, string? Decision, string? AcknowledgementText);
