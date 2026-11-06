@@ -222,8 +222,8 @@ public sealed class GitHubCandidatePolicyReaderTests
                 0, "Observed"),
             new(GitHubCandidatePolicyIntegrity.RefNameDigest(Candidates[1].Name),
                 "Tag", GitHubCandidatePolicyStates.PolicyUnverified,
-                0, "CatalogUnverified")
-        ], Now, "CatalogUnverified");
+                0, "TagUnverified")
+        ], Now, "Observed");
         var review = GitHubCandidatePolicyIntegrity.Seal(source, observation);
         Assert.Equal(1, review.PolicyUnverified);
         Assert.Equal("HumanReviewRequired", review.Status);
@@ -244,12 +244,8 @@ public sealed class GitHubCandidatePolicyReaderTests
             }));
         Assert.Throws<GitHubCandidatePolicyException>(() =>
             GitHubCandidatePolicyIntegrity.Seal(source, observation with {
-                RulesetCatalogStatus = "Observed",
-                Items = [
-                    observation.Items[0] with {
-                        ProviderStatus = "Observed" },
-                    observation.Items[1] ]
-            } with { RulesetCatalogStatus = "CatalogUnverified" }));
+                RulesetCatalogStatus = "CatalogUnverified"
+            }));
         Assert.Throws<GitHubCandidatePolicyException>(() =>
             GitHubCandidatePolicyIntegrity.Seal(
                 source with { Packet = source.Packet with {
