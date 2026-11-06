@@ -59,6 +59,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<GitSandboxDispatchRecord>();
     public DbSet<GitSandboxDispatchEventRecord> GitSandboxDispatchEvents =>
         Set<GitSandboxDispatchEventRecord>();
+    public DbSet<GitHubRemoteObjectReconciliationRecord> GitHubRemoteObjectReconciliations =>
+        Set<GitHubRemoteObjectReconciliationRecord>();
+    public DbSet<GitHubRemoteObjectReconciliationEventRecord> GitHubRemoteObjectReconciliationEvents =>
+        Set<GitHubRemoteObjectReconciliationEventRecord>();
     public DbSet<GitHubRemoteTransmitHazardRecord> GitHubRemoteTransmitHazards =>
         Set<GitHubRemoteTransmitHazardRecord>();
     public DbSet<GitHubRemoteTransmitHazardEventRecord> GitHubRemoteTransmitHazardEvents =>
@@ -567,6 +571,56 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.GrantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => new { x.GrantId, x.Id })
                 .HasDatabaseName("ix_remote_test_grant_events");
+        });
+        builder.Entity<GitHubRemoteObjectReconciliationRecord>(entity =>
+        {
+            entity.ToTable("github_remote_object_reconciliations");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.GrantId).HasColumnName("grant_id");
+            entity.Property(x => x.ReadbackId).HasColumnName("readback_id");
+            entity.Property(x => x.HazardId).HasColumnName("hazard_id");
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.SourceSnapshotId).HasColumnName("source_snapshot_id");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(40);
+            entity.Property(x => x.OriginalBaselineSha256).HasColumnName("original_baseline_sha256").HasMaxLength(64);
+            entity.Property(x => x.CandidateSetSha256).HasColumnName("candidate_set_sha256").HasMaxLength(64);
+            entity.Property(x => x.TargetRefSetSha256).HasColumnName("target_ref_set_sha256").HasMaxLength(64);
+            entity.Property(x => x.RemoteRefObservationSha256).HasColumnName("remote_ref_observation_sha256").HasMaxLength(64);
+            entity.Property(x => x.FullObjectClosureSha256).HasColumnName("full_object_closure_sha256").HasMaxLength(64);
+            entity.Property(x => x.RemoteMirrorReceiptSha256).HasColumnName("remote_mirror_receipt_sha256").HasMaxLength(64);
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.ObservedBy).HasColumnName("observed_by");
+            entity.Property(x => x.VerifiedAtUtc).HasColumnName("verified_at_utc");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.RemotePushInvoked).HasColumnName("remote_push_invoked");
+            entity.Property(x => x.RemoteWritesAuthorized).HasColumnName("remote_writes_authorized");
+            entity.Property(x => x.MayAutomaticallyRetry).HasColumnName("may_automatically_retry");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasOne<GitHubRemoteTestGrantRecord>().WithMany()
+                .HasForeignKey(x => x.GrantId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubRemoteReadbackRecord>().WithMany()
+                .HasForeignKey(x => x.ReadbackId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubRemoteTransmitHazardRecord>().WithMany()
+                .HasForeignKey(x => x.HazardId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.GrantId).IsUnique()
+                .HasDatabaseName("uq_f058_one_per_grant");
+            entity.HasIndex(x => x.HazardId).IsUnique()
+                .HasDatabaseName("uq_f058_one_per_hazard");
+        });
+        builder.Entity<GitHubRemoteObjectReconciliationEventRecord>(entity =>
+        {
+            entity.ToTable("github_remote_object_reconciliation_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.ReconciliationId).HasColumnName("reconciliation_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(16);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitHubRemoteObjectReconciliationRecord>().WithMany()
+                .HasForeignKey(x => x.ReconciliationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.ReconciliationId, x.Id })
+                .HasDatabaseName("ix_f058_events");
         });
         builder.Entity<GitHubRemoteTransmitHazardRecord>(entity =>
         {
