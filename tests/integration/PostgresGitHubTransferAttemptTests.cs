@@ -232,7 +232,10 @@ public sealed class PostgresGitHubTransferAttemptTests(
         GitHubCreateOnlyPacket packet) =>
         new(packet.ScopeId, packet.RepositoryId, packet.EvidenceSha256,
             Sha('c'), DateTimeOffset.UtcNow, 1, 1, 0, 0,
-            "AdvisoryNoRulesReported", [], false, false, false, false);
+            "AdvisoryNoRulesReported", [
+                new(Sha('d'), "Branch",
+                    GitHubCandidatePolicyStates.NoActiveRulesReported, 0, "Observed")
+            ], false, false, false, false);
 
     private static GitHubTransferAttemptDraft Draft(
         GitHubCreateOnlyPacket packet, GitHubTargetPreviewLeaseClaim lease) =>
