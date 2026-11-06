@@ -155,6 +155,7 @@ public static class GitHubRemoteAppPreflightIntegrity
 public sealed class GitHubRemoteAppPreflightService(
     GitHubCreateOnlyPacketService packets,
     IGitHubRemoteSandboxFenceStore fences,
+    IGitHubTransferAttemptStore attempts,
     IGitHubRemoteRefFenceStore prior,
     IGitHubAppWriteScopeStore scopes,
     IGitHubRemoteAppPreflightReader reader,
@@ -196,6 +197,12 @@ public sealed class GitHubRemoteAppPreflightService(
             writeFence.Generation != generation ||
             writeFence.State != GitHubRemoteSandboxFenceStates.ReviewedWriteDisabled)
             throw new GitHubRemoteAppPreflightException("RemotePreflightWriteFenceLost");
+
+        var attempt = await attempts.GetAsync(preparationId, planId,
+            scopeId, writeFence.AttemptId, ct);
+        if (!MatchesHardWriteBarrier(attempt, packet, writeFence))
+            throw new GitHubRemoteAppPreflightException(
+                "RemotePreflightHardBarrierChanged");
 
         var original = await prior.GetAsync(preparationId,
             planId, packet.FenceId, ct)
@@ -241,15 +248,37 @@ public sealed class GitHubRemoteAppPreflightService(
         var freshFence = await fences.GetAsync(packet.RepositoryId, ct)
             ?? throw new GitHubRemoteAppPreflightException(
                 "RemotePreflightWriteFenceLost");
+        var freshAttempt = await attempts.GetAsync(preparationId,
+            planId, scopeId, writeFence.AttemptId, ct);
         if (freshPacket.EvidenceSha256 != packet.EvidenceSha256 ||
             freshPacket.CandidateSetSha256 != packet.CandidateSetSha256 ||
             freshFence.RequestId != requestId ||
             freshFence.Generation != generation ||
-            freshFence.State != GitHubRemoteSandboxFenceStates.ReviewedWriteDisabled)
+            freshFence.State != GitHubRemoteSandboxFenceStates.ReviewedWriteDisabled ||
+            !MatchesHardWriteBarrier(freshAttempt, packet, freshFence))
             throw new GitHubRemoteAppPreflightException(
                 "RemotePreflightChangedDuringIO");
 
         return GitHubRemoteAppPreflightIntegrity.Seal(
             source, freshFence, original, scope, result, clock.GetUtcNow());
     }
+
+    private static bool MatchesHardWriteBarrier(
+        GitHubTransferAttemptView? attempt, GitHubCreateOnlyPacket packet,
+        GitHubRemoteSandboxFenceStatus fence) =>
+        attempt is not null &&
+        attempt.Id == fence.AttemptId &&
+        attempt.PreparationId == packet.PreparationId &&
+        attempt.PlanId == packet.PlanId &&
+        attempt.ScopeId == packet.ScopeId &&
+        attempt.RepositoryId == packet.RepositoryId &&
+        attempt.PacketSha256 == packet.EvidenceSha256 &&
+        attempt.CandidateSetSha256 == packet.CandidateSetSha256 &&
+        attempt.PolicySha256 == fence.PolicySha256 &&
+        attempt.CandidateCount == packet.CreateCandidates &&
+        attempt.State == GitHubTransferAttemptStates.BlockedAtWriteBarrier &&
+        attempt.ReviewedBy is not null &&
+        attempt.ReviewedBy != attempt.RequestedBy &&
+        !attempt.TransportAttempted && !attempt.ExecutionAuthorized &&
+        !attempt.RemoteWritesPerformed && !attempt.ReadyForExecution;
 }
