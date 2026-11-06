@@ -20,6 +20,10 @@ public sealed class AzureDevOpsGitMirrorFetcher(
     : IAzureGitMirrorFetcher
 {
     public const long MaxMirrorBytes = 512L * 1024 * 1024;
+    // A fast fail-closed admission gate protects CPU/disk from overlapping
+    // authenticated requests on one API replica; per-job global fencing
+    // needs the future leased remote-acquisition queue.
+    private static readonly SemaphoreSlim ProcessSlots = new(2, 2);
     private static readonly Regex OrgPattern = new(
         "^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$", RegexOptions.Compiled);
     private readonly IAzureGitReadOnlyTransport _transport =
@@ -51,6 +55,15 @@ public sealed class AzureDevOpsGitMirrorFetcher(
             ch is '/' or '\\' or '?' or '#' or '@' or ':' or '%');
 
     public async Task FetchAsync(AzureGitMirrorFetchRequest request, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!await ProcessSlots.WaitAsync(0, ct))
+            throw new GitSourceBundleException("AzureGitFetchCapacityExceeded");
+        try { await FetchCoreAsync(request, ct); }
+        finally { ProcessSlots.Release(); }
+    }
+
+    private async Task FetchCoreAsync(AzureGitMirrorFetchRequest request, CancellationToken ct)
     {
         if (request is null || request.Location is null ||
             request.Location.ConnectionId == Guid.Empty ||
@@ -178,7 +191,7 @@ public sealed class AzureDevOpsGitMirrorFetcher(
 public sealed class GitCliAzureReadOnlyTransport : IAzureGitReadOnlyTransport
 {
     public static readonly TimeSpan FetchDeadline = TimeSpan.FromSeconds(115);
-    private const int MaxOutputChars = 1024 * 1024;
+    private const int MaxOutputChars = 12 * 1024 * 1024;
 
     public static ProcessStartInfo CreateFetchStartInfo(
         string bare, Uri url, string token)
