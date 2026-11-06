@@ -98,6 +98,16 @@ builder.Services.AddScoped<PostgresVerifiedSourceGitRefReader>();
 builder.Services.AddScoped<PostgresIncrementalGitRefReconciliationStore>();
 builder.Services.AddScoped<IIncrementalGitRefReconciliationStore>(
     x => x.GetRequiredService<PostgresIncrementalGitRefReconciliationStore>());
+builder.Services.AddScoped<IVerifiedSourceGitRefReader>(
+    provider => provider.GetRequiredService<PostgresVerifiedSourceGitRefReader>());
+builder.Services.AddScoped<IGitSourceBundleEvidenceStore, PostgresGitSourceBundleEvidenceStore>();
+builder.Services.AddScoped<IGitSourceBundleAcquirer>(provider =>
+    new GitHubMigrator.Infrastructure.GitObjects.LocalGitSourceBundleAcquirer(
+        builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
+            ? builder.Configuration["GitSourceBundles:SourceRoot"] ?? "" : "",
+        builder.Configuration.GetValue("GitSourceBundles:Enabled", false)
+            ? builder.Configuration["GitSourceBundles:BundleRoot"] ?? "" : ""));
+builder.Services.AddScoped<GitSourceBundleService>();
 builder.Services.AddScoped<IGitTransferWorkpackRepository, PostgresGitTransferWorkpackRepository>();
 builder.Services.AddScoped<GitTransferWorkpackService>();
 builder.Services.AddScoped<GitTransferWorkpackProcessor>();
@@ -269,6 +279,7 @@ app.UseAuthorization();
 
 await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Environment, app.Logger);
 await GitTransferWorkpackSchema.InitializeAsync(app.Services);
+await GitSourceBundleSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
 app.MapGet("/api/ready", async Task<IResult> (AppDbContext db, CancellationToken ct) =>
