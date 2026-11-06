@@ -107,7 +107,7 @@ internal sealed class RemoteObjectReconciliationFixture
                 {ScopeId},{AttemptId},{"gh-org"},{"test-sandbox"},
                 {packet},{proof.CandidateSetSha256},{policy},{Sha('7')},{1L},
                 'ReviewedWriteDisabled',{requestedF050},{reviewedF050},
-                {now.AddMinutes(-1)},{now},false,false,false)
+                {now.AddSeconds(1)},{now},false,false,false)
             """);
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO github_remote_test_grants (
@@ -124,7 +124,7 @@ internal sealed class RemoteObjectReconciliationFixture
                 {1L},{packet},{proof.CandidateSetSha256},{policy},
                 {proof.OriginalBaselineSha256},{Sha('8')},{Sha('9')},
                 'ReviewedWriteDisabled',{requestedF052},{reviewedF052},
-                {now.AddMinutes(-1)},{now},false,false,false)
+                {now.AddSeconds(1)},{now},false,false,false)
             """);
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO github_remote_readback_evidence (
@@ -157,7 +157,7 @@ internal sealed class RemoteObjectReconciliationFixture
                 {1L},{packet},{proof.CandidateSetSha256},
                 {proof.OriginalBaselineSha256},{Sha('d')},
                 'MayHaveTransmitted',{preparedF055},{markedF055},
-                {now.AddMinutes(-1)},{now},
+                {now.AddSeconds(1)},{now},
                 false,false,false,false)
             """);
         await db.Database.ExecuteSqlInterpolatedAsync($"""
