@@ -7,7 +7,7 @@ namespace GitHubMigrator.Infrastructure.GitObjects;
 // Filesystem boundary of F-038. The store never deletes a .bundle or
 // accepts an arbitrary path. All inputs are server-derived workpack IDs.
 public sealed class LocalGitBundleArtifactStore(
-    string bundleRoot, long maxStorageBytes = DefaultMaxStorageBytes,
+    string bundleRoot, long maxStorageBytes = 4L * 1024 * 1024 * 1024,
     TimeProvider? clock = null) : IGitSourceBundleArtifactVerifier
 {
     public const long DefaultMaxStorageBytes = 4L * 1024 * 1024 * 1024;
