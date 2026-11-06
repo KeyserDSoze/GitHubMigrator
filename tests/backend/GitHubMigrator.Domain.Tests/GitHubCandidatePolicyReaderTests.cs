@@ -236,6 +236,21 @@ public sealed class GitHubCandidatePolicyReaderTests
                     observation.Items[0] with { ActiveRules = 1 },
                     observation.Items[1] ] }));
         Assert.Throws<GitHubCandidatePolicyException>(() =>
+            GitHubCandidatePolicyIntegrity.Seal(source, observation with {
+                Items = [
+                    observation.Items[0] with {
+                        ProviderStatus = "BranchUnverified" },
+                    observation.Items[1] ]
+            }));
+        Assert.Throws<GitHubCandidatePolicyException>(() =>
+            GitHubCandidatePolicyIntegrity.Seal(source, observation with {
+                RulesetCatalogStatus = "Observed",
+                Items = [
+                    observation.Items[0] with {
+                        ProviderStatus = "Observed" },
+                    observation.Items[1] ]
+            } with { RulesetCatalogStatus = "CatalogUnverified" }));
+        Assert.Throws<GitHubCandidatePolicyException>(() =>
             GitHubCandidatePolicyIntegrity.Seal(
                 source with { Packet = source.Packet with {
                     ExecutionAuthorized = true } }, observation));
