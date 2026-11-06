@@ -1,5 +1,6 @@
 using GitHubMigrator.Business;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace GitHubMigrator.Infrastructure.PostgreSql;
 
@@ -82,7 +83,21 @@ public sealed class PostgresGitSandboxDispatchStore(
             return Map(existing);
         }
 
-        var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
+        // Block either a second active job on the same global GitHub ID
+        // or an attempt to reuse a local sandbox for a different source.
+        if (await db.GitSandboxDispatches.AsNoTracking().AnyAsync(x =>
+            (x.RepositoryId == request.Packet.RepositoryId ||
+             x.SandboxId == request.SandboxId) &&
+            (x.State == GitSandboxDispatchStates.Queued ||
+             x.State == GitSandboxDispatchStates.MayHaveTransmitted ||
+             x.State == GitSandboxDispatchStates.InspectionRequired ||
+             x.State == GitSandboxDispatchStates.Inspecting), ct))
+            throw new GitSandboxDispatchException("SandboxDispatchActiveTargetBusy");
+
+        int changed;
+        try
+        {
+        changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
             WITH inserted AS (
                 INSERT INTO git_sandbox_dispatches (
                     id, attempt_id, sandbox_id, repository_id, packet_sha256,
@@ -102,6 +117,15 @@ public sealed class PostgresGitSandboxDispatchStore(
                 dispatch_id, type, occurred_at_utc)
             SELECT id, 'Queued', {now} FROM inserted
             """, ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState ==
+            PostgresErrorCodes.UniqueViolation)
+        {
+            // A competing process can race the sandbox UUID while locking
+            // a *different* numeric GitHub repo. The partial unique indexes
+            // remain the final concurrency guarantee.
+            throw new GitSandboxDispatchException("SandboxDispatchActiveTargetBusy");
+        }
         if (changed != 1)
             throw new GitSandboxDispatchException("SandboxDispatchAdmissionFailed");
         await tx.CommitAsync(ct);
@@ -130,7 +154,8 @@ public sealed class PostgresGitSandboxDispatchStore(
                 SET state = 'MayHaveTransmitted',
                     claim_token = {token}, claim_until_utc = {until},
                     updated_at_utc = {now}
-                WHERE d.id = {row.Id} AND d.state = 'Queued'
+                WHERE d.id = {row.Id} AND d.sandbox_id = {row.SandboxId}
+                  AND d.state = 'Queued'
                   AND d.remote_writes_performed = false
                   AND d.execution_authorized = false
                   AND d.ready_for_execution = false
@@ -185,6 +210,7 @@ public sealed class PostgresGitSandboxDispatchStore(
                     claim_token = {token}, claim_until_utc = {until},
                     updated_at_utc = {now}
                 WHERE id = {row.Id}
+                  AND sandbox_id = {row.SandboxId}
                   AND (state = 'InspectionRequired' OR
                        (state IN ('MayHaveTransmitted','Inspecting') AND
                         claim_until_utc < {now}))
