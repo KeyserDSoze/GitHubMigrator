@@ -10,6 +10,7 @@ public sealed class PostgresGitHubTrustedRemoteReadPlanReader(
     AppDbContext db, TimeProvider clock,
     IIncrementalOperationPlanRepository planRepository,
     IVerifiedSourceGitRefReader sourceRefs,
+    IGitSourceBundleEvidenceStore bundles,
     GitHubReadOnlyObjectMirrorOptions options)
     : IGitHubTrustedRemoteReadPlanReader
 {
@@ -191,10 +192,53 @@ public sealed class PostgresGitHubTrustedRemoteReadPlanReader(
         if (!canonical.SequenceEqual(source.Refs))
             throw Reject("TrustedRemoteReadSourceSnapshotInvalid");
 
+        // A F-029 snapshot can describe multiple source repositories.
+        // The F-038 workpack is the per-repository immutable artifact
+        // that selects a distinct physical mirror path (F-060).
+        var selected = await db.GitTransferWorkpacks.AsNoTracking()
+            .Where(x => x.PlanId == plan.Id &&
+                x.SourceRepositoryId == sourceSteps[0].SourceRepositoryId &&
+                x.TargetRepositoryName == grant.Repository)
+            .Take(2).ToArrayAsync(ct);
+        if (selected.Length != 1 ||
+            selected[0].State != GitTransferWorkpackStates.Blocked ||
+            selected[0].Phase != GitTransferWorkpackPhases.WriteBlocked ||
+            selected[0].ReadyForExecution ||
+            selected[0].ReconciliationId == Guid.Empty ||
+            selected[0].ManifestSha256 != plan.ManifestSha256)
+            throw Reject("TrustedRemoteReadSourceBundleNotBound");
+
+        GitSourceBundleView bundle;
+        try
+        {
+            bundle = await bundles.GetAsync(
+                grant.PreparationId, grant.PlanId, selected[0].Id, ct)
+                ?? throw Reject("TrustedRemoteReadSourceBundleMissing");
+        }
+        catch (GitSourceBundleException)
+        {
+            throw Reject("TrustedRemoteReadSourceBundleInvalid");
+        }
+        if (!bundle.IsCurrent || bundle.ReadyForExecution ||
+            bundle.WorkpackId != selected[0].Id ||
+            bundle.PlanId != plan.Id ||
+            bundle.ReconciliationId != selected[0].ReconciliationId ||
+            bundle.SourceRepositoryId != sourceSteps[0].SourceRepositoryId ||
+            bundle.SourceEvidenceSha256 != source.SourceEvidenceSha256 ||
+            bundle.ReconciliationSha256 != selected[0].ReconciliationSha256 ||
+            bundle.RefCount != canonical.Length)
+            throw Reject("TrustedRemoteReadSourceBundleChanged");
+
         var result = new GitHubTrustedRemoteReadPlan(
             plan.SnapshotId, grant.Organization, grant.Repository,
             source.SourceEvidenceSha256, canonical,
-            baselineSha, candidatesSha, readback.RefSetSha256, "");
+            baselineSha, candidatesSha, readback.RefSetSha256, "")
+        {
+            SourceMirrorId = GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+                plan.SnapshotId, bundle.WorkpackId),
+            SourceBundle = bundle
+        };
+        GitSourceSnapshotMirrorIntegrity.RequirePlan(result);
         return result with {
             PlanEvidenceSha256 = GitHubTrustedRemoteReadCoordinator.Fingerprint(result)
         };
