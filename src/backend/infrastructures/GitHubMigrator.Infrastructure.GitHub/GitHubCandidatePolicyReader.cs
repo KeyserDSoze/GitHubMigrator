@@ -105,10 +105,10 @@ public sealed class GitHubCandidatePolicyReader(
         return new(observations, clock.GetUtcNow(), "Observed");
     }
 
-    private static GitHubCandidatePolicyObservation Unverified(
+    private GitHubCandidatePolicyObservation Unverified(
         IReadOnlyList<GitMirrorRef> refs, string status) =>
         new(refs.Select(x => Unknown(x.Name, status)).ToArray(),
-            DateTimeOffset.UtcNow, status);
+            clock.GetUtcNow(), status);
 
     private static GitHubCandidateRuleStatus Unknown(
         string name, string providerStatus) => new(
