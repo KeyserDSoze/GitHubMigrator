@@ -8,6 +8,8 @@ namespace GitHubMigrator.Business;
 // fingerprints), and an ephemeral token. The source snapshot and its refs
 // are selected by a trusted persisted F-029/F-014 plan reader, never
 // chosen by the external caller. This is not an API or a background sender.
+public sealed record GitHubTrustedRemoteReadOptions(bool Enabled);
+
 public sealed record GitHubTrustedRemoteReadCommand(
     Guid GrantId, Guid ReadbackId, Guid HazardId, long RepositoryId,
     Guid ObserverId, IReadOnlyList<GitHubObservedRef> OriginalBaseline,
@@ -38,12 +40,15 @@ public sealed class GitHubTrustedRemoteReadCoordinator(
     IGitHubReadOnlyObjectMirrorRunner mirror,
     IGitHubRemoteObjectReconciliationJournal journal,
     GitHubReadOnlyObjectMirrorOptions options,
+    GitHubTrustedRemoteReadOptions orchestrationOptions,
     TimeProvider clock)
 {
     public async Task<GitHubRemoteObjectReconciliationStatus> ExecuteAsync(
         GitHubTrustedRemoteReadCommand command,
         string ephemeralInstallationToken, CancellationToken ct)
     {
+        if (!orchestrationOptions.Enabled)
+            throw new GitHubTrustedRemoteReadException("TrustedRemoteReadDisabled");
         if (command is null || command.GrantId == Guid.Empty ||
             command.ReadbackId == Guid.Empty || command.HazardId == Guid.Empty ||
             command.RepositoryId <= 0 || command.ObserverId == Guid.Empty ||
