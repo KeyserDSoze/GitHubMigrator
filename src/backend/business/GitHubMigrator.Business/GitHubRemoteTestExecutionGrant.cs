@@ -179,6 +179,8 @@ public sealed class GitHubRemoteTestGrantService(
     {
         var repo = await ScopedRepositoryAsync(preparationId, planId,
             scopeId, attemptId, ct);
+        await RequireScopedGrantAsync(grantId, repo, preparationId,
+            planId, scopeId, attemptId, ct);
         return await store.CancelAsync(grantId, repo, actorId, token, ct);
     }
 
@@ -189,6 +191,8 @@ public sealed class GitHubRemoteTestGrantService(
     {
         var repo = await ScopedRepositoryAsync(preparationId, planId,
             scopeId, attemptId, ct);
+        await RequireScopedGrantAsync(grantId, repo, preparationId,
+            planId, scopeId, attemptId, ct);
         return await store.RecoverAsync(grantId, repo, actorId,
             acknowledgement, ct);
     }
@@ -199,7 +203,8 @@ public sealed class GitHubRemoteTestGrantService(
     {
         var repo = await ScopedRepositoryAsync(preparationId, planId,
             scopeId, attemptId, ct);
-        return await store.GetAsync(grantId, repo, ct);
+        return await RequireScopedGrantAsync(grantId, repo, preparationId,
+            planId, scopeId, attemptId, ct);
     }
 
     public async Task<IReadOnlyList<GitHubRemoteTestGrantEvent>> EventsAsync(
@@ -208,7 +213,22 @@ public sealed class GitHubRemoteTestGrantService(
     {
         var repo = await ScopedRepositoryAsync(preparationId, planId,
             scopeId, attemptId, ct);
+        await RequireScopedGrantAsync(grantId, repo, preparationId,
+            planId, scopeId, attemptId, ct);
         return await store.EventsAsync(grantId, repo, ct);
+    }
+
+    private async Task<GitHubRemoteTestGrantStatus?> RequireScopedGrantAsync(
+        Guid grantId, long repositoryId, Guid preparationId, Guid planId,
+        Guid scopeId, Guid attemptId, CancellationToken ct)
+    {
+        var grant = await store.GetAsync(grantId, repositoryId, ct);
+        if (grant is not null &&
+            (grant.PreparationId != preparationId ||
+             grant.PlanId != planId || grant.ScopeId != scopeId ||
+             grant.AttemptId != attemptId))
+            throw new KeyNotFoundException("RemoteTestGrantNotFound");
+        return grant;
     }
 
     private async Task<long> ScopedRepositoryAsync(
