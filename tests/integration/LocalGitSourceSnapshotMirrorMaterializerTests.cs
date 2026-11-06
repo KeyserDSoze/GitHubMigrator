@@ -58,8 +58,7 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
             "test-only-ephemeral-token", default);
         Assert.Equal(format, receipt.GitObjectFormat);
         Assert.Equal(proof.ObjectSetSha256,
-            receipt.SourceObjectSetSha256 is { Length: 64 }
-                ? proof.ObjectSetSha256 : "");
+            receipt.SourceObjectSetSha256);
         Assert.Equal(receipt.SourceObjectSetSha256,
             receipt.RemoteObjectSetSha256);
         Assert.False(receipt.MigrationComplete);
