@@ -212,6 +212,74 @@ public sealed class PostgresGitHubTransferAttemptTests(
             owner, lease.LeaseToken, lease.Generation, packet.EvidenceSha256, default));
     }
 
+    [Fact]
+    public async Task Abandoned_pending_attempt_is_expired_and_audited_once()
+    {
+        var clock = new FakeClock(DateTimeOffset.UtcNow);
+        var packet = Packet();
+        var owner = Guid.NewGuid();
+        await using var db = fixture.NewContext();
+        var leaseStore = new PostgresGitHubTargetPreviewLeaseStore(db, clock);
+        var lease = await leaseStore.AcquireAsync(packet, owner, Duration, default);
+        var store = Store(db, clock);
+        var prepared = await store.PrepareAsync(Draft(packet, lease), default);
+        clock.Advance(TimeSpan.FromSeconds(21));
+        Assert.True(await store.ExpireNextStaleAsync(default));
+        Assert.False(await store.ExpireNextStaleAsync(default));
+        var expired = await store.GetAsync(
+            packet.PreparationId, packet.PlanId, packet.ScopeId, prepared.Id,
+            default);
+        Assert.Equal(GitHubTransferAttemptStates.Expired, expired!.State);
+        Assert.NotNull(expired.ExpiredAtUtc);
+        Assert.Null(expired.ReviewedBy);
+        Assert.False(expired.TransportAttempted);
+        Assert.False(expired.ExecutionAuthorized);
+        Assert.False(expired.RemoteWritesPerformed);
+        Assert.Equal(new[] { "Prepared", "LeaseExpired" },
+            (await store.EventsAsync(packet.PreparationId, packet.PlanId,
+                packet.ScopeId, prepared.Id, default)).Select(x => x.Type));
+        Assert.Null(await store.BlockNextAtWriteBarrierAsync(default));
+    }
+
+    [Fact]
+    public async Task New_preparation_proactively_expires_old_released_lease_slot()
+    {
+        var firstPacket = Packet();
+        var owner = Guid.NewGuid();
+        await using var db = fixture.NewContext();
+        var store = Store(db);
+        var leases = new PostgresGitHubTargetPreviewLeaseStore(
+            db, TimeProvider.System);
+        var firstLease = await leases.AcquireAsync(
+            firstPacket, owner, Duration, default);
+        var abandoned = await store.PrepareAsync(
+            Draft(firstPacket, firstLease), default);
+        Assert.True(await leases.ReleaseAsync(firstPacket.RepositoryId,
+            owner, firstLease.LeaseToken, firstLease.Generation,
+            firstPacket.EvidenceSha256, default));
+
+        var nextPacket = firstPacket with {
+            ScopeId = Guid.NewGuid(), EvidenceSha256 = Sha('e')
+        };
+        var nextOwner = Guid.NewGuid();
+        var nextLease = await leases.AcquireAsync(
+            nextPacket, nextOwner, Duration, default);
+        // Even without Jobs:Enabled, the new prepare performs stale-lease
+        // expiry under the same lock before testing the active target index.
+        var next = await store.PrepareAsync(
+            Draft(nextPacket, nextLease), default);
+        Assert.NotEqual(abandoned.Id, next.Id);
+        Assert.Equal(GitHubTransferAttemptStates.Expired,
+            (await store.GetAsync(firstPacket.PreparationId,
+                firstPacket.PlanId, firstPacket.ScopeId,
+                abandoned.Id, default))!.State);
+        Assert.Equal(GitHubTransferAttemptStates.AwaitingIndependentReview,
+            next.State);
+        Assert.True(await leases.ReleaseAsync(nextPacket.RepositoryId,
+            nextOwner, nextLease.LeaseToken, nextLease.Generation,
+            nextPacket.EvidenceSha256, default));
+    }
+
     private PostgresGitHubTransferAttemptStore Store(
         AppDbContext db, TimeProvider? clock = null) =>
         new(db, clock ?? TimeProvider.System);
