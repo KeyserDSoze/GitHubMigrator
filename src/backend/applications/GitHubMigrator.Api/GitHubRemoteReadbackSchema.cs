@@ -49,12 +49,12 @@ public static class GitHubRemoteReadbackSchema
                 CONSTRAINT ck_f054_no_transport CHECK (
                     repository_id > 0 AND observed_by <> '00000000-0000-0000-0000-000000000000'::uuid
                     AND state IN ('ExactTipEvidenceOnly','OperatorReviewRequired')
-                    AND baseline_sha256 ~ '^[0-9a-f]{64}$'
-                    AND candidate_set_sha256 ~ '^[0-9a-f]{64}$'
-                    AND ref_set_sha256 ~ '^[0-9a-f]{64}$'
-                    AND tip_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                    AND assessment_sha256 ~ '^[0-9a-f]{64}$'
-                    AND journal_evidence_sha256 ~ '^[0-9a-f]{64}$'
+                    AND baseline_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND candidate_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND ref_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND tip_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND assessment_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND journal_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                     AND transport_attempted=false
                     AND remote_writes_authorized=false
                     AND may_automatically_retry=false
