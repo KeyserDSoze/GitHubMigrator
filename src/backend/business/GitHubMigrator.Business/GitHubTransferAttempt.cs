@@ -64,6 +64,11 @@ public static class GitHubTransferAttemptIntegrity
             policy.NoActiveRulesReported != packet.CreateCandidates ||
             policy.RulesRequireReview != 0 || policy.PolicyUnverified != 0 ||
             policy.Candidates != packet.CreateCandidates ||
+            policy.Items is null || policy.Items.Count != packet.CreateCandidates ||
+            policy.Items.Any(x =>
+                x is null ||
+                x.Status != GitHubCandidatePolicyStates.NoActiveRulesReported ||
+                x.ActiveRules != 0 || x.ProviderStatus != "Observed") ||
             packet.CreateCandidates is < 1 or > MaxCandidates ||
             !GitSourceBundleStorageCheck.ValidSha(packet.EvidenceSha256) ||
             !GitSourceBundleStorageCheck.ValidSha(packet.CandidateSetSha256) ||
