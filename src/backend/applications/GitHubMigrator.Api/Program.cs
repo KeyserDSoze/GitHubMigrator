@@ -332,7 +332,7 @@ builder.Services.AddRateLimiter(options =>
     });
     options.AddFixedWindowLimiter("github-app-scope", limiter =>
     {
-        limiter.PermitLimit = 2;
+        limiter.PermitLimit = 6;
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
