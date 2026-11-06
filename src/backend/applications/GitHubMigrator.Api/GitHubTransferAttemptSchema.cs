@@ -32,12 +32,15 @@ public static class GitHubTransferAttemptSchema
                 created_at_utc timestamptz NOT NULL,
                 reviewed_at_utc timestamptz NULL,
                 blocked_at_utc timestamptz NULL,
+                expired_at_utc timestamptz NULL,
                 state varchar(32) NOT NULL,
                 transport_attempted boolean NOT NULL DEFAULT false,
                 execution_authorized boolean NOT NULL DEFAULT false,
                 remote_writes_performed boolean NOT NULL DEFAULT false,
                 ready_for_execution boolean NOT NULL DEFAULT false
             );
+            ALTER TABLE github_transfer_attempts
+                ADD COLUMN IF NOT EXISTS expired_at_utc timestamptz NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS ux_github_transfer_attempt_scope
                 ON github_transfer_attempts(scope_id);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_github_transfer_active_repository
@@ -71,13 +74,15 @@ public static class GitHubTransferAttemptSchema
                         AND policy_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND candidate_set_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND state IN ('AwaitingIndependentReview','Reviewed',
-                                      'Rejected','BlockedAtWriteBarrier')
-                        AND ((state = 'AwaitingIndependentReview')
+                                      'Rejected','Expired','BlockedAtWriteBarrier')
+                        AND ((state IN ('AwaitingIndependentReview','Expired'))
                              = (reviewed_by IS NULL))
                         AND ((reviewed_by IS NULL) = (reviewed_at_utc IS NULL))
                         AND (reviewed_by IS NULL OR reviewed_by <> requested_by)
                         AND ((state = 'BlockedAtWriteBarrier')
                              = (blocked_at_utc IS NOT NULL))
+                        AND ((state = 'Expired')
+                             = (expired_at_utc IS NOT NULL))
                         AND transport_attempted = false
                         AND execution_authorized = false
                         AND remote_writes_performed = false
@@ -92,7 +97,7 @@ public static class GitHubTransferAttemptSchema
                     ALTER TABLE github_transfer_attempt_events
                     ADD CONSTRAINT ck_github_transfer_attempt_event CHECK (
                         type IN ('Prepared','Reviewed','Rejected',
-                                 'WriteBarrierBlocked')
+                                 'WriteBarrierBlocked','LeaseExpired')
                     );
                 END IF;
             END
