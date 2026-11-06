@@ -142,6 +142,48 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
     }
 
     [Fact]
+    public async Task F047_transfer_preparation_is_disabled_by_default_and_superadmin_only()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}/transfer-attempts";
+        async Task<HttpResponseMessage> SubmitAsync(string? token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(new {
+                    expectedPacketSha256 = new string('a', 64),
+                    expectedPolicySha256 = new string('b', 64),
+                    leaseToken = Guid.NewGuid(),
+                    leaseGeneration = 1
+                })
+            };
+            if (token is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await SubmitAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await SubmitAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await SubmitAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await SubmitAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.Conflict, superadmin.StatusCode);
+        Assert.Contains("TransferPreparationDisabled",
+            await superadmin.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("leaseToken",
+            await superadmin.Content.ReadAsStringAsync(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Health_and_readiness_are_served_by_real_API_and_database()
     {
         using var health = await harness.Client.GetAsync("/api/health");

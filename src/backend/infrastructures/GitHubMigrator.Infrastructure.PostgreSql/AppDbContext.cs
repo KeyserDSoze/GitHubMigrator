@@ -55,6 +55,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<AzureGitFetchJobRecord>();
     public DbSet<AzureGitFetchJobEventRecord> AzureGitFetchJobEvents =>
         Set<AzureGitFetchJobEventRecord>();
+    public DbSet<GitHubTransferAttemptRecord> GitHubTransferAttempts =>
+        Set<GitHubTransferAttemptRecord>();
+    public DbSet<GitHubTransferAttemptEventRecord> GitHubTransferAttemptEvents =>
+        Set<GitHubTransferAttemptEventRecord>();
     public DbSet<GitHubTargetPreviewLeaseRecord> GitHubTargetPreviewLeases =>
         Set<GitHubTargetPreviewLeaseRecord>();
     public DbSet<GitHubTargetPreviewLeaseEventRecord> GitHubTargetPreviewLeaseEvents =>
@@ -447,6 +451,54 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(x => new { x.JobId, x.Id })
                 .HasDatabaseName("ix_azure_git_fetch_events");
+        });
+        builder.Entity<GitHubTransferAttemptRecord>(entity =>
+        {
+            entity.ToTable("github_transfer_attempts");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.ScopeId).HasColumnName("scope_id");
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(100);
+            entity.Property(x => x.Repository).HasColumnName("repository").HasMaxLength(100);
+            entity.Property(x => x.PacketSha256).HasColumnName("packet_sha256").HasMaxLength(64);
+            entity.Property(x => x.PolicySha256).HasColumnName("policy_sha256").HasMaxLength(64);
+            entity.Property(x => x.CandidateSetSha256).HasColumnName("candidate_set_sha256").HasMaxLength(64);
+            entity.Property(x => x.CandidateCount).HasColumnName("candidate_count");
+            entity.Property(x => x.PolicyObservedAtUtc).HasColumnName("policy_observed_at_utc");
+            entity.Property(x => x.LeaseToken).HasColumnName("lease_token");
+            entity.Property(x => x.LeaseGeneration).HasColumnName("lease_generation");
+            entity.Property(x => x.RequestedBy).HasColumnName("requested_by");
+            entity.Property(x => x.ReviewedBy).HasColumnName("reviewed_by");
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.ReviewedAtUtc).HasColumnName("reviewed_at_utc");
+            entity.Property(x => x.BlockedAtUtc).HasColumnName("blocked_at_utc");
+            entity.Property(x => x.ExpiredAtUtc).HasColumnName("expired_at_utc");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(32);
+            entity.Property(x => x.TransportAttempted).HasColumnName("transport_attempted");
+            entity.Property(x => x.ExecutionAuthorized).HasColumnName("execution_authorized");
+            entity.Property(x => x.RemoteWritesPerformed).HasColumnName("remote_writes_performed");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasIndex(x => x.ScopeId).IsUnique()
+                .HasDatabaseName("ux_github_transfer_attempt_scope");
+            entity.HasIndex(x => new { x.State, x.CreatedAtUtc, x.Id })
+                .HasDatabaseName("ix_github_transfer_attempt_worker");
+        });
+        builder.Entity<GitHubTransferAttemptEventRecord>(entity =>
+        {
+            entity.ToTable("github_transfer_attempt_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.AttemptId).HasColumnName("attempt_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(32);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitHubTransferAttemptRecord>().WithMany()
+                .HasForeignKey(x => x.AttemptId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.AttemptId, x.Id })
+                .HasDatabaseName("ix_github_transfer_attempt_events");
         });
         builder.Entity<GitHubTargetPreviewLeaseRecord>(entity =>
         {
