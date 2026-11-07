@@ -129,6 +129,43 @@ public sealed class PostgresGitSourceMirrorLifecycleTests(
     }
 
     [Fact]
+    public async Task The_same_scoped_DbContext_must_reload_after_Busy_and_before_fencing()
+    {
+        using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
+        var plan = f.CreatePlan();
+        await using var first = fixture.NewContext();
+        await using var second = fixture.NewContext();
+        var original = await Journal(first).AcquireAsync(
+            plan, Guid.NewGuid(), default);
+        var busy = await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+            () => Journal(second).AcquireAsync(
+                plan, Guid.NewGuid(), default));
+        Assert.Equal("SourceMirrorLifecycleBusy", busy.Code);
+
+        var proof = await f.Materializer().MaterializeAsync(plan, default);
+        await Journal(first).CompleteAsync(plan, original, proof, default);
+
+        // This exact second DbContext previously tracked the row as
+        // Leased: it MUST reload fresh Verified state before retrying.
+        var replay = await Journal(second).AcquireAsync(
+            plan, Guid.NewGuid(), default);
+        Assert.Equal(2, replay.Generation);
+
+        // The first DbContext also has a tracked older row, but can no
+        // longer use its stale lease to quarantine the newer owner.
+        var stale = await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+            () => Journal(first).QuarantineAsync(
+                plan, original, "SourceMirrorChanged", default));
+        Assert.Equal("SourceMirrorLifecycleLeaseLost", stale.Code);
+
+        var reverified = await f.Materializer().MaterializeAsync(plan, default);
+        var committed = await Journal(second).CompleteAsync(
+            plan, replay, reverified, default);
+        Assert.Equal(GitSourceMirrorLifecycleStates.Verified, committed.State);
+        Assert.Equal(proof.EvidenceSha256, committed.MirrorProofSha256);
+    }
+
+    [Fact]
     public async Task Reverification_of_a_corrupt_immutable_mirror_is_quarantined()
     {
         using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
