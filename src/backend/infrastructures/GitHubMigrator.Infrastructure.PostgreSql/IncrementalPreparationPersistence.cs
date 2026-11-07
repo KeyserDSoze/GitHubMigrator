@@ -133,32 +133,49 @@ public sealed class PostgresIncrementalPreparationRepository(
         // not before its start. Do not use now() (transaction-start time).
         var now = await UtcNowAsync(ct);
         var until = now.Add(duration);
-        // Recovery of a crashed fifth attempt must not leave a stuck Running
-        // record forever, and the terminal failure is audited exactly once.
+        // F-069: only a bounded number of exhausted fifth-attempt leases
+        // can be finalized per poll. SKIP LOCKED means an active replica
+        // never causes the janitor to block behind another owner's row.
+        // The terminal state and one Failed audit event commit atomically.
         await db.Database.ExecuteSqlInterpolatedAsync($"""
-            WITH exhausted AS (
-                UPDATE incremental_preparations SET
-                    state = 'Failed', last_error_code = 'LeaseExpiredAfterMaxAttempts',
-                    updated_at_utc = {now}, lease_token = NULL, lease_until_utc = NULL
+            WITH expired AS MATERIALIZED (
+                SELECT id FROM incremental_preparations
                 WHERE state = 'Running' AND lease_until_utc <= {now}
                   AND attempts >= max_attempts
                   AND ({sourceConnectionId} = {Guid.Empty}
                       OR source_connection_id = {sourceConnectionId})
-                RETURNING id, attempts
+                ORDER BY lease_until_utc, id
+                FOR UPDATE SKIP LOCKED LIMIT 64
+            ), exhausted AS (
+                UPDATE incremental_preparations p SET
+                    state = 'Failed',
+                    last_error_code = 'LeaseExpiredAfterMaxAttempts',
+                    updated_at_utc = {now},
+                    lease_token = NULL, lease_until_utc = NULL
+                FROM expired
+                WHERE p.id = expired.id
+                  AND p.state = 'Running'
+                  AND p.lease_until_utc <= {now}
+                  AND p.attempts >= p.max_attempts
+                RETURNING p.id, p.attempts
             )
             INSERT INTO incremental_preparation_events (
                 preparation_id, event_type, attempt, occurred_at_utc, error_code)
-            SELECT id, 'Failed', attempts, {now}, 'LeaseExpiredAfterMaxAttempts'
+            SELECT id, 'Failed', attempts, {now},
+                'LeaseExpiredAfterMaxAttempts'
             FROM exhausted
             """, ct);
 
+        // F-069: capture the old state under SKIP LOCKED BEFORE claiming it.
+        // Previous Running means a worker crashed or lost its lease.
+        // The recovery marker is written in the SAME transaction as the
+        // next generation and strictly BEFORE its Claimed event.
+        // Queued retry/admission keeps the original single Claimed event.
         var affected = await db.Database.ExecuteSqlInterpolatedAsync($"""
-            UPDATE incremental_preparations
-            SET state = 'Running', lease_token = {token},
-                lease_until_utc = {until}, attempts = attempts + 1,
-                updated_at_utc = {now}
-            WHERE id = (
-                SELECT id FROM incremental_preparations
+            WITH candidate AS MATERIALIZED (
+                SELECT id, state AS previous_state,
+                    attempts AS previous_attempt
+                FROM incremental_preparations
                 WHERE (
                     (state = 'Queued' AND available_at_utc <= {now})
                     OR (state = 'Running' AND lease_until_utc <= {now})
@@ -168,7 +185,24 @@ public sealed class PostgresIncrementalPreparationRepository(
                     OR source_connection_id = {sourceConnectionId})
                 ORDER BY available_at_utc, created_at_utc, id
                 FOR UPDATE SKIP LOCKED LIMIT 1
+            ), claimed AS (
+                UPDATE incremental_preparations p
+                SET state = 'Running', lease_token = {token},
+                    lease_until_utc = {until}, attempts = p.attempts + 1,
+                    updated_at_utc = {now}
+                FROM candidate c WHERE p.id = c.id
+                RETURNING p.id, p.attempts,
+                    c.previous_state, c.previous_attempt
             )
+            INSERT INTO incremental_preparation_events (
+                preparation_id, event_type, attempt, occurred_at_utc, error_code)
+            SELECT id,
+                CASE WHEN previous_state = 'Running'
+                    THEN 'LeaseReclaimed' ELSE 'Claimed' END,
+                CASE WHEN previous_state = 'Running'
+                    THEN previous_attempt ELSE attempts END,
+                {now}, NULL
+            FROM claimed
             """, ct);
         if (affected == 0)
         {
@@ -178,11 +212,24 @@ public sealed class PostgresIncrementalPreparationRepository(
 
         var run = await db.IncrementalPreparations.AsNoTracking()
             .SingleAsync(x => x.LeaseToken == token, ct);
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO incremental_preparation_events (
-                preparation_id, event_type, attempt, occurred_at_utc, error_code)
-            VALUES ({run.Id}, 'Claimed', {run.Attempts}, {now}, NULL)
-            """, ct);
+        var claimEvent = await db.IncrementalPreparationEvents.AsNoTracking()
+            .Where(x => x.PreparationId == run.Id)
+            .OrderByDescending(x => x.Id)
+            .Select(x => x.EventType).FirstAsync(ct);
+        if (claimEvent == "LeaseReclaimed")
+        {
+            // Two separately ordered immutable events. The first captures
+            // the fenced-out attempt; the second starts the successor.
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO incremental_preparation_events (
+                    preparation_id, event_type, attempt,
+                    occurred_at_utc, error_code)
+                VALUES ({run.Id}, 'Claimed', {run.Attempts}, {now}, NULL)
+                """, ct);
+        }
+        else if (claimEvent != "Claimed")
+            throw new IncrementalPreparationException(
+                "IncrementalRecoveryAuditMismatch");
         await transaction.CommitAsync(ct);
         return new(run.Id, run.SnapshotId, run.SourceConnectionId,
             run.DestinationConnectionId, token, run.Attempts);
