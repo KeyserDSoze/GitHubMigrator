@@ -229,7 +229,7 @@ public sealed class PostgresIncrementalTargetPreflightTests(PostgresDraftFixture
             new PostgresDiscoveryRepository(db), connections,
             new PostgresIdentityMappingDraftRepository(db),
             null, new PostgresPlanRefEvidenceReader(db));
-        return new(new PostgresIncrementalPreparationRepository(db, clock),
+        return new(new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false),
             new PostgresIncrementalReviewRepository(db, clock),
             preview, connections, secrets, access, probe,
             new PostgresIncrementalTargetPreflightRepository(db, clock), clock);
@@ -269,7 +269,7 @@ public sealed class PostgresIncrementalTargetPreflightTests(PostgresDraftFixture
         var normalized = StagingAssetNormalizer.Normalize(snapshot);
         await new PostgresStagingRepository(db, clock)
             .ApplyAsync(snapshot, normalized.Assets, normalized.CompleteTypes, default);
-        var jobs = new PostgresIncrementalPreparationRepository(db, clock);
+        var jobs = new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false);
         var queued = await jobs.EnqueueAsync(id, source, destination, author, default);
         var lease = await jobs.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5),
             default, source);
