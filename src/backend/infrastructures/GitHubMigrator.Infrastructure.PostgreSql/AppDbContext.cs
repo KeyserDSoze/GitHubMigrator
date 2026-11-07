@@ -270,6 +270,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .IsDescending(false, true)
                 .HasDatabaseName("ix_f067_incremental_prepared_source_time")
                 .HasFilter("state = 'Prepared'");
+            entity.HasIndex(x => new { x.LeaseUntilUtc, x.Id })
+                .HasDatabaseName("ix_f069_incremental_running_expiry")
+                .HasFilter("state = 'Running'");
             entity.HasOne<StagingSnapshotSyncRecord>().WithMany()
                 .HasForeignKey(x => x.SnapshotId).OnDelete(DeleteBehavior.Restrict);
         });
