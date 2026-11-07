@@ -84,7 +84,14 @@ public sealed class GitHubRemoteAppPreflightReaderTests
         Assert.All(actual.CandidatePolicies.Items, x =>
             Assert.Equal(GitHubCandidatePolicyStates.NoActiveRulesReported,
                 x.Status));
-        Assert.Equal(8, requests.Count);
+        Assert.Equal(11, requests.Count);
+        Assert.Equal(2, requests.Count(x =>
+            x == "GET /repos/gh-org/sandbox/git/matching-refs/heads"));
+        Assert.Equal(2, requests.Count(x =>
+            x == "GET /repos/gh-org/sandbox/git/matching-refs/tags"));
+        Assert.Equal(3, requests.Count(x =>
+            x == "GET /repos/gh-org/sandbox"));
+        Assert.Equal("GET /repos/gh-org/sandbox", requests[^1]);
         Assert.Single(requests.Where(x => x.StartsWith("POST ")));
         Assert.Contains("GET /app/installations/77", requests);
         Assert.All(requests.Where(x =>
