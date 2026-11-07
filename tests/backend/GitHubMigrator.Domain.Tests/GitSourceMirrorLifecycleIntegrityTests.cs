@@ -119,17 +119,66 @@ public sealed class GitSourceMirrorLifecycleIntegrityTests
         Assert.Equal("SourceMirrorGitClosureInvalid", journal.LastFailureCode);
     }
 
+    [Fact]
+    public async Task Heartbeat_extends_owned_lease_before_slow_source_completes()
+    {
+        var plan = Plan();
+        var gate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var physical = new FakePhysical { Gate = gate.Task };
+        var journal = new FakeJournal();
+        var wrapper = new DurableGitSourceSnapshotMirrorMaterializer(
+            physical, journal, TimeSpan.FromMilliseconds(10));
+
+        var run = wrapper.MaterializeAsync(plan, default);
+        await journal.Renewed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        gate.SetResult();
+        var proof = await run;
+
+        Assert.True(journal.Renewals >= 1);
+        Assert.Equal(1, physical.Calls);
+        Assert.Equal(1, journal.Commits);
+        Assert.NotNull(journal.CompletedLease);
+        Assert.True(journal.CompletedLease.ExpiresAtUtc >
+            journal.OriginalLease.ExpiresAtUtc);
+        Assert.Equal(proof.EvidenceSha256,
+            GitSourceSnapshotMirrorIntegrity.Seal(
+                plan, proof.ObjectSetSha256, proof.VerifiedObjectCount,
+                proof.VerifiedAtUtc).EvidenceSha256);
+    }
+
+    [Fact]
+    public async Task Lost_heartbeat_cancels_physical_work_and_never_commits()
+    {
+        var plan = Plan();
+        var gate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var physical = new FakePhysical { Gate = gate.Task };
+        var journal = new FakeJournal { FailRenewal = true };
+        var wrapper = new DurableGitSourceSnapshotMirrorMaterializer(
+            physical, journal, TimeSpan.FromMilliseconds(10));
+
+        var error = await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+            () => wrapper.MaterializeAsync(plan, default));
+        Assert.Equal("SourceMirrorLifecycleLeaseLost", error.Code);
+        Assert.Equal(1, physical.Calls);
+        Assert.Equal(0, journal.Commits);
+        Assert.Equal(0, journal.Quarantines);
+    }
+
     private sealed class FakePhysical : IGitSourceSnapshotMirrorMaterializer
     {
         public int Calls { get; private set; }
         public GitSourceSnapshotMirrorException? Failure { get; init; }
-        public Task<GitSourceSnapshotMirrorProof> MaterializeAsync(
+        public Task? Gate { get; init; }
+        public async Task<GitSourceSnapshotMirrorProof> MaterializeAsync(
             GitHubTrustedRemoteReadPlan plan, CancellationToken ct)
         {
             Calls++;
             if (Failure is not null) throw Failure;
-            return Task.FromResult(GitSourceSnapshotMirrorIntegrity.Seal(
-                plan, Sha('a'), 8, DateTimeOffset.UtcNow));
+            if (Gate is not null) await Gate.WaitAsync(ct);
+            return GitSourceSnapshotMirrorIntegrity.Seal(
+                plan, Sha('a'), 8, DateTimeOffset.UtcNow);
         }
     }
 
@@ -137,6 +186,11 @@ public sealed class GitSourceMirrorLifecycleIntegrityTests
     {
         public Task<GitSourceMirrorLease> AcquireAsync(
             GitHubTrustedRemoteReadPlan plan, Guid workerId, CancellationToken ct) =>
+            throw new GitSourceMirrorLifecycleException(
+                "SourceMirrorLifecycleDisabled");
+        public Task<GitSourceMirrorLease> RenewAsync(
+            GitHubTrustedRemoteReadPlan plan, GitSourceMirrorLease lease,
+            CancellationToken ct) =>
             throw new GitSourceMirrorLifecycleException(
                 "SourceMirrorLifecycleDisabled");
         public Task<GitSourceMirrorLifecycleStatus> CompleteAsync(
@@ -159,19 +213,51 @@ public sealed class GitSourceMirrorLifecycleIntegrityTests
     {
         public int Commits { get; private set; }
         public int Quarantines { get; private set; }
+        public int Renewals { get; private set; }
+        public bool FailRenewal { get; init; }
+        public GitSourceMirrorLease OriginalLease { get; private set; } = null!;
+        public GitSourceMirrorLease? CompletedLease { get; private set; }
+        public TaskCompletionSource Renewed { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         public string? LastFailureCode { get; private set; }
 
         public Task<GitSourceMirrorLease> AcquireAsync(
-            GitHubTrustedRemoteReadPlan plan, Guid workerId, CancellationToken ct) =>
-            Task.FromResult(new GitSourceMirrorLease(plan.SourceMirrorId,
+            GitHubTrustedRemoteReadPlan plan, Guid workerId, CancellationToken ct)
+        {
+            OriginalLease = new GitSourceMirrorLease(plan.SourceMirrorId,
                 plan.SourceBundle!.WorkpackId, workerId, Guid.NewGuid(),
-                1, DateTimeOffset.UtcNow.AddMinutes(15)));
+                1, DateTimeOffset.UtcNow.AddMinutes(15));
+            return Task.FromResult(OriginalLease);
+        }
+        public Task<GitSourceMirrorLease> RenewAsync(
+            GitHubTrustedRemoteReadPlan plan, GitSourceMirrorLease lease,
+            CancellationToken ct)
+        {
+            if (FailRenewal)
+                throw new GitSourceMirrorLifecycleException(
+                    "SourceMirrorLifecycleLeaseLost");
+            Renewals++;
+            Renewed.TrySetResult();
+            return Task.FromResult(lease with {
+                ExpiresAtUtc = lease.ExpiresAtUtc.AddMinutes(1)
+            });
+        }
         public Task<GitSourceMirrorLifecycleStatus> CompleteAsync(
             GitHubTrustedRemoteReadPlan plan, GitSourceMirrorLease lease,
             GitSourceSnapshotMirrorProof proof, CancellationToken ct)
         {
             Commits++;
-            throw new NotImplementedException();
+            CompletedLease = lease;
+            return Task.FromResult(new GitSourceMirrorLifecycleStatus(
+                lease.MirrorId, plan.SourceSnapshotId, lease.WorkpackId,
+                GitSourceMirrorLifecycleStates.Verified,
+                lease.Generation, null, null,
+                plan.SourceBundle!.BundleSha256,
+                plan.SourceEvidenceSha256,
+                GitSourceSnapshotMirrorIntegrity.SourceRefsSha(plan.SourceRefs),
+                proof.ObjectSetSha256, proof.VerifiedObjectCount,
+                proof.EvidenceSha256, null, proof.VerifiedAtUtc,
+                false, false, false, false));
         }
         public Task QuarantineAsync(
             GitHubTrustedRemoteReadPlan plan, GitSourceMirrorLease lease,
