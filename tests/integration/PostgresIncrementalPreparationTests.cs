@@ -13,6 +13,148 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
     : IClassFixture<PostgresDraftFixture>
 {
     [Fact]
+    public async Task F068_extreme_replica_clock_skew_does_not_change_queue_time_or_phase_events()
+    {
+        await using var db = fixture.NewContext();
+        var skew = new ManualClock(DateTimeOffset.UtcNow.AddHours(12));
+        var source = Guid.NewGuid();
+        var target = Guid.NewGuid();
+        await ConnectionsAsync(db, source, target);
+        var scan = Snapshot(source, DateTimeOffset.UtcNow.AddMinutes(-4),
+            [new("repo-1", "refs/heads/main", "sha")]);
+        await StageAsync(db, TimeProvider.System, scan);
+        // The two-argument constructor defaults to DATABASE clock. The
+        // supplied worker clock is intentionally twelve hours ahead.
+        var queue = new PostgresIncrementalPreparationRepository(db, skew);
+        var before = await db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
+        var run = await queue.EnqueueAsync(scan.Id, source, target,
+            Guid.NewGuid(), default);
+        var after = await db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
+        Assert.InRange(run.CreatedAtUtc, before, after);
+        Assert.Equal(run.CreatedAtUtc, run.AvailableAtUtc);
+        var first = await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(first);
+        var acquired = await queue.GetAsync(run.Id, default);
+        var dbNow = await db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
+        Assert.InRange(acquired!.LeaseUntilUtc!.Value,
+            dbNow.AddMinutes(4), dbNow.AddMinutes(6));
+        Assert.True(await queue.FailAsync(first,
+            "TransientDatabaseFailure", false, default));
+
+        var deferred = await queue.GetAsync(run.Id, default);
+        Assert.Equal(IncrementalPreparationStates.Queued, deferred!.State);
+        var realNow = await db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
+        Assert.InRange(deferred.AvailableAtUtc,
+            realNow.AddSeconds(5), realNow.AddSeconds(20));
+        // A fast host clock would incorrectly claim this delayed retry.
+        Assert.Null(await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source));
+
+        // Now simulate a worker twelve hours BEHIND the PostgreSQL
+        // server and make the retry due using server time.
+        skew.Advance(TimeSpan.FromHours(-24));
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations
+            SET available_at_utc=clock_timestamp()-interval '1 second'
+            WHERE id={run.Id}
+            """);
+        var next = await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(next);
+        Assert.Equal(2, next.Attempt);
+        // A slow host would otherwise reject this healthy lease.
+        Assert.True(await queue.PrepareAsync(next, default));
+        var events = await queue.EventsAsync(run.Id, default);
+        Assert.Equal(["Queued", "Claimed", "RetryScheduled",
+            "Claimed", "Prepared"], events.Select(e => e.EventType).ToArray());
+        Assert.All(events, e => Assert.InRange(e.OccurredAtUtc,
+            before, DateTimeOffset.UtcNow.AddSeconds(5)));
+        Assert.True(events.Zip(events.Skip(1),
+            (a, b) => a.OccurredAtUtc <= b.OccurredAtUtc).All(x => x));
+
+        // F-067 can now consume DB-clock events from different workers
+        // without wrongly declaring valid attempt evidence incomplete.
+        var phases = await new PostgresIncrementalPreparationPhaseHealthReader(
+            db, new(true)).ReadAsync(source, default);
+        Assert.Equal(1, phases.PreparedLast24Hours);
+        Assert.Equal(1, phases.ValidPhaseSamples);
+        Assert.Equal(0, phases.MissingOrInvalidSamples);
+        Assert.Equal(1, phases.RetriedPreparedLast24Hours);
+        Assert.NotNull(phases.AverageQueueWaitSeconds);
+        Assert.NotNull(phases.AverageClaimToPreparedSeconds);
+    }
+
+    [Fact]
+    public async Task F068_failed_worker_cannot_use_time_sampled_before_contended_row_lock()
+    {
+        await using var db = fixture.NewContext();
+        var source = Guid.NewGuid();
+        var target = Guid.NewGuid();
+        await ConnectionsAsync(db, source, target);
+        var scan = Snapshot(source, DateTimeOffset.UtcNow.AddMinutes(-4),
+            [new("repo-1", "refs/heads/main", "sha")]);
+        await StageAsync(db, TimeProvider.System, scan);
+        var queue = new PostgresIncrementalPreparationRepository(db,
+            new ManualClock(DateTimeOffset.UtcNow.AddHours(12)));
+        var run = await queue.EnqueueAsync(scan.Id, source, target,
+            Guid.NewGuid(), default);
+        var lease = await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(lease);
+
+        // Lock a row while the old owner's deadline passes. The failing
+        // replica waits for the lock and THEN samples clock_timestamp().
+        await using (var blocker = fixture.NewContext())
+        {
+            await using var tx = await blocker.Database.BeginTransactionAsync();
+            await blocker.Database.ExecuteSqlInterpolatedAsync($"""
+                SELECT id FROM incremental_preparations
+                WHERE id={run.Id} FOR UPDATE
+                """);
+            await blocker.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE incremental_preparations
+                SET lease_until_utc=clock_timestamp()+interval '350 milliseconds'
+                WHERE id={run.Id}
+                """);
+            var staleFailure = Task.Run(async () =>
+            {
+                await using var delayedDb = fixture.NewContext();
+                return await new PostgresIncrementalPreparationRepository(
+                    delayedDb, TimeProvider.System).FailAsync(lease,
+                        "PreparationDeadlineExceeded", false, default);
+            });
+            await Task.Delay(600);
+            await tx.CommitAsync();
+            Assert.False(await staleFailure.WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+
+        Assert.Equal(IncrementalPreparationStates.Running,
+            (await queue.GetAsync(run.Id, default))!.State);
+        Assert.DoesNotContain(await queue.EventsAsync(run.Id, default),
+            e => e.EventType is "RetryScheduled" or "Failed");
+
+        // A successor can reclaim the expired generation. The original
+        // token cannot publish a late retry or a prepared result.
+        var successor = await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(successor);
+        Assert.Equal(2, successor.Attempt);
+        Assert.NotEqual(lease.LeaseToken, successor.LeaseToken);
+        Assert.False(await queue.FailAsync(lease,
+            "PreparationDeadlineExceeded", false, default));
+        Assert.Equal("IncrementalLeaseLost",
+            (await Assert.ThrowsAsync<IncrementalPreparationException>(
+                () => queue.PrepareAsync(lease, default))).Code);
+        Assert.Equal(IncrementalPreparationStates.Running,
+            (await queue.GetAsync(run.Id, default))!.State);
+    }
+
+    [Fact]
     public async Task F067_immutable_events_separate_queue_wait_from_final_attempt_work()
     {
         await using var db = fixture.NewContext();
