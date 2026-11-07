@@ -144,6 +144,11 @@ public static class Bootstrap
             CREATE INDEX IF NOT EXISTS ix_f067_incremental_prepared_source_time
                 ON incremental_preparations(source_connection_id, prepared_at_utc DESC)
                 WHERE state = 'Prepared';
+            -- F-069 recovery workers only inspect expired Running leases
+            -- and skip rows currently locked by another replica.
+            CREATE INDEX IF NOT EXISTS ix_f069_incremental_running_expiry
+                ON incremental_preparations(lease_until_utc, id)
+                WHERE state = 'Running';
             CREATE TABLE IF NOT EXISTS incremental_preparation_items (
                 preparation_id uuid NOT NULL REFERENCES incremental_preparations(id)
                     ON DELETE CASCADE,
