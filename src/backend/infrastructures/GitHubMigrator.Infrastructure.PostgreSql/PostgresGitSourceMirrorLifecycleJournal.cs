@@ -7,8 +7,7 @@ namespace GitHubMigrator.Infrastructure.PostgreSql;
 // A lease is NOT a GitHub transport permit. Only the current generation
 // may record a verified SHA, and any expired generation must re-fsck.
 public sealed class PostgresGitSourceMirrorLifecycleJournal(
-    AppDbContext db, TimeProvider clock,
-    GitSourceMirrorLifecycleOptions options)
+    AppDbContext db, GitSourceMirrorLifecycleOptions options)
     : IGitSourceMirrorLifecycleJournal
 {
     public async Task<GitSourceMirrorLease> AcquireAsync(
@@ -21,7 +20,7 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(plan.SourceMirrorId, ct);
-        var now = clock.GetUtcNow();
+        var now = await ServerUtcNowAsync(ct);
         var row = await db.GitSourceMirrorLifecycles
             .SingleOrDefaultAsync(x => x.MirrorId == plan.SourceMirrorId, ct);
         string eventType;
@@ -100,7 +99,7 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
         GitSourceSnapshotMirrorIntegrity.RequirePlan(plan);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(plan.SourceMirrorId, ct);
-        var now = clock.GetUtcNow();
+        var now = await ServerUtcNowAsync(ct);
         // Reload under the same advisory lock as claim/commit. Both the
         // exact prior deadline AND the random token must match, so an
         // old heartbeat cannot resurrect a superseded generation.
@@ -141,7 +140,7 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
         GitSourceSnapshotMirrorIntegrity.RequirePlan(plan);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(plan.SourceMirrorId, ct);
-        var now = clock.GetUtcNow();
+        var now = await ServerUtcNowAsync(ct);
         var row = await OwnedAsync(plan, lease, now, ct);
         // A replayed proof can still match the immutable object-set hash.
         // Require a freshly sealed verification *after this lease began*.
@@ -187,7 +186,7 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
             throw Reject("SourceMirrorLifecycleFailureInvalid");
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(plan.SourceMirrorId, ct);
-        var now = clock.GetUtcNow();
+        var now = await ServerUtcNowAsync(ct);
         var row = await OwnedAsync(plan, lease, now, ct);
         row.State = GitSourceMirrorLifecycleStates.RecoveryRequired;
         row.FailureCode = failureCode;
@@ -275,6 +274,16 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
             row.MayAutomaticallyRetry || row.MigrationComplete)
             throw Reject("SourceMirrorLifecyclePlanConflict");
     }
+
+    // All lifecycle timestamps, expiry decisions and proof freshness
+    // checks share the PostgreSQL server clock. Reading clock_timestamp()
+    // AFTER acquiring the advisory transaction lock matters: now() and
+    // transaction_timestamp() freeze at BEGIN and could admit a worker
+    // whose deadline expired while it waited for another replica.
+    // Never use a process-local TimeProvider as fencing authority.
+    private Task<DateTimeOffset> ServerUtcNowAsync(CancellationToken ct) =>
+        db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
 
     private async Task LockAsync(Guid mirrorId, CancellationToken ct) =>
         await db.Database.ExecuteSqlInterpolatedAsync(

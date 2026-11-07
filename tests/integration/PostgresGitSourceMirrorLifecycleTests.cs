@@ -23,7 +23,107 @@ public sealed class PostgresGitSourceMirrorLifecycleTests(
     public Task DisposeAsync() => Task.CompletedTask;
 
     private PostgresGitSourceMirrorLifecycleJournal Journal(AppDbContext db) =>
-        new(db, TimeProvider.System, new(true));
+        new(db, new(true));
+
+    private static Task<DateTimeOffset> DatabaseNowAsync(AppDbContext db) =>
+        db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
+
+    [Fact]
+    public async Task Database_clock_bounds_admission_heartbeat_and_verified_receipt()
+    {
+        using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
+        var plan = f.CreatePlan();
+        await using var db = fixture.NewContext();
+        var beforeAcquire = await DatabaseNowAsync(db);
+        var original = await Journal(db).AcquireAsync(
+            plan, Guid.NewGuid(), default);
+        var afterAcquire = await DatabaseNowAsync(db);
+        var acquired = await Journal(db).GetAsync(plan.SourceMirrorId, default);
+        Assert.NotNull(acquired);
+        Assert.InRange(acquired.UpdatedAtUtc, beforeAcquire, afterAcquire);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(
+            (acquired.UpdatedAtUtc +
+                GitSourceMirrorLifecycleIntegrity.LeaseDuration)
+            .ToUnixTimeMilliseconds()), original.ExpiresAtUtc);
+
+        // Physical F-062 verification happens after the database's
+        // admission clock and before a legitimate database renewal.
+        var proof = await f.Materializer().MaterializeAsync(plan, default);
+        await Task.Delay(20);
+        var beforeRenew = await DatabaseNowAsync(db);
+        var current = await Journal(db).RenewAsync(plan, original, default);
+        var afterRenew = await DatabaseNowAsync(db);
+        Assert.Equal(original.Generation, current.Generation);
+        Assert.Equal(original.LeaseToken, current.LeaseToken);
+        Assert.True(current.ExpiresAtUtc > original.ExpiresAtUtc);
+        var renewed = Assert.Single((await Journal(db).EventsAsync(
+            plan.SourceMirrorId, default))
+            .Where(e => e.Type == "LeaseRenewed"));
+        Assert.InRange(renewed.OccurredAtUtc, beforeRenew, afterRenew);
+        // Renewal advances only the deadline, NOT the original F-062
+        // admission boundary used for source proof freshness.
+        var stillAdmitted = await Journal(db).GetAsync(
+            plan.SourceMirrorId, default);
+        Assert.Equal(acquired.UpdatedAtUtc, stillAdmitted!.UpdatedAtUtc);
+
+        var beforeComplete = await DatabaseNowAsync(db);
+        var verified = await Journal(db).CompleteAsync(
+            plan, current, proof, default);
+        var afterComplete = await DatabaseNowAsync(db);
+        Assert.InRange(verified.UpdatedAtUtc, beforeComplete, afterComplete);
+        var completionEvent = Assert.Single((await Journal(db).EventsAsync(
+            plan.SourceMirrorId, default))
+            .Where(e => e.Type == "Verified"));
+        Assert.InRange(completionEvent.OccurredAtUtc,
+            beforeComplete, afterComplete);
+        Assert.False(verified.RemotePushInvoked);
+        Assert.False(verified.MigrationComplete);
+    }
+
+    [Fact]
+    public async Task An_expired_lease_is_reclaimed_using_live_PostgreSQL_time()
+    {
+        using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
+        var plan = f.CreatePlan();
+        GitSourceMirrorLease old;
+        await using (var db = fixture.NewContext())
+            old = await Journal(db).AcquireAsync(
+                plan, Guid.NewGuid(), default);
+
+        // Simulate an expiring owner using PostgreSQL time only, not the
+        // local worker clock. A concurrent admission waits for the same
+        // advisory transaction lock until the original deadline passes.
+        await using (var blocker = fixture.NewContext())
+        {
+            await using var lockTx = await blocker.Database.BeginTransactionAsync();
+            await blocker.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT pg_advisory_xact_lock(736061, hashtext({plan.SourceMirrorId.ToString()}))");
+            await blocker.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE git_source_mirror_lifecycles
+                SET lease_expires_at_utc=clock_timestamp() + interval '350 milliseconds'
+                WHERE mirror_id={plan.SourceMirrorId}
+                """);
+            var contender = Task.Run(async () =>
+            {
+                await using var db = fixture.NewContext();
+                return await Journal(db).AcquireAsync(
+                    plan, Guid.NewGuid(), default);
+            });
+            // The contender opens its transaction while blocked; unlike
+            // transaction_timestamp()/now(), clock_timestamp() must be
+            // sampled only after the lock becomes available.
+            await Task.Delay(600);
+            await lockTx.CommitAsync();
+            var successor = await contender.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(old.Generation + 1, successor.Generation);
+            Assert.NotEqual(old.LeaseToken, successor.LeaseToken);
+            await using var stale = fixture.NewContext();
+            var denied = await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+                () => Journal(stale).RenewAsync(plan, old, default));
+            Assert.Equal("SourceMirrorLifecycleLeaseLost", denied.Code);
+        }
+    }
 
     [Fact]
     public async Task Six_replicas_admit_only_one_Git_import_generation()
