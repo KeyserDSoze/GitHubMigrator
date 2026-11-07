@@ -11,6 +11,7 @@ namespace GitHubMigrator.Infrastructure.PostgreSql;
 // Acquire in this order to fence both concurrent mutation families.
 public sealed class PostgresGitHubRemoteDispatchReviewVerifier(
     AppDbContext db, GitHubRemoteTransmitHazardOptions options)
+    : IGitHubRemoteDispatchAuthorityVerifier
 {
     public async Task<GitHubRemoteCreateOnlyDispatchReview> VerifyAsync(
         GitHubCreateOnlyCandidatePacket source,
