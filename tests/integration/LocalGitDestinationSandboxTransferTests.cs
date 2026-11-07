@@ -195,7 +195,9 @@ public sealed class LocalGitDestinationSandboxTransferTests
         using var original = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
         using var changed = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
         var a = original.CreatePlan();
-        var b = changed.CreatePlan();
+        // Force an unequivocally distinct Git source object format; two
+        // identically scripted repositories may share commit SHA-1s.
+        var b = changed.CreatePlan("sha256");
         var proofA = await original.Materializer().MaterializeAsync(a, default);
         var proofB = await changed.Materializer().MaterializeAsync(b, default);
         var root = Path.Combine(original.Root, "never-force");
