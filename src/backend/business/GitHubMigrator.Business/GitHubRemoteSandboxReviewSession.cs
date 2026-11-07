@@ -28,6 +28,15 @@ public sealed class GitHubRemoteSandboxReviewSessionException(string code)
     public string Code { get; } = code;
 }
 
+// Implemented by the F-078 PostgreSQL append-only journal. No actual
+// sender or production API depends on this review-only interface.
+public interface IGitHubRemoteSandboxReviewSessionRecorder
+{
+    Task<GitHubRemoteSandboxReviewSessionReceipt> RecordAsync(
+        GitHubRemoteCreateOnlyDispatchReview reviewed,
+        Guid independentActor, CancellationToken ct);
+}
+
 public static class GitHubRemoteSandboxReviewSessionIntegrity
 {
     public const string Recorded = "RecordedWriteDisabled";
