@@ -81,9 +81,18 @@ public static class GitSourceMirrorLifecycleIntegrity
             proof.MayAutomaticallyRetry || proof.MigrationComplete)
             throw new GitSourceMirrorLifecycleException(
                 "SourceMirrorLifecycleProofInvalid");
-        var recalculated = GitSourceSnapshotMirrorIntegrity.Seal(
-            plan, proof.ObjectSetSha256, proof.VerifiedObjectCount,
-            proof.VerifiedAtUtc);
+        GitSourceSnapshotMirrorProof recalculated;
+        try
+        {
+            recalculated = GitSourceSnapshotMirrorIntegrity.Seal(
+                plan, proof.ObjectSetSha256, proof.VerifiedObjectCount,
+                proof.VerifiedAtUtc);
+        }
+        catch (GitSourceSnapshotMirrorException)
+        {
+            throw new GitSourceMirrorLifecycleException(
+                "SourceMirrorLifecycleProofInvalid");
+        }
         if (recalculated.EvidenceSha256 != proof.EvidenceSha256)
             throw new GitSourceMirrorLifecycleException(
                 "SourceMirrorLifecycleProofInvalid");
