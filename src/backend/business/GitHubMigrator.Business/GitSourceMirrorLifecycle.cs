@@ -93,9 +93,26 @@ public static class GitSourceMirrorLifecycleIntegrity
             throw new GitSourceMirrorLifecycleException(
                 "SourceMirrorLifecycleProofInvalid");
         }
-        if (recalculated.EvidenceSha256 != proof.EvidenceSha256)
+        if (recalculated.EvidenceSha256 != proof.EvidenceSha256 ||
+            recalculated.VerificationReceiptSha256 !=
+                proof.VerificationReceiptSha256)
             throw new GitSourceMirrorLifecycleException(
                 "SourceMirrorLifecycleProofInvalid");
+    }
+
+    // Proofs from previous generations remain content-identical, but
+    // are not evidence of a new physical fsck. PostgreSQL supplies the
+    // current lease admission timestamp under its advisory lock.
+    public static void VerifyProofForLease(
+        GitHubTrustedRemoteReadPlan plan,
+        GitSourceSnapshotMirrorProof proof,
+        DateTimeOffset acquiredAtUtc, DateTimeOffset now)
+    {
+        VerifyProof(plan, proof, now);
+        if (acquiredAtUtc == default || acquiredAtUtc > now ||
+            proof.VerifiedAtUtc < acquiredAtUtc)
+            throw new GitSourceMirrorLifecycleException(
+                "SourceMirrorLifecycleProofStale");
     }
 }
 
@@ -152,7 +169,8 @@ public sealed class DurableGitSourceSnapshotMirrorMaterializer(
         }
         catch (GitSourceMirrorLifecycleException ex) when
             (ex.Code is "SourceMirrorLifecycleProofConflict" or
-                "SourceMirrorLifecycleProofInvalid")
+                "SourceMirrorLifecycleProofInvalid" or
+                "SourceMirrorLifecycleProofStale")
         {
             try
             {

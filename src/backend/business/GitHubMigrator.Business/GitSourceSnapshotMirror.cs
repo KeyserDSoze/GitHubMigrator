@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -20,7 +21,8 @@ public sealed record GitSourceSnapshotMirrorProof(
     string ObjectSetSha256, int VerifiedObjectCount,
     string EvidenceSha256, DateTimeOffset VerifiedAtUtc,
     bool RemotePushInvoked, bool RemoteWritesAuthorized,
-    bool MayAutomaticallyRetry, bool MigrationComplete);
+    bool MayAutomaticallyRetry, bool MigrationComplete,
+    string VerificationReceiptSha256 = "");
 
 public interface IGitSourceSnapshotMirrorMaterializer
 {
@@ -121,9 +123,18 @@ public static class GitSourceSnapshotMirrorIntegrity
                 refSha, b.RefCount, objectSetSha, objectCount,
                 false, false, false, false
             }))));
+        // Keep the stable F-060 physical-object digest unchanged across
+        // legitimate re-verifications; bind the *individual receipt's*
+        // timestamp separately so it cannot be silently edited or replayed.
+        var verificationReceipt = Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new object[] {
+                "f062-source-mirror-verification-receipt-v1",
+                evidence,
+                when.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)
+            }))));
         return new(plan.SourceSnapshotId, plan.SourceMirrorId,
             b.WorkpackId, b.BundleSha256, b.SourceEvidenceSha256,
             refSha, b.RefCount, objectSetSha, objectCount, evidence, when,
-            false, false, false, false);
+            false, false, false, false, verificationReceipt);
     }
 }

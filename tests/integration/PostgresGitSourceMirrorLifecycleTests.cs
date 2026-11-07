@@ -245,11 +245,12 @@ public sealed class PostgresGitSourceMirrorLifecycleTests(
     {
         using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
         var plan = f.CreatePlan();
-        var first = await f.Materializer().MaterializeAsync(plan, default);
+        GitSourceSnapshotMirrorProof first;
         await using (var db = fixture.NewContext())
         {
             var lease = await Journal(db).AcquireAsync(
                 plan, Guid.NewGuid(), default);
+            first = await f.Materializer().MaterializeAsync(plan, default);
             await Journal(db).CompleteAsync(plan, lease, first, default);
         }
         await using (var db = fixture.NewContext())
@@ -284,6 +285,52 @@ public sealed class PostgresGitSourceMirrorLifecycleTests(
                 status.State);
             Assert.False(status.MayAutomaticallyRetry);
         }
+    }
+
+    [Fact]
+    public async Task A_completed_generation_proof_cannot_be_replayed_under_a_new_lease()
+    {
+        using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
+        var plan = f.CreatePlan();
+        GitSourceSnapshotMirrorProof oldProof;
+        await using (var firstDb = fixture.NewContext())
+        {
+            var first = await Journal(firstDb).AcquireAsync(
+                plan, Guid.NewGuid(), default);
+            oldProof = await f.Materializer().MaterializeAsync(plan, default);
+            await Journal(firstDb).CompleteAsync(
+                plan, first, oldProof, default);
+        }
+
+        // Ensure the second acquisition is strictly later, even on
+        // hosts with coarse wall-clock precision.
+        await Task.Delay(20);
+        await using (var secondDb = fixture.NewContext())
+        {
+            var second = await Journal(secondDb).AcquireAsync(
+                plan, Guid.NewGuid(), default);
+            Assert.Equal(2, second.Generation);
+            var refusal = await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+                () => Journal(secondDb).CompleteAsync(
+                    plan, second, oldProof, default));
+            Assert.Equal("SourceMirrorLifecycleProofStale", refusal.Code);
+            await Journal(secondDb).QuarantineAsync(
+                plan, second, refusal.Code, default);
+        }
+
+        await using var inspect = fixture.NewContext();
+        var row = await Journal(inspect).GetAsync(
+            plan.SourceMirrorId, default);
+        Assert.NotNull(row);
+        Assert.Equal(GitSourceMirrorLifecycleStates.RecoveryRequired,
+            row.State);
+        Assert.Equal(oldProof.EvidenceSha256, row.MirrorProofSha256);
+        Assert.Equal("SourceMirrorLifecycleProofStale", row.FailureCode);
+        Assert.False(row.MayAutomaticallyRetry);
+        Assert.Equal(
+            ["LeaseAcquired", "Verified", "ReverifyStarted", "Quarantined"],
+            (await Journal(inspect).EventsAsync(plan.SourceMirrorId, default))
+                .Select(e => e.Type).ToArray());
     }
 
     [Fact]
