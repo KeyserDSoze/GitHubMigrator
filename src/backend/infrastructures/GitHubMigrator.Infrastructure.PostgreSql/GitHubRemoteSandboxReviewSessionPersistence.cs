@@ -314,8 +314,34 @@ public sealed class PostgresGitHubRemoteSandboxReviewSessionJournal(
         var grant = await db.GitHubRemoteTestGrants.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == session.GrantId &&
                 x.RepositoryId == session.RepositoryId, ct);
+        var fence = await db.GitHubRemoteSandboxFences.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.RepositoryId == session.RepositoryId, ct);
+        var attempt = grant is null ? null :
+            await db.GitHubTransferAttempts.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id == grant.AttemptId &&
+                    x.RepositoryId == session.RepositoryId, ct);
+        var lease = await db.GitHubTargetPreviewLeases.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.RepositoryId == session.RepositoryId, ct);
         var current = session.ExpiresAtUtc > now &&
             hazard is not null && grant is not null &&
+            fence is not null && attempt is not null && lease is not null &&
+            fence.RequestId == session.FenceRequestId &&
+            fence.Generation == session.FenceGeneration &&
+            fence.State == GitHubRemoteSandboxFenceStates.ReviewedWriteDisabled &&
+            fence.DeadlineUtc > now &&
+            !fence.ExecutionAuthorized && !fence.RemoteWritesPerformed &&
+            !fence.ReadyForExecution &&
+            attempt.State == GitHubTransferAttemptStates.BlockedAtWriteBarrier &&
+            attempt.PacketSha256 == session.PacketSha256 &&
+            !attempt.TransportAttempted && !attempt.ExecutionAuthorized &&
+            !attempt.RemoteWritesPerformed && !attempt.ReadyForExecution &&
+            lease.State == GitHubTargetPreviewLeaseIntegrity.Held &&
+            lease.LeaseUntilUtc > now &&
+            lease.LeaseToken == attempt.LeaseToken &&
+            lease.Generation == attempt.LeaseGeneration &&
+            lease.PacketSha256 == session.PacketSha256 &&
+            !lease.ExecutionAuthorized && !lease.RemoteWritesPerformed &&
+            !lease.ReadyForExecution &&
             hazard.State == GitHubRemoteTransmitHazardStates.PreparedWriteDisabled &&
             hazard.MarkedBy is null && !hazard.TransportInvoked &&
             !hazard.TransportAuthorized && !hazard.RemoteWritesPerformed &&
