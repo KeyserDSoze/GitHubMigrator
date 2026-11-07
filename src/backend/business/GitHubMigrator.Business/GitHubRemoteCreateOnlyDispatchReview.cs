@@ -97,6 +97,7 @@ public static class GitHubRemoteCreateOnlyDispatchIntegrity
             preflight.MatchingBaselineRefs < 0 ||
             !ValidSha(preflight.EvidenceSha256) ||
             !ValidSha(preflight.OriginalPolicySha256) ||
+            preflight.OriginalPolicySha256 != packet.PolicySha256 ||
             !ValidSha(preflight.CurrentPolicySha256) ||
             !ValidSha(preflight.ExpectedBaselineSha256) ||
             preflight.ExpectedBaselineSha256 !=
@@ -111,7 +112,7 @@ public static class GitHubRemoteCreateOnlyDispatchIntegrity
         // F-052/F-055 are the ONLY authoritative state-machine witnesses:
         // the F-051 receipt alone says nothing about a previous possible
         // transmission. Refuse any old or marked hazard for this epoch.
-        if (grant.Id == Guid.Empty ||
+        if (grant.Id == Guid.Empty || grant.AttemptId == Guid.Empty ||
             grant.RepositoryId != packet.RepositoryId ||
             !SameTarget(grant.Organization, grant.Repository, packet) ||
             grant.PreparationId != packet.PreparationId ||
