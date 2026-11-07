@@ -54,7 +54,7 @@ public sealed class PostgresGitHubRemoteSandboxReviewSessionJournal(
             review.FenceRequestId == Guid.Empty ||
             review.FenceGeneration <= 0 || review.RepositoryId <= 0 ||
             review.State != GitHubRemoteCreateOnlyDispatchIntegrity.State ||
-            review.TransportInvokedUnsafe() ||
+            review.RemoteTransportInvoked ||
             review.RemoteWritesAuthorized || review.MayAutomaticallyRetry ||
             review.MigrationComplete ||
             !Valid(review.EvidenceSha256) ||
@@ -109,6 +109,22 @@ public sealed class PostgresGitHubRemoteSandboxReviewSessionJournal(
             hazard.CandidateSetSha256 != review.CandidateSetSha256 ||
             hazard.BaselineSha256 != review.BaselineSha256 ||
             hazard.PreparedBy == independentActor ||
+            grant.AttemptId != attempt.Id ||
+            grant.PreparationId != attempt.PreparationId ||
+            grant.PlanId != attempt.PlanId ||
+            grant.ScopeId != attempt.ScopeId ||
+            fence.AttemptId != attempt.Id ||
+            fence.PreparationId != grant.PreparationId ||
+            fence.PlanId != grant.PlanId ||
+            fence.ScopeId != grant.ScopeId ||
+            !string.Equals(grant.Organization, fence.Organization,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(grant.Repository, fence.Repository,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(attempt.Organization, fence.Organization,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(attempt.Repository, fence.Repository,
+                StringComparison.OrdinalIgnoreCase) ||
             grant.State != GitHubRemoteTestGrantStates.ReviewedWriteDisabled ||
             grant.DeadlineUtc <= now ||
             grant.Id != review.GrantId ||
@@ -360,9 +376,3 @@ public sealed class PostgresGitHubRemoteSandboxReviewSessionJournal(
         string code) => new(code);
 }
 
-internal static class F078DispatchReviewExtensions
-{
-    public static bool TransportInvokedUnsafe(
-        this GitHubRemoteCreateOnlyDispatchReview review) =>
-        review.RemoteTransportInvoked;
-}
