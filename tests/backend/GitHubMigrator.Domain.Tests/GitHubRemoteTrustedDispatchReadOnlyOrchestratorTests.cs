@@ -177,8 +177,10 @@ public sealed class GitHubRemoteTrustedDispatchReadOnlyOrchestratorTests
         Assert.Equal(1, f.RemoteReader.Calls);
         Assert.Equal(1, f.AuthorityReader.Calls);
         Assert.Equal(f.Preflight, f.AuthorityReader.SubmittedPreflight);
-        Assert.Equal(f.Observation.TargetRefs,
-            f.AuthorityReader.SubmittedRefs);
+        Assert.Equal(f.Observation.TargetRefs.EvidenceSha256,
+            f.AuthorityReader.SubmittedRefs!.EvidenceSha256);
+        Assert.Equal(f.Observation.TargetRefs.Refs,
+            f.AuthorityReader.SubmittedRefs.Refs);
         Assert.Equal(GitHubRemoteCreateOnlyDispatchIntegrity.State,
             receipt.State);
         Assert.False(receipt.RemoteTransportInvoked);
@@ -320,9 +322,7 @@ public sealed class GitHubRemoteTrustedDispatchReadOnlyOrchestratorTests
             };
         var ex = await Assert.ThrowsAsync<GitHubRemoteCreateOnlyDispatchException>(
             () => f.RunAsync());
-        Assert.Equal(mutation == "packet"
-            ? "RemoteDispatchSourceChangedDuringRead"
-            : "RemoteDispatchSourceChangedDuringRead", ex.Code);
+        Assert.Equal("RemoteDispatchSourceChangedDuringRead", ex.Code);
         Assert.Equal(2, f.Packets.Calls);
         Assert.Equal(1, f.RemoteReader.Calls);
         Assert.Equal(0, f.AuthorityReader.Calls);
