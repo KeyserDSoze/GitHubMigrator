@@ -266,6 +266,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasDatabaseName("ix_incremental_preparations_ready");
             entity.HasIndex(x => new { x.SourceConnectionId, x.State })
                 .HasDatabaseName("ix_f066_incremental_health_source_state");
+            entity.HasIndex(x => new { x.SourceConnectionId, x.PreparedAtUtc })
+                .IsDescending(false, true)
+                .HasDatabaseName("ix_f067_incremental_prepared_source_time")
+                .HasFilter("state = 'Prepared'");
             entity.HasOne<StagingSnapshotSyncRecord>().WithMany()
                 .HasForeignKey(x => x.SnapshotId).OnDelete(DeleteBehavior.Restrict);
         });
