@@ -134,6 +134,10 @@ public static class Bootstrap
                 ON incremental_preparations(snapshot_id, destination_connection_id);
             CREATE INDEX IF NOT EXISTS ix_incremental_preparations_ready
                 ON incremental_preparations(state, available_at_utc, created_at_utc);
+            -- F-066 source-scoped operational queue health. Never scan
+            -- unrelated organizations to produce diagnostic counters.
+            CREATE INDEX IF NOT EXISTS ix_f066_incremental_health_source_state
+                ON incremental_preparations(source_connection_id, state);
             CREATE TABLE IF NOT EXISTS incremental_preparation_items (
                 preparation_id uuid NOT NULL REFERENCES incremental_preparations(id)
                     ON DELETE CASCADE,
