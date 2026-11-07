@@ -188,7 +188,11 @@ builder.Services.AddScoped<IGitHubReadOnlyObjectMirrorRunner>(sp =>
         builder.Configuration["GitHubTrustedRemoteRead:ScratchRoot"] ?? "",
         sp.GetRequiredService<GitHubReadOnlyObjectMirrorOptions>(),
         sp.GetRequiredService<TimeProvider>()));
-builder.Services.AddScoped<IGitSourceSnapshotMirrorMaterializer>(sp =>
+builder.Services.AddSingleton(new GitSourceMirrorLifecycleOptions(
+    builder.Configuration.GetValue("GitHubSourceMirrorLifecycle:Enabled", false)));
+builder.Services.AddScoped<IGitSourceMirrorLifecycleJournal,
+    PostgresGitSourceMirrorLifecycleJournal>();
+builder.Services.AddScoped<GitHubMigrator.Infrastructure.GitObjects.LocalGitSourceSnapshotMirrorMaterializer>(sp =>
     new GitHubMigrator.Infrastructure.GitObjects.LocalGitSourceSnapshotMirrorMaterializer(
         builder.Configuration["GitSourceBundles:BundleRoot"] ?? "",
         builder.Configuration["GitHubTrustedRemoteRead:SourceRoot"] ?? "",
@@ -196,6 +200,10 @@ builder.Services.AddScoped<IGitSourceSnapshotMirrorMaterializer>(sp =>
         builder.Configuration.GetValue("GitHubSourceSnapshotMirror:Enabled", false)
             && builder.Configuration.GetValue("GitSourceBundles:Enabled", false),
         sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<IGitSourceSnapshotMirrorMaterializer>(sp =>
+    new DurableGitSourceSnapshotMirrorMaterializer(
+        sp.GetRequiredService<GitHubMigrator.Infrastructure.GitObjects.LocalGitSourceSnapshotMirrorMaterializer>(),
+        sp.GetRequiredService<IGitSourceMirrorLifecycleJournal>()));
 builder.Services.AddScoped<GitHubTrustedRemoteReadCoordinator>();
 
 builder.Services.AddScoped<GitHubRemoteTestGrantService>();
@@ -526,6 +534,7 @@ await GitHubRemoteTestGrantSchema.InitializeAsync(app.Services);
 await GitHubRemoteReadbackSchema.InitializeAsync(app.Services);
 await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
 await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
+await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));

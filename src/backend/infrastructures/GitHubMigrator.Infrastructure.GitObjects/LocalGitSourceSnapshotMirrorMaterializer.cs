@@ -133,6 +133,69 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
         }
     }
 
+    // F-061: explicit operator-only orphan cleanup, NOT a scheduled GC.
+    // No persisted final .git is ever removed or overwritten, including
+    // an unrecognized bare repository from an interrupted rename.
+    public async Task<int> CleanupStaleStagingAsync(
+        TimeSpan minimumAge, CancellationToken ct)
+    {
+        if (!enabled)
+            throw new GitSourceSnapshotMirrorException("SourceMirrorDisabled");
+        if (minimumAge < TimeSpan.FromHours(24))
+            throw new GitSourceSnapshotMirrorException(
+                "SourceMirrorCleanupAgeTooShort");
+        var root = CheckMirrorRoot(mirrorRoot);
+        await ProcessGate.WaitAsync(ct);
+        try
+        {
+            await using var guard = await AcquireRootLockAsync(root, ct);
+            var cutoff = _clock.GetUtcNow().UtcDateTime - minimumAge;
+            var cleaned = 0;
+            var inspected = 0;
+            foreach (var path in Directory.EnumerateFileSystemEntries(
+                root, "*.tmp", SearchOption.TopDirectoryOnly))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (++inspected > 5000 || cleaned >= 40) break;
+                var name = Path.GetFileName(path);
+                // <deterministic-mirror-guid>.<random-uuid>.tmp only.
+                if (name.Length != 69 ||
+                    name[32] != '.' || !name.EndsWith(".tmp",
+                        StringComparison.Ordinal) ||
+                    name.AsSpan(0, 32).ToString().Any(c =>
+                        c is not (>= '0' and <= '9' or >= 'a' and <= 'f')) ||
+                    name.AsSpan(33, 32).ToString().Any(c =>
+                        c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
+                    continue;
+                var info = new DirectoryInfo(path);
+                if (!info.Exists || info.LinkTarget is not null ||
+                    (info.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new GitSourceSnapshotMirrorException(
+                        "SourceMirrorCleanupUnsafeEntry");
+                if (info.LastWriteTimeUtc > cutoff) continue;
+
+                var pending = new Stack<DirectoryInfo>();
+                pending.Push(info);
+                var count = 0;
+                while (pending.TryPop(out var dir))
+                {
+                    foreach (var entry in dir.EnumerateFileSystemInfos())
+                    {
+                        if (++count > 450_000 || entry.LinkTarget is not null ||
+                            (entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                            throw new GitSourceSnapshotMirrorException(
+                                "SourceMirrorCleanupUnsafeEntry");
+                        if (entry is DirectoryInfo nested) pending.Push(nested);
+                    }
+                }
+                Directory.Delete(path, recursive: true);
+                cleaned++;
+            }
+            return cleaned;
+        }
+        finally { ProcessGate.Release(); }
+    }
+
     private static async Task<(int Count, string Digest)> VerifySourceAsync(
         string root, GitHubTrustedRemoteReadPlan plan, CancellationToken ct) =>
         await LocalGitObjectClosureAuditor.VerifyOneAsync(

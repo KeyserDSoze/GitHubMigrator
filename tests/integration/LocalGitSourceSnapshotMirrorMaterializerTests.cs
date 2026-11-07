@@ -169,7 +169,61 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.git"));
     }
 
-    private sealed class Fixture : IDisposable
+    [Fact]
+    public async Task Old_recognized_staging_is_cleaned_without_touching_current_or_final_bare()
+    {
+        using var f = new Fixture();
+        var plan = f.CreatePlan();
+        await f.Materializer().MaterializeAsync(plan, default);
+        var old = Path.Combine(f.MirrorRoot,
+            plan.SourceMirrorId.ToString("N") + "." +
+            Guid.NewGuid().ToString("N") + ".tmp");
+        var fresh = Path.Combine(f.MirrorRoot,
+            plan.SourceMirrorId.ToString("N") + "." +
+            Guid.NewGuid().ToString("N") + ".tmp");
+        var foreign = Path.Combine(f.MirrorRoot, "foreign.tmp");
+        Directory.CreateDirectory(old);
+        Directory.CreateDirectory(fresh);
+        Directory.CreateDirectory(foreign);
+        await File.WriteAllTextAsync(Path.Combine(old, "partial"), "partial");
+        Directory.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddDays(-2));
+        Directory.SetLastWriteTimeUtc(foreign, DateTime.UtcNow.AddDays(-2));
+
+        var runner = f.Materializer();
+        Assert.Equal("SourceMirrorCleanupAgeTooShort",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                () => runner.CleanupStaleStagingAsync(
+                    TimeSpan.FromHours(1), default))).Code);
+        Assert.Equal(1, await runner.CleanupStaleStagingAsync(
+            TimeSpan.FromHours(24), default));
+        Assert.False(Directory.Exists(old));
+        Assert.True(Directory.Exists(fresh));
+        Assert.True(Directory.Exists(foreign));
+        Assert.True(Directory.Exists(f.Physical(plan)));
+        Assert.Equal(plan.SourceRefs, f.Refs(f.Physical(plan)));
+    }
+
+    [Fact]
+    public async Task Recognized_stale_symlink_is_never_followed_by_cleanup()
+    {
+        using var f = new Fixture();
+        var plan = f.CreatePlan();
+        var outside = Path.Combine(f.Root, "outside-protected");
+        Directory.CreateDirectory(outside);
+        await File.WriteAllTextAsync(
+            Path.Combine(outside, "never-delete"), "protected");
+        var link = Path.Combine(f.MirrorRoot,
+            plan.SourceMirrorId.ToString("N") + "." +
+            Guid.NewGuid().ToString("N") + ".tmp");
+        Directory.CreateSymbolicLink(link, outside);
+        var ex = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+            () => f.Materializer().CleanupStaleStagingAsync(
+                TimeSpan.FromHours(24), default));
+        Assert.Equal("SourceMirrorCleanupUnsafeEntry", ex.Code);
+        Assert.True(File.Exists(Path.Combine(outside, "never-delete")));
+    }
+
+    internal sealed class Fixture : IDisposable
     {
         public string Root { get; } = Path.Combine(
             Path.GetTempPath(), "f060-source-" + Guid.NewGuid().ToString("N"));
