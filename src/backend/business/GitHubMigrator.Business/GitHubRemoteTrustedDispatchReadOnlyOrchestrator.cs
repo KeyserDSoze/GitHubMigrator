@@ -24,8 +24,26 @@ public sealed class GitHubRemoteTrustedDispatchReadOnlyOrchestrator(
     GitHubRemoteSandboxFenceOptions fenceOptions,
     GitHubAppWriteCredentialOptions credentials,
     TimeProvider clock,
-    IGitHubRemoteAppPreflightEvidenceJournal? preflightJournal = null)
+    IGitHubRemoteAppPreflightEvidenceJournal? preflightJournal = null,
+    IGitHubRemoteSandboxReviewSessionRecorder? sessionJournal = null)
 {
+    // F-078: the ONLY session creation path composes the trusted F-077
+    // hazard-bound historical receipt with F-076 live GitHub GETs,
+    // twice-rebuilt F-044 source and F-075 locked PostgreSQL review.
+    // The separate F-078 journal re-locks all authority before INSERT.
+    public async Task<GitHubRemoteSandboxReviewSessionReceipt>
+        ReviewAndRecordSessionFromJournalAsync(Guid preparationId,
+            Guid planId, Guid scopeId, Guid hazardId,
+            Guid independentActor, CancellationToken ct)
+    {
+        if (sessionJournal is null)
+            throw new GitHubRemoteSandboxReviewSessionException(
+                "SandboxReviewSessionJournalUnavailable");
+        var reviewed = await ReviewFromJournalAsync(preparationId,
+            planId, scopeId, hazardId, independentActor, ct);
+        return await sessionJournal.RecordAsync(reviewed, independentActor, ct);
+    }
+
     // F-077: new trusted entrypoint. The reviewed F-051 hash comes from
     // the F-052 PostgreSQL grant, followed by a lookup of that exact
     // append-only receipt. Callers do not supply its body or digest.
