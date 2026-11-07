@@ -732,7 +732,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         builder.Entity<GitHubRemoteAppPreflightEvidenceRecord>(entity =>
         {
             entity.ToTable("github_remote_app_preflight_evidence");
-            entity.HasKey(x => new { x.RequestId, x.Generation });
+            entity.HasKey(x => new { x.RequestId, x.Generation, x.EvidenceSha256 });
             entity.Property(x => x.RequestId).HasColumnName("request_id");
             entity.Property(x => x.Generation).HasColumnName("generation");
             entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
@@ -766,12 +766,13 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.RequestId).HasColumnName("request_id");
             entity.Property(x => x.Generation).HasColumnName("generation");
             entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
             entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(16);
             entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
             entity.HasOne<GitHubRemoteAppPreflightEvidenceRecord>().WithMany()
-                .HasForeignKey(x => new { x.RequestId, x.Generation })
+                .HasForeignKey(x => new { x.RequestId, x.Generation, x.EvidenceSha256 })
                 .OnDelete(DeleteBehavior.Restrict);
-            entity.HasIndex(x => new { x.RequestId, x.Generation, x.Id })
+            entity.HasIndex(x => new { x.RequestId, x.Generation, x.EvidenceSha256, x.Id })
                 .HasDatabaseName("ix_f077_preflight_events");
         });
         builder.Entity<GitHubRemoteReadbackRecord>(entity =>
