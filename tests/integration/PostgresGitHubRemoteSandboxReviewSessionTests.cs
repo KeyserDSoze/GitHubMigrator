@@ -135,7 +135,7 @@ public sealed class PostgresGitHubRemoteSandboxReviewSessionTests(
         var review = await SeedAndReviewAsync(db, e);
         var journal = new PostgresGitHubRemoteSandboxReviewSessionJournal(
             db, Options(e));
-        await journal.RecordAsync(review, e.Actor, default);
+        var first = await journal.RecordAsync(review, e.Actor, default);
         var changed = mutation switch
         {
             "alternate-review" => review with {
@@ -153,7 +153,7 @@ public sealed class PostgresGitHubRemoteSandboxReviewSessionTests(
             () => journal.RecordAsync(changed, actor, default));
         Assert.Equal("SandboxReviewSessionConflict", error.Code);
         Assert.Equal(1, await db.GitHubRemoteSandboxReviewSessionEvents
-            .AsNoTracking().CountAsync());
+            .AsNoTracking().CountAsync(x => x.SessionId == first.Id));
     }
 
     [Fact]
