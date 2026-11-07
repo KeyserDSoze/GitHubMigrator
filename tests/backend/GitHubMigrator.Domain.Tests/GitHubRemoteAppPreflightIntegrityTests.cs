@@ -144,6 +144,65 @@ public sealed class GitHubRemoteAppPreflightIntegrityTests
                 fixture.Seal(observation: oldToken)).Code);
     }
 
+    [Fact]
+    public void F077_historical_receipt_recomputes_exact_F051_original_digest()
+    {
+        var fixture = Valid();
+        var issued = fixture.Seal();
+        var recomputed = GitHubRemoteAppPreflightIntegrity
+            .RecomputeHistoricalEvidenceSha256(issued,
+                fixture.Observation.CandidatePolicies.ObservedAtUtc);
+        Assert.Equal(issued.EvidenceSha256, recomputed);
+        Assert.NotEqual(issued.EvidenceSha256,
+            GitHubRemoteAppPreflightIntegrity
+                .RecomputeHistoricalEvidenceSha256(issued,
+                    fixture.Observation.CandidatePolicies.ObservedAtUtc
+                        .AddMilliseconds(10)));
+        Assert.Equal(64, recomputed.Length);
+    }
+
+    [Theory]
+    [InlineData("wrong-baseline")]
+    [InlineData("wrong-state")]
+    [InlineData("write-enabled")]
+    [InlineData("too-many-candidates")]
+    [InlineData("token-expired")]
+    [InlineData("bad-policy-timestamp")]
+    public void F077_corrupted_historical_F051_witness_cannot_be_rehashed(
+        string mutation)
+    {
+        var fixture = Valid();
+        var issued = fixture.Seal();
+        var policyTime = fixture.Observation.CandidatePolicies.ObservedAtUtc;
+        var altered = mutation switch
+        {
+            "wrong-baseline" => issued with {
+                ObservedBaselineSha256 = Sha('f')
+            },
+            "wrong-state" => issued with {
+                State = "Unverified"
+            },
+            "write-enabled" => issued with {
+                ExecutionAuthorized = true
+            },
+            "too-many-candidates" => issued with {
+                AbsentCreateCandidates = 17
+            },
+            "token-expired" => issued with {
+                InstallationTokenExpiresAtUtc = issued.ObservedAtUtc
+                    .AddSeconds(10)
+            },
+            "bad-policy-timestamp" => issued,
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation))
+        };
+        if (mutation == "bad-policy-timestamp")
+            policyTime = policyTime.AddMinutes(2);
+        var ex = Assert.Throws<GitHubRemoteAppPreflightException>(() =>
+            GitHubRemoteAppPreflightIntegrity
+                .RecomputeHistoricalEvidenceSha256(altered, policyTime));
+        Assert.Equal("RemotePreflightHistoricalEvidenceInvalid", ex.Code);
+    }
+
     private static string Sha(char c) => new(c, 64);
 
     private static Fixture Valid()
