@@ -37,13 +37,13 @@ public static class GitHubRemoteAppPreflightEvidenceSchema
                 CONSTRAINT ck_f077_no_execution CHECK (
                     request_id <> '00000000-0000-0000-0000-000000000000'::uuid
                     AND generation > 0 AND repository_id > 0
-                    AND packet_sha256 ~ '^[0-9a-f]{64}$'
-                    AND candidate_set_sha256 ~ '^[0-9a-f]{64}$'
-                    AND original_policy_sha256 ~ '^[0-9a-f]{64}$'
-                    AND current_policy_sha256 ~ '^[0-9a-f]{64}$'
-                    AND expected_baseline_sha256 ~ '^[0-9a-f]{64}$'
-                    AND observed_baseline_sha256 ~ '^[0-9a-f]{64}$'
-                    AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                    AND packet_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND candidate_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND original_policy_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND current_policy_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND expected_baseline_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND observed_baseline_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                     AND expected_baseline_sha256 = observed_baseline_sha256
                     AND matching_baseline_refs >= 0
                     AND absent_create_candidates BETWEEN 1 AND 16
