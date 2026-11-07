@@ -13,6 +13,129 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
     : IClassFixture<PostgresDraftFixture>
 {
     [Fact]
+    public async Task F067_immutable_events_separate_queue_wait_from_final_attempt_work()
+    {
+        await using var db = fixture.NewContext();
+        // Stay behind the real PostgreSQL clock so the SQL 24h window
+        // is deterministic; simulate durations with the F-026 clock.
+        var clock = new ManualClock(DateTimeOffset.UtcNow.AddMinutes(-12));
+        var source = Guid.NewGuid();
+        var destination = Guid.NewGuid();
+        await ConnectionsAsync(db, source, destination);
+        var scan = Snapshot(source, clock.GetUtcNow().AddMinutes(-5),
+            [new("repo-1", "refs/heads/main", "sha")]);
+        await StageAsync(db, clock, scan);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var first = await queue.EnqueueAsync(scan.Id, source,
+            destination, Guid.NewGuid(), default);
+
+        clock.Advance(TimeSpan.FromSeconds(20));
+        var firstLease = await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(firstLease);
+        Assert.Equal(first.Id, firstLease.Id);
+        clock.Advance(TimeSpan.FromSeconds(25));
+        Assert.True(await queue.PrepareAsync(firstLease, default));
+
+        // New run, same source, another destination. On retry the
+        // correct queue origin is RetryScheduled(attempt 1), never the
+        // original Queued event or obsolete Claimed(attempt 1).
+        var second = await queue.EnqueueAsync(scan.Id, source,
+            Guid.NewGuid(), Guid.NewGuid(), default);
+        clock.Advance(TimeSpan.FromSeconds(8));
+        var failedAttempt = await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(failedAttempt);
+        Assert.Equal(second.Id, failedAttempt.Id);
+        clock.Advance(TimeSpan.FromSeconds(7));
+        Assert.True(await queue.FailAsync(failedAttempt,
+            "TransientDatabaseFailure", false, default));
+        clock.Advance(TimeSpan.FromSeconds(11));
+        var nextAttempt = await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(nextAttempt);
+        Assert.Equal(second.Id, nextAttempt.Id);
+        Assert.Equal(2, nextAttempt.Attempt);
+        clock.Advance(TimeSpan.FromSeconds(15));
+        Assert.True(await queue.PrepareAsync(nextAttempt, default));
+
+        // A row falsely marked Prepared without a corresponding
+        // claimed-and-sealed event chain MUST reduce coverage, not
+        // invent a fake zero-duration or sample from another attempt.
+        var malformed = await queue.EnqueueAsync(scan.Id, source,
+            Guid.NewGuid(), Guid.NewGuid(), default);
+        var fakePreparedAt = clock.GetUtcNow();
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations SET state='Prepared',
+                attempts=1, prepared_at_utc={fakePreparedAt},
+                updated_at_utc={fakePreparedAt}, lease_token=NULL,
+                lease_until_utc=NULL
+            WHERE id={malformed.Id}
+            """);
+
+        var reader = new PostgresIncrementalPreparationPhaseHealthReader(
+            db, new(true));
+        var before = await db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
+        var phase = await reader.ReadAsync(source, default);
+        var after = await db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
+        Assert.InRange(phase.ObservedAtUtc, before, after);
+        Assert.Equal(3, phase.PreparedLast24Hours);
+        Assert.Equal(2, phase.ValidPhaseSamples);
+        Assert.Equal(1, phase.MissingOrInvalidSamples);
+        Assert.True(phase.TimingEvidenceIncomplete);
+        Assert.Equal(1, phase.RetriedPreparedLast24Hours);
+        Assert.InRange(phase.AverageQueueWaitSeconds!.Value, 15.49, 15.51);
+        Assert.InRange(phase.AverageClaimToPreparedSeconds!.Value,
+            19.99, 20.01);
+        Assert.InRange(phase.P95ClaimToPreparedSeconds!.Value, 24.49, 24.51);
+        Assert.InRange(phase.MaxClaimToPreparedSeconds!.Value, 24.99, 25.01);
+        Assert.Equal(phase.PreparedLast24Hours,
+            phase.ValidPhaseSamples + phase.MissingOrInvalidSamples);
+
+        // Health is strictly read-only. No extra lifecycle events,
+        // retries, review approvals or destination transfers.
+        Assert.Equal(["Queued", "Claimed", "RetryScheduled",
+                "Claimed", "Prepared"],
+            (await queue.EventsAsync(second.Id, default))
+                .Select(x => x.EventType).ToArray());
+        var malformedEvents = await queue.EventsAsync(malformed.Id, default);
+        Assert.Single(malformedEvents);
+        Assert.Equal("Queued", malformedEvents[0].EventType);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(phase);
+        foreach (var forbidden in new[] {
+            "PreparationId", "SnapshotId", "SourceConnectionId",
+            "DestinationConnectionId", "LeaseToken", "ErrorCode",
+            "WorkerId", "RepositoryName"
+        })
+            Assert.DoesNotContain(forbidden, json,
+                StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(second.Id.ToString("D"),
+            json, StringComparison.OrdinalIgnoreCase);
+
+        // No source existence oracle and no invented durations.
+        var empty = await reader.ReadAsync(Guid.NewGuid(), default);
+        Assert.Equal(0, empty.PreparedLast24Hours);
+        Assert.Equal(0, empty.ValidPhaseSamples);
+        Assert.Equal(0, empty.MissingOrInvalidSamples);
+        Assert.Null(empty.AverageQueueWaitSeconds);
+        Assert.Null(empty.P95ClaimToPreparedSeconds);
+        Assert.Null(empty.MaxClaimToPreparedSeconds);
+        Assert.False(empty.TimingEvidenceIncomplete);
+
+        var disabled = new PostgresIncrementalPreparationPhaseHealthReader(
+            db, new(false));
+        Assert.Equal("IncrementalQueueHealthDisabled",
+            (await Assert.ThrowsAsync<IncrementalPreparationException>(
+                () => disabled.ReadAsync(source, default))).Code);
+        Assert.Equal("IncrementalQueueHealthSourceInvalid",
+            (await Assert.ThrowsAsync<IncrementalPreparationException>(
+                () => reader.ReadAsync(Guid.Empty, default))).Code);
+    }
+
+    [Fact]
     public async Task F066_database_queue_health_is_source_scoped_classified_and_read_only()
     {
         await using var db = fixture.NewContext();
