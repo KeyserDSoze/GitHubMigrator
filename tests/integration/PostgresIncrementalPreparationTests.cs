@@ -13,6 +13,138 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
     : IClassFixture<PostgresDraftFixture>
 {
     [Fact]
+    public async Task F066_database_queue_health_is_source_scoped_classified_and_read_only()
+    {
+        await using var db = fixture.NewContext();
+        var now = DateTimeOffset.UtcNow;
+        var clock = new ManualClock(now);
+        var source = Guid.NewGuid();
+        var target = Guid.NewGuid();
+        await ConnectionsAsync(db, source, target);
+        var scan = Snapshot(source, now.AddMinutes(-8),
+            [new("repo-1", "refs/heads/main", "sha")]);
+        await StageAsync(db, clock, scan);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var rows = new List<IncrementalPreparationView>();
+        for (var i = 0; i < 8; i++)
+            rows.Add(await queue.EnqueueAsync(scan.Id, source,
+                Guid.NewGuid(), Guid.NewGuid(), default));
+
+        // Each row is a different destination for the same *source*.
+        // The query does not perform a cross-tenant fleet-wide scan.
+        var later = now.AddMinutes(10);
+        var validLease = now.AddMinutes(3);
+        var expiredLease = now.AddMinutes(-3);
+        var historical = now.AddMinutes(-1);
+        var created = now.AddMinutes(-8);
+        var evidence = new string('a', 64);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations SET
+                state='Queued', attempts=1,
+                available_at_utc={later},
+                last_error_code='PreparationDeadlineExceeded'
+            WHERE id={rows[1].Id}
+            """);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations SET
+                state='Running', attempts=1, lease_token={Guid.NewGuid()},
+                lease_until_utc={validLease}
+            WHERE id={rows[2].Id}
+            """);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations SET
+                state='Running', attempts=2, lease_token={Guid.NewGuid()},
+                lease_until_utc={expiredLease}
+            WHERE id={rows[3].Id}
+            """);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations SET
+                state='Prepared', attempts=1, lease_token=NULL,
+                lease_until_utc=NULL, prepared_at_utc={historical},
+                created_at_utc={created}, item_count=7,
+                evidence_sha256={evidence}, updated_at_utc={historical}
+            WHERE id={rows[4].Id}
+            """);
+        var failures = new[] {
+            "IncrementalJournalMismatch",
+            "LeaseExpiredAfterMaxAttempts",
+            "IncrementalPreparationFailed"
+        };
+        for (var i = 0; i < failures.Length; i++)
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE incremental_preparations SET state='Failed',
+                    attempts=5, last_error_code={failures[i]},
+                    lease_token=NULL, lease_until_utc=NULL,
+                    updated_at_utc={historical}
+                WHERE id={rows[i + 5].Id}
+                """);
+        }
+
+        var enabled = new PostgresIncrementalPreparationQueueHealthReader(
+            db, new(true));
+        var before = await db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
+        var result = await enabled.ReadAsync(source, default);
+        var after = await db.Database.SqlQueryRaw<DateTimeOffset>(
+            "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
+
+        Assert.InRange(result.ObservedAtUtc, before, after);
+        Assert.Equal(8, result.TotalRuns);
+        Assert.Equal(1, result.QueuedReady);
+        Assert.Equal(1, result.QueuedDeferred);
+        Assert.Equal(1, result.RunningCurrent);
+        Assert.Equal(1, result.RunningExpired);
+        Assert.Equal(1, result.Prepared);
+        Assert.Equal(3, result.Failed);
+        Assert.Equal(1, result.RetryingQueued);
+        Assert.Equal(1, result.PreparedLast24Hours);
+        Assert.Equal(7, result.PreparedReviewItemsLast24Hours);
+        Assert.Equal(3, result.FailedLast24Hours);
+        Assert.Equal(1, result.FailedSourceEvidence);
+        Assert.Equal(1, result.FailedTimeoutOrLease);
+        Assert.Equal(1, result.FailedOther);
+        Assert.InRange(result.AverageTurnaroundSecondsLast24Hours!.Value,
+            350, 500);
+        Assert.True(result.OldestReadyWaitSeconds > 0);
+        Assert.True(result.AttentionRequired);
+        Assert.Equal(result.TotalRuns,
+            result.QueuedReady + result.QueuedDeferred +
+            result.RunningCurrent + result.RunningExpired +
+            result.Prepared + result.Failed);
+
+        // No lease token, preparation ID, snapshots or raw error codes
+        // are serialized even for an authorized superadmin.
+        var json = System.Text.Json.JsonSerializer.Serialize(result);
+        foreach (var forbidden in new[] {
+            "SourceConnectionId", "DestinationConnectionId",
+            "SnapshotId", "EnqueuedBy", "LeaseToken",
+            "LastErrorCode", "IncrementalJournalMismatch"
+        })
+            Assert.DoesNotContain(forbidden, json,
+                StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(rows[0].Id.ToString("D"),
+            json, StringComparison.OrdinalIgnoreCase);
+
+        // An empty source has zero counts and no invented latency.
+        var unknown = await enabled.ReadAsync(Guid.NewGuid(), default);
+        Assert.Equal(0, unknown.TotalRuns);
+        Assert.Null(unknown.OldestReadyWaitSeconds);
+        Assert.Null(unknown.AverageTurnaroundSecondsLast24Hours);
+        Assert.False(unknown.AttentionRequired);
+
+        // Gate checks precede any SQL query or source inspection.
+        var disabled = new PostgresIncrementalPreparationQueueHealthReader(
+            db, new(false));
+        Assert.Equal("IncrementalQueueHealthDisabled",
+            (await Assert.ThrowsAsync<IncrementalPreparationException>(
+                () => disabled.ReadAsync(source, default))).Code);
+        Assert.Equal("IncrementalQueueHealthSourceInvalid",
+            (await Assert.ThrowsAsync<IncrementalPreparationException>(
+                () => enabled.ReadAsync(Guid.Empty, default))).Code);
+    }
+
+    [Fact]
     public async Task Six_hundred_changes_become_bounded_review_only_items_not_destination_writes()
     {
         await using var db = fixture.NewContext();
