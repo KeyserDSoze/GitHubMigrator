@@ -31,6 +31,14 @@ public sealed class PostgresIncrementalPreparationRepository(
             sourceConnectionId == destinationConnectionId)
             throw new IncrementalPreparationException("InvalidPreparationContext");
 
+        // F-070: use the SAME source-scoped transactional advisory lock
+        // as PostgresStagingRepository.ApplyAsync and PrepareAsync. Reading
+        // 'latest snapshot' outside that lock allows a concurrent source
+        // sync to supersede it before a stale preparation is enqueued.
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtext({sourceConnectionId.ToString()}), 732911)", ct);
+
         var sync = await db.StagingSnapshotSyncs.AsNoTracking()
             .SingleOrDefaultAsync(x => x.SnapshotId == snapshotId, ct);
         if (sync is null || sync.SourceConnectionId != sourceConnectionId ||
@@ -71,6 +79,7 @@ public sealed class PostgresIncrementalPreparationRepository(
                 x.DestinationConnectionId == destinationConnectionId, ct);
         if (record.SourceConnectionId != sourceConnectionId)
             throw new IncrementalPreparationException("IncrementalSourceMismatch");
+        await transaction.CommitAsync(ct);
         return View(record);
     }
 
