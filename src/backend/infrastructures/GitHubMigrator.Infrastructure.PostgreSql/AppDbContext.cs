@@ -264,6 +264,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .IsUnique().HasDatabaseName("ux_incremental_preparations_pair");
             entity.HasIndex(x => new { x.State, x.AvailableAtUtc, x.CreatedAtUtc })
                 .HasDatabaseName("ix_incremental_preparations_ready");
+            entity.HasIndex(x => new { x.SourceConnectionId, x.State })
+                .HasDatabaseName("ix_f066_incremental_health_source_state");
             entity.HasOne<StagingSnapshotSyncRecord>().WithMany()
                 .HasForeignKey(x => x.SnapshotId).OnDelete(DeleteBehavior.Restrict);
         });
