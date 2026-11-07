@@ -146,7 +146,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         Assert.Equal(0, summaryE.Total);
         var preparedE = await Finish(e);
         Assert.Equal(0, preparedE.ItemCount);
-        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData([])),
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(Array.Empty<byte>())),
             preparedE.EvidenceSha256);
         var syncReplay = StagingAssetNormalizer.Normalize(e);
         await staging.ApplyAsync(e, syncReplay.Assets, syncReplay.CompleteTypes, default);
