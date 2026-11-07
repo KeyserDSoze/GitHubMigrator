@@ -197,7 +197,7 @@ public sealed class GitHubRemoteCreateOnlyDispatchReviewTests
         };
 
         var error = Assert.Throws<GitHubRemoteCreateOnlyDispatchException>(
-            corrupted.Seal);
+            () => corrupted.Seal());
         Assert.Equal("RemoteDispatchEvidenceInvalid", error.Code);
         Assert.DoesNotContain("refs/", error.Message);
         Assert.DoesNotContain("ghs_", error.Message);
