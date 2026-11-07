@@ -81,7 +81,13 @@ builder.Services.AddScoped<IMigrationJobRepository, PostgresMigrationJobReposito
 builder.Services.AddScoped<MigrationJobService>();
 builder.Services.AddScoped<MigrationJobProcessor>();
 builder.Services.AddHostedService<MigrationJobBackgroundWorker>();
-builder.Services.AddScoped<IIncrementalPreparationRepository, PostgresIncrementalPreparationRepository>();
+// F-068: the API always uses PostgreSQL clock authority for the
+// F-026 queue; only explicit deterministic test fixtures may opt out.
+builder.Services.AddScoped<IIncrementalPreparationRepository>(sp =>
+    new PostgresIncrementalPreparationRepository(
+        sp.GetRequiredService<AppDbContext>(),
+        sp.GetRequiredService<TimeProvider>(),
+        useDatabaseClock: true));
 builder.Services.AddSingleton(new IncrementalPreparationQueueHealthOptions(
     builder.Configuration.GetValue("IncrementalQueueHealth:Enabled", false)));
 builder.Services.AddScoped<IIncrementalPreparationQueueHealthReader,
