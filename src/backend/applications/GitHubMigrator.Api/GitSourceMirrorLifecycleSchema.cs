@@ -105,17 +105,19 @@ public static class GitSourceMirrorLifecycleSchema
                             AND migration_complete = false
                         );
                 END IF;
-                IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                    WHERE conrelid='git_source_mirror_lifecycle_events'::regclass
-                      AND conname='ck_f061_event_safe') THEN
-                    ALTER TABLE git_source_mirror_lifecycle_events
-                        ADD CONSTRAINT ck_f061_event_safe CHECK (
-                            type IN ('LeaseAcquired','LeaseReclaimed',
-                                     'ReverifyStarted','Verified','Quarantined')
-                            AND generation BETWEEN 1 AND 2000
-                            AND worker_id <> '00000000-0000-0000-0000-000000000000'::uuid
-                        );
-                END IF;
+                -- F-063 expands the immutable audit vocabulary for
+                -- owner-fenced lease renewals. Upgrade F-061 installations
+                -- as well as brand-new databases.
+                ALTER TABLE git_source_mirror_lifecycle_events
+                    DROP CONSTRAINT IF EXISTS ck_f061_event_safe;
+                ALTER TABLE git_source_mirror_lifecycle_events
+                    ADD CONSTRAINT ck_f061_event_safe CHECK (
+                        type IN ('LeaseAcquired','LeaseReclaimed',
+                                 'ReverifyStarted','LeaseRenewed',
+                                 'Verified','Quarantined')
+                        AND generation BETWEEN 1 AND 2000
+                        AND worker_id <> '00000000-0000-0000-0000-000000000000'::uuid
+                    );
             END
             $f061_constraints$;
 
