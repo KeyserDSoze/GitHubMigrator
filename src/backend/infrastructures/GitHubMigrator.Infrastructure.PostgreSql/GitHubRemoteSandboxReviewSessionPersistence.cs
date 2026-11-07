@@ -44,6 +44,7 @@ public sealed class GitHubRemoteSandboxReviewSessionEventRecord
 // remains permanently non-executable, even if forged.
 public sealed class PostgresGitHubRemoteSandboxReviewSessionJournal(
     AppDbContext db, GitHubRemoteTransmitHazardOptions options)
+    : IGitHubRemoteSandboxReviewSessionRecorder
 {
     public async Task<GitHubRemoteSandboxReviewSessionReceipt> RecordAsync(
         GitHubRemoteCreateOnlyDispatchReview review,
