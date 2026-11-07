@@ -80,6 +80,7 @@ public sealed class PostgresIncrementalPreparationPhaseHealthReader(
                     AND finished_at_utc IS NOT NULL
                     AND origin_at_utc <= claimed_at_utc
                     AND claimed_at_utc <= finished_at_utc
+                    AND finished_at_utc - claimed_at_utc <= interval '5 minutes'
                     AND finished_at_utc = prepared_at_utc
                     AND finished_at_utc <= observed_at_utc
                 THEN extract(epoch FROM
@@ -91,6 +92,7 @@ public sealed class PostgresIncrementalPreparationPhaseHealthReader(
                     AND finished_at_utc IS NOT NULL
                     AND origin_at_utc <= claimed_at_utc
                     AND claimed_at_utc <= finished_at_utc
+                    AND finished_at_utc - claimed_at_utc <= interval '5 minutes'
                     AND finished_at_utc = prepared_at_utc
                     AND finished_at_utc <= observed_at_utc
                 THEN extract(epoch FROM
