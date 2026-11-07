@@ -32,7 +32,7 @@ public sealed class PostgresGitHubRemoteDispatchReviewTests(
     private static GitHubRemoteTransmitHazardOptions Options(TestCase e) =>
         new(true, e.RepositoryId, "gh-org/sandbox");
 
-    private sealed record TestCase(
+    internal sealed record TestCase(
         long RepositoryId, Guid HazardId, Guid GrantId,
         Guid AttemptId, Guid FenceRequestId, Guid LeaseToken,
         Guid Actor, Guid PreparedBy, Guid Reviewer,
@@ -50,7 +50,7 @@ public sealed class PostgresGitHubRemoteDispatchReviewTests(
                 HazardId, Actor, ct);
     }
 
-    private static TestCase NewCase()
+    internal static TestCase NewCase()
     {
         var now = DateTimeOffset.UtcNow;
         var repoId = Random.Shared.NextInt64(
@@ -91,12 +91,17 @@ public sealed class PostgresGitHubRemoteDispatchReviewTests(
             now.AddSeconds(-1), now.AddMinutes(45), Sha('d'),
             GitHubRemoteAppPreflightIntegrity.VerifiedState,
             false, false, false);
+        preflight = preflight with {
+            EvidenceSha256 = GitHubRemoteAppPreflightIntegrity
+                .RecomputeHistoricalEvidenceSha256(
+                    preflight, preflight.ObservedAtUtc)
+        };
         return new(repoId, hazard, grant, attempt, fenceRequest, lease,
             actor, preparedBy, reviewedBy, proposedBy, now,
             new(packet, [candidate]), preflight, latest);
     }
 
-    private static async Task SeedAsync(AppDbContext db, TestCase e,
+    internal static async Task SeedAsync(AppDbContext db, TestCase e,
         bool grantAudit = true, bool hazardAudit = true)
     {
         var now = e.Now;
