@@ -13,6 +13,242 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
     : IClassFixture<PostgresDraftFixture>
 {
     [Fact]
+    public async Task F070_five_real_source_cycles_preserve_exact_deltas_and_recover_crashed_worker()
+    {
+        await using var db = fixture.NewContext();
+        var source = Guid.NewGuid();
+        var destination = Guid.NewGuid();
+        await ConnectionsAsync(db, source, destination);
+        var staging = new PostgresStagingRepository(db, TimeProvider.System);
+        var queue = new PostgresIncrementalPreparationRepository(db, TimeProvider.System);
+        var t0 = DateTimeOffset.UtcNow.AddMinutes(-12);
+
+        async Task<StagingChangeSummary> Apply(DiscoveryInventory snapshot)
+        {
+            var normalized = StagingAssetNormalizer.Normalize(snapshot);
+            await staging.ApplyAsync(snapshot, normalized.Assets,
+                normalized.CompleteTypes, default);
+            return (await staging.GetChangeSummaryAsync(snapshot.Id, default))!;
+        }
+        async Task<IncrementalPreparationView> Finish(DiscoveryInventory snap)
+        {
+            var job = await queue.EnqueueAsync(snap.Id, source, destination,
+                Guid.NewGuid(), default);
+            Assert.True(await new IncrementalPreparationProcessor(queue)
+                .RunOnceAsync(default, source));
+            return (await queue.GetAsync(job.Id, default))!;
+        }
+
+        // Cycle A: full initial source catalog, pinned to snapshot A.
+        var a = Snapshot(source, t0,
+            [new("repo-1", "refs/heads/main", "sha-a"),
+             new("repo-1", "refs/heads/feature", "sha-f")]);
+        Assert.Equal(4, (await Apply(a)).Added);
+        var first = await Finish(a);
+        Assert.Equal("Prepared", first.State);
+        Assert.Equal(4, first.ItemCount);
+        Assert.Equal(64, first.EvidenceSha256!.Length);
+        var sealedA = first.EvidenceSha256;
+        var immutableA = await db.IncrementalPreparationItems.AsNoTracking()
+            .Where(x => x.PreparationId == first.Id)
+            .OrderBy(x => x.AssetType).ThenBy(x => x.SourceId)
+            .Select(x => new { x.AssetType, x.SourceId, x.ChangeKind,
+                x.Revision, x.CurrentFingerprint }).ToArrayAsync();
+
+        // Cycle B: a single Git ref advances; one worker crashes after
+        // claiming B. Two independent replicas compete to recover.
+        var b = Snapshot(source, t0.AddMinutes(1),
+            [new("repo-1", "refs/heads/main", "sha-b"),
+             new("repo-1", "refs/heads/feature", "sha-f")]);
+        var summaryB = await Apply(b);
+        Assert.Equal(0, summaryB.Added);
+        Assert.Equal(1, summaryB.Changed);
+        Assert.Equal(0, summaryB.Missing);
+        var queuedB = await queue.EnqueueAsync(b.Id, source, destination,
+            Guid.NewGuid(), default);
+        var crashed = await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(crashed);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations
+            SET lease_until_utc=clock_timestamp()-interval '1 second'
+            WHERE id={queuedB.Id}
+            """);
+        var contenders = await Task.WhenAll(Enumerable.Range(0, 2).Select(async _ =>
+        {
+            await using var replica = fixture.NewContext();
+            return await new PostgresIncrementalPreparationRepository(
+                replica, TimeProvider.System).ClaimAsync(
+                    Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
+        }));
+        var successor = Assert.Single(contenders.Where(x => x is not null))!;
+        Assert.Equal(2, successor.Attempt);
+        Assert.Equal(queuedB.Id, successor.Id);
+        Assert.False(await queue.FailAsync(crashed,
+            "PreparationDeadlineExceeded", false, default));
+        await using (var resumed = fixture.NewContext())
+        {
+            var worker = new PostgresIncrementalPreparationRepository(
+                resumed, TimeProvider.System);
+            Assert.True(await worker.PrepareAsync(successor, default));
+        }
+        var preparedB = (await queue.GetAsync(queuedB.Id, default))!;
+        Assert.Equal(1, preparedB.ItemCount);
+        Assert.Equal("Prepared", preparedB.State);
+        var onlyB = Assert.Single((await queue.ListItemsAsync(
+            queuedB.Id, null, null, 10, default))!.Items);
+        Assert.Equal(("ref", "Changed", 2),
+            (onlyB.AssetType, onlyB.ChangeKind, onlyB.Revision));
+        Assert.Equal(["Queued", "Claimed", "LeaseReclaimed", "Claimed", "Prepared"],
+            (await queue.EventsAsync(queuedB.Id, default))
+                .Select(e => e.EventType).ToArray());
+        Assert.Equal(1, (await new PostgresIncrementalPreparationPhaseHealthReader(
+            db, new(true)).ReadAsync(source, default)).RetriedPreparedLast24Hours);
+
+        // Cycle C: a partial inventory never deletes; only a confirmed
+        // complete source observation may mark an absent ref Missing.
+        var c = Snapshot(source, t0.AddMinutes(2),
+            [new("repo-1", "refs/heads/main", "sha-b")],
+            completeness: DiscoveryCompleteness.Complete);
+        var summaryC = await Apply(c);
+        Assert.Equal(1, summaryC.Missing);
+        var preparedC = await Finish(c);
+        Assert.Equal(1, preparedC.ItemCount);
+        var missing = Assert.Single((await queue.ListItemsAsync(
+            preparedC.Id, null, null, 10, default))!.Items);
+        Assert.Equal(("ref", "Missing", 2),
+            (missing.AssetType, missing.ChangeKind, missing.Revision));
+        Assert.Null(missing.CurrentFingerprint);
+
+        // Cycle D: the ref is restored. It is NOT a second addition,
+        // and the source revision moves monotonically to 3.
+        var d = Snapshot(source, t0.AddMinutes(3),
+            [new("repo-1", "refs/heads/main", "sha-b"),
+             new("repo-1", "refs/heads/feature", "sha-f")],
+            completeness: DiscoveryCompleteness.Complete);
+        var summaryD = await Apply(d);
+        Assert.Equal(1, summaryD.Restored);
+        Assert.Equal(0, summaryD.Added);
+        var preparedD = await Finish(d);
+        var restored = Assert.Single((await queue.ListItemsAsync(
+            preparedD.Id, null, null, 10, default))!.Items);
+        Assert.Equal(("ref", "Restored", 3),
+            (restored.AssetType, restored.ChangeKind, restored.Revision));
+        Assert.Equal(restored.PreviousFingerprint, restored.CurrentFingerprint);
+
+        // Cycle E: unchanged source is a legitimate, authenticated empty
+        // delta. Its SHA-256 is deterministic, and replay cannot duplicate.
+        var e = Snapshot(source, t0.AddMinutes(4),
+            [new("repo-1", "refs/heads/main", "sha-b"),
+             new("repo-1", "refs/heads/feature", "sha-f")],
+            completeness: DiscoveryCompleteness.Complete);
+        var summaryE = await Apply(e);
+        Assert.Equal(0, summaryE.Total);
+        var preparedE = await Finish(e);
+        Assert.Equal(0, preparedE.ItemCount);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData([])),
+            preparedE.EvidenceSha256);
+        var syncReplay = StagingAssetNormalizer.Normalize(e);
+        await staging.ApplyAsync(e, syncReplay.Assets, syncReplay.CompleteTypes, default);
+        var replay = await queue.EnqueueAsync(e.Id, source, destination,
+            Guid.NewGuid(), default);
+        Assert.Equal(preparedE.Id, replay.Id);
+        Assert.Equal(3, (await queue.EventsAsync(replay.Id, default)).Count);
+        Assert.False(await new IncrementalPreparationProcessor(queue)
+            .RunOnceAsync(default, source));
+
+        // Earlier jobs and journal rows are immutable after later syncs.
+        Assert.Equal(sealedA, (await queue.GetAsync(first.Id, default))!.EvidenceSha256);
+        var afterA = await db.IncrementalPreparationItems.AsNoTracking()
+            .Where(x => x.PreparationId == first.Id)
+            .OrderBy(x => x.AssetType).ThenBy(x => x.SourceId)
+            .Select(x => new { x.AssetType, x.SourceId, x.ChangeKind,
+                x.Revision, x.CurrentFingerprint }).ToArrayAsync();
+        Assert.Equal(immutableA, afterA);
+        Assert.Equal(4, (await staging.GetChangeSummaryAsync(a.Id, default))!.Total);
+        Assert.Equal(1, (await staging.GetChangeSummaryAsync(b.Id, default))!.Total);
+        Assert.Equal(1, (await staging.GetChangeSummaryAsync(c.Id, default))!.Total);
+        Assert.Equal(1, (await staging.GetChangeSummaryAsync(d.Id, default))!.Total);
+        Assert.Equal(0, (await staging.GetChangeSummaryAsync(e.Id, default))!.Total);
+        Assert.Equal(5, await db.IncrementalPreparations.AsNoTracking()
+            .CountAsync(x => x.SourceConnectionId == source));
+        Assert.Equal(5, await db.StagingSnapshotSyncs.AsNoTracking()
+            .CountAsync(x => x.SourceConnectionId == source));
+        Assert.Equal("IncrementalSnapshotSuperseded",
+            (await Assert.ThrowsAsync<IncrementalPreparationException>(() =>
+                queue.EnqueueAsync(b.Id, source, Guid.NewGuid(), Guid.NewGuid(), default))).Code);
+        Assert.Equal(5, await db.IncrementalPreparations.AsNoTracking()
+            .CountAsync(x => x.SourceConnectionId == source));
+    }
+
+    [Fact]
+    public async Task F070_enqueue_waits_for_source_sync_commit_and_refuses_stale_snapshot()
+    {
+        var source = Guid.NewGuid();
+        var destination = Guid.NewGuid();
+        var snap = Snapshot(source, DateTimeOffset.UtcNow.AddMinutes(-5),
+            [new("repo-1", "refs/heads/main", "sha-first")]);
+        await using (var seed = fixture.NewContext())
+        {
+            await ConnectionsAsync(seed, source, destination);
+            await StageAsync(seed, TimeProvider.System, snap);
+        }
+        await using var blockingDb = fixture.NewContext();
+        await using var tx = await blockingDb.Database.BeginTransactionAsync();
+        await blockingDb.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtext({source.ToString()}), 732911)");
+
+        // A producer tries to enqueue A while the source's staging
+        // transaction has the lock, and must not pass its freshness
+        // check before the new snapshot becomes visible.
+        var enqueue = Task.Run(async () =>
+        {
+            await using var contenderDb = fixture.NewContext();
+            var queue = new PostgresIncrementalPreparationRepository(
+                contenderDb, TimeProvider.System);
+            return await queue.EnqueueAsync(snap.Id, source, destination,
+                Guid.NewGuid(), default);
+        });
+        await Task.Delay(125);
+        Assert.False(enqueue.IsCompleted);
+
+        // Same PostgreSQL transaction: publish the committed staging
+        // marker for snapshot B under the lock, simulating a new source
+        // sync between the old producer's start and lock admission.
+        var next = Guid.NewGuid();
+        var collected = snap.CollectedAtUtc.AddMinutes(1);
+        await blockingDb.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO staging_snapshot_syncs (
+                snapshot_id, source_connection_id, source_collected_at_utc,
+                applied_at_utc, observed, added, changed, unchanged,
+                marked_missing, source_inventory_complete, journal_version)
+            VALUES ({next}, {source}, {collected}, clock_timestamp(),
+                0, 0, 0, 0, 0, false, 1)
+            """);
+        await tx.CommitAsync();
+
+        var ex = await Assert.ThrowsAsync<IncrementalPreparationException>(
+            async () => await enqueue.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal("IncrementalSnapshotSuperseded", ex.Code);
+        await using var check = fixture.NewContext();
+        Assert.Empty(await check.IncrementalPreparations.AsNoTracking()
+            .Where(x => x.SourceConnectionId == source).ToArrayAsync());
+        Assert.Empty(await check.IncrementalPreparationEvents.AsNoTracking()
+            .Where(x => x.PreparationId == snap.Id).ToArrayAsync());
+
+        // Once the staging lock was released, a matching new snapshot
+        // can be enqueued normally; the old one remains forever stale.
+        var queueAfter = new PostgresIncrementalPreparationRepository(
+            check, TimeProvider.System);
+        var live = await queueAfter.EnqueueAsync(next, source, destination,
+            Guid.NewGuid(), default);
+        Assert.Equal(next, live.SnapshotId);
+        Assert.Equal(IncrementalPreparationStates.Queued, live.State);
+        Assert.Equal(1, await check.IncrementalPreparations.AsNoTracking()
+            .CountAsync(x => x.SourceConnectionId == source));
+    }
+
+    [Fact]
     public async Task F069_four_replicas_reclaim_once_and_stale_owner_cannot_publish()
     {
         await using var setup = fixture.NewContext();
@@ -905,7 +1141,8 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
     }
 
     private static DiscoveryInventory Snapshot(Guid source, DateTimeOffset at,
-        IReadOnlyList<RepositoryRef> refs, bool includeSecurity = false)
+        IReadOnlyList<RepositoryRef> refs, bool includeSecurity = false,
+        DiscoveryCompleteness completeness = DiscoveryCompleteness.Partial)
     {
         var id = Guid.NewGuid();
         return new DiscoveryInventory {
@@ -924,7 +1161,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
             AclEvidence = includeSecurity
                 ? [new RepositoryAclEvidence("repo-1", "repoV2/proj-1/repo-1",
                     "vssgp.group", 2, 0, false, "repository")] : [],
-            Issues = [], Completeness = DiscoveryCompleteness.Partial,
+            Issues = [], Completeness = completeness,
             IdentitiesComplete = false, PermissionsComplete = false
         };
     }
