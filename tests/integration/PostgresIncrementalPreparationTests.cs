@@ -25,7 +25,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         var scan = Snapshot(source, clock.GetUtcNow().AddMinutes(-5),
             [new("repo-1", "refs/heads/main", "sha")]);
         await StageAsync(db, clock, scan);
-        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false);
         var first = await queue.EnqueueAsync(scan.Id, source,
             destination, Guid.NewGuid(), default);
 
@@ -171,7 +171,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         var scan = Snapshot(source, now.AddMinutes(-8),
             [new("repo-1", "refs/heads/main", "sha")]);
         await StageAsync(db, clock, scan);
-        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false);
         var rows = new List<IncrementalPreparationView>();
         for (var i = 0; i < 8; i++)
             rows.Add(await queue.EnqueueAsync(scan.Id, source,
@@ -314,7 +314,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
             (await Assert.ThrowsAsync<IncrementalPreparationException>(() =>
                 service.ListItemsAsync(run.Id, null, null, 100, default))).Code);
         var processor = new IncrementalPreparationProcessor(
-            new PostgresIncrementalPreparationRepository(db, clock));
+            new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false));
         Assert.True(await processor.RunOnceAsync(default, source));
         Assert.False(await processor.RunOnceAsync(default, source));
         var ready = await service.GetAsync(run.Id, default);
@@ -372,7 +372,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         var scan = Snapshot(source, now.AddMinutes(-4), [new("repo-1", "refs/heads/main", "sha")]);
         await StageAsync(db, clock, scan);
         var run = await NewService(db, clock).EnqueueAsync(scan.Id, target, Guid.NewGuid(), default);
-        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false);
         var first = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
         Assert.NotNull(first);
         Assert.Equal(run.Id, first.Id);
@@ -407,7 +407,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         var scan = Snapshot(source, clock.GetUtcNow().AddMinutes(-3),
             [new("repo-1", "refs/heads/main", "sha")]);
         await StageAsync(db, clock, scan);
-        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false);
         var run = await queue.EnqueueAsync(scan.Id, source, destination, Guid.NewGuid(), default);
         var one = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
         Assert.NotNull(one);
@@ -438,7 +438,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         var b = Snapshot(source, clock.GetUtcNow().AddMinutes(-4),
             [new("repo-1", "refs/heads/main", "second")]);
         await StageAsync(db, clock, a);
-        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false);
         var run = await queue.EnqueueAsync(a.Id, source, destination, Guid.NewGuid(), default);
         await StageAsync(db, clock, b);
         var lease = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
@@ -468,7 +468,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         var scan = Snapshot(source, clock.GetUtcNow(),
             [new("repo-1", "refs/heads/main", "sha")]);
         await StageAsync(db, clock, scan);
-        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false);
         var run = await queue.EnqueueAsync(scan.Id, source, destination, Guid.NewGuid(), default);
         await db.Database.ExecuteSqlInterpolatedAsync($"""
             DELETE FROM staging_asset_changes
@@ -499,7 +499,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
             [new("repo-1", "refs/heads/main", "same")]);
         await StageAsync(db, clock, first);
         await StageAsync(db, clock, second);
-        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false);
         var run = await queue.EnqueueAsync(second.Id, source, destination, Guid.NewGuid(), default);
         Assert.True(await new IncrementalPreparationProcessor(queue).RunOnceAsync(default, source));
         var prepared = await queue.GetAsync(run.Id, default);
@@ -542,8 +542,8 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
             await StageAsync(setup, clock, scan);
             await using var a = fixture.NewContext();
             await using var b = fixture.NewContext();
-            var first = new PostgresIncrementalPreparationRepository(a, clock);
-            var second = new PostgresIncrementalPreparationRepository(b, clock);
+            var first = new PostgresIncrementalPreparationRepository(a, clock, useDatabaseClock: false);
+            var second = new PostgresIncrementalPreparationRepository(b, clock, useDatabaseClock: false);
             var pair = await Task.WhenAll(
                 first.EnqueueAsync(scan.Id, source, destination, Guid.NewGuid(), default),
                 second.EnqueueAsync(scan.Id, source, destination, Guid.NewGuid(), default));
@@ -562,7 +562,7 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
     }
 
     private static IncrementalPreparationService NewService(AppDbContext db, TimeProvider clock) =>
-        new(new PostgresIncrementalPreparationRepository(db, clock),
+        new(new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false),
             new PostgresStagingRepository(db, clock), new PostgresConnectionRepository(db));
 
     private static async Task ConnectionsAsync(
