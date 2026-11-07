@@ -23,8 +23,27 @@ public sealed class GitHubRemoteTrustedDispatchReadOnlyOrchestrator(
     IGitHubRemoteDispatchAuthorityVerifier authority,
     GitHubRemoteSandboxFenceOptions fenceOptions,
     GitHubAppWriteCredentialOptions credentials,
-    TimeProvider clock)
+    TimeProvider clock,
+    IGitHubRemoteAppPreflightEvidenceJournal? preflightJournal = null)
 {
+    // F-077: new trusted entrypoint. The reviewed F-051 hash comes from
+    // the F-052 PostgreSQL grant, followed by a lookup of that exact
+    // append-only receipt. Callers do not supply its body or digest.
+    public async Task<GitHubRemoteCreateOnlyDispatchReview>
+        ReviewFromJournalAsync(Guid preparationId, Guid planId,
+            Guid scopeId, Guid hazardId, Guid independentActor,
+            CancellationToken ct)
+    {
+        if (preflightJournal is null || hazardId == Guid.Empty)
+            throw new GitHubRemoteCreateOnlyDispatchException(
+                "RemoteDispatchPreflightJournalUnavailable");
+        var prior = await preflightJournal.GetForHazardAsync(hazardId, ct)
+            ?? throw new GitHubRemoteCreateOnlyDispatchException(
+                "RemoteDispatchPreflightJournalMissing");
+        return await ReviewAsync(preparationId, planId, scopeId,
+            hazardId, independentActor, prior, ct);
+    }
+
     public async Task<GitHubRemoteCreateOnlyDispatchReview> ReviewAsync(
         Guid preparationId, Guid planId, Guid scopeId,
         Guid hazardId, Guid independentActor,
