@@ -59,7 +59,33 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         var policies = await new GitHubCandidatePolicyReader(client, clock)
             .ReadAsync(target.Organization, target.Repository,
                 target.RepositoryId, minted.Token, packet.Candidates, ct);
-        return new(installationId, target.RepositoryId, refs,
+
+        // F-073: policy inspection is NOT an atomic GitHub snapshot.
+        // Re-read the entire typed head/tag ref set after the policy GETs.
+        // A branch, annotated tag or baseline ref changed mid-review
+        // must never yield a sealed F-051 preflight receipt.
+        var finalRefs = await new GitHubRefObservationReader(client, clock)
+            .ReadAsync(target.Organization, target.Repository,
+                minted.Token, ct);
+        if (!refs.Refs.SequenceEqual(finalRefs.Refs))
+            throw new GitHubRemoteAppPreflightException(
+                "RemotePreflightRefsChangedDuringReview");
+
+        // Verify the SAME numeric GitHub repository and owner again last.
+        // An organization rename, archive, disable or repository swap
+        // between the first metadata GET and the final ref GET fails closed.
+        try
+        {
+            await VerifyRepositoryWithTokenAsync(minted.Token,
+                target.Organization, target.Repository,
+                target.RepositoryId, ct);
+        }
+        catch (GitHubAppWriteScopeException)
+        {
+            throw new GitHubRemoteAppPreflightException(
+                "RemotePreflightRepositoryChangedDuringReview");
+        }
+        return new(installationId, target.RepositoryId, finalRefs,
             policies, minted.Observation.TokenExpiresAtUtc);
     }
 
@@ -166,36 +192,51 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
             tokenExpiry > now.AddMinutes(65))
             throw new GitHubAppWriteScopeException("AppScopeExpiryInvalid");
 
-        // Verify repo identity with the newly issued installation token, not
-        // the old read-only PAT. This is still only a GET, not a push check.
-        using var metadata = new HttpRequestMessage(HttpMethod.Get,
-            "https://api.github.com/repos/" +
-            Uri.EscapeDataString(organization) + "/" +
-            Uri.EscapeDataString(repository));
-        metadata.Headers.Authorization =
-            new AuthenticationHeaderValue("Bearer", token);
-        metadata.Headers.UserAgent.ParseAdd("GitHubMigrator/1.0");
-        metadata.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(
-            "application/vnd.github+json"));
-        metadata.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
-        using var visible = await client.SendAsync(metadata,
-            HttpCompletionOption.ResponseHeadersRead, ct);
-        if (visible.StatusCode != HttpStatusCode.OK)
-            throw new GitHubAppWriteScopeException("AppScopeRepositoryNotVisible");
-        using var reply = await BoundedJsonAsync(visible, ct);
-        if (reply is null || reply.RootElement.ValueKind != JsonValueKind.Object ||
-            !HasUniqueProperties(reply.RootElement) ||
-            !ValidRepo(reply.RootElement, organization, repository, out var currentId) ||
-            currentId != repoId ||
-            !reply.RootElement.TryGetProperty("archived", out var archived) ||
-            archived.ValueKind != JsonValueKind.False ||
-            !reply.RootElement.TryGetProperty("disabled", out var disabled) ||
-            disabled.ValueKind != JsonValueKind.False)
-            throw new GitHubAppWriteScopeException("AppScopeRepositoryChanged");
+        // The initial token-bound repository GET is also reused by
+        // F-073 at the END of the F-051 refs + policy inspection.
+        await VerifyRepositoryWithTokenAsync(
+            token, organization, repository, repoId, ct);
 
         return (new GitHubAppWriteScopeObservation(
             installationId, repoId, GitHubAppWriteScopeIntegrity.Issued,
             clock.GetUtcNow(), tokenExpiry.ToUniversalTime()), token);
+    }
+
+    // F-073: return no metadata, token or path to domain callers.
+    // A late check must use the SAME restricted token, not a PAT.
+    private async Task VerifyRepositoryWithTokenAsync(
+        string token, string organization, string repository,
+        long expectedRepositoryId, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            "https://api.github.com/repos/" +
+            Uri.EscapeDataString(organization) + "/" +
+            Uri.EscapeDataString(repository));
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.UserAgent.ParseAdd("GitHubMigrator/1.0");
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(
+            "application/vnd.github+json"));
+        request.Headers.TryAddWithoutValidation(
+            "X-GitHub-Api-Version", "2022-11-28");
+        using var reply = await client.SendAsync(request,
+            HttpCompletionOption.ResponseHeadersRead, ct);
+        if (reply.StatusCode != HttpStatusCode.OK)
+            throw new GitHubAppWriteScopeException(
+                "AppScopeRepositoryNotVisible");
+        using var json = await BoundedJsonAsync(reply, ct);
+        if (json is null ||
+            json.RootElement.ValueKind != JsonValueKind.Object ||
+            !HasUniqueProperties(json.RootElement) ||
+            !ValidRepo(json.RootElement, organization, repository,
+                out var currentId) ||
+            currentId != expectedRepositoryId ||
+            !json.RootElement.TryGetProperty("archived", out var archived) ||
+            archived.ValueKind != JsonValueKind.False ||
+            !json.RootElement.TryGetProperty("disabled", out var disabled) ||
+            disabled.ValueKind != JsonValueKind.False)
+            throw new GitHubAppWriteScopeException(
+                "AppScopeRepositoryChanged");
     }
 
     // F-072: App JWT-only GET. This response is never stored, logged or
