@@ -426,6 +426,92 @@ public sealed class GitHubRemoteTrustedDispatchReadOnlyOrchestratorTests
         Assert.Equal(0, f.AuthorityReader.Calls);
     }
 
+    [Fact]
+    public async Task F078_trusted_hazard_entrypoint_persists_only_after_all_readonly_checks()
+    {
+        var f = Valid();
+        var historic = new EvidenceJournal { Value = f.Preflight };
+        var sessions = new SessionRecorder();
+        var service = new GitHubRemoteTrustedDispatchReadOnlyOrchestrator(
+            f.Packets, f.RemoteReader, f.Secrets, f.AuthorityReader,
+            new(true, 2468, "gh-org/sandbox"),
+            new(true, 1234, 77, "secrets/f076-test-app",
+                "gh-org/sandbox"), TimeProvider.System, historic, sessions);
+
+        var actor = Guid.NewGuid();
+        var receipt = await service.ReviewAndRecordSessionFromJournalAsync(
+            f.Source.Packet.PreparationId, f.Source.Packet.PlanId,
+            f.Source.Packet.ScopeId, Guid.NewGuid(), actor, CancellationToken.None);
+
+        Assert.Equal(1, historic.Calls);
+        Assert.Equal(2, f.Packets.Calls);
+        Assert.Equal(1, f.RemoteReader.Calls);
+        Assert.Equal(1, f.AuthorityReader.Calls);
+        Assert.Equal(1, sessions.Calls);
+        Assert.Equal(actor, receipt.ObservedBy);
+        Assert.Equal(
+            GitHubRemoteSandboxReviewSessionIntegrity.Recorded, receipt.State);
+        Assert.False(receipt.TransportInvoked);
+        Assert.False(receipt.RemoteWritesAuthorized);
+        Assert.False(receipt.MayAutomaticallyRetry);
+        Assert.False(receipt.MigrationComplete);
+        GitHubRemoteSandboxReviewSessionIntegrity.Verify(receipt);
+    }
+
+    [Fact]
+    public async Task F078_missing_session_journal_refuses_before_secret_or_GitHub_io()
+    {
+        var f = Valid();
+        var service = new GitHubRemoteTrustedDispatchReadOnlyOrchestrator(
+            f.Packets, f.RemoteReader, f.Secrets, f.AuthorityReader,
+            new(true, 2468, "gh-org/sandbox"),
+            new(true, 1234, 77, "secrets/f076-test-app",
+                "gh-org/sandbox"), TimeProvider.System,
+            new EvidenceJournal { Value = f.Preflight });
+
+        var exception = await Assert.ThrowsAsync<
+            GitHubRemoteSandboxReviewSessionException>(() =>
+            service.ReviewAndRecordSessionFromJournalAsync(
+                f.Source.Packet.PreparationId, f.Source.Packet.PlanId,
+                f.Source.Packet.ScopeId, Guid.NewGuid(), Guid.NewGuid(),
+                CancellationToken.None));
+        Assert.Equal("SandboxReviewSessionJournalUnavailable", exception.Code);
+        Assert.Equal(0, f.Packets.Calls);
+        Assert.Equal(0, f.Secrets.Reads);
+        Assert.Equal(0, f.RemoteReader.Calls);
+    }
+
+    private sealed class SessionRecorder : IGitHubRemoteSandboxReviewSessionRecorder
+    {
+        public int Calls { get; private set; }
+
+        public Task<GitHubRemoteSandboxReviewSessionReceipt> RecordAsync(
+            GitHubRemoteCreateOnlyDispatchReview reviewed,
+            Guid independentActor, CancellationToken ct)
+        {
+            Calls++;
+            Assert.Equal(GitHubRemoteCreateOnlyDispatchIntegrity.State,
+                reviewed.State);
+            Assert.False(reviewed.RemoteWritesAuthorized);
+            Assert.False(reviewed.MayAutomaticallyRetry);
+            var result = new GitHubRemoteSandboxReviewSessionReceipt(
+                Guid.NewGuid(), reviewed.HazardId, reviewed.GrantId,
+                reviewed.FenceRequestId, reviewed.FenceGeneration,
+                reviewed.RepositoryId, independentActor,
+                reviewed.PacketSha256, reviewed.CandidateSetSha256,
+                reviewed.PreflightSha256, reviewed.BaselineSha256,
+                reviewed.EvidenceSha256,
+                reviewed.LastRefObservationSha256,
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddSeconds(4),
+                "", GitHubRemoteSandboxReviewSessionIntegrity.Recorded,
+                false, false, false, false);
+            return Task.FromResult(result with {
+                EvidenceSha256 =
+                    GitHubRemoteSandboxReviewSessionIntegrity.Digest(result)
+            });
+        }
+    }
+
     private sealed class EvidenceJournal : IGitHubRemoteAppPreflightEvidenceJournal
     {
         public GitHubRemoteAppPreflightReceipt? Value { get; set; }
