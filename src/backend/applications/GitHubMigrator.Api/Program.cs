@@ -192,6 +192,8 @@ builder.Services.AddSingleton(new GitSourceMirrorLifecycleOptions(
     builder.Configuration.GetValue("GitHubSourceMirrorLifecycle:Enabled", false)));
 builder.Services.AddScoped<IGitSourceMirrorLifecycleJournal,
     PostgresGitSourceMirrorLifecycleJournal>();
+builder.Services.AddScoped<IGitSourceMirrorFleetHealthReader,
+    PostgresGitSourceMirrorFleetHealthReader>();
 builder.Services.AddScoped<GitHubMigrator.Infrastructure.GitObjects.LocalGitSourceSnapshotMirrorMaterializer>(sp =>
     new GitHubMigrator.Infrastructure.GitObjects.LocalGitSourceSnapshotMirrorMaterializer(
         builder.Configuration["GitSourceBundles:BundleRoot"] ?? "",
@@ -444,6 +446,14 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    // F-065 diagnostics read an aggregate over the lifecycle table.
+    // Keep a separate bounded budget from migration and provider work.
+    options.AddFixedWindowLimiter("source-mirror-health", limiter =>
+    {
+        limiter.PermitLimit = 12;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     options.AddFixedWindowLimiter("github-candidate-policy", limiter =>
     {
         limiter.PermitLimit = 6;
@@ -608,6 +618,7 @@ app.MapDiscoveryEndpoints();
 app.MapStagingEndpoints();
 app.MapIncrementalPreparationEndpoints();
 app.MapGitHubTargetPreviewLeaseEndpoints();
+app.MapGitSourceMirrorFleetHealthEndpoints();
 app.MapGitHubCandidatePolicyEndpoints();
 app.MapGitHubTransferAttemptEndpoints();
 app.MapGitHubRemoteSandboxFenceEndpoints();
