@@ -9,10 +9,18 @@ namespace GitHubMigrator.Infrastructure.PostgreSql;
 
 // The entire F-026 workflow is PostgreSQL-only. It NEVER resolves a GitHub
 // credential, HttpClient, destination writer, or deployment adapter.
-public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, TimeProvider clock)
+// Production uses PostgreSQL as the single authority for lease decisions
+// and append-only events. The explicit false override is reserved for
+// deterministic legacy test clocks; DI always uses the database default.
+public sealed class PostgresIncrementalPreparationRepository(
+    AppDbContext db, TimeProvider clock, bool useDatabaseClock = true)
     : IIncrementalPreparationRepository
 {
-    private static DateTimeOffset UtcNow(TimeProvider clock) => clock.GetUtcNow();
+    private Task<DateTimeOffset> UtcNowAsync(CancellationToken ct) =>
+        useDatabaseClock
+            ? db.Database.SqlQueryRaw<DateTimeOffset>(
+                "SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct)
+            : Task.FromResult(clock.GetUtcNow());
 
     public async Task<IncrementalPreparationView> EnqueueAsync(
         Guid snapshotId, Guid sourceConnectionId, Guid destinationConnectionId,
@@ -36,7 +44,7 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
             throw new IncrementalPreparationException("IncrementalSnapshotSuperseded");
 
         var id = Guid.NewGuid();
-        var now = UtcNow(clock);
+        var now = await UtcNowAsync(ct);
         // Concurrent administrators and API replicas converge on exactly one
         // (snapshot, destination) preparation, including an audit event.
         await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -120,9 +128,11 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
         if (token == Guid.Empty || duration <= TimeSpan.Zero ||
             duration > TimeSpan.FromMinutes(5))
             throw new IncrementalPreparationException("InvalidPreparationLease");
-        var now = UtcNow(clock);
-        var until = now.Add(duration);
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        // Observe a fresh PostgreSQL instant *inside* the transaction,
+        // not before its start. Do not use now() (transaction-start time).
+        var now = await UtcNowAsync(ct);
+        var until = now.Add(duration);
         // Recovery of a crashed fifth attempt must not leave a stuck Running
         // record forever, and the terminal failure is audited exactly once.
         await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -191,7 +201,7 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
         // snapshot from replacing the current source catalog mid-preparation.
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock(hashtext({lease.SourceConnectionId.ToString()}), 732911)", ct);
-        var began = UtcNow(clock);
+        var began = await UtcNowAsync(ct);
         var locked = await db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE incremental_preparations SET updated_at_utc = {began}
             WHERE id = {lease.Id} AND snapshot_id = {lease.SnapshotId}
@@ -274,7 +284,7 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
         if (reviewed != actual)
             throw new IncrementalPreparationException("IncrementalJournalMismatch");
         var root = Convert.ToHexStringLower(digest.GetHashAndReset());
-        var now = UtcNow(clock);
+        var now = await UtcNowAsync(ct);
         var finished = await db.Database.ExecuteSqlInterpolatedAsync($"""
             WITH completed AS (
                 UPDATE incremental_preparations SET
@@ -308,7 +318,14 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
         if (errorCode.Length is < 1 or > 70 ||
             errorCode.Any(c => !char.IsAsciiLetterOrDigit(c)))
             throw new IncrementalPreparationException("UnsafePreparationErrorCode");
-        var now = UtcNow(clock);
+        // Another replica might be completing or renewing this row.
+        // Wait for its row lock BEFORE sampling the authoritative time.
+        // Otherwise an expiring lease could be accepted using stale now.
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT id FROM incremental_preparations WHERE id = {lease.Id} FOR UPDATE",
+            ct);
+        var now = await UtcNowAsync(ct);
         var seconds = Math.Min(300, 5 * (1 << Math.Min(lease.Attempt, 6)));
         var retryAt = now.AddSeconds(seconds);
         var finished = await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -332,6 +349,7 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
             SELECT id, CASE WHEN state = 'Queued' THEN 'RetryScheduled' ELSE 'Failed' END,
                 attempts, {now}, {errorCode} FROM failed
             """, ct);
+        await transaction.CommitAsync(ct);
         return finished == 1;
     }
 
