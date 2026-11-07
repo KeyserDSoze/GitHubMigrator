@@ -36,6 +36,7 @@ public sealed class GitHubRemoteAppPreflightEventRecord
     public Guid RequestId { get; set; }
     public long Generation { get; set; }
     public long RepositoryId { get; set; }
+    public string EvidenceSha256 { get; set; } = "";
     public string Type { get; set; } = "";
     public DateTimeOffset OccurredAtUtc { get; set; }
 }
@@ -62,14 +63,16 @@ public sealed class PostgresGitHubRemoteAppPreflightEvidenceJournal(
         var existing = await db.GitHubRemoteAppPreflightEvidence
             .AsNoTracking()
             .SingleOrDefaultAsync(x => x.RequestId == receipt.RequestId &&
-                x.Generation == receipt.Generation, ct);
+                x.Generation == receipt.Generation &&
+                x.EvidenceSha256 == receipt.EvidenceSha256, ct);
         if (existing is not null)
         {
             // Never amend a historical attestation. Replays must match
             // every supplied field AND the independently recorded clock.
             if (existing.RepositoryId != receipt.RepositoryId ||
-                existing.PolicyObservedAtUtc != policyObservedAtUtc ||
-                FromRow(existing) != receipt)
+                existing.PolicyObservedAtUtc.ToUnixTimeMilliseconds() !=
+                    policyObservedAtUtc.ToUnixTimeMilliseconds() ||
+                !SameProof(FromRow(existing), receipt))
                 throw Refused("RemotePreflightJournalEpochConflict");
             await RequireAuditAsync(existing, ct);
             await tx.CommitAsync(ct);
@@ -128,6 +131,7 @@ public sealed class PostgresGitHubRemoteAppPreflightEvidenceJournal(
             RequestId = receipt.RequestId,
             Generation = receipt.Generation,
             RepositoryId = receipt.RepositoryId,
+            EvidenceSha256 = receipt.EvidenceSha256,
             Type = "Recorded",
             OccurredAtUtc = now
         });
@@ -138,19 +142,56 @@ public sealed class PostgresGitHubRemoteAppPreflightEvidenceJournal(
 
     public async Task<GitHubRemoteAppPreflightReceipt?> GetAsync(
         Guid fenceRequestId, long generation, long repositoryId,
-        CancellationToken ct)
+        string evidenceSha256, CancellationToken ct)
     {
         RequireAllowed(repositoryId);
-        if (fenceRequestId == Guid.Empty || generation <= 0)
+        if (fenceRequestId == Guid.Empty || generation <= 0 ||
+            !GitSourceBundleStorageCheck.ValidSha(evidenceSha256))
             throw Refused("RemotePreflightJournalInvalid");
 
         var row = await db.GitHubRemoteAppPreflightEvidence.AsNoTracking()
             .SingleOrDefaultAsync(x => x.RequestId == fenceRequestId &&
                 x.Generation == generation &&
-                x.RepositoryId == repositoryId, ct);
+                x.RepositoryId == repositoryId &&
+                x.EvidenceSha256 == evidenceSha256, ct);
         if (row is null) return null;
         await RequireAuditAsync(row, ct);
         return FromRow(row);
+    }
+
+    // This read-side selection must not trust a client-supplied preflight:
+    // the authoritative F-052 reviewer stored the exact F-051 hash.
+    // F-075 still rechecks the current grant/hazard under both locks.
+    public async Task<GitHubRemoteAppPreflightReceipt?> GetForHazardAsync(
+        Guid hazardId, CancellationToken ct)
+    {
+        if (hazardId == Guid.Empty)
+            throw Refused("RemotePreflightJournalInvalid");
+        var hazard = await db.GitHubRemoteTransmitHazards.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == hazardId, ct);
+        if (hazard is null) return null;
+        RequireAllowed(hazard.RepositoryId);
+        if (hazard.State !=
+                GitHubRemoteTransmitHazardStates.PreparedWriteDisabled ||
+            hazard.MarkedBy is not null || hazard.TransportAuthorized ||
+            hazard.TransportInvoked || hazard.RemoteWritesPerformed ||
+            hazard.MayAutomaticallyRetry)
+            throw Refused("RemotePreflightJournalHazardChanged");
+        var grant = await db.GitHubRemoteTestGrants.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == hazard.GrantId &&
+                x.RepositoryId == hazard.RepositoryId, ct);
+        if (grant is null ||
+            grant.State != GitHubRemoteTestGrantStates.ReviewedWriteDisabled ||
+            grant.ExecutionAuthorized || grant.RemoteWritesPerformed ||
+            grant.ReadyForExecution ||
+            grant.FenceRequestId != hazard.FenceRequestId ||
+            grant.FenceGeneration != hazard.FenceGeneration ||
+            grant.PacketSha256 != hazard.PacketSha256 ||
+            grant.CandidateSetSha256 != hazard.CandidateSetSha256 ||
+            grant.BaselineSha256 != hazard.BaselineSha256)
+            throw Refused("RemotePreflightJournalGrantChanged");
+        return await GetAsync(grant.FenceRequestId, grant.FenceGeneration,
+            grant.RepositoryId, grant.PreflightSha256, ct);
     }
 
     private async Task RequireAuditAsync(
@@ -167,13 +208,32 @@ public sealed class PostgresGitHubRemoteAppPreflightEvidenceJournal(
 
         var events = await db.GitHubRemoteAppPreflightEvents.AsNoTracking()
             .Where(x => x.RequestId == row.RequestId &&
-                x.Generation == row.Generation)
+                x.Generation == row.Generation &&
+                x.EvidenceSha256 == row.EvidenceSha256)
             .OrderBy(x => x.Id).Take(2).ToArrayAsync(ct);
         if (events.Length != 1 || events[0].Type != "Recorded" ||
             events[0].RepositoryId != row.RepositoryId ||
+            events[0].EvidenceSha256 != row.EvidenceSha256 ||
             events[0].OccurredAtUtc != row.RecordedAtUtc)
             throw Refused("RemotePreflightJournalCorrupt");
     }
+
+    private static bool SameProof(
+        GitHubRemoteAppPreflightReceipt a,
+        GitHubRemoteAppPreflightReceipt b) =>
+        a with {
+            ObservedAtUtc = DateTimeOffset.FromUnixTimeMilliseconds(
+                a.ObservedAtUtc.ToUnixTimeMilliseconds()),
+            InstallationTokenExpiresAtUtc =
+                DateTimeOffset.FromUnixTimeMilliseconds(
+                    a.InstallationTokenExpiresAtUtc.ToUnixTimeMilliseconds())
+        } == b with {
+            ObservedAtUtc = DateTimeOffset.FromUnixTimeMilliseconds(
+                b.ObservedAtUtc.ToUnixTimeMilliseconds()),
+            InstallationTokenExpiresAtUtc =
+                DateTimeOffset.FromUnixTimeMilliseconds(
+                    b.InstallationTokenExpiresAtUtc.ToUnixTimeMilliseconds())
+        };
 
     private static GitHubRemoteAppPreflightReceipt FromRow(
         GitHubRemoteAppPreflightEvidenceRecord x) =>
