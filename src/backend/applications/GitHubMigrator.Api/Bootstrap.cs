@@ -138,6 +138,12 @@ public static class Bootstrap
             -- unrelated organizations to produce diagnostic counters.
             CREATE INDEX IF NOT EXISTS ix_f066_incremental_health_source_state
                 ON incremental_preparations(source_connection_id, state);
+            -- F-067 phase timings only visit recently prepared runs
+            -- belonging to the requested source. The immutable event
+            -- lookup already uses the (preparation_id, id) index.
+            CREATE INDEX IF NOT EXISTS ix_f067_incremental_prepared_source_time
+                ON incremental_preparations(source_connection_id, prepared_at_utc DESC)
+                WHERE state = 'Prepared';
             CREATE TABLE IF NOT EXISTS incremental_preparation_items (
                 preparation_id uuid NOT NULL REFERENCES incremental_preparations(id)
                     ON DELETE CASCADE,
