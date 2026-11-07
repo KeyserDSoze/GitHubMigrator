@@ -71,6 +71,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<GitHubRemoteTransmitHazardRecord>();
     public DbSet<GitHubRemoteTransmitHazardEventRecord> GitHubRemoteTransmitHazardEvents =>
         Set<GitHubRemoteTransmitHazardEventRecord>();
+    public DbSet<GitHubRemoteAppPreflightEvidenceRecord>
+        GitHubRemoteAppPreflightEvidence =>
+        Set<GitHubRemoteAppPreflightEvidenceRecord>();
+    public DbSet<GitHubRemoteAppPreflightEventRecord>
+        GitHubRemoteAppPreflightEvents =>
+        Set<GitHubRemoteAppPreflightEventRecord>();
     public DbSet<GitHubRemoteReadbackRecord> GitHubRemoteReadbacks =>
         Set<GitHubRemoteReadbackRecord>();
     public DbSet<GitHubRemoteReadbackEventRecord> GitHubRemoteReadbackEvents =>
@@ -722,6 +728,51 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.HazardId).OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => new { x.HazardId, x.Id })
                 .HasDatabaseName("ix_f055_hazard_events");
+        });
+        builder.Entity<GitHubRemoteAppPreflightEvidenceRecord>(entity =>
+        {
+            entity.ToTable("github_remote_app_preflight_evidence");
+            entity.HasKey(x => new { x.RequestId, x.Generation });
+            entity.Property(x => x.RequestId).HasColumnName("request_id");
+            entity.Property(x => x.Generation).HasColumnName("generation");
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.PacketSha256).HasColumnName("packet_sha256").HasMaxLength(64);
+            entity.Property(x => x.CandidateSetSha256).HasColumnName("candidate_set_sha256").HasMaxLength(64);
+            entity.Property(x => x.OriginalPolicySha256).HasColumnName("original_policy_sha256").HasMaxLength(64);
+            entity.Property(x => x.CurrentPolicySha256).HasColumnName("current_policy_sha256").HasMaxLength(64);
+            entity.Property(x => x.ExpectedBaselineSha256).HasColumnName("expected_baseline_sha256").HasMaxLength(64);
+            entity.Property(x => x.ObservedBaselineSha256).HasColumnName("observed_baseline_sha256").HasMaxLength(64);
+            entity.Property(x => x.MatchingBaselineRefs).HasColumnName("matching_baseline_refs");
+            entity.Property(x => x.AbsentCreateCandidates).HasColumnName("absent_create_candidates");
+            entity.Property(x => x.ObservedAtUtc).HasColumnName("observed_at_utc");
+            entity.Property(x => x.PolicyObservedAtUtc).HasColumnName("policy_observed_at_utc");
+            entity.Property(x => x.TokenExpiresAtUtc).HasColumnName("token_expires_at_utc");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(40);
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.RemoteWritesPerformed).HasColumnName("remote_writes_performed");
+            entity.Property(x => x.ExecutionAuthorized).HasColumnName("execution_authorized");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<GitHubRemoteSandboxFenceRecord>().WithMany()
+                .HasForeignKey(x => x.RepositoryId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.RepositoryId, x.RecordedAtUtc })
+                .HasDatabaseName("ix_f077_preflight_repo_observed");
+        });
+        builder.Entity<GitHubRemoteAppPreflightEventRecord>(entity =>
+        {
+            entity.ToTable("github_remote_app_preflight_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.RequestId).HasColumnName("request_id");
+            entity.Property(x => x.Generation).HasColumnName("generation");
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(16);
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitHubRemoteAppPreflightEvidenceRecord>().WithMany()
+                .HasForeignKey(x => new { x.RequestId, x.Generation })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.RequestId, x.Generation, x.Id })
+                .HasDatabaseName("ix_f077_preflight_events");
         });
         builder.Entity<GitHubRemoteReadbackRecord>(entity =>
         {
