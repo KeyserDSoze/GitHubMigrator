@@ -159,7 +159,7 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
                 if (++inspected > 5000 || cleaned >= 40) break;
                 var name = Path.GetFileName(path);
                 // <deterministic-mirror-guid>.<random-uuid>.tmp only.
-                if (name.Length != 73 ||
+                if (name.Length != 69 ||
                     name[32] != '.' || !name.EndsWith(".tmp",
                         StringComparison.Ordinal) ||
                     name.AsSpan(0, 32).ToString().Any(c =>
