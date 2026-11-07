@@ -230,12 +230,15 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         var node = document.RootElement;
         if (!HasUniqueProperties(node) ||
             !node.TryGetProperty("id", out var identity) ||
+            identity.ValueKind != JsonValueKind.Number ||
             !identity.TryGetInt64(out var actualInstallationId) ||
             actualInstallationId != installationId ||
             !node.TryGetProperty("app_id", out var app) ||
+            app.ValueKind != JsonValueKind.Number ||
             !app.TryGetInt64(out var actualAppId) ||
             actualAppId != appId ||
             !node.TryGetProperty("target_id", out var targetId) ||
+            targetId.ValueKind != JsonValueKind.Number ||
             !targetId.TryGetInt64(out var targetAccountId) ||
             targetAccountId <= 0 ||
             !TryText(node, "target_type", out var targetType) ||
@@ -247,6 +250,7 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
             !node.TryGetProperty("account", out var account) ||
             account.ValueKind != JsonValueKind.Object ||
             !account.TryGetProperty("id", out var accountId) ||
+            accountId.ValueKind != JsonValueKind.Number ||
             !accountId.TryGetInt64(out var accountNumericId) ||
             accountNumericId != targetAccountId ||
             !TryText(account, "login", out var login) ||
