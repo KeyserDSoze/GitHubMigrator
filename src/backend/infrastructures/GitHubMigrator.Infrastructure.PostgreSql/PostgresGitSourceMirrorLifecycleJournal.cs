@@ -101,8 +101,11 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await LockAsync(plan.SourceMirrorId, ct);
         var now = clock.GetUtcNow();
-        GitSourceMirrorLifecycleIntegrity.VerifyProof(plan, proof, now);
         var row = await OwnedAsync(plan, lease, now, ct);
+        // A replayed proof can still match the immutable object-set hash.
+        // Require a freshly sealed verification *after this lease began*.
+        GitSourceMirrorLifecycleIntegrity.VerifyProofForLease(
+            plan, proof, row.UpdatedAtUtc, now);
         if (row.MirrorProofSha256 is not null &&
             (row.MirrorProofSha256 != proof.EvidenceSha256 ||
              row.ObjectSetSha256 != proof.ObjectSetSha256 ||

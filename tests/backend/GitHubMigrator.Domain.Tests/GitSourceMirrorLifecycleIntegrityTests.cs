@@ -51,12 +51,38 @@ public sealed class GitSourceMirrorLifecycleIntegrityTests
         Reject(receipt with { WorkpackId = Guid.NewGuid() });
         Reject(receipt with { BundleSha256 = Sha('9') });
         Reject(receipt with { ObjectSetSha256 = Sha('4') });
+        Reject(receipt with { VerificationReceiptSha256 = Sha('4') });
+        // F-060's stable content SHA excludes time; F-062's individual
+        // verification-receipt SHA must detect tampering with that time.
+        Reject(receipt with { VerifiedAtUtc =
+            receipt.VerifiedAtUtc.AddSeconds(1) });
         Reject(receipt with { RemoteWritesAuthorized = true });
         Reject(receipt with { RemotePushInvoked = true });
         Reject(receipt with { MigrationComplete = true });
         Reject(receipt with { MayAutomaticallyRetry = true });
         Reject(receipt with { VerifiedAtUtc =
             DateTimeOffset.UtcNow.AddMinutes(-4) });
+    }
+
+    [Fact]
+    public void A_previous_verification_cannot_satisfy_a_new_lease()
+    {
+        var plan = Plan();
+        var admittedAt = DateTimeOffset.UtcNow;
+        var old = GitSourceSnapshotMirrorIntegrity.Seal(
+            plan, Sha('3'), 8, admittedAt.AddSeconds(-15));
+        var error = Assert.Throws<GitSourceMirrorLifecycleException>(() =>
+            GitSourceMirrorLifecycleIntegrity.VerifyProofForLease(
+                plan, old, admittedAt, admittedAt.AddSeconds(1)));
+        Assert.Equal("SourceMirrorLifecycleProofStale", error.Code);
+
+        var fresh = GitSourceSnapshotMirrorIntegrity.Seal(
+            plan, Sha('3'), 8, admittedAt.AddMilliseconds(1));
+        Assert.Equal(old.EvidenceSha256, fresh.EvidenceSha256);
+        Assert.NotEqual(old.VerificationReceiptSha256,
+            fresh.VerificationReceiptSha256);
+        GitSourceMirrorLifecycleIntegrity.VerifyProofForLease(
+            plan, fresh, admittedAt, admittedAt.AddSeconds(1));
     }
 
     [Fact]
