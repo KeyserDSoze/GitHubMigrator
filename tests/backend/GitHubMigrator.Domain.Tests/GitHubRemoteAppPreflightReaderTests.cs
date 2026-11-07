@@ -28,6 +28,12 @@ public sealed class GitHubRemoteAppPreflightReaderTests
             Assert.Equal("https", req.RequestUri.Scheme);
             requests.Add(req.Method + " " + req.RequestUri.AbsolutePath);
             var path = req.RequestUri.AbsolutePath;
+            if (path == "/app/installations/77")
+            {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                Assert.NotEqual(Token, req.Headers.Authorization?.Parameter);
+                return Reply(200, Installation());
+            }
             if (path.EndsWith("/access_tokens", StringComparison.Ordinal))
             {
                 Assert.Equal(HttpMethod.Post, req.Method);
@@ -78,9 +84,11 @@ public sealed class GitHubRemoteAppPreflightReaderTests
         Assert.All(actual.CandidatePolicies.Items, x =>
             Assert.Equal(GitHubCandidatePolicyStates.NoActiveRulesReported,
                 x.Status));
-        Assert.Equal(7, requests.Count);
+        Assert.Equal(8, requests.Count);
         Assert.Single(requests.Where(x => x.StartsWith("POST ")));
-        Assert.All(requests.Where(x => x.StartsWith("GET ")), x =>
+        Assert.Contains("GET /app/installations/77", requests);
+        Assert.All(requests.Where(x =>
+            x.StartsWith("GET /repos/", StringComparison.Ordinal)), x =>
             Assert.StartsWith("GET /repos/gh-org/sandbox", x));
         Assert.DoesNotContain(Token, JsonSerializer.Serialize(actual));
     }
@@ -97,6 +105,12 @@ public sealed class GitHubRemoteAppPreflightReaderTests
         using var client = new HttpClient(new Handler(req =>
         {
             calls++;
+            if (req.Method == HttpMethod.Get)
+            {
+                Assert.Equal("/app/installations/77",
+                    req.RequestUri!.AbsolutePath);
+                return Reply(200, Installation());
+            }
             Assert.Equal(HttpMethod.Post, req.Method);
             return Reply(201, Mint(selection, permission));
         }));
@@ -106,7 +120,7 @@ public sealed class GitHubRemoteAppPreflightReaderTests
                     1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
                     Packet(), default));
         Assert.Equal(expected, ex.Code);
-        Assert.Equal(1, calls);
+        Assert.Equal(2, calls);
     }
 
     [Fact]
@@ -116,6 +130,8 @@ public sealed class GitHubRemoteAppPreflightReaderTests
         using var client = new HttpClient(new Handler(req =>
         {
             var path = req.RequestUri!.AbsolutePath;
+            if (path == "/app/installations/77")
+                return Reply(200, Installation());
             if (path.EndsWith("/access_tokens")) return Reply(201, Mint());
             if (path == "/repos/gh-org/sandbox") return Reply(200, Metadata());
             Assert.Equal(HttpMethod.Get, req.Method);
@@ -137,7 +153,8 @@ public sealed class GitHubRemoteAppPreflightReaderTests
         using var client = new HttpClient(new Handler(req =>
         {
             calls++;
-            if (calls == 1) return Reply(201, Mint());
+            if (calls == 1) return Reply(200, Installation());
+            if (calls == 2) return Reply(201, Mint());
             Assert.Equal(HttpMethod.Get, req.Method);
             return Reply(200, Metadata(9999));
         }));
@@ -147,7 +164,7 @@ public sealed class GitHubRemoteAppPreflightReaderTests
                     1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
                     Packet(), default));
         Assert.Equal("AppScopeRepositoryChanged", ex.Code);
-        Assert.Equal(2, calls);
+        Assert.Equal(3, calls);
     }
 
     [Fact]
@@ -205,6 +222,15 @@ public sealed class GitHubRemoteAppPreflightReaderTests
                     owner = new { login = Owner } }
             }
         });
+
+    private static string Installation() => JsonSerializer.Serialize(new {
+        id = 77L, app_id = 1234L, target_id = 9876L,
+        target_type = "Organization", repository_selection = "selected",
+        suspended_at = (string?)null,
+        account = new { id = 9876L, login = Owner,
+            type = "Organization" },
+        permissions = new { contents = "write", metadata = "read" }
+    });
 
     private static string Metadata(long id = 2468) => JsonSerializer.Serialize(
         new { id, full_name = Owner + "/" + Repo,
