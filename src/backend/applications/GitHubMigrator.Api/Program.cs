@@ -82,6 +82,10 @@ builder.Services.AddScoped<MigrationJobService>();
 builder.Services.AddScoped<MigrationJobProcessor>();
 builder.Services.AddHostedService<MigrationJobBackgroundWorker>();
 builder.Services.AddScoped<IIncrementalPreparationRepository, PostgresIncrementalPreparationRepository>();
+builder.Services.AddSingleton(new IncrementalPreparationQueueHealthOptions(
+    builder.Configuration.GetValue("IncrementalQueueHealth:Enabled", false)));
+builder.Services.AddScoped<IIncrementalPreparationQueueHealthReader,
+    PostgresIncrementalPreparationQueueHealthReader>();
 builder.Services.AddScoped<IncrementalPreparationService>();
 builder.Services.AddScoped<IIncrementalReviewRepository, PostgresIncrementalReviewRepository>();
 builder.Services.AddScoped<IncrementalReviewService>();
@@ -401,6 +405,14 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    // F-066: a separate limited budget for read-only queue aggregates.
+    // These reads must not starve active preparation/review endpoints.
+    options.AddFixedWindowLimiter("incremental-queue-health", limiter =>
+    {
+        limiter.PermitLimit = 12;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     // F-039 GET-only GitHub metadata review: independent small provider
     // budget so it cannot starve existing F-027/F-038 human review routes.
     options.AddFixedWindowLimiter("import-readiness", limiter =>
@@ -619,6 +631,7 @@ app.MapStagingEndpoints();
 app.MapIncrementalPreparationEndpoints();
 app.MapGitHubTargetPreviewLeaseEndpoints();
 app.MapGitSourceMirrorFleetHealthEndpoints();
+app.MapIncrementalPreparationQueueHealthEndpoints();
 app.MapGitHubCandidatePolicyEndpoints();
 app.MapGitHubTransferAttemptEndpoints();
 app.MapGitHubRemoteSandboxFenceEndpoints();
