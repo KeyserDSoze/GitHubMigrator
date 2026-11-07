@@ -101,6 +101,177 @@ public sealed class GitHubRemoteAppPreflightReaderTests
     }
 
     [Theory]
+    [InlineData("head")]
+    [InlineData("annotated-tag")]
+    public async Task F073_ref_changed_during_policy_GET_cannot_seal_preflight(
+        string changed)
+    {
+        using var rsa = RSA.Create(2048);
+        var heads = 0;
+        var tags = 0;
+        var repositories = 0;
+        var tokenMints = 0;
+        using var client = new HttpClient(new Handler(req =>
+        {
+            Assert.Equal("api.github.com", req.RequestUri!.Host);
+            var path = req.RequestUri.AbsolutePath;
+            if (path == "/app/installations/77")
+            {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                return Reply(200, Installation());
+            }
+            if (path.EndsWith("/access_tokens", StringComparison.Ordinal))
+            {
+                Assert.Equal(HttpMethod.Post, req.Method);
+                tokenMints++;
+                return Reply(201, Mint());
+            }
+            Assert.Equal(HttpMethod.Get, req.Method);
+            Assert.Equal(Token, req.Headers.Authorization?.Parameter);
+            if (path == "/repos/gh-org/sandbox")
+            {
+                repositories++;
+                return Reply(200, Metadata());
+            }
+            if (path.EndsWith("/git/matching-refs/heads",
+                StringComparison.Ordinal))
+            {
+                heads++;
+                return Reply(200, JsonSerializer.Serialize(new[] {
+                    new { @ref = "refs/heads/main", @object = new {
+                        sha = heads == 2 && changed == "head"
+                            ? new string('d', 40) : MainOid,
+                        type = "commit"
+                    }}
+                }));
+            }
+            if (path.EndsWith("/git/matching-refs/tags",
+                StringComparison.Ordinal))
+            {
+                tags++;
+                return Reply(200, JsonSerializer.Serialize(new[] {
+                    new { @ref = "refs/tags/v1", @object = new {
+                        sha = tags == 2 && changed == "annotated-tag"
+                            ? new string('d', 40) : AnnotatedTagOid,
+                        type = "tag"
+                    }}
+                }));
+            }
+            if (path.EndsWith("/rulesets", StringComparison.Ordinal) ||
+                path.Contains("/rules/branches/", StringComparison.Ordinal))
+                return Reply(200, "[]");
+            throw new InvalidOperationException("Unexpected GitHub endpoint");
+        }));
+
+        var ex = await Assert.ThrowsAsync<GitHubRemoteAppPreflightException>(
+            () => new GitHubAppScopedWriteCredentialInspector(
+                client, TimeProvider.System).InspectAsync(
+                    1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
+                    Packet(), default));
+        Assert.Equal("RemotePreflightRefsChangedDuringReview", ex.Code);
+        Assert.Equal(1, tokenMints);
+        Assert.Equal(2, heads);
+        Assert.Equal(2, tags);
+        Assert.Equal(2, repositories);
+        Assert.DoesNotContain(Token, ex.Message);
+    }
+
+    [Theory]
+    [InlineData("repository-id")]
+    [InlineData("owner")]
+    [InlineData("archived")]
+    [InlineData("disabled")]
+    [InlineData("duplicate-identity")]
+    [InlineData("hidden")]
+    public async Task F073_repository_changed_at_final_GET_fails_closed(
+        string mutation)
+    {
+        using var rsa = RSA.Create(2048);
+        var repositories = 0;
+        var heads = 0;
+        var tags = 0;
+        var mints = 0;
+        using var client = new HttpClient(new Handler(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path == "/app/installations/77")
+                return Reply(200, Installation());
+            if (path.EndsWith("/access_tokens", StringComparison.Ordinal))
+            {
+                Assert.Equal(HttpMethod.Post, req.Method);
+                mints++;
+                return Reply(201, Mint());
+            }
+            Assert.Equal(HttpMethod.Get, req.Method);
+            Assert.Equal(Token, req.Headers.Authorization?.Parameter);
+            if (path == "/repos/gh-org/sandbox")
+            {
+                repositories++;
+                var stable = Metadata();
+                if (repositories < 3)
+                    return Reply(200, stable);
+                var altered = mutation switch
+                {
+                    "repository-id" => Metadata(9999),
+                    "owner" => stable.Replace(
+                        "\"login\":\"gh-org\"",
+                        "\"login\":\"other-org\"",
+                        StringComparison.Ordinal),
+                    "archived" => stable.Replace(
+                        "\"archived\":false", "\"archived\":true",
+                        StringComparison.Ordinal),
+                    "disabled" => stable.Replace(
+                        "\"disabled\":false", "\"disabled\":true",
+                        StringComparison.Ordinal),
+                    "duplicate-identity" => stable.Replace(
+                        "\"id\":2468",
+                        "\"id\":1111,\"id\":2468",
+                        StringComparison.Ordinal),
+                    "hidden" => "{}",
+                    _ => throw new ArgumentOutOfRangeException(nameof(mutation))
+                };
+                return Reply(mutation == "hidden" ? 404 : 200, altered);
+            }
+            if (path.EndsWith("/git/matching-refs/heads",
+                StringComparison.Ordinal))
+            {
+                heads++;
+                return Reply(200, JsonSerializer.Serialize(new[] {
+                    new { @ref = "refs/heads/main", @object = new {
+                        sha = MainOid, type = "commit"
+                    }}
+                }));
+            }
+            if (path.EndsWith("/git/matching-refs/tags",
+                StringComparison.Ordinal))
+            {
+                tags++;
+                return Reply(200, JsonSerializer.Serialize(new[] {
+                    new { @ref = "refs/tags/v1", @object = new {
+                        sha = AnnotatedTagOid, type = "tag"
+                    }}
+                }));
+            }
+            if (path.EndsWith("/rulesets", StringComparison.Ordinal) ||
+                path.Contains("/rules/branches/", StringComparison.Ordinal))
+                return Reply(200, "[]");
+            throw new InvalidOperationException("Unexpected GitHub endpoint");
+        }));
+
+        var ex = await Assert.ThrowsAsync<GitHubRemoteAppPreflightException>(
+            () => new GitHubAppScopedWriteCredentialInspector(
+                client, TimeProvider.System).InspectAsync(
+                    1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
+                    Packet(), default));
+        Assert.Equal("RemotePreflightRepositoryChangedDuringReview", ex.Code);
+        Assert.Equal(1, mints);
+        Assert.Equal(3, repositories);
+        Assert.Equal(2, heads);
+        Assert.Equal(2, tags);
+        Assert.DoesNotContain(Token, ex.Message);
+    }
+
+    [Theory]
     [InlineData("all", "write", "AppScopeMintNotRestricted")]
     [InlineData("selected", "read", "AppScopeMintNotRestricted")]
     [InlineData("selected", "admin", "AppScopeMintNotRestricted")]
