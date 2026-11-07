@@ -119,6 +119,40 @@ public static class GitSourceMirrorLifecycleSchema
             END
             $f061_constraints$;
 
+            CREATE OR REPLACE FUNCTION f061_guard_lifecycle()
+            RETURNS trigger LANGUAGE plpgsql AS $guard$
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    RAISE EXCEPTION 'F061 source mirror evidence cannot be deleted';
+                END IF;
+                IF NEW.mirror_id IS DISTINCT FROM OLD.mirror_id
+                    OR NEW.source_snapshot_id IS DISTINCT FROM OLD.source_snapshot_id
+                    OR NEW.workpack_id IS DISTINCT FROM OLD.workpack_id
+                    OR NEW.plan_id IS DISTINCT FROM OLD.plan_id
+                    OR NEW.reconciliation_id IS DISTINCT FROM OLD.reconciliation_id
+                    OR NEW.bundle_sha256 IS DISTINCT FROM OLD.bundle_sha256
+                    OR NEW.source_evidence_sha256 IS DISTINCT FROM OLD.source_evidence_sha256
+                    OR NEW.refs_sha256 IS DISTINCT FROM OLD.refs_sha256 THEN
+                    RAISE EXCEPTION 'F061 source mirror immutable provenance changed';
+                END IF;
+                IF OLD.state = 'RecoveryRequired'
+                    AND NEW.state <> 'RecoveryRequired' THEN
+                    RAISE EXCEPTION 'F061 quarantined source mirror cannot be released';
+                END IF;
+                IF NEW.lease_generation < OLD.lease_generation
+                    OR NEW.lease_generation > OLD.lease_generation + 1 THEN
+                    RAISE EXCEPTION 'F061 source mirror generation invalid';
+                END IF;
+                IF OLD.mirror_proof_sha256 IS NOT NULL
+                    AND (NEW.mirror_proof_sha256 IS DISTINCT FROM OLD.mirror_proof_sha256
+                        OR NEW.object_set_sha256 IS DISTINCT FROM OLD.object_set_sha256
+                        OR NEW.object_count IS DISTINCT FROM OLD.object_count) THEN
+                    RAISE EXCEPTION 'F061 original Git object proof cannot be modified';
+                END IF;
+                RETURN NEW;
+            END
+            $guard$;
+
             CREATE OR REPLACE FUNCTION f061_events_immutable()
             RETURNS trigger LANGUAGE plpgsql AS $reject$
             BEGIN
@@ -127,6 +161,13 @@ public static class GitSourceMirrorLifecycleSchema
             $reject$;
             DO $f061_triggers$
             BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_trigger
+                    WHERE tgrelid='git_source_mirror_lifecycles'::regclass
+                      AND tgname='trg_f061_lifecycle_guard') THEN
+                    CREATE TRIGGER trg_f061_lifecycle_guard
+                    BEFORE UPDATE OR DELETE ON git_source_mirror_lifecycles
+                    FOR EACH ROW EXECUTE FUNCTION f061_guard_lifecycle();
+                END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_trigger
                     WHERE tgrelid='git_source_mirror_lifecycle_events'::regclass
                       AND tgname='trg_f061_events_immutable') THEN
