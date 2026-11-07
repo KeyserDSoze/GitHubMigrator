@@ -33,7 +33,7 @@ public static class GitHubRemoteAppPreflightEvidenceSchema
                 remote_writes_performed boolean NOT NULL DEFAULT false,
                 execution_authorized boolean NOT NULL DEFAULT false,
                 ready_for_execution boolean NOT NULL DEFAULT false,
-                PRIMARY KEY(request_id, generation),
+                PRIMARY KEY(request_id, generation, evidence_sha256),
                 CONSTRAINT ck_f077_no_execution CHECK (
                     request_id <> '00000000-0000-0000-0000-000000000000'::uuid
                     AND generation > 0 AND repository_id > 0
@@ -62,16 +62,17 @@ public static class GitHubRemoteAppPreflightEvidenceSchema
                 request_id uuid NOT NULL,
                 generation bigint NOT NULL,
                 repository_id bigint NOT NULL,
+                evidence_sha256 varchar(64) NOT NULL,
                 type varchar(16) NOT NULL,
                 occurred_at_utc timestamptz NOT NULL,
-                FOREIGN KEY(request_id,generation) REFERENCES
-                    github_remote_app_preflight_evidence(request_id,generation)
+                FOREIGN KEY(request_id,generation,evidence_sha256) REFERENCES
+                    github_remote_app_preflight_evidence(request_id,generation,evidence_sha256)
                     ON DELETE RESTRICT,
                 CONSTRAINT ck_f077_event CHECK(type='Recorded'),
-                CONSTRAINT uq_f077_one_recorded UNIQUE(request_id,generation)
+                CONSTRAINT uq_f077_one_recorded UNIQUE(request_id,generation,evidence_sha256)
             );
             CREATE INDEX IF NOT EXISTS ix_f077_preflight_events
-                ON github_remote_app_preflight_events(request_id,generation,id);
+                ON github_remote_app_preflight_events(request_id,generation,evidence_sha256,id);
             CREATE OR REPLACE FUNCTION f077_reject_mutation()
             RETURNS trigger LANGUAGE plpgsql AS $guard$
             BEGIN
