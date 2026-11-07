@@ -18,6 +18,38 @@ namespace GitHubMigrator.Integration.Tests;
 public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixture<ApiHarness>
 {
     [Fact]
+    public async Task F067_phase_timing_endpoint_is_superadmin_only_and_default_off()
+    {
+        var url = "/api/operations/incremental-preparations/" +
+            Guid.NewGuid() + "/phases";
+        async Task<HttpResponseMessage> ReadAsync(string? token)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            if (token is not null)
+                req.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(req);
+        }
+        using var anonymous = await ReadAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var user = await ReadAsync(await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, user.StatusCode);
+        using var admin = await ReadAsync(await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var pending = await ReadAsync(await harness.LoginAsync(
+            harness.PendingName, ApiHarness.PendingPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, pending.StatusCode);
+        using var superadmin = await ReadAsync(await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.NotFound, superadmin.StatusCode);
+        var body = await superadmin.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(ApiHarness.SourceToken, body);
+        Assert.DoesNotContain(ApiHarness.TargetToken, body);
+    }
+
+    [Fact]
     public async Task F066_queue_health_is_superadmin_only_and_default_off()
     {
         var url = "/api/operations/incremental-preparations/" +
