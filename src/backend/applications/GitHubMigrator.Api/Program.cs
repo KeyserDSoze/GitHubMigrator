@@ -171,6 +171,7 @@ builder.Services.AddSingleton(new GitHubRemoteSandboxFenceOptions(
     builder.Configuration["GitHubRemoteSandboxFence:AllowedRepository"] ?? ""));
 builder.Services.AddScoped<IGitHubRemoteSandboxFenceStore, PostgresGitHubRemoteSandboxFenceStore>();
 builder.Services.AddScoped<GitHubRemoteSandboxFenceService>();
+builder.Services.AddScoped<IGitHubRemoteAppPreflightEvidenceJournal, PostgresGitHubRemoteAppPreflightEvidenceJournal>();
 builder.Services.AddScoped<GitHubRemoteAppPreflightService>();
 builder.Services.AddSingleton(new GitHubRemoteTestGrantOptions(
     builder.Configuration.GetValue("GitHubRemoteTestGrant:Enabled", false),
