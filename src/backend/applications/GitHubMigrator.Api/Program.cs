@@ -86,6 +86,8 @@ builder.Services.AddSingleton(new IncrementalPreparationQueueHealthOptions(
     builder.Configuration.GetValue("IncrementalQueueHealth:Enabled", false)));
 builder.Services.AddScoped<IIncrementalPreparationQueueHealthReader,
     PostgresIncrementalPreparationQueueHealthReader>();
+builder.Services.AddScoped<IIncrementalPreparationPhaseHealthReader,
+    PostgresIncrementalPreparationPhaseHealthReader>();
 builder.Services.AddScoped<IncrementalPreparationService>();
 builder.Services.AddScoped<IIncrementalReviewRepository, PostgresIncrementalReviewRepository>();
 builder.Services.AddScoped<IncrementalReviewService>();
