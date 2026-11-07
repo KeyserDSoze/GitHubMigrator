@@ -169,7 +169,7 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.git"));
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         public string Root { get; } = Path.Combine(
             Path.GetTempPath(), "f060-source-" + Guid.NewGuid().ToString("N"));
