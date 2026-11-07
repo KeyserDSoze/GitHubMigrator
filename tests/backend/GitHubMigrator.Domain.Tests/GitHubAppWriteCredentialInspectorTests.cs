@@ -25,6 +25,13 @@ public sealed class GitHubAppWriteCredentialInspectorTests
             Assert.Equal("api.github.com", req.RequestUri!.Host);
             if (calls == 1)
             {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                Assert.Equal("/app/installations/77", req.RequestUri!.AbsolutePath);
+                Assert.Equal("Bearer", req.Headers.Authorization?.Scheme);
+                return Json(200, InstallationReply());
+            }
+            if (calls == 2)
+            {
                 Assert.Equal(HttpMethod.Post, req.Method);
                 Assert.Equal("/app/installations/77/access_tokens",
                     req.RequestUri.AbsolutePath);
@@ -60,7 +67,7 @@ public sealed class GitHubAppWriteCredentialInspectorTests
         Assert.Equal(GitHubAppWriteScopeIntegrity.Issued, observed.Status);
         Assert.Equal(77, observed.InstallationId);
         Assert.Equal(2468, observed.RepositoryId);
-        Assert.Equal(2, calls);
+        Assert.Equal(3, calls);
         var metadata = new GitHubAppWriteScopeInput(
             Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
             Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
@@ -87,7 +94,9 @@ public sealed class GitHubAppWriteCredentialInspectorTests
         using var client = new HttpClient(new Handler(_ =>
         {
             calls++;
-            if (calls != 1) throw new InvalidOperationException(
+            if (calls == 1)
+                return Json(200, InstallationReply());
+            if (calls != 2) throw new InvalidOperationException(
                 "Unrestricted GitHub App token must never be used");
             return Json(201, MintReply(selection, permission, extra));
         }));
@@ -97,7 +106,7 @@ public sealed class GitHubAppWriteCredentialInspectorTests
                 1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
                 Owner, RepoName, default));
         Assert.Equal(expected, error.Code);
-        Assert.Equal(1, calls);
+        Assert.Equal(2, calls);
     }
 
     [Fact]
@@ -108,6 +117,11 @@ public sealed class GitHubAppWriteCredentialInspectorTests
         using var client = new HttpClient(new Handler(req =>
         {
             calls++;
+            if (calls == 1)
+            {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                return Json(200, InstallationReply());
+            }
             Assert.Equal(HttpMethod.Post, req.Method);
             return Json(403, "{}");
         }));
@@ -117,7 +131,7 @@ public sealed class GitHubAppWriteCredentialInspectorTests
                 1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
                 Owner, RepoName, default));
         Assert.Equal("AppScopeMintRejected", error.Code);
-        Assert.Equal(1, calls);
+        Assert.Equal(2, calls);
     }
 
     [Fact]
@@ -129,7 +143,8 @@ public sealed class GitHubAppWriteCredentialInspectorTests
         {
             calls++;
             return calls == 1
-                ? Json(201, MintReply())
+                ? Json(200, InstallationReply())
+                : calls == 2 ? Json(201, MintReply())
                 : Json(200, RepoReply().Replace(
                     "\"archived\":false", "\"archived\":true",
                     StringComparison.Ordinal));
@@ -140,7 +155,7 @@ public sealed class GitHubAppWriteCredentialInspectorTests
                 1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
                 Owner, RepoName, default));
         Assert.Equal("AppScopeRepositoryChanged", error.Code);
-        Assert.Equal(2, calls);
+        Assert.Equal(3, calls);
     }
 
     [Theory]
@@ -180,8 +195,13 @@ public sealed class GitHubAppWriteCredentialInspectorTests
         using var client = new HttpClient(new Handler(req =>
         {
             calls++;
+            if (calls == 1)
+            {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                return Json(200, InstallationReply());
+            }
             Assert.Equal(HttpMethod.Post, req.Method);
-            Assert.Equal(1, calls);
+            Assert.Equal(2, calls);
             return Json(201, altered);
         }));
 
@@ -191,7 +211,7 @@ public sealed class GitHubAppWriteCredentialInspectorTests
                 1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
                 Owner, RepoName, default));
         Assert.Equal("AppScopeMintNotRestricted", error.Code);
-        Assert.Equal(1, calls);
+        Assert.Equal(2, calls);
     }
 
     [Theory]
@@ -225,10 +245,15 @@ public sealed class GitHubAppWriteCredentialInspectorTests
             calls++;
             if (calls == 1)
             {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                return Json(200, InstallationReply());
+            }
+            if (calls == 2)
+            {
                 Assert.Equal(HttpMethod.Post, req.Method);
                 return Json(201, MintReply());
             }
-            Assert.Equal(2, calls);
+            Assert.Equal(3, calls);
             Assert.Equal(HttpMethod.Get, req.Method);
             Assert.Equal(AccessToken, req.Headers.Authorization?.Parameter);
             return Json(200, altered);
@@ -239,7 +264,7 @@ public sealed class GitHubAppWriteCredentialInspectorTests
                 1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
                 Owner, RepoName, default));
         Assert.Equal("AppScopeRepositoryChanged", error.Code);
-        Assert.Equal(2, calls);
+        Assert.Equal(3, calls);
     }
 
     [Fact]
@@ -277,6 +302,15 @@ public sealed class GitHubAppWriteCredentialInspectorTests
             }
         });
     }
+
+    private static string InstallationReply() => JsonSerializer.Serialize(new {
+        id = 77L, app_id = 1234L, target_id = 9876L,
+        target_type = "Organization", repository_selection = "selected",
+        suspended_at = (string?)null,
+        account = new { id = 9876L, login = Owner,
+            type = "Organization" },
+        permissions = new { contents = "write", metadata = "read" }
+    });
 
     private static string RepoReply() => JsonSerializer.Serialize(new {
         id = 2468, full_name = Owner + "/" + RepoName,
