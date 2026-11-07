@@ -73,6 +73,30 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
             WHERE id={malformed.Id}
             """);
 
+        // A seemingly complete event chain with >5 minutes of lease
+        // occupancy is also invalid: F-026 has a hard five-minute
+        // lease, so skewed or synthetic timestamps must not skew P95.
+        var impossible = await queue.EnqueueAsync(scan.Id, source,
+            Guid.NewGuid(), Guid.NewGuid(), default);
+        var impossibleClaim = clock.GetUtcNow().AddSeconds(1);
+        var impossibleFinish = impossibleClaim.AddMinutes(7);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations SET state='Prepared',
+                attempts=1, prepared_at_utc={impossibleFinish},
+                updated_at_utc={impossibleFinish},
+                lease_token=NULL, lease_until_utc=NULL
+            WHERE id={impossible.Id}
+            """);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO incremental_preparation_events (
+                preparation_id, event_type, attempt,
+                occurred_at_utc, error_code)
+            VALUES ({impossible.Id}, 'Claimed', 1,
+                        {impossibleClaim}, NULL),
+                   ({impossible.Id}, 'Prepared', 1,
+                        {impossibleFinish}, NULL)
+            """);
+
         var reader = new PostgresIncrementalPreparationPhaseHealthReader(
             db, new(true));
         var before = await db.Database.SqlQueryRaw<DateTimeOffset>(
@@ -81,9 +105,9 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
         var after = await db.Database.SqlQueryRaw<DateTimeOffset>(
             "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
         Assert.InRange(phase.ObservedAtUtc, before, after);
-        Assert.Equal(3, phase.PreparedLast24Hours);
+        Assert.Equal(4, phase.PreparedLast24Hours);
         Assert.Equal(2, phase.ValidPhaseSamples);
-        Assert.Equal(1, phase.MissingOrInvalidSamples);
+        Assert.Equal(2, phase.MissingOrInvalidSamples);
         Assert.True(phase.TimingEvidenceIncomplete);
         Assert.Equal(1, phase.RetriedPreparedLast24Hours);
         Assert.InRange(phase.AverageQueueWaitSeconds!.Value, 15.49, 15.51);
