@@ -18,6 +18,49 @@ namespace GitHubMigrator.Integration.Tests;
 public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixture<ApiHarness>
 {
     [Fact]
+    public async Task F066_queue_health_is_superadmin_only_and_default_off()
+    {
+        var url = "/api/operations/incremental-preparations/" +
+            Guid.NewGuid() + "/health";
+        async Task<HttpResponseMessage> GetAsync(string? token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (token is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await GetAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await GetAsync(await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await GetAsync(await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var pending = await GetAsync(await harness.LoginAsync(
+            harness.PendingName, ApiHarness.PendingPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, pending.StatusCode);
+        using var superadmin = await GetAsync(await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.NotFound, superadmin.StatusCode);
+        Assert.DoesNotContain(ApiHarness.TargetToken,
+            await superadmin.Content.ReadAsStringAsync());
+
+        // Invalid source does not bypass the disabled feature gate.
+        using var none = new HttpRequestMessage(HttpMethod.Get,
+            "/api/operations/incremental-preparations/" +
+            Guid.Empty + "/health");
+        none.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer",
+                await harness.LoginAsync(
+                    harness.SuperadminName, ApiHarness.SuperadminPassword));
+        using var empty = await harness.Client.SendAsync(none);
+        Assert.Equal(HttpStatusCode.NotFound, empty.StatusCode);
+    }
+
+    [Fact]
     public async Task F065_source_mirror_health_is_superadmin_only_and_default_off()
     {
         const string url = "/api/operations/source-mirrors/health";
