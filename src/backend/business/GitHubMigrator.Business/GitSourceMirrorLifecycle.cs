@@ -199,6 +199,7 @@ public sealed class DurableGitSourceSnapshotMirrorMaterializer(
         }
         catch (GitSourceSnapshotMirrorException ex)
         {
+            await JoinHeartbeatAfterFailureAsync(heartbeat, stopHeartbeat);
             // A damaged bundle/mirror is NOT automatically retried.
             // The owned generation is quarantined; stale owners cannot.
             try
@@ -214,6 +215,7 @@ public sealed class DurableGitSourceSnapshotMirrorMaterializer(
                 "SourceMirrorLifecycleProofInvalid" or
                 "SourceMirrorLifecycleProofStale")
         {
+            await JoinHeartbeatAfterFailureAsync(heartbeat, stopHeartbeat);
             try
             {
                 await lifecycle.QuarantineAsync(plan, currentLease,
@@ -224,10 +226,20 @@ public sealed class DurableGitSourceSnapshotMirrorMaterializer(
         }
         finally
         {
-            stopHeartbeat.Cancel();
+            await JoinHeartbeatAfterFailureAsync(heartbeat, stopHeartbeat);
             // Cancellation/crash leaves the generation to expire. The
             // next owner must physically re-verify, never reuse a receipt.
         }
+    }
+
+    private static async Task JoinHeartbeatAfterFailureAsync(
+        Task heartbeat, CancellationTokenSource stop)
+    {
+        stop.Cancel();
+        // Only invoked during cleanup: the original physical/lease error
+        // must not be masked by another failed timer tick.
+        try { await heartbeat; }
+        catch (Exception) when (heartbeat.IsFaulted || heartbeat.IsCanceled) { }
     }
 
     private async Task HeartbeatAsync(
@@ -240,7 +252,11 @@ public sealed class DurableGitSourceSnapshotMirrorMaterializer(
         var current = admitted;
         while (await timer.WaitForNextTickAsync(ct))
         {
-            current = await lifecycle.RenewAsync(plan, current, ct);
+            // Once a tick begins, join its database transaction even
+            // when physical work finishes: cancellation mid-commit could
+            // otherwise leave the wrapper with a stale deadline token.
+            current = await lifecycle.RenewAsync(
+                plan, current, CancellationToken.None);
             renewed(current);
         }
     }
