@@ -23,6 +23,7 @@ public sealed class PostgresGitHubRemoteAppPreflightEvidenceTests(
         await GitHubTransferAttemptSchema.InitializeAsync(provider);
         await GitHubRemoteSandboxFenceSchema.InitializeAsync(provider);
         await GitHubRemoteTestGrantSchema.InitializeAsync(provider);
+        await GitHubRemoteReadbackSchema.InitializeAsync(provider);
         await GitHubRemoteTransmitHazardSchema.InitializeAsync(provider);
         await GitHubRemoteAppPreflightEvidenceSchema.InitializeAsync(provider);
     }
