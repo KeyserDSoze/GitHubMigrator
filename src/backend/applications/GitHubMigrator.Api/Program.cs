@@ -563,6 +563,7 @@ await GitSandboxDispatchSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxFenceSchema.InitializeAsync(app.Services);
 await GitHubRemoteTestGrantSchema.InitializeAsync(app.Services);
 await GitHubRemoteAppPreflightEvidenceSchema.InitializeAsync(app.Services);
+await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
 await GitHubRemoteReadbackSchema.InitializeAsync(app.Services);
 await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
 await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
