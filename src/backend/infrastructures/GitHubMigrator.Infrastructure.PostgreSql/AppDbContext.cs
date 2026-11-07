@@ -59,6 +59,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<GitSandboxDispatchRecord>();
     public DbSet<GitSandboxDispatchEventRecord> GitSandboxDispatchEvents =>
         Set<GitSandboxDispatchEventRecord>();
+    public DbSet<GitSourceMirrorLifecycleRecord> GitSourceMirrorLifecycles =>
+        Set<GitSourceMirrorLifecycleRecord>();
+    public DbSet<GitSourceMirrorLifecycleEventRecord> GitSourceMirrorLifecycleEvents =>
+        Set<GitSourceMirrorLifecycleEventRecord>();
     public DbSet<GitHubRemoteObjectReconciliationRecord> GitHubRemoteObjectReconciliations =>
         Set<GitHubRemoteObjectReconciliationRecord>();
     public DbSet<GitHubRemoteObjectReconciliationEventRecord> GitHubRemoteObjectReconciliationEvents =>
@@ -571,6 +575,53 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.GrantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => new { x.GrantId, x.Id })
                 .HasDatabaseName("ix_remote_test_grant_events");
+        });
+        builder.Entity<GitSourceMirrorLifecycleRecord>(entity =>
+        {
+            entity.ToTable("git_source_mirror_lifecycles");
+            entity.HasKey(x => x.MirrorId);
+            entity.Property(x => x.MirrorId).HasColumnName("mirror_id");
+            entity.Property(x => x.SourceSnapshotId).HasColumnName("source_snapshot_id");
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.ReconciliationId).HasColumnName("reconciliation_id");
+            entity.Property(x => x.BundleSha256).HasColumnName("bundle_sha256").HasMaxLength(64);
+            entity.Property(x => x.SourceEvidenceSha256).HasColumnName("source_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.RefsSha256).HasColumnName("refs_sha256").HasMaxLength(64);
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(32);
+            entity.Property(x => x.LeaseGeneration).HasColumnName("lease_generation");
+            entity.Property(x => x.LeasedBy).HasColumnName("leased_by");
+            entity.Property(x => x.LeaseToken).HasColumnName("lease_token");
+            entity.Property(x => x.LeaseExpiresAtUtc).HasColumnName("lease_expires_at_utc");
+            entity.Property(x => x.ObjectSetSha256).HasColumnName("object_set_sha256").HasMaxLength(64);
+            entity.Property(x => x.ObjectCount).HasColumnName("object_count");
+            entity.Property(x => x.MirrorProofSha256).HasColumnName("mirror_proof_sha256").HasMaxLength(64);
+            entity.Property(x => x.VerifiedAtUtc).HasColumnName("verified_at_utc");
+            entity.Property(x => x.FailureCode).HasColumnName("failure_code").HasMaxLength(70);
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.RemotePushInvoked).HasColumnName("remote_push_invoked");
+            entity.Property(x => x.RemoteWritesAuthorized).HasColumnName("remote_writes_authorized");
+            entity.Property(x => x.MayAutomaticallyRetry).HasColumnName("may_automatically_retry");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasIndex(x => x.WorkpackId).IsUnique()
+                .HasDatabaseName("ux_f061_workpack");
+        });
+        builder.Entity<GitSourceMirrorLifecycleEventRecord>(entity =>
+        {
+            entity.ToTable("git_source_mirror_lifecycle_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.MirrorId).HasColumnName("mirror_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(24);
+            entity.Property(x => x.Generation).HasColumnName("generation");
+            entity.Property(x => x.WorkerId).HasColumnName("worker_id");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitSourceMirrorLifecycleRecord>().WithMany()
+                .HasForeignKey(x => x.MirrorId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.MirrorId, x.Id })
+                .HasDatabaseName("ix_f061_event_history");
         });
         builder.Entity<GitHubRemoteObjectReconciliationRecord>(entity =>
         {
