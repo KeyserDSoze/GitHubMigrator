@@ -359,6 +359,98 @@ public sealed class GitHubRemoteTrustedDispatchReadOnlyOrchestratorTests
         Assert.Equal(1, authority.Calls);
     }
 
+    [Fact]
+    public async Task F077_hazard_bound_F052_digest_replaces_body_supplied_prior_receipt()
+    {
+        var f = Valid();
+        var hazard = Guid.NewGuid();
+        var journal = new EvidenceJournal { Value = f.Preflight };
+        var service = new GitHubRemoteTrustedDispatchReadOnlyOrchestrator(
+            f.Packets, f.RemoteReader, f.Secrets, f.AuthorityReader,
+            new(true, 2468, "gh-org/sandbox"),
+            new(true, 1234, 77, "secrets/f076-test-app",
+                "gh-org/sandbox"), TimeProvider.System, journal);
+
+        var receipt = await service.ReviewFromJournalAsync(
+            f.Source.Packet.PreparationId, f.Source.Packet.PlanId,
+            f.Source.Packet.ScopeId, hazard, Guid.NewGuid(),
+            CancellationToken.None);
+
+        Assert.Equal(1, journal.Calls);
+        Assert.Equal(hazard, journal.LastHazardId);
+        Assert.Equal(1, f.AuthorityReader.Calls);
+        Assert.Equal(f.Preflight.EvidenceSha256,
+            f.AuthorityReader.SubmittedPreflight!.EvidenceSha256);
+        Assert.Equal(2, f.Packets.Calls);
+        Assert.False(receipt.RemoteWritesAuthorized);
+        Assert.False(receipt.RemoteTransportInvoked);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("wrong-repository")]
+    [InlineData("wrong-packet")]
+    public async Task F077_missing_or_mismatched_history_denies_before_secret_read(
+        string mutation)
+    {
+        var f = Valid();
+        var journal = new EvidenceJournal { Value = mutation switch
+        {
+            "missing" => null,
+            "wrong-repository" => f.Preflight with {
+                RepositoryId = 9999
+            },
+            "wrong-packet" => f.Preflight with {
+                PacketSha256 = Sha('e')
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation))
+        }};
+        var service = new GitHubRemoteTrustedDispatchReadOnlyOrchestrator(
+            f.Packets, f.RemoteReader, f.Secrets, f.AuthorityReader,
+            new(true, 2468, "gh-org/sandbox"),
+            new(true, 1234, 77, "secrets/f076-test-app",
+                "gh-org/sandbox"), TimeProvider.System, journal);
+
+        var ex = await Assert.ThrowsAsync<
+            GitHubRemoteCreateOnlyDispatchException>(() =>
+            service.ReviewFromJournalAsync(
+                f.Source.Packet.PreparationId, f.Source.Packet.PlanId,
+                f.Source.Packet.ScopeId, Guid.NewGuid(), Guid.NewGuid(),
+                CancellationToken.None));
+        Assert.Equal(mutation == "missing"
+            ? "RemoteDispatchPreflightJournalMissing"
+            : "RemoteDispatchTrustedEvidenceInvalid", ex.Code);
+        Assert.Equal(1, journal.Calls);
+        Assert.Equal(0, f.Secrets.Reads);
+        Assert.Equal(0, f.RemoteReader.Calls);
+        Assert.Equal(0, f.AuthorityReader.Calls);
+    }
+
+    private sealed class EvidenceJournal : IGitHubRemoteAppPreflightEvidenceJournal
+    {
+        public GitHubRemoteAppPreflightReceipt? Value { get; set; }
+        public int Calls { get; private set; }
+        public Guid LastHazardId { get; private set; }
+
+        public Task<GitHubRemoteAppPreflightReceipt> RecordAsync(
+            GitHubRemoteAppPreflightReceipt receipt,
+            DateTimeOffset policyObservedAtUtc, CancellationToken ct) =>
+            throw new InvalidOperationException("Review cannot write a journal");
+
+        public Task<GitHubRemoteAppPreflightReceipt?> GetAsync(
+            Guid fenceRequestId, long generation, long repositoryId,
+            string evidenceSha256, CancellationToken ct) =>
+            throw new InvalidOperationException("No body-supplied SHA query");
+
+        public Task<GitHubRemoteAppPreflightReceipt?> GetForHazardAsync(
+            Guid hazardId, CancellationToken ct)
+        {
+            Calls++;
+            LastHazardId = hazardId;
+            return Task.FromResult(Value);
+        }
+    }
+
     private sealed class RejectingAuthority(
         GitHubRemoteCreateOnlyDispatchException refusal)
         : IGitHubRemoteDispatchAuthorityVerifier
