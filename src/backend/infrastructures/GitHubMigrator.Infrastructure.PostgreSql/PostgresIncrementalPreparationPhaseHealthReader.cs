@@ -5,7 +5,8 @@ namespace GitHubMigrator.Infrastructure.PostgreSql;
 
 // F-067: source-scoped, single-statement read of immutable queue events.
 // A *successful final attempt* must have an exact event chain:
-//   Queued(0) or RetryScheduled(previous attempt)
+//   Queued(0), RetryScheduled(previous attempt) or
+//   LeaseReclaimed(previous attempt)
 //   -> Claimed(current attempt) -> Prepared(current attempt).
 // We never pair an old claim with a later retry or manufacture missing
 // timestamps. Queue wait includes retry backoff; claim-to-prepared is
@@ -56,8 +57,8 @@ public sealed class PostgresIncrementalPreparationPhaseHealthReader(
                         e.event_type = 'Queued' AND e.attempt = 0)
                     OR
                     (p.attempts > 1 AND
-                        e.event_type = 'RetryScheduled' AND
-                        e.attempt = p.attempts - 1)
+                        e.event_type IN ('RetryScheduled', 'LeaseReclaimed')
+                        AND e.attempt = p.attempts - 1)
                   )
                 ORDER BY e.id DESC LIMIT 1
             ) origin ON true
