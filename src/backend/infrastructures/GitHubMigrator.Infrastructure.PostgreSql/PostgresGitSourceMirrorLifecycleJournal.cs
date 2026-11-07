@@ -46,6 +46,11 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
         }
         else
         {
+            // EF's identity map can return a previously tracked, stale
+            // Leased row after a Busy refusal. The PostgreSQL advisory
+            // lock protects the DB state, NOT the DbContext cache.
+            // Always reload under the lock before making a decision.
+            await db.Entry(row).ReloadAsync(ct);
             RequireSamePlan(row, plan);
             if (row.State == GitSourceMirrorLifecycleStates.RecoveryRequired)
                 throw Reject("SourceMirrorLifecycleQuarantined");
@@ -193,6 +198,10 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
         var row = await db.GitSourceMirrorLifecycles
             .SingleOrDefaultAsync(x => x.MirrorId == plan.SourceMirrorId, ct)
             ?? throw Reject("SourceMirrorLifecycleNotFound");
+        // Critical fencing check: a scoped DbContext may have tracked
+        // this object before another replica reclaimed the lease.
+        // Reload from PostgreSQL under the transaction advisory lock.
+        await db.Entry(row).ReloadAsync(ct);
         RequireSamePlan(row, plan);
         if (row.State != GitSourceMirrorLifecycleStates.Leased ||
             row.LeaseGeneration != lease.Generation ||
