@@ -40,6 +40,11 @@ public interface IGitSourceMirrorLifecycleJournal
 {
     Task<GitSourceMirrorLease> AcquireAsync(
         GitHubTrustedRemoteReadPlan plan, Guid workerId, CancellationToken ct);
+    // Rotate only the deadline, never the ownership generation or
+    // lease admission timestamp used by F-062 freshness checks.
+    Task<GitSourceMirrorLease> RenewAsync(
+        GitHubTrustedRemoteReadPlan plan, GitSourceMirrorLease lease,
+        CancellationToken ct);
     Task<GitSourceMirrorLifecycleStatus> CompleteAsync(
         GitHubTrustedRemoteReadPlan plan, GitSourceMirrorLease lease,
         GitSourceSnapshotMirrorProof proof, CancellationToken ct);
@@ -58,6 +63,7 @@ public static class GitSourceMirrorLifecycleIntegrity
 {
     public static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(15);
     public static readonly TimeSpan MaxProofAge = TimeSpan.FromMinutes(2);
+    public static readonly TimeSpan MaxLeaseLifetime = TimeSpan.FromHours(2);
     public const int MaxGenerations = 2000;
 
     public static void VerifyProof(
@@ -116,18 +122,24 @@ public static class GitSourceMirrorLifecycleIntegrity
     }
 }
 
-// Internal wrapper: each physical verification is admitted by a
-// PostgreSQL fencing generation. F-060 remains responsible for
-// filesystem/POSIX safety, full-object fsck and bundle rehashing.
+// Internal wrapper: physical Git work is admitted by PostgreSQL and
+// remains fenced during long-running source verification. The heartbeat
+// never sends data remotely and cannot authorize a destination write.
 public sealed class DurableGitSourceSnapshotMirrorMaterializer(
     IGitSourceSnapshotMirrorMaterializer physical,
-    IGitSourceMirrorLifecycleJournal lifecycle)
+    IGitSourceMirrorLifecycleJournal lifecycle,
+    TimeSpan? heartbeatInterval = null)
     : IGitSourceSnapshotMirrorMaterializer
 {
     public async Task<GitSourceSnapshotMirrorProof> MaterializeAsync(
         GitHubTrustedRemoteReadPlan plan, CancellationToken ct)
     {
         GitSourceSnapshotMirrorIntegrity.RequirePlan(plan);
+        var interval = heartbeatInterval ??
+            GitSourceMirrorLifecycleIntegrity.LeaseDuration / 3;
+        if (interval <= TimeSpan.Zero ||
+            interval >= GitSourceMirrorLifecycleIntegrity.LeaseDuration)
+            throw new ArgumentOutOfRangeException(nameof(heartbeatInterval));
         var workerId = Guid.NewGuid();
         GitSourceMirrorLease? lease = null;
         for (var retry = 0; retry < 240; retry++)
@@ -148,20 +160,51 @@ public sealed class DurableGitSourceSnapshotMirrorMaterializer(
             throw new GitSourceMirrorLifecycleException(
                 "SourceMirrorLifecycleBusy");
 
+        var currentLease = lease;
+        using var stopHeartbeat =
+            CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // Keep physical work and the heartbeat independent. No two
+        // journal operations overlap on the scoped EF DbContext:
+        // the heartbeat is stopped/joined before completion/quarantine.
+        var heartbeat = HeartbeatAsync(
+            plan, lease, interval, renewed => currentLease = renewed,
+            stopHeartbeat.Token);
         try
         {
-            var proof = await physical.MaterializeAsync(plan, ct);
-            await lifecycle.CompleteAsync(plan, lease, proof, ct);
+            var physicalTask = physical.MaterializeAsync(
+                plan, stopHeartbeat.Token);
+            var first = await Task.WhenAny(physicalTask, heartbeat);
+            if (first == heartbeat)
+            {
+                // A failed renewal revokes physical work; an old owner
+                // may not publish its result even if cancellation loses
+                // the race with the final filesystem promotion.
+                stopHeartbeat.Cancel();
+                try { await physicalTask; }
+                catch (Exception) when (heartbeat.IsFaulted ||
+                    heartbeat.IsCanceled) { }
+                await heartbeat;
+                throw new GitSourceMirrorLifecycleException(
+                    "SourceMirrorLifecycleLeaseLost");
+            }
+
+            stopHeartbeat.Cancel();
+            try { await heartbeat; }
+            catch (OperationCanceledException) when
+                (stopHeartbeat.IsCancellationRequested) { }
+
+            var proof = await physicalTask;
+            await lifecycle.CompleteAsync(plan, currentLease, proof, ct);
             return proof;
         }
         catch (GitSourceSnapshotMirrorException ex)
         {
-            // A corrupted bundle/mirror is NOT automatically retried.
-            // Only still-owned, unexpired leases can be quarantined.
-            // The original failure remains the caller-visible cause.
+            await JoinHeartbeatAfterFailureAsync(heartbeat, stopHeartbeat);
+            // A damaged bundle/mirror is NOT automatically retried.
+            // The owned generation is quarantined; stale owners cannot.
             try
             {
-                await lifecycle.QuarantineAsync(plan, lease,
+                await lifecycle.QuarantineAsync(plan, currentLease,
                     ex.Code, CancellationToken.None);
             }
             catch (GitSourceMirrorLifecycleException) { }
@@ -172,15 +215,49 @@ public sealed class DurableGitSourceSnapshotMirrorMaterializer(
                 "SourceMirrorLifecycleProofInvalid" or
                 "SourceMirrorLifecycleProofStale")
         {
+            await JoinHeartbeatAfterFailureAsync(heartbeat, stopHeartbeat);
             try
             {
-                await lifecycle.QuarantineAsync(plan, lease,
+                await lifecycle.QuarantineAsync(plan, currentLease,
                     ex.Code, CancellationToken.None);
             }
             catch (GitSourceMirrorLifecycleException) { }
             throw;
         }
-        // Cancellation or worker crash deliberately leaves the lease
-        // to expire. A new generation must physically re-verify first.
+        finally
+        {
+            await JoinHeartbeatAfterFailureAsync(heartbeat, stopHeartbeat);
+            // Cancellation/crash leaves the generation to expire. The
+            // next owner must physically re-verify, never reuse a receipt.
+        }
+    }
+
+    private static async Task JoinHeartbeatAfterFailureAsync(
+        Task heartbeat, CancellationTokenSource stop)
+    {
+        stop.Cancel();
+        // Only invoked during cleanup: the original physical/lease error
+        // must not be masked by another failed timer tick.
+        try { await heartbeat; }
+        catch (Exception) when (heartbeat.IsFaulted || heartbeat.IsCanceled) { }
+    }
+
+    private async Task HeartbeatAsync(
+        GitHubTrustedRemoteReadPlan plan,
+        GitSourceMirrorLease admitted, TimeSpan interval,
+        Action<GitSourceMirrorLease> renewed,
+        CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(interval);
+        var current = admitted;
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            // Once a tick begins, join its database transaction even
+            // when physical work finishes: cancellation mid-commit could
+            // otherwise leave the wrapper with a stale deadline token.
+            current = await lifecycle.RenewAsync(
+                plan, current, CancellationToken.None);
+            renewed(current);
+        }
     }
 }

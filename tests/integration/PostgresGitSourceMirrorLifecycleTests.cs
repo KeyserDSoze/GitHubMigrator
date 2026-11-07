@@ -334,6 +334,125 @@ public sealed class PostgresGitSourceMirrorLifecycleTests(
     }
 
     [Fact]
+    public async Task Renewed_lease_fences_old_deadline_but_preserves_original_proof_floor()
+    {
+        using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
+        var plan = f.CreatePlan();
+        GitSourceMirrorLease admitted;
+        await using (var db = fixture.NewContext())
+            admitted = await Journal(db).AcquireAsync(
+                plan, Guid.NewGuid(), default);
+
+        // The real Git fsck receipt predates the renewal, but was produced
+        // after lease admission: renewal must not invalidate F-062.
+        var physicalProof = await f.Materializer().MaterializeAsync(plan, default);
+        await Task.Delay(20);
+        GitSourceMirrorLease renewed;
+        await using (var db = fixture.NewContext())
+            renewed = await Journal(db).RenewAsync(plan, admitted, default);
+
+        Assert.Equal(admitted.LeaseToken, renewed.LeaseToken);
+        Assert.Equal(admitted.Generation, renewed.Generation);
+        Assert.Equal(admitted.WorkerId, renewed.WorkerId);
+        Assert.True(renewed.ExpiresAtUtc > admitted.ExpiresAtUtc);
+
+        await using (var staleDb = fixture.NewContext())
+        {
+            var refused = await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+                () => Journal(staleDb).CompleteAsync(
+                    plan, admitted, physicalProof, default));
+            Assert.Equal("SourceMirrorLifecycleLeaseLost", refused.Code);
+        }
+        await using (var currentDb = fixture.NewContext())
+        {
+            var status = await Journal(currentDb).CompleteAsync(
+                plan, renewed, physicalProof, default);
+            Assert.Equal(GitSourceMirrorLifecycleStates.Verified, status.State);
+            Assert.Equal(1, status.Generation);
+            Assert.Equal(physicalProof.EvidenceSha256, status.MirrorProofSha256);
+            Assert.False(status.RemotePushInvoked);
+            Assert.False(status.MigrationComplete);
+            Assert.Equal(
+                ["LeaseAcquired", "LeaseRenewed", "Verified"],
+                (await Journal(currentDb).EventsAsync(
+                    plan.SourceMirrorId, default))
+                    .Select(x => x.Type).ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task Expired_or_reclaimed_generation_cannot_be_renewed()
+    {
+        using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
+        var plan = f.CreatePlan();
+        GitSourceMirrorLease old;
+        await using (var db = fixture.NewContext())
+            old = await Journal(db).AcquireAsync(
+                plan, Guid.NewGuid(), default);
+        await using (var db = fixture.NewContext())
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE git_source_mirror_lifecycles
+                SET lease_expires_at_utc={DateTimeOffset.UtcNow.AddMinutes(-1)}
+                WHERE mirror_id={plan.SourceMirrorId}
+                """);
+        await using (var db = fixture.NewContext())
+        {
+            var ex = await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+                () => Journal(db).RenewAsync(plan, old, default));
+            Assert.Equal("SourceMirrorLifecycleLeaseLost", ex.Code);
+        }
+        GitSourceMirrorLease newOwner;
+        await using (var db = fixture.NewContext())
+            newOwner = await Journal(db).AcquireAsync(
+                plan, Guid.NewGuid(), default);
+        Assert.Equal(2, newOwner.Generation);
+        await using (var db = fixture.NewContext())
+        {
+            var ex = await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+                () => Journal(db).RenewAsync(plan, old, default));
+            Assert.Equal("SourceMirrorLifecycleLeaseLost", ex.Code);
+        }
+        await using (var db = fixture.NewContext())
+        {
+            var renewed = await Journal(db).RenewAsync(plan, newOwner, default);
+            Assert.Equal(newOwner.LeaseToken, renewed.LeaseToken);
+            Assert.Equal(2, renewed.Generation);
+            var events = await Journal(db).EventsAsync(
+                plan.SourceMirrorId, default);
+            Assert.Equal(["LeaseAcquired", "LeaseReclaimed", "LeaseRenewed"],
+                events.Select(x => x.Type).ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task Two_hour_absolute_lease_limit_stops_liveness_renewals()
+    {
+        using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
+        var plan = f.CreatePlan();
+        GitSourceMirrorLease lease;
+        await using (var db = fixture.NewContext())
+            lease = await Journal(db).AcquireAsync(
+                plan, Guid.NewGuid(), default);
+        // Simulate an exceedingly long-lived worker while its current
+        // deadline remains valid: no infinite lease extension is allowed.
+        await using (var db = fixture.NewContext())
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE git_source_mirror_lifecycles
+                SET updated_at_utc={DateTimeOffset.UtcNow.AddHours(-3)}
+                WHERE mirror_id={plan.SourceMirrorId}
+                """);
+        await using (var db = fixture.NewContext())
+        {
+            var ex = await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+                () => Journal(db).RenewAsync(plan, lease, default));
+            Assert.Equal("SourceMirrorLifecycleTimeLimit", ex.Code);
+            Assert.Equal(["LeaseAcquired"],
+                (await Journal(db).EventsAsync(plan.SourceMirrorId, default))
+                    .Select(x => x.Type).ToArray());
+        }
+    }
+
+    [Fact]
     public async Task Direct_SQL_cannot_turn_source_audit_into_remote_execution_or_edit_events()
     {
         using var f = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();

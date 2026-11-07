@@ -92,6 +92,47 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
             token, row.LeaseGeneration, row.LeaseExpiresAtUtc.Value);
     }
 
+    public async Task<GitSourceMirrorLease> RenewAsync(
+        GitHubTrustedRemoteReadPlan plan, GitSourceMirrorLease lease,
+        CancellationToken ct)
+    {
+        RequireEnabled();
+        GitSourceSnapshotMirrorIntegrity.RequirePlan(plan);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await LockAsync(plan.SourceMirrorId, ct);
+        var now = clock.GetUtcNow();
+        // Reload under the same advisory lock as claim/commit. Both the
+        // exact prior deadline AND the random token must match, so an
+        // old heartbeat cannot resurrect a superseded generation.
+        var row = await OwnedAsync(plan, lease, now, ct);
+        // UpdatedAtUtc is intentionally the *admission* timestamp for
+        // Leased rows (F-062's proof floor). Do NOT advance it here.
+        var absoluteLimit = row.UpdatedAtUtc +
+            GitSourceMirrorLifecycleIntegrity.MaxLeaseLifetime;
+        if (now >= absoluteLimit || now < row.UpdatedAtUtc)
+            throw Reject("SourceMirrorLifecycleTimeLimit");
+        var proposed = now +
+            GitSourceMirrorLifecycleIntegrity.LeaseDuration;
+        if (proposed > absoluteLimit)
+            proposed = absoluteLimit;
+        // Canonical precision matches the lease returned by AcquireAsync
+        // and PostgreSQL timestamptz roundtrips across worker replicas.
+        var deadline = DateTimeOffset.FromUnixTimeMilliseconds(
+            proposed.ToUnixTimeMilliseconds());
+        if (deadline <= row.LeaseExpiresAtUtc)
+            return lease;
+        row.LeaseExpiresAtUtc = deadline;
+        db.GitSourceMirrorLifecycleEvents.Add(new()
+        {
+            MirrorId = row.MirrorId, Type = "LeaseRenewed",
+            Generation = row.LeaseGeneration, WorkerId = lease.WorkerId,
+            OccurredAtUtc = now
+        });
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return lease with { ExpiresAtUtc = deadline };
+    }
+
     public async Task<GitSourceMirrorLifecycleStatus> CompleteAsync(
         GitHubTrustedRemoteReadPlan plan, GitSourceMirrorLease lease,
         GitSourceSnapshotMirrorProof proof, CancellationToken ct)
