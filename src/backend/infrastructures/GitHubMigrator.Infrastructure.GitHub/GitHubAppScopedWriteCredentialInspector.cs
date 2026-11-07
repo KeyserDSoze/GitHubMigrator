@@ -98,6 +98,13 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         catch (ArgumentException)
         { throw new GitHubAppWriteScopeException("AppScopeSigningKeyInvalid"); }
 
+        // F-072: verify the App's actual installation account using the
+        // already signed App JWT BEFORE minting even a restricted token.
+        // A configured numeric installation ID alone cannot establish
+        // ownership by the intended organization.
+        await VerifyInstallationAsync(appId, installationId,
+            organization, appJwt, ct);
+
         using var mint = new HttpRequestMessage(HttpMethod.Post,
             "https://api.github.com/app/installations/" +
             installationId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
@@ -189,6 +196,70 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         return (new GitHubAppWriteScopeObservation(
             installationId, repoId, GitHubAppWriteScopeIntegrity.Issued,
             clock.GetUtcNow(), tokenExpiry.ToUniversalTime()), token);
+    }
+
+    // F-072: App JWT-only GET. This response is never stored, logged or
+    // returned; the sole subsequent POST is still one-repository token
+    // issuance with exact Contents:write and implicit Metadata:read.
+    private async Task VerifyInstallationAsync(long appId,
+        long installationId, string organization, string appJwt,
+        CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            "https://api.github.com/app/installations/" +
+            installationId.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", appJwt);
+        request.Headers.UserAgent.ParseAdd("GitHubMigrator/1.0");
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(
+            "application/vnd.github+json"));
+        request.Headers.TryAddWithoutValidation(
+            "X-GitHub-Api-Version", "2022-11-28");
+
+        using var response = await client.SendAsync(request,
+            HttpCompletionOption.ResponseHeadersRead, ct);
+        if (response.StatusCode != HttpStatusCode.OK)
+            throw new GitHubAppWriteScopeException(
+                "AppScopeInstallationNotVerified");
+        using var document = await BoundedJsonAsync(response, ct);
+        if (document is null ||
+            document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new GitHubAppWriteScopeException(
+                "AppScopeInstallationMismatch");
+        var node = document.RootElement;
+        if (!HasUniqueProperties(node) ||
+            !node.TryGetProperty("id", out var identity) ||
+            !identity.TryGetInt64(out var actualInstallationId) ||
+            actualInstallationId != installationId ||
+            !node.TryGetProperty("app_id", out var app) ||
+            !app.TryGetInt64(out var actualAppId) ||
+            actualAppId != appId ||
+            !node.TryGetProperty("target_id", out var targetId) ||
+            !targetId.TryGetInt64(out var targetAccountId) ||
+            targetAccountId <= 0 ||
+            !TryText(node, "target_type", out var targetType) ||
+            targetType != "Organization" ||
+            !TryText(node, "repository_selection", out var selection) ||
+            selection is not ("selected" or "all") ||
+            !node.TryGetProperty("suspended_at", out var suspended) ||
+            suspended.ValueKind != JsonValueKind.Null ||
+            !node.TryGetProperty("account", out var account) ||
+            account.ValueKind != JsonValueKind.Object ||
+            !account.TryGetProperty("id", out var accountId) ||
+            !accountId.TryGetInt64(out var accountNumericId) ||
+            accountNumericId != targetAccountId ||
+            !TryText(account, "login", out var login) ||
+            !string.Equals(login, organization,
+                StringComparison.OrdinalIgnoreCase) ||
+            !TryText(account, "type", out var accountType) ||
+            accountType != "Organization" ||
+            !node.TryGetProperty("permissions", out var permissions) ||
+            permissions.ValueKind != JsonValueKind.Object ||
+            !TryText(permissions, "contents", out var grantedContents) ||
+            grantedContents != "write")
+            throw new GitHubAppWriteScopeException(
+                "AppScopeInstallationMismatch");
     }
 
     // Validate recursively: even duplicate nested owner/permission fields are
