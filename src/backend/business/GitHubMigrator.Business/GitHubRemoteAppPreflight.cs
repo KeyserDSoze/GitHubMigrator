@@ -37,10 +37,83 @@ public interface IGitHubRemoteAppPreflightReader
         GitHubCreateOnlyCandidatePacket packet, CancellationToken ct);
 }
 
+// F-077: immutable, no-credential storage for the complete F-051 receipt
+// AND the extra policy observation timestamp required to recompute its
+// original SHA-256 evidence from exactly the historical wire witness.
+// The store's only writer is the authenticated F-051 service.
+public interface IGitHubRemoteAppPreflightEvidenceJournal
+{
+    Task<GitHubRemoteAppPreflightReceipt> RecordAsync(
+        GitHubRemoteAppPreflightReceipt receipt,
+        DateTimeOffset policyObservedAtUtc, CancellationToken ct);
+    Task<GitHubRemoteAppPreflightReceipt?> GetAsync(
+        Guid fenceRequestId, long generation, long repositoryId,
+        CancellationToken ct);
+}
+
 public static class GitHubRemoteAppPreflightIntegrity
 {
     public const string VerifiedState = "RemoteReadOnlyAppPreflightVerified";
     public const string WriteBlockedState = "RemotePreflightWriteBlocked";
+
+    // Historical F-051 attestation digest: recompute exactly from the
+    // persisted receipt fields and previously unpersisted policy clock.
+    // Successful hash recomputation is integrity, NOT provider authenticity:
+    // only F-051's authenticated writer may append to the DB journal.
+    public static string RecomputeHistoricalEvidenceSha256(
+        GitHubRemoteAppPreflightReceipt receipt,
+        DateTimeOffset policyObservedAtUtc)
+    {
+        if (receipt is null ||
+            receipt.RequestId == Guid.Empty ||
+            receipt.Generation <= 0 || receipt.RepositoryId <= 0 ||
+            receipt.State != VerifiedState ||
+            !GitSourceBundleStorageCheck.ValidSha(receipt.PacketSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(
+                receipt.CandidateSetSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(
+                receipt.OriginalPolicySha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(
+                receipt.CurrentPolicySha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(
+                receipt.ExpectedBaselineSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(
+                receipt.ObservedBaselineSha256) ||
+            receipt.ExpectedBaselineSha256 !=
+                receipt.ObservedBaselineSha256 ||
+            receipt.MatchingBaselineRefs < 0 ||
+            receipt.AbsentCreateCandidates is < 1 or >
+                GitHubCandidatePolicyIntegrity.MaxOnlineCandidates ||
+            receipt.ObservedAtUtc == default ||
+            policyObservedAtUtc == default ||
+            policyObservedAtUtc < receipt.ObservedAtUtc.AddSeconds(-25) ||
+            policyObservedAtUtc > receipt.ObservedAtUtc.AddSeconds(25) ||
+            receipt.InstallationTokenExpiresAtUtc <=
+                receipt.ObservedAtUtc.AddMinutes(2) ||
+            receipt.InstallationTokenExpiresAtUtc >
+                receipt.ObservedAtUtc.AddMinutes(65) ||
+            receipt.RemoteWritesPerformed ||
+            receipt.ExecutionAuthorized || receipt.ReadyForExecution)
+            throw new GitHubRemoteAppPreflightException(
+                "RemotePreflightHistoricalEvidenceInvalid");
+        var stable = JsonSerializer.Serialize(new object[] {
+            "f051-github-app-readonly-preflight-v1",
+            receipt.RequestId.ToString("D"), receipt.Generation,
+            receipt.RepositoryId, receipt.PacketSha256,
+            receipt.CandidateSetSha256, receipt.OriginalPolicySha256,
+            receipt.ExpectedBaselineSha256,
+            receipt.ObservedBaselineSha256,
+            receipt.CurrentPolicySha256,
+            receipt.MatchingBaselineRefs,
+            receipt.AbsentCreateCandidates,
+            receipt.ObservedAtUtc.ToUnixTimeMilliseconds(),
+            policyObservedAtUtc.ToUnixTimeMilliseconds(),
+            receipt.InstallationTokenExpiresAtUtc.ToUnixTimeMilliseconds(),
+            VerifiedState, false, false, false
+        });
+        return Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(stable)));
+    }
 
     public static GitHubRemoteAppPreflightReceipt Seal(
         GitHubCreateOnlyCandidatePacket source,
@@ -162,7 +235,8 @@ public sealed class GitHubRemoteAppPreflightService(
     IConnectionSecretStore secrets,
     GitHubRemoteSandboxFenceOptions fenceOptions,
     GitHubAppWriteCredentialOptions credentials,
-    TimeProvider clock)
+    TimeProvider clock,
+    IGitHubRemoteAppPreflightEvidenceJournal? journal = null)
 {
     public async Task<GitHubRemoteAppPreflightReceipt> InspectAsync(
         Guid preparationId, Guid planId, Guid scopeId,
@@ -259,8 +333,15 @@ public sealed class GitHubRemoteAppPreflightService(
             throw new GitHubRemoteAppPreflightException(
                 "RemotePreflightChangedDuringIO");
 
-        return GitHubRemoteAppPreflightIntegrity.Seal(
+        var sealedReceipt = GitHubRemoteAppPreflightIntegrity.Seal(
             source, freshFence, original, scope, result, clock.GetUtcNow());
+        // Production always registers the F-077 journal. Tests using the
+        // business service without PostgreSQL may omit the optional store.
+        // No externally returned preflight can bypass durable recording
+        // when the journal is configured.
+        return journal is null ? sealedReceipt :
+            await journal.RecordAsync(sealedReceipt,
+                result.CandidatePolicies.ObservedAtUtc, ct);
     }
 
     private static bool MatchesHardWriteBarrier(
