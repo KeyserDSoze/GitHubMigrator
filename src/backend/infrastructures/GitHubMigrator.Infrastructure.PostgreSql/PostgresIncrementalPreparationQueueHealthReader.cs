@@ -103,11 +103,11 @@ public sealed class PostgresIncrementalPreparationQueueHealthReader(
                     WHERE state = 'Prepared'
                       AND prepared_at_utc >= sample.observed_at_utc - interval '24 hours'
                 )::double precision AS "AverageTurnaroundSecondsLast24Hours",
-                greatest(0, extract(epoch FROM
-                    sample.observed_at_utc - min(created_at_utc) FILTER (
+                max(greatest(0, extract(epoch FROM
+                    sample.observed_at_utc - created_at_utc))) FILTER (
                         WHERE state = 'Queued'
                           AND available_at_utc <= sample.observed_at_utc
-                    )))::double precision AS "OldestReadyWaitSeconds"
+                    )::double precision AS "OldestReadyWaitSeconds"
             FROM incremental_preparations
             WHERE source_connection_id = {0}
         ) AS metrics
