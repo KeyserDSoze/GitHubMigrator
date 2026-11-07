@@ -52,6 +52,15 @@ public sealed class PostgresGitHubRemoteDispatchReviewVerifier(
                 x.RepositoryId == repoId, ct);
         if (hazard is null)
             throw Refused();
+        // Map the irreversible F-055 possible-send and operator-recovery
+        // states to a stable PostgreSQL-authority failure, before invoking
+        // F-074's more general in-memory proof validator.
+        if (hazard.State !=
+                GitHubRemoteTransmitHazardStates.PreparedWriteDisabled ||
+            hazard.MarkedBy is not null || hazard.DeadlineUtc <= now ||
+            hazard.TransportAuthorized || hazard.TransportInvoked ||
+            hazard.RemoteWritesPerformed || hazard.MayAutomaticallyRetry)
+            throw Refused();
         var grant = await db.GitHubRemoteTestGrants.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == hazard.GrantId &&
                 x.RepositoryId == repoId, ct);
