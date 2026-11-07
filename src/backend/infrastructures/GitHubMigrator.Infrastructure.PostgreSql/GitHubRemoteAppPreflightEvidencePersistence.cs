@@ -221,19 +221,19 @@ public sealed class PostgresGitHubRemoteAppPreflightEvidenceJournal(
     private static bool SameProof(
         GitHubRemoteAppPreflightReceipt a,
         GitHubRemoteAppPreflightReceipt b) =>
-        a with {
+        (a with {
             ObservedAtUtc = DateTimeOffset.FromUnixTimeMilliseconds(
                 a.ObservedAtUtc.ToUnixTimeMilliseconds()),
             InstallationTokenExpiresAtUtc =
                 DateTimeOffset.FromUnixTimeMilliseconds(
                     a.InstallationTokenExpiresAtUtc.ToUnixTimeMilliseconds())
-        } == b with {
+        }) == (b with {
             ObservedAtUtc = DateTimeOffset.FromUnixTimeMilliseconds(
                 b.ObservedAtUtc.ToUnixTimeMilliseconds()),
             InstallationTokenExpiresAtUtc =
                 DateTimeOffset.FromUnixTimeMilliseconds(
                     b.InstallationTokenExpiresAtUtc.ToUnixTimeMilliseconds())
-        };
+        });
 
     private static GitHubRemoteAppPreflightReceipt FromRow(
         GitHubRemoteAppPreflightEvidenceRecord x) =>
