@@ -216,6 +216,15 @@ public sealed record GitHubCreateOnlyCandidatePacket(
     GitHubCreateOnlyPacket Packet,
     IReadOnlyList<GitMirrorRef> Candidates);
 
+// F-076: production F-044 regenerates from the persisted plan, scope,
+ // ref journal and twice-verified physical Git bundle. No candidate list
+ // can be supplied by an HTTP caller to the orchestration boundary.
+public interface IGitHubCreateOnlyPacketEvidenceReader
+{
+    Task<GitHubCreateOnlyCandidatePacket> PreviewWithCandidatesAsync(
+        Guid preparationId, Guid planId, Guid scopeId, CancellationToken ct);
+}
+
 public sealed class GitHubCreateOnlyPacketService(
     IGitHubAppWriteScopeStore scopes, IGitHubRemoteRefFenceStore fences,
     IGitHubImportIntentStore intents, IGitHubImportReadinessStore readiness,
@@ -223,6 +232,7 @@ public sealed class GitHubCreateOnlyPacketService(
     IGitSourceBundleArtifactVerifier disk,
     IIncrementalGitRefReconciliationStore reconciliations,
     IIncrementalOperationPlanRepository plans, TimeProvider clock)
+    : IGitHubCreateOnlyPacketEvidenceReader
 {
     public async Task<GitHubCreateOnlyPacket> PreviewAsync(
         Guid preparationId, Guid planId, Guid scopeId, CancellationToken ct) =>
