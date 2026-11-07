@@ -271,6 +271,12 @@ public sealed class PostgresGitSourceMirrorLifecycleTests(
             () => db.Database.ExecuteSqlInterpolatedAsync(
                 $"UPDATE git_source_mirror_lifecycles SET migration_complete={true} WHERE mirror_id={id}"),
             () => db.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE git_source_mirror_lifecycles SET bundle_sha256={new string('a', 64)} WHERE mirror_id={id}"),
+            () => db.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE git_source_mirror_lifecycles SET mirror_proof_sha256={new string('b', 64)} WHERE mirror_id={id}"),
+            () => db.Database.ExecuteSqlInterpolatedAsync(
+                $"DELETE FROM git_source_mirror_lifecycles WHERE mirror_id={id}"),
+            () => db.Database.ExecuteSqlInterpolatedAsync(
                 $"DELETE FROM git_source_mirror_lifecycle_events WHERE mirror_id={id}")
         ];
         foreach (var write in forbidden)
