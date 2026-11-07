@@ -48,7 +48,9 @@ public interface IGitHubRemoteAppPreflightEvidenceJournal
         DateTimeOffset policyObservedAtUtc, CancellationToken ct);
     Task<GitHubRemoteAppPreflightReceipt?> GetAsync(
         Guid fenceRequestId, long generation, long repositoryId,
-        CancellationToken ct);
+        string evidenceSha256, CancellationToken ct);
+    Task<GitHubRemoteAppPreflightReceipt?> GetForHazardAsync(
+        Guid hazardId, CancellationToken ct);
 }
 
 public static class GitHubRemoteAppPreflightIntegrity
