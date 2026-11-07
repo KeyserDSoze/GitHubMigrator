@@ -67,7 +67,12 @@ public sealed class PostgresGitSourceMirrorLifecycleJournal(
         row.State = GitSourceMirrorLifecycleStates.Leased;
         row.LeaseToken = token;
         row.LeasedBy = workerId;
-        row.LeaseExpiresAtUtc = now + GitSourceMirrorLifecycleIntegrity.LeaseDuration;
+        // PostgreSQL timestamptz has microsecond precision while .NET
+        // DateTimeOffset exposes 100ns ticks. Persist/return the SAME
+        // canonical millisecond lease deadline across replica roundtrips.
+        row.LeaseExpiresAtUtc = DateTimeOffset.FromUnixTimeMilliseconds(
+            (now + GitSourceMirrorLifecycleIntegrity.LeaseDuration)
+                .ToUnixTimeMilliseconds());
         row.UpdatedAtUtc = now;
         row.FailureCode = null;
         db.GitSourceMirrorLifecycleEvents.Add(new()
