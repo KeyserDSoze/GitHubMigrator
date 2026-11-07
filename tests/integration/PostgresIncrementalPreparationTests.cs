@@ -13,6 +13,189 @@ public sealed class PostgresIncrementalPreparationTests(PostgresDraftFixture fix
     : IClassFixture<PostgresDraftFixture>
 {
     [Fact]
+    public async Task F069_four_replicas_reclaim_once_and_stale_owner_cannot_publish()
+    {
+        await using var setup = fixture.NewContext();
+        var source = Guid.NewGuid();
+        var target = Guid.NewGuid();
+        await ConnectionsAsync(setup, source, target);
+        var scan = Snapshot(source, DateTimeOffset.UtcNow.AddMinutes(-4),
+            [new("repo-1", "refs/heads/main", "sha")]);
+        await StageAsync(setup, TimeProvider.System, scan);
+        // The original owner runs with a wildly incorrect local clock.
+        var original = new PostgresIncrementalPreparationRepository(
+            setup, new ManualClock(DateTimeOffset.UtcNow.AddHours(12)));
+        var queued = await original.EnqueueAsync(scan.Id, source, target,
+            Guid.NewGuid(), default);
+        var first = await original.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(first);
+
+        // Simulate a crash and elapsed expiry without sleeping. Only the
+        // database decides whether the expired owner may act.
+        await setup.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations
+            SET lease_until_utc=clock_timestamp()-interval '1 second'
+            WHERE id={queued.Id}
+            """);
+        var replicas = await Task.WhenAll(Enumerable.Range(0, 4)
+            .Select(async _ =>
+            {
+                await using var db = fixture.NewContext();
+                return await new PostgresIncrementalPreparationRepository(
+                    db, new ManualClock(DateTimeOffset.UtcNow.AddHours(-12)))
+                    .ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5),
+                        default, source);
+            }));
+        var successor = Assert.Single(replicas.Where(x => x is not null))!;
+        Assert.Equal(queued.Id, successor.Id);
+        Assert.Equal(2, successor.Attempt);
+        Assert.NotEqual(first.LeaseToken, successor.LeaseToken);
+        Assert.False(await original.FailAsync(first,
+            "PreparationDeadlineExceeded", false, default));
+        Assert.Equal("IncrementalLeaseLost",
+            (await Assert.ThrowsAsync<IncrementalPreparationException>(
+                () => original.PrepareAsync(first, default))).Code);
+
+        var events = await original.EventsAsync(queued.Id, default);
+        Assert.Equal(["Queued", "Claimed", "LeaseReclaimed", "Claimed"],
+            events.Select(x => x.EventType).ToArray());
+        Assert.Equal([0, 1, 1, 2], events.Select(x => x.Attempt).ToArray());
+        Assert.True(events.Zip(events.Skip(1),
+            (x, y) => x.Id < y.Id &&
+                x.OccurredAtUtc <= y.OccurredAtUtc).All(x => x));
+        Assert.All(events, x => Assert.Null(x.ErrorCode));
+
+        await using var successorDb = fixture.NewContext();
+        var successorWorker = new PostgresIncrementalPreparationRepository(
+            successorDb, TimeProvider.System);
+        Assert.True(await successorWorker.PrepareAsync(successor, default));
+        Assert.Equal(IncrementalPreparationStates.Prepared,
+            (await successorWorker.GetAsync(queued.Id, default))!.State);
+        Assert.Equal(["Queued", "Claimed", "LeaseReclaimed",
+                "Claimed", "Prepared"],
+            (await successorWorker.EventsAsync(queued.Id, default))
+                .Select(x => x.EventType).ToArray());
+        Assert.Empty(await successorDb.IncrementalPreparationEvents
+            .AsNoTracking().Where(x => x.PreparationId == queued.Id &&
+                x.EventType == "RetryScheduled").ToArrayAsync());
+
+        // F-067 final attempt 2 begins at the immutable LeaseReclaimed
+        // marker; crashes no longer produce a false missing phase sample.
+        var phase = await new PostgresIncrementalPreparationPhaseHealthReader(
+            successorDb, new(true)).ReadAsync(source, default);
+        Assert.Equal(1, phase.PreparedLast24Hours);
+        Assert.Equal(1, phase.ValidPhaseSamples);
+        Assert.Equal(0, phase.MissingOrInvalidSamples);
+        Assert.Equal(1, phase.RetriedPreparedLast24Hours);
+        Assert.NotNull(phase.AverageQueueWaitSeconds);
+        Assert.NotNull(phase.AverageClaimToPreparedSeconds);
+    }
+
+    [Fact]
+    public async Task F069_exhausted_lease_is_terminal_once_under_concurrent_pollers()
+    {
+        await using var setup = fixture.NewContext();
+        var source = Guid.NewGuid();
+        var target = Guid.NewGuid();
+        await ConnectionsAsync(setup, source, target);
+        var scan = Snapshot(source, DateTimeOffset.UtcNow.AddMinutes(-3),
+            [new("repo-1", "refs/heads/main", "sha")]);
+        await StageAsync(setup, TimeProvider.System, scan);
+        var queue = new PostgresIncrementalPreparationRepository(
+            setup, TimeProvider.System);
+        var queued = await queue.EnqueueAsync(scan.Id, source, target,
+            Guid.NewGuid(), default);
+        var owner = await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source);
+        Assert.NotNull(owner);
+        // The fifth attempt has crashed; a sixth must never be issued.
+        await setup.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE incremental_preparations
+            SET attempts=5,
+                lease_until_utc=clock_timestamp()-interval '2 seconds'
+            WHERE id={queued.Id}
+            """);
+        var claimed = await Task.WhenAll(Enumerable.Range(0, 4)
+            .Select(async _ =>
+            {
+                await using var db = fixture.NewContext();
+                return await new PostgresIncrementalPreparationRepository(
+                    db, TimeProvider.System)
+                    .ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5),
+                        default, source);
+            }));
+        Assert.All(claimed, x => Assert.Null(x));
+        var final = await queue.GetAsync(queued.Id, default);
+        Assert.Equal(IncrementalPreparationStates.Failed, final!.State);
+        Assert.Equal(5, final.Attempts);
+        Assert.Equal("LeaseExpiredAfterMaxAttempts", final.LastErrorCode);
+        Assert.Null(final.LeaseUntilUtc);
+        var events = await queue.EventsAsync(queued.Id, default);
+        Assert.Equal(["Queued", "Claimed", "Failed"],
+            events.Select(x => x.EventType).ToArray());
+        Assert.Equal(5, events[^1].Attempt);
+        Assert.Equal("LeaseExpiredAfterMaxAttempts", events[^1].ErrorCode);
+        Assert.False(await queue.FailAsync(owner,
+            "PreparationDeadlineExceeded", false, default));
+        Assert.Equal("IncrementalLeaseLost",
+            (await Assert.ThrowsAsync<IncrementalPreparationException>(
+                () => queue.PrepareAsync(owner, default))).Code);
+        Assert.Null(await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source));
+        Assert.Equal(3, (await queue.EventsAsync(queued.Id, default)).Count);
+    }
+
+    [Fact]
+    public async Task F069_expired_terminal_sweep_is_bounded_to_64_rows_per_poll()
+    {
+        await using var db = fixture.NewContext();
+        var source = Guid.NewGuid();
+        var target = Guid.NewGuid();
+        await ConnectionsAsync(db, source, target);
+        var scan = Snapshot(source, DateTimeOffset.UtcNow.AddMinutes(-4),
+            [new("repo-1", "refs/heads/main", "sha")]);
+        await StageAsync(db, TimeProvider.System, scan);
+        var queue = new PostgresIncrementalPreparationRepository(
+            db, TimeProvider.System);
+        var ids = new List<Guid>();
+        for (var i = 0; i < 67; i++)
+        {
+            var run = await queue.EnqueueAsync(scan.Id, source,
+                i == 0 ? target : Guid.NewGuid(), Guid.NewGuid(), default);
+            ids.Add(run.Id);
+            // Directly seed a crashed fifth attempt for bounded janitor
+            // testing; no external provider or Git subprocess is invoked.
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE incremental_preparations
+                SET state='Running', attempts=5,
+                    lease_token={Guid.NewGuid()},
+                    lease_until_utc=clock_timestamp()-interval '1 minute'
+                WHERE id={run.Id}
+                """);
+        }
+        Assert.Null(await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source));
+        Assert.Equal(64, await db.IncrementalPreparations.AsNoTracking()
+            .CountAsync(x => ids.Contains(x.Id) &&
+                x.State == IncrementalPreparationStates.Failed));
+        Assert.Null(await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source));
+        Assert.Equal(67, await db.IncrementalPreparations.AsNoTracking()
+            .CountAsync(x => ids.Contains(x.Id) &&
+                x.State == IncrementalPreparationStates.Failed));
+        Assert.Equal(67, await db.IncrementalPreparationEvents.AsNoTracking()
+            .CountAsync(x => ids.Contains(x.PreparationId) &&
+                x.EventType == "Failed"));
+        // Idempotent repeat polling never duplicates the terminal audit.
+        Assert.Null(await queue.ClaimAsync(Guid.NewGuid(),
+            TimeSpan.FromMinutes(5), default, source));
+        Assert.Equal(67, await db.IncrementalPreparationEvents.AsNoTracking()
+            .CountAsync(x => ids.Contains(x.PreparationId) &&
+                x.EventType == "Failed"));
+    }
+
+    [Fact]
     public async Task F068_extreme_replica_clock_skew_does_not_change_queue_time_or_phase_events()
     {
         await using var db = fixture.NewContext();
