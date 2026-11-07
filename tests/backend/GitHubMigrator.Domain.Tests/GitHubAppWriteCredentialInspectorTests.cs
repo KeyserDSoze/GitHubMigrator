@@ -267,6 +267,90 @@ public sealed class GitHubAppWriteCredentialInspectorTests
         Assert.Equal(3, calls);
     }
 
+    [Theory]
+    [InlineData("installation-id")]
+    [InlineData("app-id")]
+    [InlineData("owner-login")]
+    [InlineData("owner-type")]
+    [InlineData("target-id")]
+    [InlineData("target-type")]
+    [InlineData("suspended")]
+    [InlineData("permissions")]
+    [InlineData("duplicate-login")]
+    [InlineData("duplicate-app-id")]
+    [InlineData("selection")]
+    [InlineData("malformed")]
+    [InlineData("not-found")]
+    public async Task Installation_mismatch_denies_even_a_restricted_token_mint(
+        string mutation)
+    {
+        using var rsa = RSA.Create(2048);
+        var json = InstallationReply();
+        json = mutation switch
+        {
+            "installation-id" => json.Replace(
+                "\"id\":77", "\"id\":78", StringComparison.Ordinal),
+            "app-id" => json.Replace(
+                "\"app_id\":1234", "\"app_id\":4321", StringComparison.Ordinal),
+            "owner-login" => json.Replace(
+                "\"login\":\"gh-org\"", "\"login\":\"different-org\"",
+                StringComparison.Ordinal),
+            "owner-type" => json.Replace(
+                "\"type\":\"Organization\"",
+                "\"type\":\"User\"", StringComparison.Ordinal),
+            "target-id" => json.Replace(
+                "\"target_id\":9876", "\"target_id\":9999",
+                StringComparison.Ordinal),
+            "target-type" => json.Replace(
+                "\"target_type\":\"Organization\"",
+                "\"target_type\":\"User\"", StringComparison.Ordinal),
+            "suspended" => json.Replace(
+                "\"suspended_at\":null",
+                "\"suspended_at\":\"2026-11-01T00:00:00Z\"",
+                StringComparison.Ordinal),
+            "permissions" => json.Replace(
+                "\"contents\":\"write\"",
+                "\"contents\":\"read\"", StringComparison.Ordinal),
+            "duplicate-login" => json.Replace(
+                "\"login\":\"gh-org\"",
+                "\"login\":\"attacker\",\"login\":\"gh-org\"",
+                StringComparison.Ordinal),
+            "duplicate-app-id" => json.Replace(
+                "\"app_id\":1234",
+                "\"app_id\":1111,\"app_id\":1234",
+                StringComparison.Ordinal),
+            "selection" => json.Replace(
+                "\"repository_selection\":\"selected\"",
+                "\"repository_selection\":\"invalid\"",
+                StringComparison.Ordinal),
+            "malformed" => "{not-json",
+            "not-found" => "{}",
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation))
+        };
+        var calls = 0;
+        using var client = new HttpClient(new Handler(req =>
+        {
+            calls++;
+            Assert.Equal(1, calls);
+            Assert.Equal(HttpMethod.Get, req.Method);
+            Assert.Equal("/app/installations/77", req.RequestUri!.AbsolutePath);
+            Assert.Equal("Bearer", req.Headers.Authorization?.Scheme);
+            Assert.NotEqual(AccessToken, req.Headers.Authorization?.Parameter);
+            return Json(mutation == "not-found" ? 404 : 200, json);
+        }));
+        var ex = await Assert.ThrowsAsync<GitHubAppWriteScopeException>(
+            () => new GitHubAppScopedWriteCredentialInspector(
+                client, TimeProvider.System).InspectAsync(
+                    1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
+                    Owner, RepoName, default));
+        Assert.Equal(mutation == "not-found"
+            ? "AppScopeInstallationNotVerified"
+            : "AppScopeInstallationMismatch", ex.Code);
+        Assert.Equal(1, calls);
+        Assert.DoesNotContain(AccessToken, ex.Message);
+        Assert.DoesNotContain("PRIVATE KEY", ex.Message);
+    }
+
     [Fact]
     public async Task Bogus_private_key_fails_without_http_or_secret_exposure()
     {
