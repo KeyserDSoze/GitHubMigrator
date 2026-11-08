@@ -217,8 +217,16 @@ public sealed class GitHubSandboxOneShotSender(
                     var tips = await readback.ReadAsync(
                         options.AllowedOrganization, options.AllowedRepository,
                         token, source.Candidates, tokenCt);
-                    if (tips is null || tips.Tips is null ||
-                        tips.Tips.State != GitHubRemoteTipIntegrity.VerifiedState)
+                    if (tips is null || tips.TipReadback is null)
+                        return new(marker.Id,
+                            "SandboxRemoteOutcomeRequiresReconciliation",
+                            attempted, true, false, false);
+                    var prior = second.Refs.Select(x =>
+                        new GitMirrorRef(x.Name, x.ObjectId)).ToArray();
+                    var proof = GitHubRemoteTipIntegrity.Inspect(
+                        prior, source.Candidates,
+                        tips.RemoteRefs, tips.TipReadback);
+                    if (proof.State != "ExactRemoteRefsAndTipObjectsObserved")
                         return new(marker.Id,
                             "SandboxRemoteOutcomeRequiresReconciliation",
                             attempted, true, false, false);
