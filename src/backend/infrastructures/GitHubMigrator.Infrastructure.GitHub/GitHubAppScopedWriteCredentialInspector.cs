@@ -182,7 +182,7 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         // A configured numeric installation ID alone cannot establish
         // ownership by the intended organization.
         await VerifyInstallationAsync(appId, installationId,
-            organization, appJwt, ct);
+            organization, appJwt, ct, readOnly);
 
         using var mint = new HttpRequestMessage(HttpMethod.Post,
             "https://api.github.com/app/installations/" +
@@ -297,7 +297,7 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
     // issuance with exact Contents:write and implicit Metadata:read.
     private async Task VerifyInstallationAsync(long appId,
         long installationId, string organization, string appJwt,
-        CancellationToken ct)
+        CancellationToken ct, bool readOnly)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get,
             "https://api.github.com/app/installations/" +
@@ -355,7 +355,8 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
             !node.TryGetProperty("permissions", out var permissions) ||
             permissions.ValueKind != JsonValueKind.Object ||
             !TryText(permissions, "contents", out var grantedContents) ||
-            grantedContents != "write")
+            (grantedContents != "write" &&
+                !(readOnly && grantedContents == "read")))
             throw new GitHubAppWriteScopeException(
                 "AppScopeInstallationMismatch");
     }
