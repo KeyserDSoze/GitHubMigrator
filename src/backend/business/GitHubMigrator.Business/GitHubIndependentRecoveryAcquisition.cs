@@ -165,7 +165,9 @@ public sealed class GitHubIndependentRecoveryAcquisition(
         try { GitHubRemoteTypedRecoveryBaselineIntegrity.Verify(snapshot); }
         catch (GitHubRemoteTypedRecoveryBaselineException)
         { throw Refused("IndependentRecoveryHistoryCorrupt"); }
-        if (snapshot.RepositoryId != options.AllowedRepositoryId ||
+        if (snapshot.PossibleSendRecordedAtUtc is null ||
+            snapshot.PossibleSendRecordedAtUtc <= snapshot.RecordedAtUtc ||
+            snapshot.RepositoryId != options.AllowedRepositoryId ||
             !string.Equals(options.AllowedRepository,
                 snapshot.Organization + "/" + snapshot.Repository,
                 StringComparison.OrdinalIgnoreCase) ||
