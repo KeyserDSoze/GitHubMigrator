@@ -14,6 +14,7 @@ public sealed class PostgresGitHubRemoteRecoveryWorkbenchReader(
     GitHubRemoteTransmitHazardOptions markerOptions,
     PostgresGitHubRemotePostSendRecoveryJournal recovery,
     PostgresGitHubRemoteTypedRecoveryBaselineJournal typed)
+    : IGitHubRemoteRecoveryHistoryReader
 {
     public async Task<GitHubRemoteRecoveryWorkbenchPage> ListAsync(
         Guid preparationId, Guid planId, Guid? after, int take,
