@@ -192,6 +192,8 @@ builder.Services.AddSingleton(new GitHubRemoteRecoveryWorkbenchOptions(
         "GitHubRemoteRecoveryWorkbench:AllowedRepositoryId", 0),
     builder.Configuration["GitHubRemoteRecoveryWorkbench:AllowedRepository"] ?? ""));
 builder.Services.AddScoped<PostgresGitHubRemoteRecoveryWorkbenchReader>();
+builder.Services.AddScoped<IGitHubRemoteRecoveryHistoryReader>(
+    sp => sp.GetRequiredService<PostgresGitHubRemoteRecoveryWorkbenchReader>());
 builder.Services.AddSingleton(new GitHubMultiRepositorySyncPulseOptions(
     builder.Configuration.GetValue("GitHubMultiRepositorySyncPulse:Enabled", false)));
 builder.Services.AddScoped<PostgresGitHubMultiRepositorySyncPulseReader>();
