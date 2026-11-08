@@ -165,7 +165,25 @@ public sealed class PostgresMigrationJobRepository(AppDbContext db, TimeProvider
                 x.Attempt, x.OccurredAtUtc, x.ErrorCode)).ToArray();
     }
 
-    public async Task<MigrationJobLease?> ClaimAsync(Guid leaseToken, TimeSpan leaseDuration, CancellationToken ct)
+    public Task<MigrationJobLease?> ClaimAsync(
+        Guid leaseToken, TimeSpan leaseDuration, CancellationToken ct) =>
+        ClaimCoreAsync(leaseToken, leaseDuration, null, ct);
+
+    // Used by source-bound callers that must not steal an unrelated job
+    // from another replica or integration fixture. The ordinary worker
+    // remains global and uses the same transactional claim algorithm.
+    public Task<MigrationJobLease?> ClaimForSourceAsync(
+        Guid sourceConnectionId, Guid leaseToken, TimeSpan leaseDuration,
+        CancellationToken ct)
+    {
+        if (sourceConnectionId == Guid.Empty)
+            throw new MigrationJobInputException("InvalidJobContext");
+        return ClaimCoreAsync(leaseToken, leaseDuration, sourceConnectionId, ct);
+    }
+
+    private async Task<MigrationJobLease?> ClaimCoreAsync(
+        Guid leaseToken, TimeSpan leaseDuration, Guid? sourceConnectionId,
+        CancellationToken ct)
     {
         if (leaseToken == Guid.Empty || leaseDuration <= TimeSpan.Zero ||
             leaseDuration > TimeSpan.FromMinutes(5))
@@ -184,6 +202,8 @@ public sealed class PostgresMigrationJobRepository(AppDbContext db, TimeProvider
                     last_error_code = 'LeaseExpiredAfterMaxAttempts'
                 WHERE state = 'Running' AND lease_until_utc <= {now}
                   AND attempts >= max_attempts
+                  AND ({sourceConnectionId}::uuid IS NULL OR
+                       source_connection_id = {sourceConnectionId})
                 RETURNING id, attempts
             )
             INSERT INTO migration_job_events (job_id, event_type, attempt, occurred_at_utc, error_code)
@@ -204,6 +224,8 @@ public sealed class PostgresMigrationJobRepository(AppDbContext db, TimeProvider
                     OR (state = 'Running' AND lease_until_utc <= {now})
                 )
                 AND attempts < max_attempts
+                AND ({sourceConnectionId}::uuid IS NULL OR
+                     source_connection_id = {sourceConnectionId})
                 ORDER BY available_at_utc, created_at_utc, id
                 FOR UPDATE SKIP LOCKED LIMIT 1
             )

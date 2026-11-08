@@ -27,6 +27,7 @@ public sealed class ApiHarness : IAsyncLifetime
     public const string AdminPassword = "Admin-Test#1234";
     public const string UserPassword = "User-Test#1234";
     public const string PendingPassword = "Pending-Test#1234";
+    public const string SuperadminPassword = "Superadmin-Test#1234";
     public const string SourceToken = "AZDO-INTEGRATION-PAT-DO-NOT-LEAK";
     public const string TargetToken = "GITHUB-INTEGRATION-PAT-DO-NOT-LEAK";
     public const string SourceValue = "SENSITIVE_SOURCE_VALUE_DO_NOT_LEAK";
@@ -35,6 +36,7 @@ public sealed class ApiHarness : IAsyncLifetime
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
     public string PendingName { get; } = "pending-" + Guid.NewGuid().ToString("N");
+    public string SuperadminName { get; } = "reviewer-" + Guid.NewGuid().ToString("N");
     public Guid SourceConnectionId { get; } = Guid.NewGuid();
     public Guid DestinationConnectionId { get; } = Guid.NewGuid();
     public ConcurrentQueue<(string Method, Uri Url, string? AuthScheme)> Calls { get; } = new();
@@ -88,6 +90,10 @@ public sealed class ApiHarness : IAsyncLifetime
                     .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubTargetRepositoryProbe>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
+                services.AddHttpClient<GitHubRefObservationReader>()
+                    .ConfigurePrimaryHttpMessageHandler(() => github);
+                services.AddHttpClient<GitHubImportRepositoryReader>()
+                    .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubDestinationAccessReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
             });
@@ -98,6 +104,7 @@ public sealed class ApiHarness : IAsyncLifetime
         await AddUserAsync(users, AdminName, AdminPassword, "admin", false);
         await AddUserAsync(users, UserName, UserPassword, "user", false);
         await AddUserAsync(users, PendingName, PendingPassword, "admin", true);
+        await AddUserAsync(users, SuperadminName, SuperadminPassword, "superadmin", false);
         var connections = scope.ServiceProvider.GetRequiredService<IConnectionRepository>();
         var secrets = scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>();
         var now = DateTimeOffset.UtcNow;
@@ -229,8 +236,18 @@ public sealed class ApiHarness : IAsyncLifetime
             return Json("""{"state":"active","role":"admin","user":{"login":"test"},"organization":{"login":"gh-org"}}""");
         if (path == "/orgs/gh-org")
             return Json("""{"login":"gh-org","members_can_create_private_repositories":true}""");
+        if (path == "/repos/gh-org/occupied/git/matching-refs/heads")
+            return Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/heads/main",
+                    @object = new { sha = Sha, type = "commit" } }
+            }));
+        if (path == "/repos/gh-org/occupied/git/matching-refs/tags")
+            return Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/tags/v1",
+                    @object = new { sha = Sha, type = "tag" } }
+            }));
         if (path == "/repos/gh-org/occupied")
-            return Json("""{"full_name":"gh-org/occupied"}""");
+            return Json("""{"full_name":"gh-org/occupied","owner":{"login":"gh-org"},"archived":false,"disabled":false,"permissions":{"push":true}}""");
         if (path == "/repos/gh-org/hidden")
             return new(HttpStatusCode.NotFound);
         if (path == "/repos/gh-org/denied")

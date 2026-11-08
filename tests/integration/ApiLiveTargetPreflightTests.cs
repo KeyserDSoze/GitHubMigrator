@@ -6,6 +6,8 @@ using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity;
+using Npgsql;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -43,9 +45,10 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
                             VersionControlKind.Git)])],
                     Identities = [], AccessGrants = []
                 },
-                Refs = [new RepositoryRef("repo-1", "refs/heads/main", "abc")],
-                Issues = [], Completeness = DiscoveryCompleteness.Partial,
-                IdentitiesComplete = false, PermissionsComplete = false
+                Refs = [new RepositoryRef("repo-1", "refs/heads/main", ApiHarness.Sha)],
+                Issues = [], Completeness = DiscoveryCompleteness.Complete,
+                IdentitiesComplete = true, PermissionsComplete = true,
+                SecurityCoverage = new DiscoveryCoverage(true, true, true, true)
             };
             await new PostgresDiscoveryRepository(db).SaveAsync(snapshot, default);
             var normalized = StagingAssetNormalizer.Normalize(snapshot);
@@ -151,6 +154,1505 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
         }
         Assert.Equal(callsBefore + 4, harness.Calls.Count);
 
+        // F-029: immutable blocked operation manifest is constructed entirely
+        // from the saved F-025–F-028 proofs. It never calls any provider.
+        var operationalPath = $"/api/incremental-preparations/{prepId}/operation-plans";
+        var sourceProof = root.GetProperty("evidenceSha256").GetString()!;
+        using var invalidPlan = await PostAsAsync(operationalPath,
+            new { expectedPreflightSha256 = new string('a', 64) }, admin);
+        Assert.Equal(HttpStatusCode.Conflict, invalidPlan.StatusCode);
+
+        using var planResponse = await PostAsAsync(operationalPath,
+            new { expectedPreflightSha256 = sourceProof }, admin);
+        Assert.Equal(HttpStatusCode.OK, planResponse.StatusCode);
+        using var planJson = JsonDocument.Parse(
+            await planResponse.Content.ReadAsStringAsync());
+        var manifest = planJson.RootElement;
+        var planId = manifest.GetProperty("id").GetGuid();
+        var planSha = manifest.GetProperty("manifestSha256").GetString()!;
+        Assert.Equal(64, planSha.Length);
+        Assert.Equal(2, manifest.GetProperty("repositoryCount").GetInt32());
+        Assert.Equal(12, manifest.GetProperty("stepCount").GetInt32());
+        Assert.Equal(1, manifest.GetProperty("changedRefCount").GetInt32());
+        Assert.True(manifest.GetProperty("isCurrent").GetBoolean());
+        Assert.False(manifest.GetProperty("readyForExecution").GetBoolean());
+        Assert.All(manifest.GetProperty("steps").EnumerateArray(),
+            s => Assert.Equal("Blocked", s.GetProperty("state").GetString()));
+
+        using var replayPlan = await PostAsAsync(operationalPath,
+            new { expectedPreflightSha256 = sourceProof }, admin);
+        Assert.Equal(HttpStatusCode.OK, replayPlan.StatusCode);
+        using var replayJson = JsonDocument.Parse(
+            await replayPlan.Content.ReadAsStringAsync());
+        Assert.Equal(planId, replayJson.RootElement.GetProperty("id").GetGuid());
+        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+
+        var authorizePath = $"{operationalPath}/{planId}/execution-authorization";
+        using var nonSuperadmin = await PostAsAsync(authorizePath,
+            new { expectedManifestSha256 = planSha,
+                acknowledgeBlockedOperations = true }, admin);
+        Assert.Equal(HttpStatusCode.Forbidden, nonSuperadmin.StatusCode);
+        using var notLogged = await harness.Client.PostAsJsonAsync(authorizePath,
+            new { expectedManifestSha256 = planSha,
+                acknowledgeBlockedOperations = true });
+        Assert.Equal(HttpStatusCode.Unauthorized, notLogged.StatusCode);
+
+        var superUserName = "f029-super-" + Guid.NewGuid().ToString("N");
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+            var userInfo = new ApplicationUser {
+                UserName = superUserName, MustChangePassword = false
+            };
+            Assert.True((await users.CreateAsync(userInfo, ApiHarness.AdminPassword)).Succeeded);
+            Assert.True((await users.AddToRoleAsync(userInfo, "superadmin")).Succeeded);
+        }
+        var superToken = await harness.LoginAsync(superUserName, ApiHarness.AdminPassword);
+        using var denied = await PostAsAsync(authorizePath,
+            new { expectedManifestSha256 = planSha,
+                acknowledgeBlockedOperations = true }, superToken);
+        Assert.Equal(HttpStatusCode.Conflict, denied.StatusCode);
+        using var deniedJson = JsonDocument.Parse(await denied.Content.ReadAsStringAsync());
+        Assert.Equal("Denied", deniedJson.RootElement.GetProperty("decision").GetString());
+        Assert.Equal("DestinationWritePermissionUnverified",
+            deniedJson.RootElement.GetProperty("reasonCode").GetString());
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/authorization-attempts"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", superToken);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var audit = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(audit.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+
+        // F-031: read-only GitHub Git refs are bound to this manifest and
+        // persisted immutably. Neither a user nor an invalid digest can GET
+        // the target provider or emit an observation.
+        var evidencePath = $"{operationalPath}/{planId}/target-ref-evidence";
+        var evidenceRequest = new {
+            expectedManifestSha256 = planSha, sourceRepositoryId = "repo-1"
+        };
+        using (var anonymousEvidence = await harness.Client.PostAsJsonAsync(
+            evidencePath, evidenceRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousEvidence.StatusCode);
+        using (var userEvidence = await PostAsAsync(
+            evidencePath, evidenceRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userEvidence.StatusCode);
+        using (var invalidDigest = await PostAsAsync(evidencePath,
+            new { expectedManifestSha256 = new string('a', 64),
+                sourceRepositoryId = "repo-1" }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, invalidDigest.StatusCode);
+        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+
+        Guid observationId;
+        string targetRefSha;
+        using (var collected = await PostAsAsync(evidencePath, evidenceRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.OK, collected.StatusCode);
+            var body = await collected.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            using var evidenceJson = JsonDocument.Parse(body);
+            Assert.Equal(2, evidenceJson.RootElement.GetProperty("refCount").GetInt32());
+            Assert.True(evidenceJson.RootElement.GetProperty("isCurrent").GetBoolean());
+            Assert.False(evidenceJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.Equal(64, evidenceJson.RootElement.GetProperty(
+                "evidenceSha256").GetString()!.Length);
+            observationId = evidenceJson.RootElement.GetProperty("id").GetGuid();
+            targetRefSha = evidenceJson.RootElement.GetProperty("evidenceSha256").GetString()!;
+        }
+        var providerCalls = harness.Calls.ToArray().Skip(callsBefore + 4).ToArray();
+        Assert.Equal(2, providerCalls.Length);
+        Assert.Equal(new[] {
+            "/repos/gh-org/occupied/git/matching-refs/heads",
+            "/repos/gh-org/occupied/git/matching-refs/tags"
+        }, providerCalls.Select(x => x.Url.AbsolutePath).ToArray());
+        Assert.All(providerCalls, call => {
+            Assert.Equal("GET", call.Method);
+            Assert.Equal("api.github.com", call.Url.Host);
+        });
+
+        using (var get = new HttpRequestMessage(HttpMethod.Get, evidencePath))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var saved = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(saved.RootElement.EnumerateArray());
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            evidencePath + "/" + observationId + "?take=1"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var saved = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(saved.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal("refs/heads/main",
+                saved.RootElement.GetProperty("items")[0].GetProperty("name").GetString());
+            Assert.Equal("refs/heads/main",
+                saved.RootElement.GetProperty("nextAfter").GetString());
+            Assert.False(saved.RootElement.GetProperty("evidence")
+                .GetProperty("readyForExecution").GetBoolean());
+        }
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.GitHubTargetRefEvidence.AsNoTracking()
+                .CountAsync(x => x.PlanId == planId));
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-032 combines the historical, *complete* source snapshot with
+        // persisted F-031 target evidence. The endpoint issues no GitHub
+        // or Azure DevOps requests, stores no provider credentials and does
+        // not turn ref equality into execution permission.
+        var diffPath = $"{operationalPath}/{planId}/ref-reconciliations";
+        var diffRequest = new {
+            expectedManifestSha256 = planSha,
+            sourceRepositoryId = "repo-1",
+            targetObservationId = observationId,
+            expectedTargetEvidenceSha256 = targetRefSha
+        };
+        using (var noAuth = await harness.Client.PostAsJsonAsync(diffPath, diffRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, noAuth.StatusCode);
+        using (var lowRole = await PostAsAsync(diffPath, diffRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, lowRole.StatusCode);
+        using (var wrongDigest = await PostAsAsync(diffPath, new {
+            expectedManifestSha256 = planSha,
+            sourceRepositoryId = "repo-1",
+            targetObservationId = observationId,
+            expectedTargetEvidenceSha256 = new string('f', 64)
+        }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, wrongDigest.StatusCode);
+        using (var wrongMapping = await PostAsAsync(diffPath, new {
+            expectedManifestSha256 = planSha,
+            sourceRepositoryId = "does-not-exist",
+            targetObservationId = observationId,
+            expectedTargetEvidenceSha256 = targetRefSha
+        }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, wrongMapping.StatusCode);
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        Guid diffId;
+        string reconciliationSha;
+        using (var compared = await PostAsAsync(diffPath, diffRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.OK, compared.StatusCode);
+            var body = await compared.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            using var comparedJson = JsonDocument.Parse(body);
+            var result = comparedJson.RootElement;
+            diffId = result.GetProperty("id").GetGuid();
+            reconciliationSha = result.GetProperty("reconciliationSha256").GetString()!;
+            Assert.Equal(64, reconciliationSha.Length);
+            Assert.Equal(1, result.GetProperty("sourceRefCount").GetInt32());
+            Assert.Equal(2, result.GetProperty("targetRefCount").GetInt32());
+            Assert.Equal(1, result.GetProperty("matchingCount").GetInt32());
+            Assert.Equal(0, result.GetProperty("createCandidateCount").GetInt32());
+            Assert.Equal(0, result.GetProperty("divergedCount").GetInt32());
+            Assert.Equal(1, result.GetProperty("targetOnlyCount").GetInt32());
+            Assert.True(result.GetProperty("isCurrent").GetBoolean());
+            Assert.False(result.GetProperty("readyForExecution").GetBoolean());
+            Assert.Equal(JsonValueKind.Null,
+                result.GetProperty("sourceManifestRootSha256").ValueKind);
+        }
+
+        using (var replay = await PostAsAsync(diffPath, diffRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+            using var body = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+            Assert.Equal(diffId, body.RootElement.GetProperty("id").GetGuid());
+            Assert.Equal(reconciliationSha,
+                body.RootElement.GetProperty("reconciliationSha256").GetString());
+        }
+        // Separate dependency-injection scopes simulate independent API
+        // replicas replaying the same current digest under the DB lock.
+        await using (var replicaOne = harness.Host.Services.CreateAsyncScope())
+        await using (var replicaTwo = harness.Host.Services.CreateAsyncScope())
+        {
+            var one = replicaOne.ServiceProvider.GetRequiredService<
+                IncrementalGitRefReconciliationService>();
+            var two = replicaTwo.ServiceProvider.GetRequiredService<
+                IncrementalGitRefReconciliationService>();
+            var results = await Task.WhenAll(
+                one.CreateAsync(prepId, planId, "repo-1", observationId,
+                    planSha, targetRefSha, Guid.NewGuid(), default),
+                two.CreateAsync(prepId, planId, "repo-1", observationId,
+                    planSha, targetRefSha, Guid.NewGuid(), default));
+            Assert.Equal(diffId, results[0].Id);
+            Assert.Equal(diffId, results[1].Id);
+            Assert.Equal(reconciliationSha, results[0].ReconciliationSha256);
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get, diffPath))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Single(body.RootElement.EnumerateArray());
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            diffPath + "/" + diffId + "?take=1"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Single(body.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal("refs/heads/main",
+                body.RootElement.GetProperty("items")[0].GetProperty("name").GetString());
+            Assert.Equal("refs/heads/main",
+                body.RootElement.GetProperty("nextAfter").GetString());
+            Assert.Equal((int)GitMirrorRefDisposition.MatchingObjectId,
+                body.RootElement.GetProperty("items")[0]
+                    .GetProperty("disposition").GetInt32());
+            Assert.False(body.RootElement.GetProperty("reconciliation")
+                .GetProperty("readyForExecution").GetBoolean());
+        }
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.IncrementalGitRefReconciliations.AsNoTracking()
+                .CountAsync(x => x.PlanId == planId));
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-034: durable read-only transfer preparation is bound to this
+        // exact current F-032 digest. It cannot create an executable task.
+        var workPath = $"{diffPath}/{diffId}/transfer-workpacks";
+        var workRequest = new {
+            expectedManifestSha256 = planSha,
+            expectedReconciliationSha256 = reconciliationSha
+        };
+        using (var unauth = await harness.Client.PostAsJsonAsync(workPath, workRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, unauth.StatusCode);
+        using (var noAdmin = await PostAsAsync(workPath, workRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, noAdmin.StatusCode);
+        using (var forged = await PostAsAsync(workPath, new {
+            expectedManifestSha256 = planSha,
+            expectedReconciliationSha256 = new string('e', 64)
+        }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, forged.StatusCode);
+
+        Guid workId;
+        using (var accepted = await PostAsAsync(workPath, workRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+            var body = await accepted.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            using var workJson = JsonDocument.Parse(body);
+            workId = workJson.RootElement.GetProperty("id").GetGuid();
+            Assert.Equal("Queued", workJson.RootElement.GetProperty("state").GetString());
+            Assert.Equal("EvidencePending", workJson.RootElement.GetProperty("phase").GetString());
+            Assert.False(workJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+        await using (var firstReplica = harness.Host.Services.CreateAsyncScope())
+        await using (var secondReplica = harness.Host.Services.CreateAsyncScope())
+        {
+            var a = firstReplica.ServiceProvider.GetRequiredService<GitTransferWorkpackService>();
+            var b = secondReplica.ServiceProvider.GetRequiredService<GitTransferWorkpackService>();
+            var replay = await Task.WhenAll(
+                a.EnqueueAsync(prepId, planId, diffId,
+                    planSha, reconciliationSha, Guid.NewGuid(), default),
+                b.EnqueueAsync(prepId, planId, diffId,
+                    planSha, reconciliationSha, Guid.NewGuid(), default));
+            Assert.All(replay, x => Assert.Equal(workId, x.Id));
+        }
+        await using (var firstReplica = harness.Host.Services.CreateAsyncScope())
+        await using (var secondReplica = harness.Host.Services.CreateAsyncScope())
+        {
+            var jobs1 = firstReplica.ServiceProvider.GetRequiredService<IGitTransferWorkpackRepository>();
+            var jobs2 = secondReplica.ServiceProvider.GetRequiredService<IGitTransferWorkpackRepository>();
+            var claims = await Task.WhenAll(
+                jobs1.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(2), default),
+                jobs2.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(2), default));
+            var firstLease = Assert.Single(claims, x => x is not null)!;
+            Assert.Equal(workId, firstLease.Id);
+            Assert.Equal(1, firstLease.Attempt);
+            Assert.Equal("EvidencePending", firstLease.Phase);
+            Assert.True(await jobs1.CheckpointEvidenceAsync(firstLease, default));
+            Assert.False(await jobs1.CheckpointEvidenceAsync(firstLease, default));
+
+            // Simulate a process crash after the persisted EvidenceChecked
+            // checkpoint. Reclaim must resume without repeating that phase.
+            var db = firstReplica.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.GitTransferWorkpacks.Where(x => x.Id == workId)
+                .ExecuteUpdateAsync(updates => updates.SetProperty(
+                    x => x.LeaseUntilUtc, DateTimeOffset.UtcNow.AddMinutes(-1)));
+            var secondLease = await jobs2.ClaimAsync(
+                Guid.NewGuid(), TimeSpan.FromMinutes(2), default);
+            Assert.NotNull(secondLease);
+            Assert.Equal(workId, secondLease!.Id);
+            Assert.Equal(2, secondLease.Attempt);
+            Assert.Equal("EvidenceChecked", secondLease.Phase);
+
+            // Original worker is irreversibly fenced, even if it wakes up
+            // just before the new worker commits the next checkpoint.
+            Assert.False(await jobs1.BlockAtWriteBarrierAsync(firstLease, default));
+            Assert.True(await jobs2.BlockAtWriteBarrierAsync(secondLease, default));
+            Assert.False(await jobs1.FailAsync(
+                firstLease, "StaleWorkerAttempt", false, default));
+            Assert.False(await jobs2.BlockAtWriteBarrierAsync(secondLease, default));
+            Assert.Null(await jobs1.ClaimAsync(
+                Guid.NewGuid(), TimeSpan.FromMinutes(2), default));
+        }
+        using (var read = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}"))
+        {
+            read.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(read);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var workJson = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.Equal("Blocked", workJson.RootElement.GetProperty("state").GetString());
+            Assert.Equal("WriteBlocked", workJson.RootElement.GetProperty("phase").GetString());
+            Assert.Equal("DestinationWritesNotAuthorized",
+                workJson.RootElement.GetProperty("lastErrorCode").GetString());
+            Assert.False(workJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+        }
+        using (var read = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}/events"))
+        {
+            read.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(read);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var workJson = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.Equal(new[] { "Queued", "Claimed", "EvidenceChecked",
+                "Claimed", "WriteBlocked" }, workJson.RootElement.EnumerateArray()
+                .Select(x => x.GetProperty("type").GetString()).ToArray());
+        }
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.GitTransferWorkpacks.AsNoTracking()
+                .CountAsync(x => x.ReconciliationId == diffId));
+            Assert.False((await db.GitTransferWorkpacks.AsNoTracking()
+                .SingleAsync(x => x.Id == workId)).ReadyForExecution);
+            // SQL itself, not only the .NET DTO, forbids both an executable
+            // workpack and a fabricated success state.
+            var writable = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE git_transfer_workpacks SET ready_for_execution = {true}
+                    WHERE id = {workId}
+                    """));
+            Assert.Equal("23514", writable.SqlState);
+            var fabricated = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE git_transfer_workpacks SET state = {"Succeeded"}
+                    WHERE id = {workId}
+                    """));
+            Assert.Equal("23514", fabricated.SqlState);
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-036 remote source acquisition is deliberately disabled by
+        // default. HTTP accepts neither an Azure URI nor a PAT, and it
+        // cannot bypass the sealed F-029/F-032/F-034 source proofs.
+        var azureFetchPath =
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}/source-bundle/fetch-azure";
+        using (var anonymousFetch = await harness.Client.PostAsJsonAsync(
+            azureFetchPath, new { expectedReconciliationSha256 = reconciliationSha }))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousFetch.StatusCode);
+        using (var normalUserFetch = await PostAsAsync(azureFetchPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, user))
+            Assert.Equal(HttpStatusCode.Forbidden, normalUserFetch.StatusCode);
+        using (var forgedFetch = await PostAsAsync(azureFetchPath,
+            new { expectedReconciliationSha256 = new string('f', 64) }, admin))
+            Assert.Equal(HttpStatusCode.Conflict, forgedFetch.StatusCode);
+        using (var disabledFetch = await PostAsAsync(azureFetchPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, disabledFetch.StatusCode);
+            var body = await disabledFetch.Content.ReadAsStringAsync();
+            Assert.Contains("AzureGitSourceRootNotConfigured", body);
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-035 local-only export API never accepts a path, remote URL or
+        // source credential. With no trusted roots configured it fails closed.
+        var bundlePath = $"{operationalPath}/{planId}/transfer-workpacks/{workId}/source-bundle";
+        using (var deniedBundle = await harness.Client.PostAsJsonAsync(bundlePath, new {
+            expectedReconciliationSha256 = reconciliationSha
+        }))
+            Assert.Equal(HttpStatusCode.Unauthorized, deniedBundle.StatusCode);
+        using (var deniedUser = await PostAsAsync(bundlePath, new {
+            expectedReconciliationSha256 = reconciliationSha
+        }, user))
+            Assert.Equal(HttpStatusCode.Forbidden, deniedUser.StatusCode);
+        using (var noLocalRoots = await PostAsAsync(bundlePath, new {
+            expectedReconciliationSha256 = reconciliationSha
+        }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, noLocalRoots.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await noLocalRoots.Content.ReadAsStringAsync());
+        }
+
+        // Verify the immutable PostgreSQL write boundary independently of
+        // local-file generation (the real Git CLI runs in its own tests).
+        // The internal store is given the exact source snapshot proof, not
+        // arbitrary ref names from the HTTP caller.
+        string sourceDigest;
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var compare = await db.IncrementalGitRefReconciliations
+                .AsNoTracking().SingleAsync(x => x.Id == diffId);
+            sourceDigest = compare.SourceEvidenceSha256;
+            var evidenceStore = scope.ServiceProvider
+                .GetRequiredService<IGitSourceBundleEvidenceStore>();
+            var artifact = new GitSourceBundleArtifact(
+                workId, sourceDigest, workId.ToString("N") + ".bundle",
+                new string('d', 64), 1024, 1, DateTimeOffset.UtcNow);
+            var saved = await evidenceStore.SaveAsync(prepId, planId,
+                workId, reconciliationSha, artifact, default);
+            Assert.True(saved.IsCurrent);
+            Assert.False(saved.ReadyForExecution);
+            Assert.Equal(sourceDigest, saved.SourceEvidenceSha256);
+            var replay = await evidenceStore.SaveAsync(prepId, planId,
+                workId, reconciliationSha, artifact, default);
+            Assert.Equal(saved.BundleSha256, replay.BundleSha256);
+            Assert.Equal(1, await db.GitSourceBundleEvidence.AsNoTracking()
+                .CountAsync(x => x.WorkpackId == workId));
+            var invalid = artifact with { BundleSha256 = new string('e', 64) };
+            var mismatch = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                evidenceStore.SaveAsync(prepId, planId, workId,
+                    reconciliationSha, invalid, default));
+            Assert.Equal("BundleProofMismatch", mismatch.Code);
+            var unsafeFlag = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE git_source_bundle_evidence
+                    SET ready_for_execution = {true}
+                    WHERE workpack_id = {workId}
+                    """));
+            Assert.Equal("23514", unsafeFlag.SqlState);
+            var unsafeName = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE git_source_bundle_evidence
+                    SET bundle_file_name = {"../../etc/passwd"}
+                    WHERE workpack_id = {workId}
+                    """));
+            Assert.Equal("23514", unsafeName.SqlState);
+        }
+        // F-038: a synthetic PostgreSQL proof without a corresponding real
+        // local bundle can never be replayed as successfully verified.
+        using (var recovered = await PostAsAsync(azureFetchPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, recovered.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await recovered.Content.ReadAsStringAsync());
+        }
+        using (var storage = new HttpRequestMessage(HttpMethod.Get,
+            bundlePath + "/storage-integrity"))
+        {
+            storage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var result = await harness.Client.SendAsync(storage);
+            Assert.Equal(HttpStatusCode.Conflict, result.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await result.Content.ReadAsStringAsync());
+        }
+        using (var anonymousStorage = await harness.Client.GetAsync(
+            bundlePath + "/storage-integrity"))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousStorage.StatusCode);
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+        using (var audit = new HttpRequestMessage(HttpMethod.Get, bundlePath))
+        {
+            audit.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(audit);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.False(body.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.Equal(new string('d', 64),
+                body.RootElement.GetProperty("bundleSha256").GetString());
+            Assert.DoesNotContain(ApiHarness.SourceToken,
+                body.RootElement.ToString());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-039: the HTTP endpoint MUST NOT treat a synthetic DB SHA as a
+        // real source bundle. A forged digest cannot even reach GitHub GETs.
+        var importPath =
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}/import-readiness";
+        var importRequest = new {
+            expectedReconciliationSha256 = reconciliationSha,
+            expectedBundleSha256 = new string('d', 64)
+        };
+        using (var anonymousImport = await harness.Client.PostAsJsonAsync(
+            importPath, importRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousImport.StatusCode);
+        using (var userImport = await PostAsAsync(importPath, importRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userImport.StatusCode);
+        using (var forgedImport = await PostAsAsync(importPath, new {
+            expectedReconciliationSha256 = reconciliationSha,
+            expectedBundleSha256 = new string('f', 64)
+        }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, forgedImport.StatusCode);
+            Assert.Contains("ImportReadinessBundleMismatch",
+                await forgedImport.Content.ReadAsStringAsync());
+        }
+        using (var noStoredBundle = await PostAsAsync(
+            importPath, importRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, noStoredBundle.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await noStoredBundle.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // Test the real PostgreSQL immutability, advisory lock and F-032
+        // reconciliation binding with an explicit test-only disk verifier.
+        // Physical SHA-256 validation is separately exercised by F-038's
+        // real Git bundle tests; production always uses the real verifier.
+        Guid importId;
+        await using (var scopeOne = harness.Host.Services.CreateAsyncScope())
+        await using (var scopeTwo = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scopeOne.ServiceProvider.GetRequiredService<AppDbContext>();
+            var dest = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == target);
+            var input = new GitHubImportReadinessInput(
+                prepId, planId, workId, diffId, "repo-1", "occupied",
+                "gh-org", target, dest.ValidatedAtUtc, planSha,
+                reconciliationSha, targetRefSha, new string('d', 64),
+                0, 1,
+                new GitHubImportRepositoryObservation(
+                    "Visible", "ReportedAllowed", false, false,
+                    DateTimeOffset.UtcNow), Guid.NewGuid());
+
+            static PostgresGitHubImportReadinessStore Repository(IServiceProvider provider) =>
+                new(
+                    provider.GetRequiredService<AppDbContext>(),
+                    TimeProvider.System,
+                    provider.GetRequiredService<IGitTransferWorkpackRepository>(),
+                    provider.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                    new F039TestOnlyDiskVerifier(),
+                    provider.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                    provider.GetRequiredService<IIncrementalOperationPlanRepository>());
+
+            var one = Repository(scopeOne.ServiceProvider);
+            var two = Repository(scopeTwo.ServiceProvider);
+            var saved = await Task.WhenAll(
+                one.SaveAsync(input, default), two.SaveAsync(input, default));
+            importId = saved[0].Id;
+            Assert.Equal(importId, saved[1].Id);
+            Assert.False(saved[0].WriteCapabilityVerified);
+            Assert.False(saved[0].ReadyForExecution);
+            Assert.True(saved[0].IsCurrent);
+            Assert.Equal("ReportedAllowed", saved[0].ReportedPush);
+            Assert.Contains("ContentsWriteScopeNotVerified", saved[0].Blockers);
+            Assert.Contains("BranchRulesNotVerified", saved[0].Blockers);
+            Assert.Contains("TargetOnlyRefsPreserved", saved[0].Blockers);
+            Assert.Contains("WriteAuthorizationNotGranted", saved[0].Blockers);
+            Assert.Equal(1, await db.GitHubImportReadiness.AsNoTracking()
+                .CountAsync(x => x.WorkpackId == workId));
+            var tampered = input with { SourceBundleSha256 = new string('e',64) };
+            var ex = await Assert.ThrowsAsync<GitHubImportReadinessException>(() =>
+                one.SaveAsync(tampered, default));
+            Assert.Equal("ImportReadinessContextChanged", ex.Code);
+
+            var noWrite = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE github_import_readiness SET ready_for_execution = {true}
+                    WHERE id = {importId}
+                    """));
+            Assert.Equal("23514", noWrite.SqlState);
+            var fakeCapability = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE github_import_readiness
+                    SET write_capability_verified = {true}
+                    WHERE id = {importId}
+                    """));
+            Assert.Equal("23514", fakeCapability.SqlState);
+        }
+        using (var getImport = new HttpRequestMessage(
+            HttpMethod.Get, $"{operationalPath}/{planId}/import-readiness/{importId}"))
+        {
+            getImport.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(getImport);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var importBody = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.SourceToken, importBody);
+            Assert.DoesNotContain(ApiHarness.TargetToken, importBody);
+            using var importJson = JsonDocument.Parse(importBody);
+            Assert.Equal(importId, importJson.RootElement.GetProperty("id").GetGuid());
+            Assert.False(importJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.False(importJson.RootElement.GetProperty("writeCapabilityVerified").GetBoolean());
+        }
+        using (var listImport = new HttpRequestMessage(HttpMethod.Get, importPath))
+        {
+            listImport.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(listImport);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var importJson = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(importJson.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-037: the new HTTP entrypoint only queues authenticated source
+        // reads. Its default off state must prevent all Git subprocesses.
+        var acquisitionPath =
+            $"{operationalPath}/{planId}/transfer-workpacks/{workId}/source-acquisitions";
+        using (var unauthQueue = await harness.Client.PostAsJsonAsync(
+            acquisitionPath, new { expectedReconciliationSha256 = reconciliationSha }))
+            Assert.Equal(HttpStatusCode.Unauthorized, unauthQueue.StatusCode);
+        using (var userQueue = await PostAsAsync(acquisitionPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userQueue.StatusCode);
+        using (var disabledQueue = await PostAsAsync(acquisitionPath,
+            new { expectedReconciliationSha256 = reconciliationSha }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, disabledQueue.StatusCode);
+            Assert.Contains("AzureGitQueueDisabled",
+                await disabledQueue.Content.ReadAsStringAsync());
+        }
+
+        // Direct PostgreSQL tests exercise the same validated store as the
+        // production admin endpoint. No Azure PAT or GitHub write is needed.
+        Guid sourceJobId;
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            var a = one.ServiceProvider.GetRequiredService<IAzureGitFetchJobRepository>();
+            var b = two.ServiceProvider.GetRequiredService<IAzureGitFetchJobRepository>();
+            var jobs = await Task.WhenAll(
+                a.EnqueueAsync(prepId, planId, workId, reconciliationSha,
+                    Guid.NewGuid(), default),
+                b.EnqueueAsync(prepId, planId, workId, reconciliationSha,
+                    Guid.NewGuid(), default));
+            Assert.Equal(jobs[0].Id, jobs[1].Id);
+            sourceJobId = jobs[0].Id;
+            Assert.Equal("Queued", jobs[0].State);
+            Assert.False(jobs[0].ReadyForExecution);
+            var wrong = await Assert.ThrowsAsync<AzureGitFetchJobException>(() =>
+                a.EnqueueAsync(prepId, planId, workId,
+                    new string('f', 64), Guid.NewGuid(), default));
+            Assert.Equal("AzureGitFetchProofNotCurrent", wrong.Code);
+
+            var leases = await Task.WhenAll(
+                a.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default),
+                b.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default));
+            var first = Assert.Single(leases, x => x is not null)!;
+            Assert.Equal(1, first.Attempt);
+            Assert.Equal("Pending", first.Phase);
+            Assert.True(await a.MirrorVerifiedAsync(first, default));
+            Assert.False(await a.MirrorVerifiedAsync(first, default));
+
+            // Crash after PostgreSQL's MirrorVerified event. Another worker
+            // resumes at the *bundle* phase, never re-fetching Azure data.
+            var db = one.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.AzureGitFetchJobs.Where(x => x.Id == sourceJobId)
+                .ExecuteUpdateAsync(update => update.SetProperty(
+                    x => x.LeaseUntilUtc, DateTimeOffset.UtcNow.AddMinutes(-1)));
+            var recoveredLease = await b.ClaimAsync(
+                Guid.NewGuid(), TimeSpan.FromMinutes(5), default);
+            Assert.NotNull(recoveredLease);
+            Assert.Equal(2, recoveredLease!.Attempt);
+            Assert.Equal("MirrorVerified", recoveredLease.Phase);
+            Assert.False(await a.BundleVerifiedAsync(
+                first, new string('d', 64), default));
+            Assert.True(await b.BundleVerifiedAsync(
+                recoveredLease, new string('d', 64), default));
+            Assert.False(await a.FailAsync(
+                first, "AzureGitFetchOrFsckFailed", false, default));
+            Assert.False(await b.BundleVerifiedAsync(
+                recoveredLease, new string('d', 64), default));
+            Assert.Null(await a.ClaimAsync(
+                Guid.NewGuid(), TimeSpan.FromMinutes(5), default));
+        }
+        using (var query = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/source-acquisitions/{sourceJobId}"))
+        {
+            query.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(query);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var fetchJobJson = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Equal("Completed", fetchJobJson.RootElement.GetProperty("state").GetString());
+            Assert.Equal("BundleVerified", fetchJobJson.RootElement.GetProperty("phase").GetString());
+            Assert.False(fetchJobJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.DoesNotContain(ApiHarness.SourceToken,
+                fetchJobJson.RootElement.ToString());
+        }
+        using (var eventsRead = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/source-acquisitions/{sourceJobId}/events"))
+        {
+            eventsRead.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(eventsRead);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var fetchJobJson = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Equal(new[] {
+                "Queued", "Claimed", "MirrorVerified", "Claimed", "BundleVerified"
+            }, fetchJobJson.RootElement.EnumerateArray()
+                .Select(x => x.GetProperty("type").GetString()).ToArray());
+        }
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.AzureGitFetchJobs.AsNoTracking()
+                .CountAsync(x => x.WorkpackId == workId));
+            Assert.Equal(5, await db.AzureGitFetchJobEvents.AsNoTracking()
+                .CountAsync(x => x.JobId == sourceJobId));
+            var deniedWrite = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE azure_git_fetch_jobs SET ready_for_execution = {true}
+                    WHERE id = {sourceJobId}
+                    """));
+            Assert.Equal("23514", deniedWrite.SqlState);
+            var fakeSourceSuccess = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE azure_git_fetch_jobs SET bundle_sha256 = {new string('e', 64)},
+                        phase = {"Pending"}, state = {"Completed"}
+                    WHERE id = {sourceJobId}
+                    """));
+            Assert.Equal("23514", fakeSourceSuccess.SqlState);
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-040 positive end-to-end PostgreSQL lineage. Capture a new
+        // *complete empty* GitHub target-ref observation; the proven source
+        // main ref is now a non-destructive CREATE candidate. No HTTP writer.
+        Guid safeIntentId;
+        Guid safeWorkpackId;
+        Guid safeReadinessId;
+        string safeReadinessSha;
+        Guid requester = Guid.NewGuid();
+        await using (var fixture = harness.Host.Services.CreateAsyncScope())
+        {
+            var provider = fixture.ServiceProvider;
+            var db = provider.GetRequiredService<AppDbContext>();
+            var plan = await provider.GetRequiredService<IIncrementalOperationPlanRepository>()
+                .GetAsync(prepId, planId, default);
+            Assert.NotNull(plan);
+            var dest = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == target);
+            var targetEmpty = GitHubRefObservationIntegrity.Seal(
+                "gh-org", "occupied", DateTimeOffset.UtcNow, []);
+            var targetView = await provider.GetRequiredService<IGitHubTargetRefEvidenceStore>()
+                .SaveAsync(plan!, "repo-1", Guid.NewGuid(),
+                    dest.ValidatedAtUtc, targetEmpty, default);
+            Assert.True(targetView.IsCurrent);
+            Assert.Equal(0, targetView.RefCount);
+            var reconciled = await provider
+                .GetRequiredService<IIncrementalGitRefReconciliationStore>()
+                .CreateAsync(prepId, planId, "repo-1", targetView.Id,
+                    planSha, targetView.EvidenceSha256, Guid.NewGuid(), default);
+            Assert.Equal(1, reconciled.CreateCandidateCount);
+            Assert.Equal(0, reconciled.DivergedCount);
+            var work = await provider.GetRequiredService<IGitTransferWorkpackRepository>()
+                .EnqueueAsync(prepId, planId, reconciled.Id, planSha,
+                    reconciled.ReconciliationSha256, Guid.NewGuid(), default);
+            safeWorkpackId = work.Id;
+            var leases = provider.GetRequiredService<IGitTransferWorkpackRepository>();
+            var lease = await leases.ClaimAsync(Guid.NewGuid(),
+                TimeSpan.FromMinutes(2), default);
+            Assert.NotNull(lease);
+            Assert.Equal(work.Id, lease!.Id);
+            Assert.True(await leases.CheckpointEvidenceAsync(lease, default));
+            Assert.True(await leases.BlockAtWriteBarrierAsync(lease, default));
+
+            var storedBundle = await provider.GetRequiredService<IGitSourceBundleEvidenceStore>()
+                .SaveAsync(prepId, planId, work.Id, reconciled.ReconciliationSha256,
+                    new GitSourceBundleArtifact(work.Id,
+                        reconciled.SourceEvidenceSha256,
+                        work.Id.ToString("N") + ".bundle", new string('e',64),
+                        1024, 1, DateTimeOffset.UtcNow), default);
+            Assert.True(storedBundle.IsCurrent);
+
+            var readinessStore = new PostgresGitHubImportReadinessStore(
+                db, TimeProvider.System,
+                provider.GetRequiredService<IGitTransferWorkpackRepository>(),
+                provider.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                new F039TestOnlyDiskVerifier(),
+                provider.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                provider.GetRequiredService<IIncrementalOperationPlanRepository>());
+            var readinessInput = new GitHubImportReadinessInput(
+                prepId, planId, work.Id, reconciled.Id,
+                "repo-1", "occupied", "gh-org", target,
+                dest.ValidatedAtUtc, planSha, reconciled.ReconciliationSha256,
+                targetView.EvidenceSha256, storedBundle.BundleSha256,
+                0, 0, new GitHubImportRepositoryObservation(
+                    "Visible", "ReportedAllowed", false, false,
+                    DateTimeOffset.UtcNow), Guid.NewGuid());
+            var recorded = await readinessStore.SaveAsync(readinessInput, default);
+            Assert.True(recorded.IsCurrent);
+            safeReadinessId = recorded.Id;
+            safeReadinessSha = recorded.EvidenceSha256;
+        }
+
+        // The production API refuses a synthetic DB-only bundle before
+        // opening an external GitHub connection. The separate PG contract
+        // below tests only transactions, actor fencing and DB constraints.
+        var intentPostPath = $"{operationalPath}/{planId}/transfer-workpacks/{safeWorkpackId}/import-readiness/{safeReadinessId}/intents";
+        using (var noAuthIntent = await harness.Client.PostAsJsonAsync(intentPostPath,
+            new { expectedReadinessSha256 = safeReadinessSha }))
+            Assert.Equal(HttpStatusCode.Unauthorized, noAuthIntent.StatusCode);
+        using (var userIntent = await PostAsAsync(intentPostPath,
+            new { expectedReadinessSha256 = safeReadinessSha }, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userIntent.StatusCode);
+        using (var syntheticBundleDenied = await PostAsAsync(intentPostPath,
+            new { expectedReadinessSha256 = safeReadinessSha }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, syntheticBundleDenied.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await syntheticBundleDenied.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        var policySnapshot = new GitHubImportPolicyObservation(
+            "Observed", 1, 1, "ProtectionVisible", DateTimeOffset.UtcNow);
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            var first = one.ServiceProvider;
+            var second = two.ServiceProvider;
+            static PostgresGitHubImportIntentStore MakeRepo(IServiceProvider provider) =>
+                new(
+                    provider.GetRequiredService<AppDbContext>(),
+                    TimeProvider.System,
+                    provider.GetRequiredService<IGitHubImportReadinessStore>(),
+                    provider.GetRequiredService<IGitTransferWorkpackRepository>(),
+                    provider.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                    new F039TestOnlyDiskVerifier(),
+                    provider.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                    provider.GetRequiredService<IIncrementalOperationPlanRepository>());
+            var review = await first.GetRequiredService<IGitHubImportReadinessStore>()
+                .GetAsync(prepId, planId, safeReadinessId, default);
+            Assert.NotNull(review);
+            var safePlan = await GitHubImportIntentService.BuildVerifiedPlanAsync(
+                first.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                prepId, planId, review!.ReconciliationId, review, default);
+            Assert.Equal(1, safePlan.CreateCandidates);
+            Assert.True(safePlan.HasOnlyNonDestructiveCandidates);
+            var draft = new GitHubImportIntentDraft(
+                prepId, planId, safeWorkpackId, safeReadinessId,
+                safeReadinessSha, planSha, review.ReconciliationSha256,
+                review.SourceBundleSha256, safePlan, policySnapshot, requester);
+            var a = MakeRepo(first);
+            var b = MakeRepo(second);
+            // Distinct observation timestamps are expected across real
+            // concurrent HTTP requests. An identical policy must replay
+            // the first SHA-bound intention, not duplicate or overwrite it.
+            var concurrent = await Task.WhenAll(
+                a.CreateAsync(draft, default),
+                b.CreateAsync(draft with {
+                    Policy = policySnapshot with {
+                        ObservedAtUtc = policySnapshot.ObservedAtUtc.AddMilliseconds(-250)
+                    }
+                }, default));
+            safeIntentId = concurrent[0].Id;
+            Assert.Equal(safeIntentId, concurrent[1].Id);
+            Assert.Equal("Pending", concurrent[0].State);
+            Assert.Equal(1, concurrent[0].CreateCandidates);
+            Assert.Equal(0, concurrent[0].DivergedBlocked);
+            Assert.False(concurrent[0].ReadyForExecution);
+            Assert.False(concurrent[0].ExecutionAuthorized);
+            Assert.False(concurrent[0].WriteCapabilityVerified);
+            Assert.Equal(1, await first.GetRequiredService<AppDbContext>()
+                .GitHubImportIntentEvents.CountAsync(x => x.IntentId == safeIntentId));
+            var neverRead = new F040UnexpectedPolicyReader();
+            var service = new GitHubImportIntentService(
+                first.GetRequiredService<IGitHubImportReadinessStore>(),
+                first.GetRequiredService<IGitTransferWorkpackRepository>(),
+                first.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                first.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                new F039TestOnlyDiskVerifier(),
+                first.GetRequiredService<IIncrementalOperationPlanRepository>(),
+                first.GetRequiredService<IConnectionRepository>(),
+                first.GetRequiredService<IConnectionSecretStore>(),
+                neverRead, a);
+            var replay = await service.CreateAsync(
+                prepId, planId, safeWorkpackId, safeReadinessId,
+                safeReadinessSha, requester, default);
+            Assert.Equal(safeIntentId, replay.Id);
+            Assert.Equal(0, neverRead.Calls);
+            Assert.Equal("ImportIntentConflictingReplay",
+                (await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
+                    service.CreateAsync(prepId, planId, safeWorkpackId,
+                        safeReadinessId, safeReadinessSha, Guid.NewGuid(),
+                        default))).Code);
+
+
+            var myself = await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
+                a.DecideAsync(prepId, planId, safeIntentId, requester,
+                    safeReadinessSha, "Acknowledge", default));
+            Assert.Equal("ImportIntentDecisionNotAllowed", myself.Code);
+            var wrongSha = await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
+                a.DecideAsync(prepId, planId, safeIntentId, Guid.NewGuid(),
+                    new string('f', 64), "Acknowledge", default));
+            Assert.Equal("ImportIntentDecisionNotAllowed", wrongSha.Code);
+
+            var reviewer = Guid.NewGuid();
+            var accepted = await b.DecideAsync(prepId, planId, safeIntentId,
+                reviewer, safeReadinessSha, "Acknowledge", default);
+            Assert.Equal("Acknowledged", accepted.State);
+            Assert.Equal(reviewer, accepted.ReviewedBy);
+            Assert.False(accepted.ExecutionAuthorized);
+            Assert.False(accepted.ReadyForExecution);
+            Assert.Equal(new[] { "Requested", "Acknowledged" },
+                (await a.EventsAsync(prepId, planId, safeIntentId, default))
+                .Select(x => x.Kind).ToArray());
+            var duplicate = await Assert.ThrowsAsync<GitHubImportIntentException>(() =>
+                a.DecideAsync(prepId, planId, safeIntentId, Guid.NewGuid(),
+                    safeReadinessSha, "Acknowledge", default));
+            Assert.Equal("ImportIntentDecisionNotAllowed", duplicate.Code);
+
+            var db = first.GetRequiredService<AppDbContext>();
+            foreach (var column in new[] {
+                "write_capability_verified", "execution_authorized", "ready_for_execution"
+            })
+            {
+                var sql = "UPDATE github_import_intents SET " + column +
+                    " = true WHERE id = @intentId";
+                var denial = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlRawAsync(sql,
+                        new Npgsql.NpgsqlParameter("intentId", safeIntentId)));
+                Assert.Equal("23514", denial.SqlState);
+            }
+        }
+
+        using (var readIntent = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/import-intents/{safeIntentId}"))
+        {
+            readIntent.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(readIntent);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            using var intentJson = JsonDocument.Parse(body);
+            Assert.Equal("Acknowledged",
+                intentJson.RootElement.GetProperty("state").GetString());
+            Assert.False(intentJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.False(intentJson.RootElement.GetProperty("executionAuthorized").GetBoolean());
+        }
+        var decisionPath = $"{operationalPath}/{planId}/import-intents/{safeIntentId}/decision";
+        using (var untrustedDecision = await harness.Client.PostAsJsonAsync(
+            decisionPath, new {
+                expectedReadinessSha256 = safeReadinessSha,
+                decision = "Acknowledge",
+                acknowledgementText = "I UNDERSTAND THIS DOES NOT AUTHORIZE A GITHUB PUSH"
+            }))
+            Assert.Equal(HttpStatusCode.Unauthorized, untrustedDecision.StatusCode);
+        using (var noSuperadmin = await PostAsAsync(decisionPath, new {
+            expectedReadinessSha256 = safeReadinessSha,
+            decision = "Acknowledge",
+            acknowledgementText = "I UNDERSTAND THIS DOES NOT AUTHORIZE A GITHUB PUSH"
+        }, admin))
+            Assert.Equal(HttpStatusCode.Forbidden, noSuperadmin.StatusCode);
+        var superadmin = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        using (var authorizedReviewer = await PostAsAsync(decisionPath, new {
+            expectedReadinessSha256 = safeReadinessSha,
+            decision = "Acknowledge",
+            acknowledgementText = "I UNDERSTAND THIS DOES NOT AUTHORIZE A GITHUB PUSH"
+        }, superadmin))
+        {
+            // Superadmin passes RBAC, but the second decision is refused by
+            // the one-shot PostgreSQL state machine after first acknowledgment.
+            Assert.Equal(HttpStatusCode.Conflict, authorizedReviewer.StatusCode);
+            Assert.Contains("ImportIntentDecisionNotAllowed",
+                await authorizedReviewer.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-041: a real HTTP request cannot mistake a PostgreSQL-only
+        // synthetic F-035 bundle for physically verified Git objects. The
+        // built-in rehearsal feature is OFF, and no Git subprocess launches.
+        var rehearsalPath =
+            $"{operationalPath}/{planId}/import-intents/{safeIntentId}/git-rehearsals";
+        string safeIntentDigest;
+        await using (var context = harness.Host.Services.CreateAsyncScope())
+        {
+            var current = await context.ServiceProvider
+                .GetRequiredService<IGitHubImportIntentStore>()
+                .GetAsync(prepId, planId, safeIntentId, default);
+            Assert.NotNull(current);
+            safeIntentDigest = current!.EvidenceSha256;
+            Assert.Equal(64, safeIntentDigest.Length);
+        }
+        var rehearseRequest = new { expectedIntentEvidenceSha256 = safeIntentDigest };
+        using (var anonymousRehearsal = await harness.Client.PostAsJsonAsync(
+            rehearsalPath, rehearseRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousRehearsal.StatusCode);
+        using (var nonAdminRehearsal = await PostAsAsync(
+            rehearsalPath, rehearseRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, nonAdminRehearsal.StatusCode);
+        using (var forgedRehearsal = await PostAsAsync(
+            rehearsalPath, new { expectedIntentEvidenceSha256 = new string('f',64) },
+            admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, forgedRehearsal.StatusCode);
+            Assert.Contains("GitRehearsalIntentNotCurrent",
+                await forgedRehearsal.Content.ReadAsStringAsync());
+        }
+        using (var unverifiedBundleRehearsal = await PostAsAsync(
+            rehearsalPath, rehearseRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict,
+                unverifiedBundleRehearsal.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await unverifiedBundleRehearsal.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // The real F-041 Git transport is tested with a real bundle in
+        // LocalGitImportRehearsalTests. This PostgreSQL integration uses an
+        // explicit test-only disk verifier, solely to isolate the source
+        // advisory transaction, unique replay and SQL no-write constraints.
+        Guid rehearsalId;
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            static PostgresGitImportRehearsalStore Make(
+                IServiceProvider services) => new(
+                services.GetRequiredService<AppDbContext>(),
+                TimeProvider.System,
+                services.GetRequiredService<IGitHubImportIntentStore>(),
+                services.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                services.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                new F039TestOnlyDiskVerifier(),
+                services.GetRequiredService<IIncrementalOperationPlanRepository>(),
+                services.GetRequiredService<IGitTransferWorkpackRepository>());
+
+            var rehearsalNow = DateTimeOffset.UtcNow;
+            var actor = Guid.NewGuid();
+            var candidate = new GitImportRehearsalInput(
+                prepId, planId, safeWorkpackId, safeIntentId,
+                safeIntentDigest, planSha,
+                (await one.ServiceProvider
+                    .GetRequiredService<IGitHubImportIntentStore>()
+                    .GetAsync(prepId, planId, safeIntentId, default))!
+                    .ReconciliationSha256,
+                new string('e',64),
+                (await one.ServiceProvider
+                    .GetRequiredService<IGitHubImportIntentStore>()
+                    .GetAsync(prepId, planId, safeIntentId, default))!
+                    .SafeRefPlanSha256,
+                new GitImportRehearsalArtifact(
+                    "sha1", new string('a',64), 1, 0, 0,
+                    1, new string('b',64), rehearsalNow), actor);
+
+            var first = Make(one.ServiceProvider);
+            var second = Make(two.ServiceProvider);
+            var together = await Task.WhenAll(
+                first.SaveAsync(candidate, default),
+                second.SaveAsync(candidate with {
+                    Artifact = candidate.Artifact with {
+                        CompletedAtUtc = rehearsalNow.AddMilliseconds(-100)
+                    }
+                }, default));
+            rehearsalId = together[0].Id;
+            Assert.Equal(rehearsalId, together[1].Id);
+            Assert.Equal(1, together[0].DestinationCreated);
+            Assert.False(together[0].DestinationWritesPerformed);
+            Assert.False(together[0].ExecutionAuthorized);
+            Assert.False(together[0].ReadyForExecution);
+
+            var db = one.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(1, await db.GitImportRehearsals.AsNoTracking()
+                .CountAsync(x => x.IntentId == safeIntentId));
+            var mismatched = candidate with { BundleSha256 = new string('f', 64) };
+            var rejected = await Assert.ThrowsAsync<GitImportRehearsalException>(() =>
+                first.SaveAsync(mismatched, default));
+            Assert.Equal("GitRehearsalProofNotCurrent", rejected.Code);
+            foreach (var column in new[] {
+                "destination_writes_performed", "execution_authorized",
+                "ready_for_execution"
+            })
+            {
+                var sql = "UPDATE git_import_rehearsals SET " + column +
+                    " = true WHERE id = @rehearsal";
+                var rehearsalWriteDenial = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlRawAsync(sql,
+                        new Npgsql.NpgsqlParameter("rehearsal", rehearsalId)));
+                Assert.Equal("23514", rehearsalWriteDenial.SqlState);
+            }
+        }
+        using (var readRehearsal = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/git-rehearsals/{rehearsalId}"))
+        {
+            readRehearsal.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var result = await harness.Client.SendAsync(readRehearsal);
+            Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+            var body = await result.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, body);
+            Assert.DoesNotContain(ApiHarness.SourceToken, body);
+            using var rehearsalJson = JsonDocument.Parse(body);
+            Assert.Equal("sha1",
+                rehearsalJson.RootElement.GetProperty("gitObjectFormat").GetString());
+            Assert.False(rehearsalJson.RootElement.GetProperty("destinationWritesPerformed").GetBoolean());
+            Assert.False(rehearsalJson.RootElement.GetProperty("executionAuthorized").GetBoolean());
+            Assert.False(rehearsalJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+        }
+        using (var listRehearsals = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/transfer-workpacks/{safeWorkpackId}/git-rehearsals"))
+        {
+            listRehearsals.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var result = await harness.Client.SendAsync(listRehearsals);
+            Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+            using var rehearsalJson = JsonDocument.Parse(
+                await result.Content.ReadAsStringAsync());
+            Assert.Single(rehearsalJson.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-042 HTTP requires a real, SHA-verified physical Git bundle.
+        // These F-040/F-041 synthetic PostgreSQL fixtures must not be
+        // confused with validated external Git objects.
+        string sealedRehearsalSha;
+        await using (var context = harness.Host.Services.CreateAsyncScope())
+        {
+            var proof = await context.ServiceProvider
+                .GetRequiredService<IGitImportRehearsalStore>()
+                .GetAsync(prepId, planId, rehearsalId, default);
+            Assert.NotNull(proof);
+            sealedRehearsalSha = proof!.EvidenceSha256;
+        }
+        var fencePostPath =
+            $"{operationalPath}/{planId}/git-rehearsals/{rehearsalId}/remote-fences";
+        var fenceRequest = new {
+            expectedRehearsalEvidenceSha256 = sealedRehearsalSha
+        };
+        using (var noAuthFence = await harness.Client.PostAsJsonAsync(
+            fencePostPath, fenceRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, noAuthFence.StatusCode);
+        using (var userFence = await PostAsAsync(
+            fencePostPath, fenceRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userFence.StatusCode);
+        using (var forgedFence = await PostAsAsync(
+            fencePostPath, new {
+                expectedRehearsalEvidenceSha256 = new string('f',64)
+            }, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, forgedFence.StatusCode);
+            Assert.Contains("RemoteFenceRehearsalStale",
+                await forgedFence.Content.ReadAsStringAsync());
+        }
+        using (var noPhysicalFence = await PostAsAsync(
+            fencePostPath, fenceRequest, admin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, noPhysicalFence.StatusCode);
+            Assert.Contains("LocalBundleStoreNotConfigured",
+                await noPhysicalFence.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // PostgreSQL-only fixture: explicit test verifier isolates the
+        // advisory transaction + immutable SQL safety from the separately
+        // real-Git-tested F-038/F-041 disk layer.
+        Guid fenceId;
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            static PostgresGitHubRemoteRefFenceStore MakeFence(
+                IServiceProvider provider) => new(
+                provider.GetRequiredService<AppDbContext>(),
+                TimeProvider.System,
+                provider.GetRequiredService<IIncrementalOperationPlanRepository>(),
+                provider.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                provider.GetRequiredService<IGitHubTargetRefEvidenceStore>(),
+                provider.GetRequiredService<IGitHubImportIntentStore>(),
+                provider.GetRequiredService<IGitImportRehearsalStore>(),
+                provider.GetRequiredService<IGitHubImportReadinessStore>(),
+                provider.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                new F039TestOnlyDiskVerifier());
+
+            var first = one.ServiceProvider;
+            var db = first.GetRequiredService<AppDbContext>();
+            var plan = await first.GetRequiredService<IIncrementalOperationPlanRepository>()
+                .GetAsync(prepId, planId, default);
+            Assert.NotNull(plan);
+            var intent = await first.GetRequiredService<IGitHubImportIntentStore>()
+                .GetAsync(prepId, planId, safeIntentId, default);
+            Assert.NotNull(intent);
+            var review = await first.GetRequiredService<IGitHubImportReadinessStore>()
+                .GetAsync(prepId, planId, safeReadinessId, default);
+            Assert.NotNull(review);
+            var diff = await first.GetRequiredService<IIncrementalGitRefReconciliationStore>()
+                .PageAsync(prepId, planId, review!.ReconciliationId, null, 1, default);
+            Assert.NotNull(diff);
+            var dest = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == target);
+
+            // The certified F-031 baseline is EMPTY for this F-040
+            // create-candidate. A newly present GitHub main ref is drift.
+            var remoteProof = GitHubRefObservationIntegrity.Seal(
+                "gh-org", "occupied", DateTimeOffset.UtcNow,
+                [new GitHubObservedRef("refs/heads/main", ApiHarness.Sha, "commit")]);
+            var drift = GitHubRemoteRefFenceIntegrity.Compare(
+                [], remoteProof);
+            Assert.Equal("RemoteDriftBlocked", drift.Status);
+            Assert.Equal(1, drift.ChangedRefs);
+            var fenceInput = new GitHubRemoteRefFenceInput(
+                prepId, planId, safeWorkpackId, safeIntentId,
+                rehearsalId, diff!.Reconciliation.TargetObservationId,
+                target, dest.ValidatedAtUtc, planSha,
+                intent!.ReconciliationSha256,
+                intent.BundleSha256, intent.EvidenceSha256,
+                sealedRehearsalSha, review.TargetEvidenceSha256,
+                remoteProof.EvidenceSha256, drift, Guid.NewGuid());
+
+            var a = MakeFence(first);
+            var b = MakeFence(two.ServiceProvider);
+            var both = await Task.WhenAll(
+                a.SaveAsync(fenceInput, default),
+                b.SaveAsync(fenceInput, default));
+            fenceId = both[0].Id;
+            Assert.Equal(fenceId, both[1].Id);
+            Assert.Equal("RemoteDriftBlocked", both[0].Status);
+            Assert.False(both[0].IsCurrent);
+            Assert.False(both[0].RemoteWritesPerformed);
+            Assert.False(both[0].WriteCapabilityVerified);
+            Assert.False(both[0].ExecutionAuthorized);
+            Assert.False(both[0].ReadyForExecution);
+            Assert.Equal(1, await db.GitHubRemoteRefFences.AsNoTracking()
+                .CountAsync(x => x.RehearsalId == rehearsalId));
+
+            var alteredInput = fenceInput with {
+                BundleSha256 = new string('f',64)
+            };
+            Assert.Equal("RemoteFenceLineageChanged",
+                (await Assert.ThrowsAsync<GitHubRemoteRefFenceException>(() =>
+                    a.SaveAsync(alteredInput, default))).Code);
+            foreach (var column in new[] {
+                "remote_writes_performed", "write_capability_verified",
+                "execution_authorized", "ready_for_execution"
+            })
+            {
+                var sql = "UPDATE github_remote_ref_fences SET " + column +
+                    " = true WHERE id = @fenceId";
+                var denial = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlRawAsync(sql,
+                        new Npgsql.NpgsqlParameter("fenceId", fenceId)));
+                Assert.Equal("23514", denial.SqlState);
+            }
+        }
+        using (var readFence = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/remote-fences/{fenceId}"))
+        {
+            readFence.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(readFence);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var fenceBody = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, fenceBody);
+            Assert.DoesNotContain(ApiHarness.SourceToken, fenceBody);
+            using var fenceJson = JsonDocument.Parse(fenceBody);
+            Assert.Equal("RemoteDriftBlocked",
+                fenceJson.RootElement.GetProperty("status").GetString());
+            Assert.False(fenceJson.RootElement.GetProperty("readyForExecution").GetBoolean());
+            Assert.False(fenceJson.RootElement.GetProperty("remoteWritesPerformed").GetBoolean());
+        }
+        using (var listFence = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/git-rehearsals/{rehearsalId}/remote-fences"))
+        {
+            listFence.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(listFence);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var fenceJson = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync());
+            Assert.Single(fenceJson.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // F-043: GitHub App write scopes are a distinct, superadmin-only,
+        // *disabled-by-default* capability. No live App key or GitHub token
+        // is available to this integration fixture. First persist a fresh,
+        // unchanged F-042 remote fence with an explicit test-only disk
+        // verifier; the preceding F-042 case persisted changed refs.
+        Guid safeFenceId;
+        string safeFenceDigest;
+        Guid appScopeId;
+        await using (var one = harness.Host.Services.CreateAsyncScope())
+        await using (var two = harness.Host.Services.CreateAsyncScope())
+        {
+            static PostgresGitHubRemoteRefFenceStore FenceStore(IServiceProvider p) =>
+                new(
+                    p.GetRequiredService<AppDbContext>(), TimeProvider.System,
+                    p.GetRequiredService<IIncrementalOperationPlanRepository>(),
+                    p.GetRequiredService<IIncrementalGitRefReconciliationStore>(),
+                    p.GetRequiredService<IGitHubTargetRefEvidenceStore>(),
+                    p.GetRequiredService<IGitHubImportIntentStore>(),
+                    p.GetRequiredService<IGitImportRehearsalStore>(),
+                    p.GetRequiredService<IGitHubImportReadinessStore>(),
+                    p.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                    new F039TestOnlyDiskVerifier());
+
+            var provider = one.ServiceProvider;
+            var db = provider.GetRequiredService<AppDbContext>();
+            var intent = await provider.GetRequiredService<IGitHubImportIntentStore>()
+                .GetAsync(prepId, planId, safeIntentId, default);
+            Assert.NotNull(intent);
+            Assert.NotNull(intent!.ReviewedBy);
+            var review = await provider.GetRequiredService<IGitHubImportReadinessStore>()
+                .GetAsync(prepId, planId, safeReadinessId, default);
+            Assert.NotNull(review);
+            var rec = await provider.GetRequiredService<IIncrementalGitRefReconciliationStore>()
+                .PageAsync(prepId, planId, review!.ReconciliationId, null, 1, default);
+            Assert.NotNull(rec);
+            var dest = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == target);
+            var clearRemote = GitHubRefObservationIntegrity.Seal(
+                "gh-org", "occupied", DateTimeOffset.UtcNow, []);
+            var stable = GitHubRemoteRefFenceIntegrity.Compare([], clearRemote);
+            Assert.Equal("RefSetUnchanged", stable.Status);
+            var snapshot = new GitHubRemoteRefFenceInput(
+                prepId, planId, safeWorkpackId, safeIntentId, rehearsalId,
+                rec!.Reconciliation.TargetObservationId, target,
+                dest.ValidatedAtUtc, planSha,
+                intent.ReconciliationSha256, intent.BundleSha256,
+                intent.EvidenceSha256, sealedRehearsalSha,
+                review.TargetEvidenceSha256, clearRemote.EvidenceSha256,
+                stable, Guid.NewGuid());
+            var fence = await FenceStore(provider).SaveAsync(snapshot, default);
+            Assert.True(fence.IsCurrent);
+            safeFenceId = fence.Id;
+            safeFenceDigest = fence.EvidenceSha256;
+
+            static PostgresGitHubAppWriteScopeStore ScopeStore(
+                IServiceProvider p) => new(
+                    p.GetRequiredService<AppDbContext>(), TimeProvider.System,
+                    new GitHubAppWriteCredentialOptions(
+                        true, 123, 77, "dedicated-app-key", "gh-org/occupied"),
+                    p.GetRequiredService<IGitHubRemoteRefFenceStore>(),
+                    p.GetRequiredService<IGitHubImportIntentStore>(),
+                    p.GetRequiredService<IGitHubImportReadinessStore>(),
+                    p.GetRequiredService<IGitSourceBundleEvidenceStore>(),
+                    new F039TestOnlyDiskVerifier(),
+                    p.GetRequiredService<IIncrementalOperationPlanRepository>());
+            var observation = new GitHubAppWriteScopeObservation(
+                77, 2468, GitHubAppWriteScopeIntegrity.Issued,
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(45));
+            var input = new GitHubAppWriteScopeInput(
+                prepId, planId, safeFenceId, safeWorkpackId, safeIntentId,
+                rehearsalId, target, "gh-org", "occupied",
+                planSha, intent.BundleSha256, intent.EvidenceSha256,
+                sealedRehearsalSha, safeFenceDigest,
+                fence.RemoteRefFingerprintSha256,
+                observation, intent.ReviewedBy.Value);
+
+            // Simulate two API replicas saving the independently tested
+            // GitHub token mint response. Only SHA metadata is stored.
+            var a = ScopeStore(provider);
+            var b = ScopeStore(two.ServiceProvider);
+            var receipts = await Task.WhenAll(
+                a.SaveAsync(input, default),
+                b.SaveAsync(input with {
+                    Observation = input.Observation with {
+                        ObservedAtUtc = input.Observation.ObservedAtUtc.AddMilliseconds(-250)
+                    }
+                }, default));
+            appScopeId = receipts[0].Id;
+            Assert.Equal(appScopeId, receipts[1].Id);
+            Assert.True(receipts[0].ScopedContentsWriteReported);
+            Assert.False(receipts[0].ExecutionAuthorized);
+            Assert.False(receipts[0].ReadyForExecution);
+            Assert.False(receipts[0].RemoteWritesPerformed);
+            Assert.False(receipts[0].WriteCapabilityVerified);
+            Assert.Equal(1, await db.GitHubAppWriteScopes.AsNoTracking()
+                .CountAsync(x => x.FenceId == safeFenceId));
+            var wrongTarget = input with { Repository = "another-repo" };
+            Assert.Equal("AppScopeObservationStaleOrUnconfigured",
+                (await Assert.ThrowsAsync<GitHubAppWriteScopeException>(() =>
+                    a.SaveAsync(wrongTarget, default))).Code);
+            var wrongReviewer = input with { ActorId = Guid.NewGuid() };
+            Assert.Equal("AppScopeLineageChanged",
+                (await Assert.ThrowsAsync<GitHubAppWriteScopeException>(() =>
+                    a.SaveAsync(wrongReviewer, default))).Code);
+            foreach (var column in new[] {
+                "write_capability_verified", "execution_authorized",
+                "remote_writes_performed", "ready_for_execution"
+            })
+            {
+                var sql = "UPDATE github_app_write_scopes SET " + column +
+                    " = true WHERE id = @scopeId";
+                var refusal = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlRawAsync(sql,
+                        new Npgsql.NpgsqlParameter("scopeId", appScopeId)));
+                Assert.Equal("23514", refusal.SqlState);
+            }
+        }
+
+        var scopePostPath =
+            $"{operationalPath}/{planId}/remote-fences/{safeFenceId}/github-app-scope";
+        var scopeRequest = new {
+            expectedFenceEvidenceSha256 = safeFenceDigest,
+            acknowledgementText =
+                "I UNDERSTAND THIS TOKEN IS DISCARDED AND DOES NOT AUTHORIZE A PUSH"
+        };
+        using (var noAuthScope = await harness.Client.PostAsJsonAsync(
+            scopePostPath, scopeRequest))
+            Assert.Equal(HttpStatusCode.Unauthorized, noAuthScope.StatusCode);
+        using (var userScope = await PostAsAsync(scopePostPath, scopeRequest, user))
+            Assert.Equal(HttpStatusCode.Forbidden, userScope.StatusCode);
+        using (var adminScope = await PostAsAsync(scopePostPath, scopeRequest, admin))
+            Assert.Equal(HttpStatusCode.Forbidden, adminScope.StatusCode);
+        using (var missingAcknowledgement = await PostAsAsync(
+            scopePostPath, new { expectedFenceEvidenceSha256 = safeFenceDigest,
+                acknowledgementText = "wrong" }, superadmin))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest,
+                missingAcknowledgement.StatusCode);
+            Assert.Contains("AppScopeAcknowledgementRequired",
+                await missingAcknowledgement.Content.ReadAsStringAsync());
+        }
+        using (var disabledScope = await PostAsAsync(
+            scopePostPath, scopeRequest, superadmin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, disabledScope.StatusCode);
+            Assert.Contains("AppScopeDisabledOrUnconfigured",
+                await disabledScope.Content.ReadAsStringAsync());
+        }
+        using (var getScope = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/github-app-scopes/{appScopeId}"))
+        {
+            getScope.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var result = await harness.Client.SendAsync(getScope);
+            Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+            var jsonText = await result.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ApiHarness.TargetToken, jsonText);
+            Assert.DoesNotContain(ApiHarness.SourceToken, jsonText);
+            Assert.DoesNotContain("ghs_", jsonText);
+            Assert.DoesNotContain("BEGIN PRIVATE KEY", jsonText);
+            using var parsedScope = JsonDocument.Parse(jsonText);
+            Assert.True(parsedScope.RootElement
+                .GetProperty("scopedContentsWriteReported").GetBoolean());
+            Assert.False(parsedScope.RootElement
+                .GetProperty("executionAuthorized").GetBoolean());
+            Assert.False(parsedScope.RootElement
+                .GetProperty("readyForExecution").GetBoolean());
+        }
+        using (var listScope = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}/remote-fences/{safeFenceId}/github-app-scopes"))
+        {
+            listScope.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(listScope);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var listed = JsonDocument.Parse(
+                await reply.Content.ReadAsStringAsync());
+            Assert.Single(listed.RootElement.EnumerateArray());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
         // A connection re-validation invalidates even previously persisted GET
         // observations. Reading the old record makes ZERO additional API calls.
         await using (var scope = harness.Host.Services.CreateAsyncScope())
@@ -168,7 +1670,66 @@ public sealed class ApiLiveTargetPreflightTests(ApiHarness harness)
             using var stale = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
             Assert.False(stale.RootElement.GetProperty("isCurrent").GetBoolean());
         }
-        Assert.Equal(callsBefore + 4, harness.Calls.Count);
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            $"{operationalPath}/{planId}"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var stale = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.False(stale.RootElement.GetProperty("isCurrent").GetBoolean());
+            Assert.False(stale.RootElement.GetProperty("readyForExecution").GetBoolean());
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get, evidencePath))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            using var stale = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+            Assert.False(stale.RootElement[0].GetProperty("isCurrent").GetBoolean());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+
+        // A same-row mutation that preserves a plausible JSON shape but
+        // changes the recorded count must fail SHA/metadata verification.
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.GitHubTargetRefEvidence
+                .Where(x => x.Id == observationId)
+                .ExecuteUpdateAsync(set => set.SetProperty(x => x.RefCount, 3));
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            evidencePath + "/" + observationId + "?take=50"))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var response = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("RefEvidenceIntegrityFailed",
+                await response.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
+        // Corrupt an F-032 count without changing the sealed proof; reads
+        // must reject even though the persisted JSON retains valid syntax.
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.IncrementalGitRefReconciliations
+                .Where(x => x.Id == diffId)
+                .ExecuteUpdateAsync(updates => updates.SetProperty(
+                    x => x.MatchingCount, 2));
+        }
+        using (var get = new HttpRequestMessage(HttpMethod.Get,
+            diffPath + "/" + diffId))
+        {
+            get.Headers.Authorization = new AuthenticationHeaderValue("Bearer", admin);
+            using var reply = await harness.Client.SendAsync(get);
+            Assert.Equal(HttpStatusCode.Conflict, reply.StatusCode);
+            Assert.Contains("ReconciliationIntegrityFailed",
+                await reply.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(callsBefore + 6, harness.Calls.Count);
     }
 
     private async Task<HttpResponseMessage> PostAsAsync(

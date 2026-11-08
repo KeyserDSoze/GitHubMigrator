@@ -18,6 +18,430 @@ namespace GitHubMigrator.Integration.Tests;
 public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixture<ApiHarness>
 {
     [Fact]
+    public async Task F067_phase_timing_endpoint_is_superadmin_only_and_default_off()
+    {
+        var url = "/api/operations/incremental-preparations/" +
+            Guid.NewGuid() + "/phases";
+        async Task<HttpResponseMessage> ReadAsync(string? token)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            if (token is not null)
+                req.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(req);
+        }
+        using var anonymous = await ReadAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var user = await ReadAsync(await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, user.StatusCode);
+        using var admin = await ReadAsync(await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var pending = await ReadAsync(await harness.LoginAsync(
+            harness.PendingName, ApiHarness.PendingPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, pending.StatusCode);
+        using var superadmin = await ReadAsync(await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.NotFound, superadmin.StatusCode);
+        var body = await superadmin.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(ApiHarness.SourceToken, body);
+        Assert.DoesNotContain(ApiHarness.TargetToken, body);
+    }
+
+    [Fact]
+    public async Task F066_queue_health_is_superadmin_only_and_default_off()
+    {
+        var url = "/api/operations/incremental-preparations/" +
+            Guid.NewGuid() + "/health";
+        async Task<HttpResponseMessage> GetAsync(string? token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (token is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await GetAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await GetAsync(await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await GetAsync(await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var pending = await GetAsync(await harness.LoginAsync(
+            harness.PendingName, ApiHarness.PendingPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, pending.StatusCode);
+        using var superadmin = await GetAsync(await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.NotFound, superadmin.StatusCode);
+        Assert.DoesNotContain(ApiHarness.TargetToken,
+            await superadmin.Content.ReadAsStringAsync());
+
+        // Invalid source does not bypass the disabled feature gate.
+        using var none = new HttpRequestMessage(HttpMethod.Get,
+            "/api/operations/incremental-preparations/" +
+            Guid.Empty + "/health");
+        none.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer",
+                await harness.LoginAsync(
+                    harness.SuperadminName, ApiHarness.SuperadminPassword));
+        using var empty = await harness.Client.SendAsync(none);
+        Assert.Equal(HttpStatusCode.NotFound, empty.StatusCode);
+    }
+
+    [Fact]
+    public async Task F065_source_mirror_health_is_superadmin_only_and_default_off()
+    {
+        const string url = "/api/operations/source-mirrors/health";
+        async Task<HttpResponseMessage> InspectAsync(string? jwt)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            if (jwt is not null)
+                req.Headers.Authorization = new AuthenticationHeaderValue(
+                    "Bearer", jwt);
+            return await harness.Client.SendAsync(req);
+        }
+
+        using var anonymous = await InspectAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var user = await InspectAsync(await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, user.StatusCode);
+        using var admin = await InspectAsync(await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var pending = await InspectAsync(await harness.LoginAsync(
+            harness.PendingName, ApiHarness.PendingPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, pending.StatusCode);
+        using var superadmin = await InspectAsync(await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.NotFound, superadmin.StatusCode);
+        Assert.DoesNotContain(ApiHarness.SourceToken,
+            await superadmin.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task F044_packet_preview_is_superadmin_only_and_missing_proofs_are_not_invented()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}/create-only-packet";
+        async Task<HttpResponseMessage> GetAsync(string? bearer = null)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (bearer is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", bearer);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await GetAsync();
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await GetAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await GetAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await GetAsync(
+            await harness.LoginAsync(harness.SuperadminName, ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.NotFound, superadmin.StatusCode);
+        Assert.Contains("PacketDependencyNotFound",
+            await superadmin.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task F045_preview_lease_endpoint_is_superadmin_only_and_disabled_by_default()
+    {
+        var root = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}";
+        var url = root + "/target-preview-leases";
+        async Task<HttpResponseMessage> AcquireAsync(string? jwt)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) {
+                Content = JsonContent.Create(new { durationSeconds = 10 })
+            };
+            if (jwt is not null)
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+            return await harness.Client.SendAsync(req);
+        }
+
+        using var anonymous = await AcquireAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var user = await AcquireAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, user.StatusCode);
+        using var admin = await AcquireAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await AcquireAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.Conflict, superadmin.StatusCode);
+        Assert.Contains("PreviewLeaseDisabled",
+            await superadmin.Content.ReadAsStringAsync());
+
+        // A malformed client cannot bypass the feature flag via GET.
+        using var get = new HttpRequestMessage(
+            HttpMethod.Get, root + "/target-preview-lease");
+        get.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer", await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        using var status = await harness.Client.SendAsync(get);
+        Assert.Equal(HttpStatusCode.Conflict, status.StatusCode);
+        Assert.Contains("PreviewLeaseDisabled",
+            await status.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task F046_policy_review_only_accepts_superadmin_SHA_bound_request()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}" +
+            "/create-only-packet/candidate-policy";
+        var priorPolicyCalls = harness.Calls.Count(x =>
+            x.Url.AbsolutePath.Contains("/rules/branches/", StringComparison.Ordinal) ||
+            x.Url.AbsolutePath.EndsWith("/rulesets", StringComparison.Ordinal));
+        async Task<HttpResponseMessage> ReviewAsync(
+            string? jwt, string expectedPacketSha)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url) {
+                Content = JsonContent.Create(new {
+                    expectedPacketSha256 = expectedPacketSha
+                })
+            };
+            if (jwt is not null)
+                request.Headers.Authorization = new AuthenticationHeaderValue(
+                    "Bearer", jwt);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await ReviewAsync(null, new string('a', 64));
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var user = await ReviewAsync(await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword), new string('a', 64));
+        Assert.Equal(HttpStatusCode.Forbidden, user.StatusCode);
+        using var admin = await ReviewAsync(await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword), new string('a', 64));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        var superadminJwt = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        using var malformed = await ReviewAsync(superadminJwt, "fake");
+        Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+        Assert.Contains("CandidatePolicyRequestInvalid",
+            await malformed.Content.ReadAsStringAsync());
+        using var missing = await ReviewAsync(
+            superadminJwt, new string('a', 64));
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Contains("CandidatePolicyDependencyMissing",
+            await missing.Content.ReadAsStringAsync());
+
+        // No provider GET is allowed before server evidence is recovered.
+        Assert.Equal(priorPolicyCalls, harness.Calls.Count(x =>
+            x.Url.AbsolutePath.Contains("/rules/branches/", StringComparison.Ordinal) ||
+            x.Url.AbsolutePath.EndsWith("/rulesets", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task F047_transfer_preparation_is_disabled_by_default_and_superadmin_only()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}/transfer-attempts";
+        async Task<HttpResponseMessage> SubmitAsync(string? token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(new {
+                    expectedPacketSha256 = new string('a', 64),
+                    expectedPolicySha256 = new string('b', 64),
+                    leaseToken = Guid.NewGuid(),
+                    leaseGeneration = 1
+                })
+            };
+            if (token is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await SubmitAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await SubmitAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await SubmitAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await SubmitAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.Conflict, superadmin.StatusCode);
+        Assert.Contains("TransferPreparationDisabled",
+            await superadmin.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("leaseToken",
+            await superadmin.Content.ReadAsStringAsync(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task F049_local_sandbox_dispatch_requires_superadmin_and_never_accepts_missing_attempt()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}" +
+            $"/transfer-attempts/{Guid.NewGuid()}/local-sandbox";
+        async Task<HttpResponseMessage> SubmitAsync(string? token)
+        {
+            using var message = new HttpRequestMessage(HttpMethod.Post, url) {
+                Content = JsonContent.Create(new { sandboxId = Guid.NewGuid() })
+            };
+            if (token is not null)
+                message.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(message);
+        }
+        using var anonymous = await SubmitAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await SubmitAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await SubmitAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await SubmitAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.NotFound, superadmin.StatusCode);
+        Assert.Contains("SandboxDependencyNotFound",
+            await superadmin.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task F050_remote_write_fence_is_superadmin_only_and_disabled_by_default()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}" +
+            "/remote-sandbox-write-fence/propose";
+        async Task<HttpResponseMessage> SubmitAsync(string? token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url) {
+                Content = JsonContent.Create(new {
+                    attemptId = Guid.NewGuid(),
+                    expectedPacketSha256 = new string('a', 64)
+                })
+            };
+            if (token is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await SubmitAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await SubmitAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await SubmitAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await SubmitAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.Conflict, superadmin.StatusCode);
+        Assert.Contains("RemoteFenceDisabledOrInvalid",
+            await superadmin.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("FenceToken",
+            await superadmin.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task F051_remote_App_readonly_preflight_is_superadmin_only_and_disabled_by_default()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}" +
+            $"/remote-sandbox-write-fence/{Guid.NewGuid()}/app-preflight";
+        async Task<HttpResponseMessage> SubmitAsync(string? token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url) {
+                Content = JsonContent.Create(new {
+                    generation = 1,
+                    expectedPacketSha256 = new string('a', 64)
+                })
+            };
+            if (token is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(request);
+        }
+        using var anonymous = await SubmitAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await SubmitAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await SubmitAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await SubmitAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.Conflict, superadmin.StatusCode);
+        Assert.Contains("RemotePreflightDisabledOrInvalid",
+            await superadmin.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("token",
+            await superadmin.Content.ReadAsStringAsync(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task F052_remote_test_grant_uses_four_person_control_and_is_off_by_default()
+    {
+        var url = $"/api/incremental-preparations/{Guid.NewGuid()}" +
+            $"/operation-plans/{Guid.NewGuid()}" +
+            $"/github-app-scopes/{Guid.NewGuid()}" +
+            $"/transfer-attempts/{Guid.NewGuid()}/remote-test-grants";
+        async Task<HttpResponseMessage> ProposeAsync(string? token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(new {
+                    fenceRequestId = Guid.NewGuid(),
+                    generation = 1,
+                    expectedPacketSha256 = new string('a', 64)
+                })
+            };
+            if (token is not null)
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+            return await harness.Client.SendAsync(request);
+        }
+
+        using var anonymous = await ProposeAsync(null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var ordinary = await ProposeAsync(
+            await harness.LoginAsync(harness.UserName, ApiHarness.UserPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using var admin = await ProposeAsync(
+            await harness.LoginAsync(harness.AdminName, ApiHarness.AdminPassword));
+        Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+        using var superadmin = await ProposeAsync(
+            await harness.LoginAsync(harness.SuperadminName,
+                ApiHarness.SuperadminPassword));
+        Assert.Equal(HttpStatusCode.Conflict, superadmin.StatusCode);
+        var response = await superadmin.Content.ReadAsStringAsync();
+        Assert.Contains("RemoteTestGrantDisabled", response);
+        Assert.DoesNotContain("cancellationToken", response);
+        Assert.DoesNotContain("ghs_", response);
+    }
+
+    [Fact]
     public async Task Health_and_readiness_are_served_by_real_API_and_database()
     {
         using var health = await harness.Client.GetAsync("/api/health");
