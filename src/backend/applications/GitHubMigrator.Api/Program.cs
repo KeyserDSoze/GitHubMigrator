@@ -160,6 +160,15 @@ builder.Services.AddSingleton(new GitHubAppWriteCredentialOptions(
 builder.Services.AddScoped<IGitHubAppWriteScopeStore, PostgresGitHubAppWriteScopeStore>();
 builder.Services.AddScoped<GitHubAppWriteScopeService>();
 builder.Services.AddScoped<GitHubCreateOnlyPacketService>();
+// F-079: trusted GET-only remote sandbox review, still WRITE-DISABLED.
+builder.Services.AddScoped<IGitHubCreateOnlyPacketEvidenceReader>(
+    sp => sp.GetRequiredService<GitHubCreateOnlyPacketService>());
+builder.Services.AddScoped<IGitHubRemoteDispatchAuthorityVerifier,
+    PostgresGitHubRemoteDispatchReviewVerifier>();
+builder.Services.AddScoped<PostgresGitHubRemoteSandboxReviewSessionJournal>();
+builder.Services.AddScoped<IGitHubRemoteSandboxReviewSessionRecorder>(
+    sp => sp.GetRequiredService<PostgresGitHubRemoteSandboxReviewSessionJournal>());
+builder.Services.AddScoped<GitHubRemoteTrustedDispatchReadOnlyOrchestrator>();
 builder.Services.AddScoped<GitHubCandidatePolicyService>();
 builder.Services.AddSingleton(new GitHubTransferAttemptOptions(
     builder.Configuration.GetValue("GitHubTransferAttempts:Enabled", false)));
@@ -505,6 +514,13 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    // Independent, low-volume provider GET + immutable audit budget.
+    options.AddFixedWindowLimiter("github-remote-sandbox-session", limiter =>
+    {
+        limiter.PermitLimit = 3;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     options.AddFixedWindowLimiter("git-local-sandbox-dispatch", limiter =>
     {
         limiter.PermitLimit = 6;
@@ -563,9 +579,10 @@ await GitSandboxDispatchSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxFenceSchema.InitializeAsync(app.Services);
 await GitHubRemoteTestGrantSchema.InitializeAsync(app.Services);
 await GitHubRemoteAppPreflightEvidenceSchema.InitializeAsync(app.Services);
-await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
 await GitHubRemoteReadbackSchema.InitializeAsync(app.Services);
 await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
+// F-078 has an FK to F-055: never initialize this before the hazard table.
+await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
 await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
@@ -648,6 +665,7 @@ app.MapGitHubTransferAttemptEndpoints();
 app.MapGitHubRemoteSandboxFenceEndpoints();
 app.MapGitHubRemoteAppPreflightEndpoints();
 app.MapGitHubRemoteTestGrantEndpoints();
+app.MapGitHubRemoteSandboxReviewSessionEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
