@@ -125,6 +125,7 @@ public sealed class PostgresGitHubRemoteSandboxDispatchConfirmationJournal(
             grant.ReviewedBy == actorId ||
             grant.PreparationId != preparationId || grant.PlanId != planId ||
             grant.ScopeId != scopeId ||
+            grant.AttemptId != attempt.Id ||
             grant.PacketSha256 != intent.PacketSha256 ||
             grant.CandidateSetSha256 != intent.CandidateSetSha256 ||
             grant.PreflightSha256 != session.PreflightSha256 ||
@@ -136,6 +137,9 @@ public sealed class PostgresGitHubRemoteSandboxDispatchConfirmationJournal(
             fence.State != GitHubRemoteSandboxFenceStates.ReviewedWriteDisabled ||
             fence.RequestId != session.FenceRequestId ||
             fence.Generation != session.FenceGeneration ||
+            fence.AttemptId != attempt.Id ||
+            fence.PreparationId != preparationId ||
+            fence.PlanId != planId || fence.ScopeId != scopeId ||
             fence.DeadlineUtc <= now ||
             fence.PacketSha256 != intent.PacketSha256 ||
             fence.CandidateSetSha256 != intent.CandidateSetSha256 ||
@@ -147,12 +151,14 @@ public sealed class PostgresGitHubRemoteSandboxDispatchConfirmationJournal(
             attempt.PreparationId != preparationId ||
             attempt.PlanId != planId || attempt.ScopeId != scopeId ||
             attempt.PacketSha256 != intent.PacketSha256 ||
+            attempt.PolicySha256 != grant.OriginalPolicySha256 ||
+            fence.PolicySha256 != grant.OriginalPolicySha256 ||
             attempt.CandidateSetSha256 != intent.CandidateSetSha256 ||
             attempt.RequestedBy == actorId || attempt.ReviewedBy == actorId ||
             attempt.TransportAttempted || attempt.ExecutionAuthorized ||
             attempt.RemoteWritesPerformed || attempt.ReadyForExecution ||
             lease.State != GitHubTargetPreviewLeaseIntegrity.Held ||
-            lease.LeaseUntilUtc <= now ||
+            lease.LeaseUntilUtc is null || lease.LeaseUntilUtc <= now ||
             lease.LeaseToken != attempt.LeaseToken ||
             lease.Generation != attempt.LeaseGeneration ||
             lease.PacketSha256 != intent.PacketSha256 ||
