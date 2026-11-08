@@ -259,7 +259,9 @@ public sealed class PostgresGitHubRemoteTypedRecoveryBaselineJournal(
             audit[0].ActorId != value.CapturedBy ||
             audit[0].OccurredAtUtc != value.RecordedAtUtc)
             throw Refused("TypedRecoveryBaselineHistoryCorrupt");
-        return value;
+        return value with {
+            PossibleSendRecordedAtUtc = barrier.RecordedAtUtc
+        };
     }
 
     public async Task<GitHubRemoteTypedRecoveryBaselineStatus?> InspectScopedAsync(
