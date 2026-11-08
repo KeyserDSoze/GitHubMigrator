@@ -1,6 +1,7 @@
 using GitHubMigrator.Business;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.EntityFrameworkCore;
 
 // F-086 exposes ONLY the non-executable SHA/count summary of the
 // already-committed F-082-bound snapshot. Original branch/tag refs and
@@ -25,8 +26,7 @@ public static class GitHubRemoteTypedRecoveryBaselineEndpoints
             Guid intentId, Guid confirmationId,
             GitHubRemoteTypedRecoveryBaselineOptions options,
             PostgresGitHubRemoteTypedRecoveryBaselineJournal journal,
-            PostgresGitHubRemoteSandboxPreSendBarrierJournal barriers,
-            CancellationToken ct) =>
+            AppDbContext db, CancellationToken ct) =>
         {
             if (!options.Enabled || options.AllowedRepositoryId <= 0 ||
                 string.IsNullOrWhiteSpace(options.AllowedRepository))
@@ -41,16 +41,12 @@ public static class GitHubRemoteTypedRecoveryBaselineEndpoints
                     return Results.NotFound(new {
                         error = "TypedRecoveryBaselineNotFound"
                     });
-                var barrier = await barriers.InspectScopedAsync(
-                    (await journal.ReadAfterBarrierAsync(
-                        confirmationId, intentId, id, planId,
-                        scopeId, ct))!.HazardId == Guid.Empty
-                        ? Guid.Empty
-                        : await GetBarrierIdAsync(
-                            journal, confirmationId, intentId,
-                            id, planId, scopeId, ct),
-                    confirmationId, intentId, id, planId, scopeId, ct);
-                if (barrier is null || barrier.Barrier.SessionId != sessionId)
+                var belongsToSession = await db
+                    .GitHubRemoteSandboxDispatchConfirmations.AsNoTracking()
+                    .AnyAsync(x => x.Id == confirmationId &&
+                        x.IntentId == intentId && x.SessionId == sessionId &&
+                        x.RepositoryId == status.RepositoryId, ct);
+                if (!belongsToSession)
                     return Results.NotFound(new {
                         error = "TypedRecoveryBaselineNotFound"
                     });
@@ -63,13 +59,4 @@ public static class GitHubRemoteTypedRecoveryBaselineEndpoints
         });
     }
 
-    private static async Task<Guid> GetBarrierIdAsync(
-        PostgresGitHubRemoteTypedRecoveryBaselineJournal journal,
-        Guid confirmationId, Guid intentId, Guid id,
-        Guid planId, Guid scopeId, CancellationToken ct)
-    {
-        var typed = await journal.ReadAfterBarrierAsync(
-            confirmationId, intentId, id, planId, scopeId, ct);
-        return typed is null ? Guid.Empty : typed.HazardId;
-    }
 }
