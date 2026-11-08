@@ -48,7 +48,8 @@ public sealed class GitHubSandboxAtomicPushFullClosureTests
                 true, f.RepositoryId, "gh-org/sandbox"), f.Target)
             .VerifyAsync(request, "ephemeral-f084-test-token", default);
         Assert.Equal(format, closure.GitObjectFormat);
-        Assert.True(closure.VerifiedReachableObjects >= 8);
+        // Two commits + two trees + two blobs + annotated tag = 7.
+        Assert.True(closure.VerifiedReachableObjects >= 7);
         Assert.Equal(closure.SourceObjectSetSha256,
             closure.RemoteObjectSetSha256);
         Assert.Equal(GitHubRemoteRefFenceIntegrity.Fingerprint(
