@@ -71,6 +71,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<GitHubRemoteTransmitHazardRecord>();
     public DbSet<GitHubRemoteTransmitHazardEventRecord> GitHubRemoteTransmitHazardEvents =>
         Set<GitHubRemoteTransmitHazardEventRecord>();
+    public DbSet<GitHubRemotePostSendClosureCheckpointRecord>
+        GitHubRemotePostSendClosureCheckpoints =>
+        Set<GitHubRemotePostSendClosureCheckpointRecord>();
+    public DbSet<GitHubRemotePostSendClosureEventRecord>
+        GitHubRemotePostSendClosureEvents =>
+        Set<GitHubRemotePostSendClosureEventRecord>();
     public DbSet<GitHubRemoteSandboxPreSendBarrierRecord>
         GitHubRemoteSandboxPreSendBarriers =>
         Set<GitHubRemoteSandboxPreSendBarrierRecord>();
@@ -796,6 +802,55 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasDatabaseName("github_remote_sandbox_review_session_events_session_id_key");
             entity.HasOne<GitHubRemoteSandboxReviewSessionRecord>().WithMany()
                 .HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<GitHubRemotePostSendClosureCheckpointRecord>(entity =>
+        {
+            entity.ToTable("github_remote_post_send_closure_checkpoints");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.BarrierId).HasColumnName("barrier_id");
+            entity.Property(x => x.ConfirmationId).HasColumnName("confirmation_id");
+            entity.Property(x => x.IntentId).HasColumnName("intent_id");
+            entity.Property(x => x.HazardId).HasColumnName("hazard_id");
+            entity.Property(x => x.GrantId).HasColumnName("grant_id");
+            entity.Property(x => x.ReadbackId).HasColumnName("readback_id");
+            entity.Property(x => x.ReconciliationId).HasColumnName("reconciliation_id");
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
+            entity.Property(x => x.BarrierEvidenceSha256).HasColumnName("barrier_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReadbackEvidenceSha256).HasColumnName("readback_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReconciliationEvidenceSha256).HasColumnName("reconciliation_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.FullObjectClosureSha256).HasColumnName("full_object_closure_sha256").HasMaxLength(64);
+            entity.Property(x => x.VerifiedAtUtc).HasColumnName("verified_at_utc");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(40);
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasIndex(x => x.BarrierId).IsUnique();
+            entity.HasIndex(x => x.HazardId).IsUnique();
+            entity.HasIndex(x => x.GrantId).IsUnique();
+            entity.HasIndex(x => x.ReadbackId).IsUnique();
+            entity.HasIndex(x => x.ReconciliationId).IsUnique();
+            entity.HasOne<GitHubRemoteSandboxPreSendBarrierRecord>().WithMany()
+                .HasForeignKey(x => x.BarrierId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubRemoteObjectReconciliationRecord>().WithMany()
+                .HasForeignKey(x => x.ReconciliationId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<GitHubRemotePostSendClosureEventRecord>(entity =>
+        {
+            entity.ToTable("github_remote_post_send_closure_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(16);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasIndex(x => x.CheckpointId).IsUnique();
+            entity.HasOne<GitHubRemotePostSendClosureCheckpointRecord>()
+                .WithMany().HasForeignKey(x => x.CheckpointId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<GitHubRemoteSandboxPreSendBarrierRecord>(entity =>
         {
