@@ -207,12 +207,16 @@ public sealed class GitHubIndependentRecoveryAcquisitionTests
                 PossibleSendRecordedAtUtc = now.AddTicks(10)
             };
             Typed = new(Baseline);
+            // The reconstructed F-082 marker must precede the independent
+            // provider observation, including GitHub's millisecond clock.
+            var postSend = now.AddMilliseconds(50);
             var remote = GitHubRefObservationIntegrity.Seal(
-                "gh-org", "sandbox", now,
+                "gh-org", "sandbox", postSend,
                 [new("refs/heads/main", Oid('a'), "commit"),
                  new("refs/heads/new-feature", Oid('b'), "commit"),
                  new("refs/tags/v1", Oid('d'), "tag")]);
-            var tips = GitHubRemoteTipIntegrity.Seal(remote, creates, now,
+            var tips = GitHubRemoteTipIntegrity.Seal(
+                remote, creates, postSend,
                 [new("refs/heads/new-feature", Oid('b'), "commit",
                     Oid('b'), Oid('c'), 0)]);
             Tips = new(new(remote, tips));
