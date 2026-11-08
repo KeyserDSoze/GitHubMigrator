@@ -24,7 +24,13 @@ public sealed record GitHubRemoteTypedRecoveryBaselineReceipt(
     string BaselineSha256, GitHubRefObservation Baseline,
     IReadOnlyList<GitMirrorRef> CreateCandidates,
     DateTimeOffset RecordedAtUtc, string State, string EvidenceSha256,
-    bool CanSend, bool MayAutomaticallyRetry, bool MigrationComplete);
+    bool CanSend, bool MayAutomaticallyRetry, bool MigrationComplete)
+{
+    // Derived ONLY by a trusted PostgreSQL read after F-082. This is
+    // historical epoch metadata, NOT part of the original F-086 snapshot
+    // SHA or a grant of write or retry authority.
+    public DateTimeOffset? PossibleSendRecordedAtUtc { get; init; }
+}
 
 public sealed record GitHubRemoteTypedRecoveryBaselineStatus(
     Guid Id, Guid ConfirmationId, Guid IntentId, Guid HazardId,
