@@ -224,7 +224,8 @@ public sealed class GitHubIndependentRecoveryAcquisitionTests
 
         public GitHubIndependentRecoveryAcquisition Service(bool enabled = true) =>
             new(new(enabled, 2468, "gh-org/sandbox"),
-                new(true, 1234, 88,
+                new GitHubIndependentRecoveryCredentialOptions(
+                    true, 1234, 88,
                     "sandbox/app-private-key", "gh-org/sandbox"),
                 Secret, Typed, Token, Tips, Readback,
                 Readback, Closure, Closure);
@@ -259,6 +260,27 @@ public sealed class GitHubIndependentRecoveryAcquisitionTests
         Assert.Equal(0, f.Secret.Reads);
         Assert.Equal(0, f.Token.Minted);
         Assert.Equal(0, f.Tips.Reads);
+    }
+
+    [Fact]
+    public async Task F087_recovery_readonly_credentials_do_not_depend_on_F043_write_switch()
+    {
+        var f = new Fixture();
+        // The coordinator receives ONLY the recovery-specific option,
+        // not F-043's write-credential flag. Missing or disabled recovery
+        // read credentials fail before reading any private key.
+        var service = new GitHubIndependentRecoveryAcquisition(
+            new(true, 2468, "gh-org/sandbox"),
+            new(false, 1234, 88,
+                "sandbox/app-private-key", "gh-org/sandbox"),
+            f.Secret, f.Typed, f.Token, f.Tips, f.Readback,
+            f.Readback, f.Closure, f.Closure);
+        var ex = await Assert.ThrowsAsync<GitHubIndependentRecoveryException>(
+            () => f.ObserveAsync(svc: service));
+        Assert.Equal("IndependentRecoveryDisabled", ex.Code);
+        Assert.Equal(0, f.Typed.Reads);
+        Assert.Equal(0, f.Secret.Reads);
+        Assert.Equal(0, f.Token.Minted);
     }
 
     [Fact]
