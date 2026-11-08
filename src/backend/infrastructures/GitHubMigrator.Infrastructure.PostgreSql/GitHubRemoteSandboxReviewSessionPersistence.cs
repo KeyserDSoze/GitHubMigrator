@@ -295,6 +295,28 @@ public sealed class PostgresGitHubRemoteSandboxReviewSessionJournal(
         return session;
     }
 
+    // F-079: a session GUID is never an authorization to inspect evidence.
+    // The scoped read is a single indexed database existence check followed
+    // by the existing F-078 immutable audit and live authority inspection.
+    public async Task<GitHubRemoteSandboxReviewSessionInspection?>
+        InspectScopedAsync(Guid sessionId, Guid preparationId, Guid planId,
+            Guid scopeId, long repositoryId, CancellationToken ct)
+    {
+        RequireAllowed(repositoryId);
+        if (sessionId == Guid.Empty || preparationId == Guid.Empty ||
+            planId == Guid.Empty || scopeId == Guid.Empty)
+            throw Refused("SandboxReviewSessionInputInvalid");
+        var owned = await db.GitHubRemoteSandboxReviewSessions.AsNoTracking()
+            .AnyAsync(s => s.Id == sessionId &&
+                s.RepositoryId == repositoryId &&
+                db.GitHubRemoteTestGrants.Any(g =>
+                    g.Id == s.GrantId && g.RepositoryId == repositoryId &&
+                    g.PreparationId == preparationId &&
+                    g.PlanId == planId && g.ScopeId == scopeId), ct);
+        if (!owned) return null;
+        return await InspectAsync(sessionId, repositoryId, ct);
+    }
+
     public async Task<GitHubRemoteSandboxReviewSessionInspection?> InspectAsync(
         Guid sessionId, long repositoryId, CancellationToken ct)
     {
