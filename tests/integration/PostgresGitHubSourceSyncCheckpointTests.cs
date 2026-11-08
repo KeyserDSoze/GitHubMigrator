@@ -115,6 +115,11 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
             seed.Run.Id, plan.Id, plan.SnapshotId, null,
             plan.ManifestSha256, Guid.NewGuid(), default);
         GitHubSourceSyncCheckpointIntegrity.VerifyReceipt(first);
+        Assert.Equal(2, first.EvidenceVersion);
+        Assert.NotNull(first.RefChangeManifest);
+        Assert.Equal(first.Proof.TotalRefChanges, first.RefChangeManifest!.Total);
+        Assert.Equal(first.Proof.SnapshotId, first.RefChangeManifest.SnapshotId);
+        Assert.Equal(64, first.RefChangeAttestationSha256!.Length);
         Assert.True(first.Proof.IsBaselineSnapshot);
         Assert.Equal(plan.ChangedRefCount,
             first.Proof.Repositories.Sum(x => x.Total));
@@ -133,6 +138,9 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
         Assert.Equal(first.Id, replay.Id);
         Assert.Equal(first.RecordedBy, replay.RecordedBy);
         Assert.Equal(first.EvidenceSha256, replay.EvidenceSha256);
+        Assert.Equal(first.RefChangeAttestationSha256,
+            replay.RefChangeAttestationSha256);
+        Assert.Equal(first.RefChangeManifest, replay.RefChangeManifest);
         var after = await Journal(nextSession,
             new PostgresIncrementalOperationPlanTests.ManualClock(
                 DateTimeOffset.UtcNow)).ListAsync(
@@ -171,6 +179,9 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
         Assert.Equal(first.Id, second.Proof.PreviousCheckpointId);
         Assert.Equal(first.EvidenceSha256,
             second.Proof.PreviousEvidenceSha256);
+        Assert.Equal(2, second.EvidenceVersion);
+        Assert.NotNull(second.RefChangeManifest);
+        Assert.Equal(second.Proof.TotalRefChanges, second.RefChangeManifest!.Total);
         Assert.Equal(1, second.Proof.Repositories.Single(x =>
             x.SourceRepositoryId == "repo-2").Added);
         Assert.Equal(0, second.Proof.Repositories.Single(x =>
@@ -226,6 +237,90 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
             .Where(x => x.PlanId == plan.Id).ToArrayAsync());
         Assert.Single(await verify.GitHubSourceSyncCheckpointEvents.AsNoTracking()
             .Where(x => x.CheckpointId == receipts[0].Id).ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task F091_historic_count_only_F090_receipt_remains_readable_as_version_one()
+    {
+        await using var db = fixture.NewContext();
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        var (seed, plan) = await SeedPlanAsync(db, clock);
+        var stage = await db.StagingSnapshotSyncs.AsNoTracking()
+            .SingleAsync(x => x.SnapshotId == plan.SnapshotId);
+        var staging = new PostgresStagingRepository(db, clock);
+        var counts = (await staging.GetChangeSummaryAsync(plan.SnapshotId,
+            default))!;
+        var refRows = await db.StagingAssetChanges.AsNoTracking()
+            .Where(x => x.SourceConnectionId == plan.SourceConnectionId &&
+                x.SnapshotId == plan.SnapshotId && x.AssetType == "ref")
+            .ToArrayAsync();
+        var mapped = plan.Steps.Where(x => x.Kind == "ReviewTargetName")
+            .OrderBy(x => x.SourceRepositoryId, StringComparer.Ordinal)
+            .Select(step => {
+                var changes = refRows.Where(row =>
+                    System.Text.Json.JsonSerializer.Deserialize<string[]>(
+                        row.SourceId)![0] == step.SourceRepositoryId).ToArray();
+                return new GitHubSourceRefDelta(step.SourceRepositoryId,
+                    step.TargetRepositoryName,
+                    changes.Count(row => row.Kind == "Added"),
+                    changes.Count(row => row.Kind == "Changed"),
+                    changes.Count(row => row.Kind == "Restored"),
+                    changes.Count(row => row.Kind == "Missing"));
+            }).ToArray();
+        var baseline = new GitHubSourceSyncCheckpointProof(
+            plan.PreparationId, plan.Id, plan.SourceConnectionId,
+            plan.SnapshotId, plan.SnapshotId, null, null,
+            plan.ManifestSha256, stage.SourceCollectedAtUtc,
+            stage.AppliedAtUtc, stage.SourceInventoryComplete,
+            true, counts.Added, counts.Changed, counts.Restored,
+            counts.Missing, refRows.Length,
+            refRows.Length - mapped.Sum(m => m.Total), mapped);
+        var id = Guid.NewGuid();
+        var actor = Guid.NewGuid();
+        var sha = GitHubSourceSyncCheckpointIntegrity.Digest(baseline);
+        var timestamp = DateTimeOffset.UtcNow;
+        await using (var transaction = await db.Database.BeginTransactionAsync())
+        {
+            db.GitHubSourceSyncCheckpoints.Add(new() {
+                Id = id, PreparationId = seed.Run.Id,
+                PlanId = plan.Id, SourceConnectionId = plan.SourceConnectionId,
+                SnapshotId = plan.SnapshotId, PreviousCheckpointId = null,
+                ManifestSha256 = plan.ManifestSha256,
+                ProofJson = System.Text.Json.JsonSerializer.Serialize(baseline),
+                EvidenceSha256 = sha, EvidenceVersion = 1,
+                RecordedBy = actor, RecordedAtUtc = timestamp,
+                CanPush = false, CanRetry = false,
+                CanDispatch = false, MigrationComplete = false
+            });
+            await db.SaveChangesAsync();
+            db.GitHubSourceSyncCheckpointEvents.Add(new() {
+                CheckpointId = id, Type = "Recorded", ActorId = actor,
+                EvidenceSha256 = sha, OccurredAtUtc = timestamp
+            });
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+        }
+
+        await using var reopened = fixture.NewContext();
+        var journal = Journal(reopened, clock);
+        var history = await journal.ListAsync(
+            seed.Run.Id, plan.Id, null, 10, default);
+        var old = Assert.Single(history.Items);
+        Assert.Equal(1, old.EvidenceVersion);
+        Assert.Null(old.RefChangeManifest);
+        Assert.Null(old.RefChangeAttestationSha256);
+        Assert.Equal(sha, old.EvidenceSha256);
+        GitHubSourceSyncCheckpointIntegrity.VerifyReceipt(old);
+
+        // No retroactive upgrade or duplicate append event on exact replay.
+        var replay = await journal.CaptureAsync(seed.Run.Id, plan.Id,
+            plan.SnapshotId, null, plan.ManifestSha256,
+            Guid.NewGuid(), default);
+        Assert.Equal(old.Id, replay.Id);
+        Assert.Equal(1, replay.EvidenceVersion);
+        Assert.Single(await reopened.GitHubSourceSyncCheckpointEvents
+            .AsNoTracking().Where(x => x.CheckpointId == id).ToArrayAsync());
     }
 
     [Fact]
