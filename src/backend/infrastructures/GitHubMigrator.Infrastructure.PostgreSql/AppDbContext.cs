@@ -29,6 +29,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<IdentityMappingDraftRecord> IdentityMappingDrafts => Set<IdentityMappingDraftRecord>();
     public DbSet<MigrationPlanDraftRecord> MigrationPlanDrafts => Set<MigrationPlanDraftRecord>();
     public DbSet<StagingAssetRecord> StagingAssets => Set<StagingAssetRecord>();
+    public DbSet<GitHubSourceSyncCheckpointRecord> GitHubSourceSyncCheckpoints
+        => Set<GitHubSourceSyncCheckpointRecord>();
+    public DbSet<GitHubSourceSyncCheckpointEventRecord> GitHubSourceSyncCheckpointEvents
+        => Set<GitHubSourceSyncCheckpointEventRecord>();
     public DbSet<StagingSnapshotSyncRecord> StagingSnapshotSyncs => Set<StagingSnapshotSyncRecord>();
     public DbSet<StagingAssetChangeRecord> StagingAssetChanges => Set<StagingAssetChangeRecord>();
     public DbSet<IncrementalPreparationRecord> IncrementalPreparations =>
@@ -246,6 +250,39 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasDatabaseName("ix_staging_assets_changed");
             entity.HasIndex(x => new { x.SourceConnectionId, x.Missing })
                 .HasDatabaseName("ix_staging_assets_missing");
+        });
+        // F-090 source-only append-only checkpoint chain; DDL installed by
+        // GitHubSourceSyncCheckpointSchema after EF's base tables.
+        builder.Entity<GitHubSourceSyncCheckpointRecord>(entity =>
+        {
+            entity.ToTable("github_source_sync_checkpoints");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.PreviousCheckpointId).HasColumnName("previous_checkpoint_id");
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.ProofJson).HasColumnName("proof_json");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.CanPush).HasColumnName("can_push");
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+        });
+        builder.Entity<GitHubSourceSyncCheckpointEventRecord>(entity =>
+        {
+            entity.ToTable("github_source_sync_checkpoint_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.Type).HasColumnName("type");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
         });
         builder.Entity<StagingSnapshotSyncRecord>(entity =>
         {
