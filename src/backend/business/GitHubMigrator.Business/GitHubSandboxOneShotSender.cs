@@ -143,6 +143,7 @@ public sealed class GitHubSandboxOneShotSender(
     IGitHubRefObservationReader refs,
     IGitHubCandidatePolicyReader policies,
     IGitHubSandboxPreSendAuthority authority,
+    IGitHubRemoteTypedRecoveryBaselineJournal typedBaselines,
     IGitHubSandboxOneShotGitWriter writer,
     IGitHubRemoteTipObjectReader readback)
 {
@@ -223,6 +224,16 @@ public sealed class GitHubSandboxOneShotSender(
                     physical.BundleSha256 != bundle.BundleSha256 ||
                     physical.BundleBytes != bundle.BundleBytes)
                     throw new GitHubSandboxOneShotException("SandboxSenderSourceDrift");
+
+                // F-086: persist a typed, immutable recovery snapshot
+                // BEFORE the irreversible F-082 commit. If this fails,
+                // the sender must refuse to send anything. A future
+                // independent reader can reconstitute the exact original
+                // branch/tag types and candidate OIDs after a crash,
+                // without accepting caller-supplied refs or any token.
+                await typedBaselines.CaptureAsync(
+                    confirmationId, intentId, preparationId, planId,
+                    scopeId, independentOperator, final, second, tokenCt);
 
                 // This commit is the irreversible point. Cancellation,
                 // process crash and lost acknowledgment after this point
