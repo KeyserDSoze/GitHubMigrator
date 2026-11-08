@@ -204,11 +204,11 @@ public sealed class PostgresIncrementalOperationPlanTests(PostgresDraftFixture f
             .CountAsync(x => x.PlanId == results[0].Id));
     }
 
-    private sealed record Seed(IncrementalPreparationView Run,
+    internal sealed record Seed(IncrementalPreparationView Run,
         IncrementalReviewView Review, IncrementalTargetPreflightView Preflight,
         Guid OperatorId, Guid ReviewerId);
 
-    private static IncrementalOperationPlanService NewService(
+    internal static IncrementalOperationPlanService NewService(
         AppDbContext db, TimeProvider clock) =>
         new(new PostgresIncrementalOperationPlanRepository(db, clock));
 
@@ -227,7 +227,7 @@ public sealed class PostgresIncrementalOperationPlanTests(PostgresDraftFixture f
                 new("repo-2", "migration-two", "GitMirror", "NotVisibleOrMissing")
             ]);
 
-    private static async Task<Seed> SeedAsync(
+    internal static async Task<Seed> SeedAsync(
         AppDbContext db, ManualClock clock, int refs = 1)
     {
         var source = Guid.NewGuid();
@@ -293,7 +293,7 @@ public sealed class PostgresIncrementalOperationPlanTests(PostgresDraftFixture f
         return new(run, approved, preflight, author, reviewer);
     }
 
-    private sealed class ManualClock(DateTimeOffset now) : TimeProvider
+    internal sealed class ManualClock(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
         public void Advance(TimeSpan time) => now = now.Add(time);
