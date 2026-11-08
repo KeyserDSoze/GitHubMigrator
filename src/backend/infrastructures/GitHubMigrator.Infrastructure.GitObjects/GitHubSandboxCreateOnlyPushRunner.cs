@@ -28,6 +28,8 @@ public sealed class GitHubSandboxCreateOnlyPushRunner(
             oneRepositoryInstallationToken.Length is < 10 or > 4096 ||
             oneRepositoryInstallationToken.Any(char.IsControl))
             throw Refused("SandboxPushTokenInvalid");
+        if (UsedBarriers.Count >= 10_000)
+            throw Refused("SandboxPushProcessBudgetExceeded");
         if (!UsedBarriers.TryAdd(input.Barrier.Id, 0))
             throw Refused("SandboxPushAlreadyAttempted");
 
@@ -182,7 +184,9 @@ public sealed class GitHubSandboxCreateOnlyPushRunner(
             env["GIT_CONFIG_VALUE_4"] = "true";
             env["GIT_CONFIG_KEY_5"] = "credential.helper";
             env["GIT_CONFIG_VALUE_5"] = "";
-            env["GIT_CONFIG_KEY_6"] = "http.https://github.com/.extraHeader";
+            env["GIT_CONFIG_KEY_6"] = "http.https://github.com/" +
+                options.AllowedOrganization + "/" + options.AllowedRepository +
+                ".git.extraHeader";
             env["GIT_CONFIG_VALUE_6"] = authHeader;
         }
         foreach (var arg in args)
