@@ -388,6 +388,47 @@ public sealed class GitHubSandboxOneShotSenderTests
     }
 
     [Fact]
+    public void F084_unsigned_stale_or_drifted_typed_baseline_fails_before_git()
+    {
+        var f = new Fixture();
+        var options = new GitHubSandboxOneShotOptions(
+            true, 2468, "gh-org", "sandbox");
+        var baseline = f.Refs.Baseline;
+        var packet = new GitHubSandboxPushInput(
+            f.Source, f.Bundle, f.Barrier,
+            GitHubRemoteRefFenceIntegrity.Fingerprint(baseline.Refs),
+            baseline);
+        GitHubSandboxPushIntegrity.Verify(packet, options);
+        var changed = new[] {
+            packet with { BaselineSha256 = Sha('0') },
+            packet with {
+                BaselineRefs = baseline with {
+                    EvidenceSha256 = Sha('0')
+                }
+            },
+            packet with {
+                BaselineRefs = baseline with {
+                    ObservedAtUtc = baseline.ObservedAtUtc.AddMinutes(-10)
+                }
+            },
+            packet with {
+                BaselineRefs = baseline with {
+                    Refs = [
+                        .. baseline.Refs,
+                        new GitHubObservedRef("refs/heads/new",
+                            new string('b', 40), "commit")
+                    ]
+                }
+            }
+        };
+        foreach (var forged in changed)
+            Assert.Equal("SandboxPushEvidenceInvalid",
+                Assert.Throws<GitHubSandboxOneShotException>(() =>
+                    GitHubSandboxPushIntegrity.Verify(
+                        forged, options)).Code);
+    }
+
+    [Fact]
     public void F083_forged_packet_barrier_or_target_is_rejected_before_git()
     {
         var f = new Fixture();
