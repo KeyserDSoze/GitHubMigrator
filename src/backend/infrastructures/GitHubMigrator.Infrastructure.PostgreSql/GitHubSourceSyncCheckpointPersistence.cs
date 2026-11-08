@@ -97,6 +97,11 @@ public sealed class PostgresGitHubSourceSyncCheckpointJournal(
             CanDispatch = false, MigrationComplete = false
         };
         db.GitHubSourceSyncCheckpoints.Add(record);
+        // EF Core has no navigation-based insert ordering for this
+        // PostgreSQL FK. Persist the parent first, then the event,
+        // BOTH inside the same uncommitted transaction: crash or
+        // cancellation still rolls everything back atomically.
+        await db.SaveChangesAsync(ct);
         db.GitHubSourceSyncCheckpointEvents.Add(new()
         {
             CheckpointId = record.Id, Type = "Recorded",
