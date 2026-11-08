@@ -35,20 +35,20 @@ public sealed class PostgresGitHubRecoveredReadbackTests(
     }
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private sealed record Scenario(
+    internal sealed record Scenario(
         PostgresGitHubRemoteDispatchReviewTests.TestCase Setup,
         GitHubRemoteSandboxDispatchConfirmationReceipt Confirmation,
         GitHubRemoteTypedRecoveryBaselineReceipt Typed,
         GitHubRemoteSandboxPreSendBarrierReceipt Barrier);
 
-    private static PostgresGitHubRemotePostSendRecoveryJournal Recovery(
+    internal static PostgresGitHubRemotePostSendRecoveryJournal Recovery(
         AppDbContext db, Scenario x) =>
         new(db, PostgresGitHubRemoteSandboxPreSendBarrierTests.Options(
             x.Setup),
             PostgresGitHubRemoteSandboxPreSendBarrierTests.Journal(
                 db, x.Setup));
 
-    private static PostgresGitHubRemoteRecoveredReadbackJournal Journal(
+    internal static PostgresGitHubRemoteRecoveredReadbackJournal Journal(
         AppDbContext db, Scenario x) =>
         new(db, TimeProvider.System,
             new(true, x.Typed.RepositoryId, "gh-org/sandbox"),
@@ -56,7 +56,7 @@ public sealed class PostgresGitHubRecoveredReadbackTests(
                 db, x.Setup),
             Recovery(db, x));
 
-    private static async Task<Scenario> SeedAsync(AppDbContext db)
+    internal static async Task<Scenario> SeedAsync(AppDbContext db)
     {
         var e = PostgresGitHubRemoteDispatchReviewTests.NewCase();
         var confirmation = await PostgresGitHubRemoteSandboxPreSendBarrierTests
@@ -73,7 +73,7 @@ public sealed class PostgresGitHubRecoveredReadbackTests(
         return new(e, confirmation, snapshot, marker);
     }
 
-    private static GitHubRemoteReadbackEvidence Evidence(
+    internal static GitHubRemoteReadbackEvidence Evidence(
         Scenario scenario, Guid observerId, bool drift = false)
     {
         var source = scenario.Typed;
