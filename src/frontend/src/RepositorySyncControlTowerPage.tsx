@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import SourceSyncCheckpointPanel from './SourceSyncCheckpointPanel';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle, ArrowRight, CheckCircle2, Clock3, CloudDownload,
@@ -293,6 +294,10 @@ export default function RepositorySyncControlTowerPage({
         </button>
       </div>}
 
+      <SourceSyncCheckpointPanel
+        token={token} preparationId={pulse.preparationId}
+        planId={pulse.planId} manifestSha256={pulse.manifestSha256}
+        isSuperAdmin={isSuperAdmin} />
       <div className="sync-repo-heading">
         <div><h2>{t('syncPerRepository')}</h2>
           <p>{t('syncRepositoryIntro')}</p></div>
