@@ -24,7 +24,7 @@ public sealed record GitHubSandboxPushInput(
     GitHubCreateOnlyCandidatePacket Source,
     GitSourceBundleView Bundle,
     GitHubRemoteSandboxPreSendBarrierReceipt Barrier,
-    string BaselineSha256);
+    string BaselineSha256, GitHubRefObservation BaselineRefs);
 
 public interface IGitHubSandboxOneShotGitWriter
 {
@@ -63,7 +63,9 @@ public static class GitHubSandboxPushIntegrity
         var p = source?.Packet;
         var b = request?.Bundle;
         var h = request?.Barrier;
+        var baseline = request?.BaselineRefs;
         if (source is null || p is null || b is null || h is null ||
+            baseline is null || baseline.Refs is null ||
             !options.Enabled || options.AllowedRepositoryId <= 0 ||
             !GitHubRefObservationIntegrity.ValidOwner(options.AllowedOrganization) ||
             !GitHubRefObservationIntegrity.ValidRepository(options.AllowedRepository) ||
@@ -83,6 +85,12 @@ public static class GitHubSandboxPushIntegrity
             p.ReconciliationSha256 != b.ReconciliationSha256 ||
             !b.IsCurrent || b.ReadyForExecution ||
             !GitSourceBundleStorageCheck.ValidSha(request.BaselineSha256) ||
+            !string.Equals(baseline.Organization, p.Organization,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(baseline.Repository, p.Repository,
+                StringComparison.OrdinalIgnoreCase) ||
+            baseline.ObservedAtUtc < h.RecordedAtUtc.AddSeconds(-30) ||
+            baseline.ObservedAtUtc > h.RecordedAtUtc.AddSeconds(5) ||
             source.Candidates is null ||
             source.Candidates.Count != p.CreateCandidates ||
             source.Candidates.Count is < 1 or >
@@ -96,8 +104,26 @@ public static class GitHubSandboxPushIntegrity
                 "f044-create-only-candidate-refs-v1", source.Candidates) !=
                 p.CandidateSetSha256)
             throw new GitHubSandboxOneShotException("SandboxPushEvidenceInvalid");
-        try { GitHubRemoteSandboxPreSendBarrierIntegrity.Verify(h); }
-        catch (GitHubRemoteSandboxPreSendBarrierException)
+        try
+        {
+            GitHubRemoteSandboxPreSendBarrierIntegrity.Verify(h);
+            var sealedBaseline = GitHubRefObservationIntegrity.Seal(
+                baseline.Organization, baseline.Repository,
+                baseline.ObservedAtUtc, baseline.Refs);
+            if (sealedBaseline.EvidenceSha256 != baseline.EvidenceSha256 ||
+                !sealedBaseline.Refs.SequenceEqual(baseline.Refs) ||
+                GitHubRemoteRefFenceIntegrity.Fingerprint(baseline.Refs) !=
+                    request.BaselineSha256 ||
+                baseline.Refs.Any(x => source.Candidates.Any(c =>
+                    c.Name == x.Name)))
+                throw new GitHubSandboxOneShotException(
+                    "SandboxPushEvidenceInvalid");
+        }
+        catch (Exception ex) when (
+            ex is GitHubRemoteSandboxPreSendBarrierException or
+                GitHubRefObservationException or
+                GitHubRemoteRefFenceException or
+                GitHubSandboxOneShotException)
         { throw new GitHubSandboxOneShotException("SandboxPushEvidenceInvalid"); }
     }
 }
@@ -205,7 +231,7 @@ public sealed class GitHubSandboxOneShotSender(
                     confirmationId, intentId, preparationId, planId, scopeId,
                     independentOperator, tokenCt);
                 var request = new GitHubSandboxPushInput(
-                    source, bundle, marker, baseline);
+                    source, bundle, marker, baseline, second);
                 var attempted = false;
                 try
                 {
