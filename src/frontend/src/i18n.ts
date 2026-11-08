@@ -4,6 +4,7 @@ import { initReactI18next } from 'react-i18next';
 const translations = {
   en: {
     translation: {
+      cpDisabled: "Source checkpoint recording is not enabled for this environment. Existing source sync monitoring remains available.",
       cpTitle: "Durable source checkpoints",
       cpIntro: "Immutable snapshot-by-snapshot source evidence linked to the exact reviewed plan, saved in PostgreSQL. These checks are not a GitHub migration.",
       cpRefresh: "Refresh checkpoints",
@@ -487,6 +488,7 @@ const translations = {
   },
   it: {
     translation: {
+      cpDisabled: "La registrazione dei checkpoint sorgente non è abilitata in questo ambiente. Il monitoraggio dello staging resta disponibile.",
       cpTitle: "Checkpoint sorgente persistenti",
       cpIntro: "Prove immutabili, snapshot per snapshot, collegate al piano revisionato e salvate in PostgreSQL. Non attestano una migrazione GitHub.",
       cpRefresh: "Aggiorna checkpoint",
