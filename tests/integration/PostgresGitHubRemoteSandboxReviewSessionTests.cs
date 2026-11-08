@@ -92,6 +92,58 @@ public sealed class PostgresGitHubRemoteSandboxReviewSessionTests(
     }
 
     [Fact]
+    public async Task F079_scoped_readback_requires_exact_plan_and_tracks_historical_hazard()
+    {
+        var e = PostgresGitHubRemoteDispatchReviewTests.NewCase();
+        await using var db = fixture.NewContext();
+        var review = await SeedAndReviewAsync(db, e);
+        var journal = new PostgresGitHubRemoteSandboxReviewSessionJournal(
+            db, Options(e));
+        var receipt = await journal.RecordAsync(review, e.Actor, default);
+        var packet = e.Source.Packet;
+
+        Assert.Null(await journal.InspectScopedAsync(
+            receipt.Id, Guid.NewGuid(), packet.PlanId,
+            packet.ScopeId, e.RepositoryId, default));
+        Assert.Null(await journal.InspectScopedAsync(
+            receipt.Id, packet.PreparationId, Guid.NewGuid(),
+            packet.ScopeId, e.RepositoryId, default));
+        Assert.Null(await journal.InspectScopedAsync(
+            receipt.Id, packet.PreparationId, packet.PlanId,
+            Guid.NewGuid(), e.RepositoryId, default));
+        Assert.Null(await journal.InspectScopedAsync(
+            Guid.NewGuid(), packet.PreparationId, packet.PlanId,
+            packet.ScopeId, e.RepositoryId, default));
+
+        var current = await journal.InspectScopedAsync(
+            receipt.Id, packet.PreparationId, packet.PlanId,
+            packet.ScopeId, e.RepositoryId, default);
+        Assert.NotNull(current);
+        Assert.Equal(GitHubRemoteSandboxReviewSessionIntegrity.Current,
+            current.Status);
+        Assert.False(current.CanExecute);
+        Assert.False(current.CanRetry);
+
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE github_remote_transmit_hazards
+            SET state='MayHaveTransmitted',
+                marked_by={Guid.NewGuid()},
+                updated_at_utc=clock_timestamp()
+            WHERE id={e.HazardId}
+            """);
+        var historical = await journal.InspectScopedAsync(
+            receipt.Id, packet.PreparationId, packet.PlanId,
+            packet.ScopeId, e.RepositoryId, default);
+        Assert.NotNull(historical);
+        Assert.True(historical.HistoricalOnly);
+        Assert.False(historical.CanExecute);
+        Assert.False(historical.CanRetry);
+        Assert.False(historical.MigrationComplete);
+        Assert.Equal(receipt.EvidenceSha256,
+            historical.Session.EvidenceSha256);
+    }
+
+    [Fact]
     public async Task F078_six_replicas_append_exactly_one_session_and_audit_event()
     {
         var e = PostgresGitHubRemoteDispatchReviewTests.NewCase();
