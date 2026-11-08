@@ -201,6 +201,12 @@ builder.Services.AddSingleton(new GitHubIndependentRecoveryOptions(
     builder.Configuration.GetValue<long>(
         "GitHubIndependentRecovery:AllowedRepositoryId", 0),
     builder.Configuration["GitHubIndependentRecovery:AllowedRepository"] ?? ""));
+builder.Services.AddSingleton(new GitHubIndependentRecoveryCredentialOptions(
+    builder.Configuration.GetValue("GitHubIndependentRecovery:ReadCredentialsEnabled", false),
+    builder.Configuration.GetValue<long>("GitHubIndependentRecovery:AppId", 0),
+    builder.Configuration.GetValue<long>("GitHubIndependentRecovery:InstallationId", 0),
+    builder.Configuration["GitHubIndependentRecovery:PrivateKeySecretReference"] ?? "",
+    builder.Configuration["GitHubIndependentRecovery:AllowedRepository"] ?? ""));
 builder.Services.AddScoped<GitHubIndependentRecoveryAcquisition>();
 builder.Services.AddScoped<IGitHubRemoteRecoveredReadbackJournal,
     PostgresGitHubRemoteRecoveredReadbackJournal>();
