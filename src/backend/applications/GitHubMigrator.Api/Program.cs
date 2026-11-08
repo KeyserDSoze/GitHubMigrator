@@ -168,6 +168,14 @@ builder.Services.AddScoped<IGitHubRemoteDispatchAuthorityVerifier,
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxReviewSessionJournal>();
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxDispatchIntentJournal>();
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxDispatchConfirmationJournal>();
+builder.Services.AddSingleton(new GitHubRemoteTypedRecoveryBaselineOptions(
+    builder.Configuration.GetValue("GitHubRemoteTypedRecoveryBaseline:Enabled", false),
+    builder.Configuration.GetValue<long>(
+        "GitHubRemoteTypedRecoveryBaseline:AllowedRepositoryId", 0),
+    builder.Configuration["GitHubRemoteTypedRecoveryBaseline:AllowedRepository"] ?? ""));
+builder.Services.AddScoped<PostgresGitHubRemoteTypedRecoveryBaselineJournal>();
+builder.Services.AddScoped<IGitHubRemoteTypedRecoveryBaselineJournal>(
+    sp => sp.GetRequiredService<PostgresGitHubRemoteTypedRecoveryBaselineJournal>());
 builder.Services.AddSingleton(new GitHubSandboxOneShotOptions(
     builder.Configuration.GetValue("GitHubSandboxOneShot:Enabled", false),
     builder.Configuration.GetValue<long>("GitHubSandboxOneShot:AllowedRepositoryId", 0),
@@ -630,6 +638,7 @@ await GitHubRemoteSandboxDispatchConfirmationSchema.InitializeAsync(app.Services
 await GitHubRemoteSandboxPreSendBarrierSchema.InitializeAsync(app.Services);
 await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
 await GitHubRemotePostSendRecoverySchema.InitializeAsync(app.Services);
+await GitHubRemoteTypedRecoveryBaselineSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
