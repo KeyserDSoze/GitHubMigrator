@@ -54,6 +54,7 @@ public static class GitHubSourceRefChangeManifestIntegrity
             changes is null)
             throw Invalid();
 
+        ct.ThrowIfCancellationRequested();
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Append(hash, JsonSerializer.Serialize(new[] {
             Domain, sourceConnectionId.ToString("D"),
@@ -64,6 +65,7 @@ public static class GitHubSourceRefChangeManifestIntegrity
         long added = 0, changed = 0, restored = 0, missing = 0;
         await foreach (var change in changes.WithCancellation(ct))
         {
+            ct.ThrowIfCancellationRequested();
             if (change is null || change.AssetType != "ref" ||
                 string.IsNullOrWhiteSpace(change.SourceId) ||
                 change.SourceId.Length > 1024 || change.Revision < 1)
