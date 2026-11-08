@@ -48,7 +48,7 @@ public sealed class PostgresGitHubRecoveredReadbackTests(
             PostgresGitHubRemoteSandboxPreSendBarrierTests.Journal(
                 db, x.Setup));
 
-    private static PostgresGitHubRecoveredReadbackJournal Journal(
+    private static PostgresGitHubRemoteRecoveredReadbackJournal Journal(
         AppDbContext db, Scenario x) =>
         new(db, TimeProvider.System,
             new(true, x.Typed.RepositoryId, "gh-org/sandbox"),
