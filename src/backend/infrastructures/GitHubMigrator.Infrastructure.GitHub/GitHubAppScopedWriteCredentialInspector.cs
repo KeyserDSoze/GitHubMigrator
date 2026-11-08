@@ -12,9 +12,34 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 // repository API write, no Git push, no token returned or persisted.
 public sealed class GitHubAppScopedWriteCredentialInspector(
     HttpClient client, TimeProvider clock)
-    : IGitHubAppScopedWriteCredentialInspector, IGitHubRemoteAppPreflightReader
+    : IGitHubAppScopedWriteCredentialInspector, IGitHubRemoteAppPreflightReader,
+      IGitHubSandboxVerifiedTokenScope
 {
     private const int MaxReplyBytes = 32_768;
+
+    // F-083: narrowly scoped, internal-only callback. F-043/F-051 still
+    // mint and discard their own tokens without exposing them. The GitHub
+    // App token stays in memory inside this sandbox sender callback; neither
+    // a public API nor an audit record receives the token or URL.
+    public async Task<GitHubSandboxOneShotOutcome> WithVerifiedTokenAsync(
+        long appId, long installationId, string privateKeyPem,
+        string organization, string repository, long expectedRepositoryId,
+        Func<string, CancellationToken, Task<GitHubSandboxOneShotOutcome>> action,
+        CancellationToken ct)
+    {
+        if (expectedRepositoryId <= 0 || action is null)
+            throw new GitHubSandboxOneShotException("SandboxSenderTokenScopeInvalid");
+        var minted = await MintVerifiedTokenAsync(
+            appId, installationId, privateKeyPem,
+            organization, repository, ct);
+        if (minted.Observation.RepositoryId != expectedRepositoryId ||
+            minted.Observation.InstallationId != installationId ||
+            minted.Observation.TokenExpiresAtUtc <=
+                clock.GetUtcNow().AddMinutes(2))
+            throw new GitHubSandboxOneShotException(
+                "SandboxSenderInstallationIdentityChanged");
+        return await action(minted.Token, ct);
+    }
 
     public async Task<GitHubAppWriteScopeObservation> InspectAsync(
         long appId, long installationId, string privateKeyPem,
