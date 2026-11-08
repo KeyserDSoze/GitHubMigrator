@@ -13,6 +13,25 @@ type Props = {
 const errorMessage = (value: unknown) =>
   value instanceof Error ? value.message : 'UnknownError';
 const short = (value: string) => value.slice(0, 16) + '…';
+const isSha = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+function safeRefEvidence(receipt: SourceSyncCheckpointReceipt): boolean {
+  if (receipt.evidenceVersion === 1) {
+    return receipt.refChangeManifest == null &&
+      receipt.refChangeAttestationSha256 == null;
+  }
+  const refs = receipt.refChangeManifest;
+  return receipt.evidenceVersion === 2 &&
+    refs != null &&
+    isSha(refs.evidenceSha256) &&
+    isSha(receipt.refChangeAttestationSha256) &&
+    refs.sourceConnectionId === receipt.proof.sourceConnectionId &&
+    refs.snapshotId === receipt.proof.snapshotId &&
+    [refs.added, refs.changed, refs.restored, refs.missing]
+      .every(x => Number.isSafeInteger(x) && x >= 0) &&
+    refs.added + refs.changed + refs.restored + refs.missing ===
+      receipt.proof.totalRefChanges;
+}
 
 function Checkpoint({ receipt }: { receipt: SourceSyncCheckpointReceipt }) {
   const { t } = useTranslation();
@@ -38,6 +57,15 @@ function Checkpoint({ receipt }: { receipt: SourceSyncCheckpointReceipt }) {
           : <span>—</span>}</div>
       <div><small>{t('cpUnmapped')}</small>
         <strong>{receipt.proof.unmappedRefChanges}</strong></div>
+      {receipt.evidenceVersion === 2 && receipt.refChangeManifest &&
+        <><div><small>{t('cpRefManifest')}</small>
+          <code title={receipt.refChangeManifest.evidenceSha256}>
+            {short(receipt.refChangeManifest.evidenceSha256)}</code></div>
+        <div><small>{t('cpRefAttestation')}</small>
+          <code title={receipt.refChangeAttestationSha256 ?? ''}>
+            {short(receipt.refChangeAttestationSha256 ?? '')}</code></div></>}
+      {receipt.evidenceVersion === 1 &&
+        <div><small>{t('cpLegacy')}</small><span>—</span></div>}
     </div>
     {!receipt.proof.sourceInventoryComplete &&
       <p className="source-cp-partial">{t('cpPartial')}</p>}
@@ -76,7 +104,8 @@ export default function SourceSyncCheckpointPanel({
       if (data.canPush || data.canRetry || data.canDispatch ||
           data.migrationComplete || data.items.some(x =>
             x.canPush || x.canRetry || x.canDispatch ||
-            x.migrationComplete || x.proof.manifestSha256 !== manifestSha256 ||
+            x.migrationComplete || !safeRefEvidence(x) ||
+            x.proof.manifestSha256 !== manifestSha256 ||
             x.proof.planId !== planId || x.proof.preparationId !== preparationId))
         throw new Error('SourceSyncCheckpointUnsafeResponse');
       setPage(data);
@@ -112,6 +141,7 @@ export default function SourceSyncCheckpointPanel({
         page.latestCheckpointId);
       if (receipt.canPush || receipt.canRetry ||
           receipt.canDispatch || receipt.migrationComplete ||
+          !safeRefEvidence(receipt) ||
           receipt.proof.snapshotId !== page.nextEligibleSnapshotId ||
           receipt.proof.manifestSha256 !== manifestSha256)
         throw new Error('SourceSyncCheckpointUnsafeResponse');

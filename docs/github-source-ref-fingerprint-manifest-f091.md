@@ -34,3 +34,25 @@ without re-fetching the source, this is not proof that Azure DevOps has
 no newer changes. The next work is to bind F-091 digests to durable,
 versioned checkpoint receipts and independently verify provider/source
 ref payloads, with safe compatibility for historic F-090 evidence.
+
+## Durable F-090 integration
+
+F-091 now extends newly written F-090 checkpoint receipts with explicit
+`evidenceVersion=2`, a persisted serialized ref-change manifest and a
+separate SHA-256 attestation over the original F-090 receipt ID, its
+original (unchanged) F-090 evidence SHA and the F-091 source ref proof.
+Both fields are in the same PostgreSQL transaction as the F-090
+checkpoint and append-only audit event. The additive database schema
+defaults existing rows to `evidenceVersion=1` and rejects incomplete
+version-2 attestations.
+
+On checkpoint history read, the API verifies the bound attestation
+and independently derives the ref-change manifest from immutable
+PostgreSQL F-025 rows. Missing or corrupted v2 evidence fails closed;
+v1 receipts remain readable without falsely claiming fingerprint
+attestation. The React Source sync page shows the source ref fingerprint
+and bound receipt SHA for v2, and a clear historic label for v1.
+
+The current proof covers *changed refs* in the F-025 journal, not
+unchanged refs in the entire source snapshot. It does not authorize or
+run any GitHub write, retry, dispatch or migration-completion operation.

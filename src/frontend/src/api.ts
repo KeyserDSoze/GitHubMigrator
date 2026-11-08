@@ -18,11 +18,19 @@ export type SourceSyncCheckpointProof = {
   totalRefChanges: number; unmappedRefChanges: number;
   repositories: SourceSyncCheckpointDelta[];
 };
+export type SourceRefChangeManifest = {
+  sourceConnectionId: string; snapshotId: string;
+  added: number; changed: number; restored: number; missing: number;
+  total: number; evidenceSha256: string;
+};
 export type SourceSyncCheckpointReceipt = {
   id: string; proof: SourceSyncCheckpointProof;
   evidenceSha256: string; recordedBy: string;
   recordedAtUtc: string; canPush: false; canRetry: false;
   canDispatch: false; migrationComplete: false;
+  evidenceVersion: 1 | 2;
+  refChangeManifest: SourceRefChangeManifest | null;
+  refChangeAttestationSha256: string | null;
 };
 export type SourceSyncCheckpointPage = {
   preparationId: string; planId: string;

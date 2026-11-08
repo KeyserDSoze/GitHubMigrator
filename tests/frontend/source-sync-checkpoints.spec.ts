@@ -77,11 +77,30 @@ function epoch(index: number) {
     evidenceSha256: baseline ? sha('b') : sha('c'),
     recordedBy: source, recordedAtUtc: stamp,
     canPush: false, canRetry: false, canDispatch: false,
-    migrationComplete: false
+    migrationComplete: false,
+    evidenceVersion: 1,
+    refChangeManifest: null,
+    refChangeAttestationSha256: null
   };
 }
 
-function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' = 'normal') {
+function attestedEpoch(index: number, forged = false) {
+  const record = epoch(index);
+  return {
+    ...record, evidenceVersion: 2,
+    refChangeManifest: {
+      sourceConnectionId: source, snapshotId: record.proof.snapshotId,
+      added: record.proof.repositories.reduce((n, r) => n + r.added, 0),
+      changed: record.proof.repositories.reduce((n, r) => n + r.changed, 0),
+      restored: 0, missing: 0,
+      total: forged ? 999 : record.proof.totalRefChanges,
+      evidenceSha256: sha('d')
+    },
+    refChangeAttestationSha256: sha('e')
+  };
+}
+
+function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' = 'normal') {
   const requests: Array<{ path: string; method: string; body: any }> = [];
   let records = 0;
   void page.route('**/api/incremental-preparations/**', async (route: Route) => {
@@ -102,7 +121,9 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' = 
       return route.fulfill({ json: {
         preparationId: prep, planId: plan,
         items: Array.from({ length: records }, (_, i) =>
-          epoch(records - i - 1)),
+          mode === 'attested' || mode === 'forged'
+            ? attestedEpoch(records - i - 1, mode === 'forged')
+            : epoch(records - i - 1)),
         nextAfter: null,
         latestCheckpointId: records === 0 ? null : records === 1 ? old : last,
         nextEligibleSnapshotId: records === 0 ? original :
@@ -125,7 +146,9 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' = 
         records === 0 ? null : old);
       expect(path).toBe(check + '/' + (records === 0 ? original : next));
       records++;
-      return route.fulfill({ json: epoch(records - 1) });
+      return route.fulfill({ json: mode === 'attested' || mode === 'forged'
+        ? attestedEpoch(records - 1, mode === 'forged')
+        : epoch(records - 1) });
     }
     return route.fulfill({ status: 404,
       json: { error: 'UnexpectedSourceCheckpointRoute' } });
@@ -228,4 +251,35 @@ test('F-090 disabled checkpoints leave existing multi-repository staging monitor
   })).toHaveCount(0);
   expect(service.saved()).toBe(0);
   expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(0);
+});
+
+test('F-091 renders bound source-ref SHA without sending to GitHub', async ({ page }) => {
+  const service = mock(page, 'attested');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await expect(page.getByText(/SHA-256 dei ref sorgente|Source ref SHA-256/i))
+    .toBeVisible();
+  await expect(page.getByText(/Attestazione ref vincolata|Bound ref attestation/i))
+    .toBeVisible();
+  expect(service.saved()).toBe(1);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(1);
+});
+
+test('F-091 forged ref-digest counts are rejected as unsafe', async ({ page }) => {
+  const service = mock(page, 'forged');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await expect(page.getByRole('alert').getByText(/SourceSyncCheckpointUnsafeResponse/))
+    .toBeVisible();
+  expect(service.saved()).toBe(1);
+  expect(service.requests().some(x => /git-push|send|retry-push/i.test(x.path)))
+    .toBe(false);
 });
