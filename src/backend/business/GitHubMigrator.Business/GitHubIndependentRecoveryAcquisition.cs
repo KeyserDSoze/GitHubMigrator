@@ -6,6 +6,13 @@ namespace GitHubMigrator.Business;
 public sealed record GitHubIndependentRecoveryOptions(
     bool Enabled, long AllowedRepositoryId, string AllowedRepository);
 
+// Recovery's credentials are independent from F-043's WRITE-token
+// preflight switch. Enabling a GET-only reconciliation NEVER enables
+// the legacy write-capable GitHub App inspection/sender path.
+public sealed record GitHubIndependentRecoveryCredentialOptions(
+    bool Enabled, long AppId, long InstallationId,
+    string PrivateKeySecretReference, string AllowedRepository);
+
 public sealed class GitHubIndependentRecoveryException(string code)
     : Exception("Independent GitHub post-send evidence acquisition refused")
 {
@@ -56,7 +63,7 @@ public interface IGitHubTrustedRemoteReadExecutor
 
 public sealed class GitHubIndependentRecoveryAcquisition(
     GitHubIndependentRecoveryOptions options,
-    GitHubAppWriteCredentialOptions credentialOptions,
+    GitHubIndependentRecoveryCredentialOptions credentialOptions,
     IConnectionSecretStore secrets,
     IGitHubRemoteTypedRecoveryBaselineJournal typed,
     IGitHubRecoveryReadOnlyTokenScope tokens,
