@@ -34,7 +34,7 @@ public sealed class PostgresGitHubRemoteSandboxPreSendBarrierTests(
 
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private static GitHubRemoteTransmitHazardOptions Options(
+    internal static GitHubRemoteTransmitHazardOptions Options(
         PostgresGitHubRemoteDispatchReviewTests.TestCase e) =>
         new(true, e.RepositoryId, "gh-org/sandbox");
 
@@ -50,11 +50,11 @@ public sealed class PostgresGitHubRemoteSandboxPreSendBarrierTests(
         AppDbContext db, PostgresGitHubRemoteDispatchReviewTests.TestCase e) =>
         new(db, Options(e), Intents(db, e), Sessions(db, e));
 
-    private static PostgresGitHubRemoteSandboxPreSendBarrierJournal Journal(
+    internal static PostgresGitHubRemoteSandboxPreSendBarrierJournal Journal(
         AppDbContext db, PostgresGitHubRemoteDispatchReviewTests.TestCase e) =>
         new(db, Options(e), Confirmations(db, e));
 
-    private static async Task<GitHubRemoteSandboxDispatchConfirmationReceipt>
+    internal static async Task<GitHubRemoteSandboxDispatchConfirmationReceipt>
         SeedAsync(AppDbContext db, PostgresGitHubRemoteDispatchReviewTests.TestCase e)
     {
         await PostgresGitHubRemoteDispatchReviewTests.SeedAsync(db, e);
