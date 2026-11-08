@@ -34,7 +34,7 @@ public sealed class PostgresGitHubRemoteTypedRecoveryBaselineTests(
 
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private static PostgresGitHubRemoteTypedRecoveryBaselineJournal Journal(
+    internal static PostgresGitHubRemoteTypedRecoveryBaselineJournal Journal(
         AppDbContext db, PostgresGitHubRemoteDispatchReviewTests.TestCase e,
         bool enabled = true) =>
         new(db,
@@ -48,7 +48,7 @@ public sealed class PostgresGitHubRemoteTypedRecoveryBaselineTests(
                 new PostgresGitHubRemoteSandboxReviewSessionJournal(
                     db, PostgresGitHubRemoteSandboxPreSendBarrierTests.Options(e))));
 
-    private static Task<GitHubRemoteTypedRecoveryBaselineReceipt> Capture(
+    internal static Task<GitHubRemoteTypedRecoveryBaselineReceipt> Capture(
         AppDbContext db, PostgresGitHubRemoteDispatchReviewTests.TestCase e,
         GitHubRemoteSandboxDispatchConfirmationReceipt confirmation,
         Guid actor) =>
@@ -57,7 +57,7 @@ public sealed class PostgresGitHubRemoteTypedRecoveryBaselineTests(
             e.Source.Packet.PreparationId, e.Source.Packet.PlanId,
             e.Source.Packet.ScopeId, actor, e.Source, e.Latest, default);
 
-    private static Task<GitHubRemoteTypedRecoveryBaselineReceipt?> Read(
+    internal static Task<GitHubRemoteTypedRecoveryBaselineReceipt?> Read(
         AppDbContext db, PostgresGitHubRemoteDispatchReviewTests.TestCase e,
         GitHubRemoteSandboxDispatchConfirmationReceipt confirmation) =>
         Journal(db, e).ReadAfterBarrierAsync(
