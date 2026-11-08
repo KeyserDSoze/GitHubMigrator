@@ -12,6 +12,21 @@ public sealed class GitHubSandboxCreateOnlyPushRunner(
     string bundleRoot, string scratchRoot, GitHubSandboxOneShotOptions options)
     : IGitHubSandboxOneShotGitWriter
 {
+    // A test-only local bare origin is inaccessible to production DI.
+    // It runs the SAME --atomic and empty-lease refspecs as GitHub.
+    private readonly string? testLocalOrigin;
+
+    internal GitHubSandboxCreateOnlyPushRunner(
+        string bundleRoot, string scratchRoot, GitHubSandboxOneShotOptions options,
+        string testLocalOrigin)
+        : this(bundleRoot, scratchRoot, options)
+    {
+        if (!Path.IsPathFullyQualified(testLocalOrigin) ||
+            !Directory.Exists(testLocalOrigin))
+            throw new GitHubSandboxOneShotException("SandboxPushTestOriginInvalid");
+        this.testLocalOrigin = testLocalOrigin;
+    }
+
     private const int MaxOutput = 512 * 1024;
     private static readonly SemaphoreSlim Gate = new(2, 2);
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(50);
@@ -86,12 +101,46 @@ public sealed class GitHubSandboxCreateOnlyPushRunner(
             // One fixed GitHub Cloud host, org/repo from server allowlist.
             // Tokens are NEVER interpolated into command-line arguments,
             // remote URL, logfile, exception message or Git config files.
-            var remote = "https://github.com/" +
+            var remote = testLocalOrigin ?? ("https://github.com/" +
                 options.AllowedOrganization + "/" + options.AllowedRepository +
-                ".git";
-            var auth = "AUTHORIZATION: basic " + Convert.ToBase64String(
-                Encoding.UTF8.GetBytes(
-                    "x-access-token:" + oneRepositoryInstallationToken));
+                ".git");
+            string? auth = testLocalOrigin is null ?
+                "AUTHORIZATION: basic " + Convert.ToBase64String(
+                    Encoding.UTF8.GetBytes(
+                        "x-access-token:" + oneRepositoryInstallationToken)) :
+                null;
+
+            // F-084: a provider GET before F-082 is NOT atomic with push.
+            // Check all heads AND annotated-tag OIDs again via actual Git
+            // upload-pack immediately before the atomic Git receive-pack.
+            // Even drift on unrelated target-only refs must fail closed.
+            var liveRefs = await GitAsync(workspace, auth, ct,
+                "--git-dir=" + local, "ls-remote", "--refs", remote,
+                "refs/heads/*", "refs/tags/*");
+            var observed = new List<GitMirrorRef>();
+            foreach (var line in liveRefs.Split('\n',
+                StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.TrimEnd('\r').Split('\t');
+                if (parts.Length != 2)
+                    throw Refused("SandboxPushRemoteRefOutputInvalid");
+                observed.Add(new(parts[1], parts[0]));
+            }
+            IReadOnlyList<GitMirrorRef> canonicalRemote;
+            try
+            {
+                canonicalRemote =
+                    GitMirrorRefReconciler.CanonicalizeObservedRefs(observed);
+            }
+            catch (GitMirrorRefReconciliationException)
+            {
+                throw Refused("SandboxPushRemoteRefOutputInvalid");
+            }
+            var expected = input.BaselineRefs.Refs.Select(x =>
+                new GitMirrorRef(x.Name, x.ObjectId)).ToArray();
+            if (!canonicalRemote.SequenceEqual(expected))
+                throw Refused("SandboxPushRemoteBaselineChanged");
+
             var args = new List<string> {
                 "--git-dir=" + local, "push", "--porcelain", "--atomic"
             };
