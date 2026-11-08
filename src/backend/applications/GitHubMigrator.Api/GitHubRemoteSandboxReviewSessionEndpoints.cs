@@ -2,7 +2,6 @@ using System.Security.Claims;
 using GitHubMigrator.Business;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
 
 // F-079: a superadmin may request an authenticated GET-only target review
 // and inspect its immutable PostgreSQL evidence. No transport, refspec,
@@ -43,25 +42,13 @@ public static class GitHubRemoteSandboxReviewSessionEndpoints
         routes.MapGet(root + "/{sessionId:guid}", (
             Guid id, Guid planId, Guid scopeId, Guid sessionId,
             GitHubRemoteTransmitHazardOptions options,
-            AppDbContext db,
             PostgresGitHubRemoteSandboxReviewSessionJournal journal,
             CancellationToken ct) => GuardAsync(async () =>
         {
             RequireEnabled(options);
-            var owned = await db.GitHubRemoteSandboxReviewSessions
-                .AsNoTracking()
-                .AnyAsync(s => s.Id == sessionId &&
-                    s.RepositoryId == options.AllowedRepositoryId &&
-                    db.GitHubRemoteTestGrants.Any(g =>
-                        g.Id == s.GrantId &&
-                        g.RepositoryId == s.RepositoryId &&
-                        g.PreparationId == id &&
-                        g.PlanId == planId &&
-                        g.ScopeId == scopeId), ct);
-            if (!owned)
-                throw new KeyNotFoundException("SandboxReviewSessionNotFound");
-            return await journal.InspectAsync(
-                sessionId, options.AllowedRepositoryId, ct) ??
+            return await journal.InspectScopedAsync(
+                sessionId, id, planId, scopeId,
+                options.AllowedRepositoryId, ct) ??
                 throw new KeyNotFoundException("SandboxReviewSessionNotFound");
         }));
     }
