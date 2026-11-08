@@ -103,6 +103,10 @@ builder.Services.AddScoped<IncrementalTargetPreflightService>();
 builder.Services.AddScoped<IIncrementalOperationPlanRepository,
     PostgresIncrementalOperationPlanRepository>();
 builder.Services.AddScoped<IncrementalOperationPlanService>();
+builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
+    builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
+builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
+    PostgresGitHubSourceSyncCheckpointJournal>();
 builder.Services.AddScoped<PostgresGitHubTargetRefEvidenceStore>();
 builder.Services.AddScoped<IGitHubTargetRefEvidenceStore>(
     service => service.GetRequiredService<PostgresGitHubTargetRefEvidenceStore>());
@@ -670,6 +674,7 @@ await GitHubRemoteSandboxPreSendBarrierSchema.InitializeAsync(app.Services);
 await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
 await GitHubRemotePostSendRecoverySchema.InitializeAsync(app.Services);
 await GitHubRemoteTypedRecoveryBaselineSchema.InitializeAsync(app.Services);
+await GitHubSourceSyncCheckpointSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
@@ -759,6 +764,7 @@ app.MapGitHubRemoteTypedRecoveryBaselineEndpoints();
 app.MapGitHubIndependentRecoveryEndpoints();
 app.MapGitHubRemoteRecoveryWorkbenchEndpoints();
 app.MapGitHubMultiRepositorySyncPulseEndpoints();
+app.MapGitHubSourceSyncCheckpointEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
