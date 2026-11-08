@@ -81,6 +81,99 @@ public sealed class GitHubAppWriteCredentialInspectorTests
         Assert.DoesNotContain("BEGIN PRIVATE KEY", JsonSerializer.Serialize(metadata));
     }
 
+    [Fact]
+    public async Task F087_recovery_mints_only_contents_read_and_never_exports_token()
+    {
+        using var rsa = RSA.Create(2048);
+        var calls = 0;
+        using var client = new HttpClient(new Handler(req =>
+        {
+            calls++;
+            Assert.Equal("api.github.com", req.RequestUri!.Host);
+            if (calls == 1)
+            {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                Assert.Equal("/app/installations/77", req.RequestUri.AbsolutePath);
+                // Recovery also works with a Contents:read-only GitHub App.
+                return Json(200, InstallationReply().Replace(
+                    "\"contents\":\"write\"",
+                    "\"contents\":\"read\"", StringComparison.Ordinal));
+            }
+            if (calls == 2)
+            {
+                Assert.Equal(HttpMethod.Post, req.Method);
+                Assert.Equal("/app/installations/77/access_tokens",
+                    req.RequestUri.AbsolutePath);
+                using var body = JsonDocument.Parse(
+                    req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                Assert.Equal("read", body.RootElement
+                    .GetProperty("permissions").GetProperty("contents").GetString());
+                Assert.Equal(RepoName, body.RootElement
+                    .GetProperty("repositories")[0].GetString());
+                Assert.Single(body.RootElement.GetProperty("permissions")
+                    .EnumerateObject());
+                return Json(201, MintReply(permission: "read"));
+            }
+            Assert.Equal(3, calls);
+            Assert.Equal(HttpMethod.Get, req.Method);
+            Assert.Equal("/repos/gh-org/sandbox", req.RequestUri.AbsolutePath);
+            Assert.Equal(AccessToken, req.Headers.Authorization?.Parameter);
+            return Json(200, RepoReply());
+        }));
+        var inspector = new GitHubAppScopedWriteCredentialInspector(
+            client, TimeProvider.System);
+        var invoked = 0;
+        var status = await inspector.WithReadOnlyTokenAsync(
+            1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
+            Owner, RepoName, 2468,
+            (token, expires, ct) =>
+            {
+                invoked++;
+                Assert.Equal(AccessToken, token);
+                Assert.True(expires > DateTimeOffset.UtcNow.AddMinutes(30));
+                return Task.FromResult(new GitHubIndependentRecoveryResult(
+                    Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                    null, GitHubIndependentRecoveryStates.ReadbackCaptured,
+                    new string('a', 64), true, false, false, false));
+            }, default);
+        Assert.Equal(3, calls);
+        Assert.Equal(1, invoked);
+        Assert.True(status.ReadOnlyAcquisition);
+        Assert.False(status.CanPush);
+        Assert.False(status.CanRetry);
+        Assert.False(status.MigrationComplete);
+        Assert.DoesNotContain(AccessToken, JsonSerializer.Serialize(status));
+    }
+
+    [Fact]
+    public async Task F087_contents_write_token_response_cannot_enter_readonly_callback()
+    {
+        using var rsa = RSA.Create(2048);
+        var calls = 0;
+        using var client = new HttpClient(new Handler(req =>
+        {
+            calls++;
+            return calls == 1 ? Json(200, InstallationReply())
+                : calls == 2 ? Json(201, MintReply(permission: "write"))
+                : throw new InvalidOperationException(
+                    "A write token must never be usable for recovery");
+        }));
+        var invoked = false;
+        var error = await Assert.ThrowsAsync<GitHubAppWriteScopeException>(
+            () => new GitHubAppScopedWriteCredentialInspector(
+                client, TimeProvider.System).WithReadOnlyTokenAsync(
+                1234, 77, rsa.ExportPkcs8PrivateKeyPem(),
+                Owner, RepoName, 2468,
+                (token, expires, ct) =>
+                {
+                    invoked = true;
+                    throw new InvalidOperationException();
+                }, default));
+        Assert.Equal("AppScopeMintNotRestricted", error.Code);
+        Assert.False(invoked);
+        Assert.Equal(2, calls);
+    }
+
     [Theory]
     [InlineData("all", "write", "", "AppScopeMintNotRestricted")]
     [InlineData("selected", "read", "", "AppScopeMintNotRestricted")]
