@@ -78,7 +78,8 @@ public sealed class PostgresGitHubRemoteSandboxPreSendBarrierJournal(
             confirmation.RecordedAtUtc > now ||
             confirmation.CanDispatch || confirmation.TransportInvoked ||
             confirmation.MayAutomaticallyRetry || confirmation.MigrationComplete ||
-            (confirmation.ConfirmedBy == independentOperator ||\n            confirmation.RequestedBy == independentOperator))
+            (confirmation.ConfirmedBy == independentOperator ||
+            confirmation.RequestedBy == independentOperator))
             throw Refused("PreSendBarrierConfirmationStale");
 
         var hazard = await db.GitHubRemoteTransmitHazards.AsNoTracking()
@@ -168,7 +169,10 @@ public sealed class PostgresGitHubRemoteSandboxPreSendBarrierJournal(
             session.TransportInvoked || session.RemoteWritesAuthorized ||
             session.MayAutomaticallyRetry || session.MigrationComplete ||
             intent.EvidenceSha256 != confirmation.IntentEvidenceSha256 ||
-            intent.Id != confirmation.IntentId ||\n            intent.SessionId != session.Id ||\n            intent.HazardId != hazard.Id ||\n            intent.GrantId != grant.Id ||
+            intent.Id != confirmation.IntentId ||
+            intent.SessionId != session.Id ||
+            intent.HazardId != hazard.Id ||
+            intent.GrantId != grant.Id ||
             intent.ExpiresAtUtc <= now ||
             intent.RequestedBy != confirmation.RequestedBy ||
             intent.RequestedBy == independentOperator ||
