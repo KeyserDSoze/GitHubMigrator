@@ -16,6 +16,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          python3 - <<'PY'
           import json, os, sys, urllib.parse, urllib.request
           REPO = 'KeyserDSoze/GitHubMigrator'
           MERGED_SHA = '6db326691b5dcab53390078745114187efdbd09b'
@@ -57,3 +58,4 @@ jobs:
           remaining = [b['name'] for b in list_branches()]
           assert remaining == ['main'], 'Unexpected remaining branches: ' + str(remaining)
           print('Success: only main remains')
+          PY
