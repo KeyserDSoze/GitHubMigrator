@@ -166,9 +166,9 @@ public sealed class PostgresGitHubRemoteSandboxPreSendBarrierTests(
         await using var check = fixture.NewContext();
         Assert.Single(await check.GitHubRemoteSandboxPreSendBarriers.AsNoTracking()
             .Where(x => x.ConfirmationId == confirmation.Id).ToArrayAsync());
+        var winnerId = outcomes.Single(x => x.Value is not null).Value!.Id;
         Assert.Single(await check.GitHubRemoteSandboxPreSendBarrierEvents.AsNoTracking()
-            .Where(x => x.BarrierId == outcomes.Single(x => x.Value is not null)
-                .Value!.Id).ToArrayAsync());
+            .Where(x => x.BarrierId == winnerId).ToArrayAsync());
         Assert.Single(await check.GitHubRemoteTransmitHazardEvents.AsNoTracking()
             .Where(x => x.HazardId == confirmation.HazardId &&
                 x.Type == GitHubRemoteTransmitHazardStates.MayHaveTransmitted)
