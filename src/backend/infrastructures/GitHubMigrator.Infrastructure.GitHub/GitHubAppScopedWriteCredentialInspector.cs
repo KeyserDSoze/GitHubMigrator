@@ -13,9 +13,36 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 public sealed class GitHubAppScopedWriteCredentialInspector(
     HttpClient client, TimeProvider clock)
     : IGitHubAppScopedWriteCredentialInspector, IGitHubRemoteAppPreflightReader,
-      IGitHubSandboxVerifiedTokenScope
+      IGitHubSandboxVerifiedTokenScope, IGitHubRecoveryReadOnlyTokenScope
 {
     private const int MaxReplyBytes = 32_768;
+
+    // F-087: read-only recovery mints a SEPARATE token with only
+    // contents:read; the legacy F-083 writer token is never reused.
+    // A token never escapes the callback or appears in an audit/DTO.
+    public async Task<GitHubIndependentRecoveryResult> WithReadOnlyTokenAsync(
+        long appId, long installationId, string privateKeyPem,
+        string organization, string repository, long repositoryId,
+        Func<string, DateTimeOffset, CancellationToken,
+            Task<GitHubIndependentRecoveryResult>> action,
+        CancellationToken ct)
+    {
+        if (repositoryId <= 0 || action is null)
+            throw new GitHubIndependentRecoveryException(
+                "IndependentRecoveryTokenScopeInvalid");
+        var minted = await MintVerifiedTokenAsync(
+            appId, installationId, privateKeyPem,
+            organization, repository, ct, readOnly: true);
+        if (minted.Observation.RepositoryId != repositoryId ||
+            minted.Observation.InstallationId != installationId ||
+            minted.Observation.TokenExpiresAtUtc <=
+                clock.GetUtcNow().AddMinutes(2))
+            throw new GitHubIndependentRecoveryException(
+                "IndependentRecoveryInstallationChanged");
+        return await action(minted.Token,
+            minted.Observation.TokenExpiresAtUtc, ct);
+    }
+
 
     // F-083: narrowly scoped, internal-only callback. F-043/F-051 still
     // mint and discard their own tokens without exposing them. The GitHub
@@ -117,7 +144,8 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
     private async Task<(GitHubAppWriteScopeObservation Observation,
         string Token)> MintVerifiedTokenAsync(
         long appId, long installationId, string privateKeyPem,
-        string organization, string repository, CancellationToken ct)
+        string organization, string repository, CancellationToken ct,
+        bool readOnly = false)
     {
         if (appId <= 0 || installationId <= 0 ||
             !GitHubRefObservationIntegrity.ValidOwner(organization) ||
@@ -170,7 +198,7 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         mint.Content = new StringContent(JsonSerializer.Serialize(new {
             repositories = new[] { repository },
             permissions = new Dictionary<string, string> {
-                ["contents"] = "write"
+                ["contents"] = readOnly ? "read" : "write"
             }
         }), Encoding.UTF8, "application/json");
 
@@ -195,7 +223,7 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
             permissions.ValueKind != JsonValueKind.Object ||
             !permissions.TryGetProperty("contents", out var contents) ||
             contents.ValueKind != JsonValueKind.String ||
-            contents.GetString() != "write" ||
+            contents.GetString() != (readOnly ? "read" : "write") ||
             permissions.EnumerateObject().Any(p =>
                 p.Name is not ("contents" or "metadata") ||
                 (p.Name == "metadata" &&
