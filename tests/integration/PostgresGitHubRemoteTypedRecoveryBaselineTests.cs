@@ -157,9 +157,9 @@ public sealed class PostgresGitHubRemoteTypedRecoveryBaselineTests(
         await using var check = fixture.NewContext();
         Assert.Single(await check.GitHubRemoteTypedRecoveryBaselines.AsNoTracking()
             .Where(x => x.ConfirmationId == confirmation.Id).ToArrayAsync());
+        var winnerId = all.Single(x => x.Id is not null).Id;
         Assert.Single(await check.GitHubRemoteTypedRecoveryBaselineEvents
-            .AsNoTracking().Where(x =>
-                x.SnapshotId == all.Single(x => x.Id is not null).Id)
+            .AsNoTracking().Where(x => x.SnapshotId == winnerId)
             .ToArrayAsync());
     }
 
