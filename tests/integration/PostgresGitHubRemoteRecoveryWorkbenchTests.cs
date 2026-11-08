@@ -214,7 +214,7 @@ public sealed class PostgresGitHubRemoteRecoveryWorkbenchTests(
     }
 
     [Fact]
-    public async Task F088_corrupted_F054_audit_is_not_hidden_behind_a_dashboard_row()
+    public async Task F088_duplicate_F054_audit_is_not_hidden_behind_a_dashboard_row()
     {
         await using var db = fixture.NewContext();
         var s = await PostgresGitHubRecoveredReadbackTests.SeedAsync(db);
@@ -222,10 +222,15 @@ public sealed class PostgresGitHubRemoteRecoveryWorkbenchTests(
             s, Guid.NewGuid());
         var status = await PostgresGitHubRecoveredReadbackTests.Journal(
             db, s).RecordRecoveredAsync(s.Typed, evidence, default);
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            DELETE FROM github_remote_readback_events
-            WHERE readback_id={status.Id}
-            """);
+        // F-054's UPDATE/DELETE triggers correctly forbid deleting audit
+        // rows. Insert a conflicting second event to simulate a corrupted
+        // history without breaking immutable SQL protections.
+        db.GitHubRemoteReadbackEvents.Add(new()
+        {
+            ReadbackId = status.Id, Type = "Recorded",
+            ActorId = Guid.NewGuid(), OccurredAtUtc = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
         var refused = await Assert.ThrowsAsync<
             GitHubRemotePostSendRecoveryException>(() => List(db, s));
         Assert.Equal("PostSendReadbackHistoryCorrupt", refused.Code);
