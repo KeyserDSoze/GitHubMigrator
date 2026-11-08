@@ -34,10 +34,11 @@ public interface IGitHubSandboxOneShotGitWriter
 
 public interface IGitHubSandboxVerifiedTokenScope
 {
-    Task<T> WithVerifiedTokenAsync<T>(
+    Task<GitHubSandboxOneShotOutcome> WithVerifiedTokenAsync(
         long appId, long installationId, string privateKeyPem,
         string organization, string repository, long expectedRepositoryId,
-        Func<string, CancellationToken, Task<T>> action, CancellationToken ct);
+        Func<string, CancellationToken, Task<GitHubSandboxOneShotOutcome>> action,
+        CancellationToken ct);
 }
 
 public interface IGitHubSandboxPreSendAuthority
