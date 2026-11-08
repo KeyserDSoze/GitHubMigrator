@@ -189,9 +189,9 @@ test('F-088 manual independent actions are explicitly confirmed and body-free, n
   // The legitimate historic route contains /dispatch-intents/ as an
   // identifier, NOT a dispatch invocation. Assert concrete forbidden
   // execution endpoints rather than matching that harmless path segment.
-  expect(seen.calls().some(x =>
-    /\\/(?:git-push|retry|execute|send|start-dispatch)(?:\\/|$)/i.test(x)
-  )).toBe(false);
+  const forbidden = ['/git-push', '/retry', '/execute', '/send', '/start-dispatch'];
+  expect(seen.calls().some(x => forbidden.some(segment =>
+    x.endsWith(segment) || x.includes(segment + '/')))).toBe(false);
 });
 
 test('F-088 a divergent remote forbids both object verification and retry', async ({ page }) => {
