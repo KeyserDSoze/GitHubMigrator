@@ -1,4 +1,39 @@
 export type Session = { accessToken: string; mustChangePassword: boolean; username: string; role: string };
+
+export type SourceSyncCheckpointDelta = {
+  sourceRepositoryId: string; targetRepositoryName: string;
+  added: number; changed: number; restored: number;
+  missing: number; total: number;
+};
+export type SourceSyncCheckpointProof = {
+  preparationId: string; planId: string; sourceConnectionId: string;
+  snapshotId: string; baselineSnapshotId: string;
+  previousCheckpointId: string | null;
+  previousEvidenceSha256: string | null;
+  manifestSha256: string; sourceCollectedAtUtc: string;
+  stagingAppliedAtUtc: string; sourceInventoryComplete: boolean;
+  isBaselineSnapshot: boolean;
+  journalAdded: number; journalChanged: number;
+  journalRestored: number; journalMissing: number;
+  totalRefChanges: number; unmappedRefChanges: number;
+  repositories: SourceSyncCheckpointDelta[];
+};
+export type SourceSyncCheckpointReceipt = {
+  id: string; proof: SourceSyncCheckpointProof;
+  evidenceSha256: string; recordedBy: string;
+  recordedAtUtc: string; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+};
+export type SourceSyncCheckpointPage = {
+  preparationId: string; planId: string;
+  items: SourceSyncCheckpointReceipt[];
+  nextAfter: string | null; latestCheckpointId: string | null;
+  nextEligibleSnapshotId: string | null;
+  latestEvidenceSha256: string | null;
+  canPush: false; canRetry: false; canDispatch: false;
+  migrationComplete: false;
+};
+
 export type RepositorySyncSourceDelta = {
   sourceRepositoryId: string; targetRepositoryName: string;
   addedRefs: number; changedRefs: number; restoredRefs: number;
@@ -517,6 +552,24 @@ export const api = {
     call<MultiRepositorySyncPulse>(
       `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/repository-sync-pulse`,
       { headers: withToken(token) }),
+  listSourceSyncCheckpoints: (token: string,
+      preparationId: string, planId: string,
+      after?: string | null, take = 10) =>
+    call<SourceSyncCheckpointPage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  captureSourceSyncCheckpoint: (token: string,
+      preparationId: string, planId: string, snapshotId: string,
+      expectedManifestSha256: string,
+      expectedPreviousCheckpointId: string | null) =>
+    call<SourceSyncCheckpointReceipt>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(snapshotId)}`, {
+        method: 'POST', headers: withToken(token),
+        body: JSON.stringify({
+          expectedManifestSha256, expectedPreviousCheckpointId
+        })
+      }),
   listRemoteRecoveryWorkbench: (token: string, preparationId: string,
       planId: string, after?: string | null, take = 12) =>
     call<RemoteRecoveryWorkbenchPage>(
