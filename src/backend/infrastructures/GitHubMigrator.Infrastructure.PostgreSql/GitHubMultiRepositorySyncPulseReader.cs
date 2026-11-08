@@ -115,7 +115,30 @@ public sealed class PostgresGitHubMultiRepositorySyncPulseReader(
         {
             var history = await recovery.ListAsync(
                 preparationId, planId, null, 1, ct);
+            if (history.CanPush || history.CanRetry ||
+                history.CanDispatch || history.MigrationComplete ||
+                history.RepositoryId != recoveryOptions.AllowedRepositoryId ||
+                history.PreparationId != preparationId ||
+                history.PlanId != planId || history.Items.Count > 1)
+                throw Refused("MultiRepositoryPulseRecoveryCorrupt");
             latestRecovery = history.Items.SingleOrDefault();
+            if (latestRecovery is not null)
+            {
+                try {
+                    GitHubRemoteRecoveryWorkbenchIntegrity.RequireSafe(
+                        latestRecovery);
+                }
+                catch (GitHubRemoteRecoveryWorkbenchException)
+                { throw Refused("MultiRepositoryPulseRecoveryCorrupt"); }
+                if (latestRecovery.PreparationId != preparationId ||
+                    latestRecovery.PlanId != planId ||
+                    latestRecovery.RepositoryId != recoveryOptions.AllowedRepositoryId ||
+                    !string.Equals(
+                        latestRecovery.Organization + "/" + latestRecovery.Repository,
+                        recoveryOptions.AllowedRepository,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw Refused("MultiRepositoryPulseRecoveryCorrupt");
+            }
         }
 
         var result = new List<GitHubRepositorySourceDelta>(mappings.Length);
