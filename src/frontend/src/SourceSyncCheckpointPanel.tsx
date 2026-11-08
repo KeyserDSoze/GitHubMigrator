@@ -62,12 +62,13 @@ export default function SourceSyncCheckpointPanel({
   const [loading, setLoading] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState('');
+  const [unavailable, setUnavailable] = useState(false);
   const [notice, setNotice] = useState('');
   const sequence = useRef(0);
 
   const load = useCallback(async (after: string | null = null) => {
     const stamp = ++sequence.current;
-    setLoading(true); setError('');
+    setLoading(true); setError(''); setUnavailable(false);
     try {
       const data = await api.listSourceSyncCheckpoints(
         token, preparationId, planId, after);
@@ -81,8 +82,13 @@ export default function SourceSyncCheckpointPanel({
       setPage(data);
       setItems(old => after ? [...old, ...data.items] : data.items);
     } catch (cause) {
-      if (stamp === sequence.current)
-        setError(t('cpLoadFailed') + ': ' + errorMessage(cause));
+      if (stamp === sequence.current) {
+        if (errorMessage(cause).includes('SourceSyncCheckpointDisabled')) {
+          setPage(null); setItems([]); setUnavailable(true);
+        } else {
+          setError(t('cpLoadFailed') + ': ' + errorMessage(cause));
+        }
+      }
     } finally {
       if (stamp === sequence.current) setLoading(false);
     }
@@ -146,6 +152,8 @@ export default function SourceSyncCheckpointPanel({
         </button>}
     </div>}
     <p className="source-cp-warning"><LockKeyhole size={16} /> {t('cpNoPush')}</p>
+    {unavailable &&
+      <p className="muted" role="status">{t('cpDisabled')}</p>}
     {error && <div className="alert" role="alert">{error}</div>}
     {notice && <div className="notice" role="status">{notice}</div>}
     {loading && <p className="muted" role="status">{t('cpLoading')}</p>}
