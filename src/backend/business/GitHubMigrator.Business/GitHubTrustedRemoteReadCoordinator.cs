@@ -48,7 +48,7 @@ public sealed class GitHubTrustedRemoteReadCoordinator(
     IGitHubRemoteObjectReconciliationJournal journal,
     GitHubReadOnlyObjectMirrorOptions options,
     GitHubTrustedRemoteReadOptions orchestrationOptions,
-    TimeProvider clock)
+    TimeProvider clock) : IGitHubTrustedRemoteReadExecutor
 {
     public async Task<GitHubRemoteObjectReconciliationStatus> ExecuteAsync(
         GitHubTrustedRemoteReadCommand command,
