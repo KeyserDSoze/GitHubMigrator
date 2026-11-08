@@ -101,6 +101,7 @@ public sealed class GitHubSandboxOneShotSenderTests
     private sealed class RefReader(GitHubRefObservation baseline)
         : IGitHubRefObservationReader
     {
+        public GitHubRefObservation Baseline => baseline;
         public int Calls;
         public GitHubRefObservation? Replacement;
         public Task<GitHubRefObservation> ReadAsync(
@@ -393,7 +394,9 @@ public sealed class GitHubSandboxOneShotSenderTests
         var opts = new GitHubSandboxOneShotOptions(true, 2468,
             "gh-org", "sandbox");
         var request = new GitHubSandboxPushInput(
-            f.Source, f.Bundle, f.Barrier, Sha('a'));
+            f.Source, f.Bundle, f.Barrier,
+            GitHubRemoteRefFenceIntegrity.Fingerprint(f.Refs.Baseline.Refs),
+            f.Refs.Baseline);
         GitHubSandboxPushIntegrity.Verify(request, opts);
         Assert.Throws<GitHubSandboxOneShotException>(
             () => GitHubSandboxPushIntegrity.Verify(
