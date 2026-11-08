@@ -166,6 +166,7 @@ builder.Services.AddScoped<IGitHubCreateOnlyPacketEvidenceReader>(
 builder.Services.AddScoped<IGitHubRemoteDispatchAuthorityVerifier,
     PostgresGitHubRemoteDispatchReviewVerifier>();
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxReviewSessionJournal>();
+builder.Services.AddScoped<PostgresGitHubRemoteSandboxDispatchIntentJournal>();
 builder.Services.AddScoped<IGitHubRemoteSandboxReviewSessionRecorder>(
     sp => sp.GetRequiredService<PostgresGitHubRemoteSandboxReviewSessionJournal>());
 builder.Services.AddScoped<GitHubRemoteTrustedDispatchReadOnlyOrchestrator>();
@@ -521,6 +522,13 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    // F-080: independent budget for strictly database-only inert intents.
+    options.AddFixedWindowLimiter("github-remote-sandbox-dispatch-intent", limiter =>
+    {
+        limiter.PermitLimit = 8;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     options.AddFixedWindowLimiter("git-local-sandbox-dispatch", limiter =>
     {
         limiter.PermitLimit = 6;
@@ -583,6 +591,7 @@ await GitHubRemoteReadbackSchema.InitializeAsync(app.Services);
 await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
 // F-078 has an FK to F-055: never initialize this before the hazard table.
 await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
+await GitHubRemoteSandboxDispatchIntentSchema.InitializeAsync(app.Services);
 await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
@@ -666,6 +675,7 @@ app.MapGitHubRemoteSandboxFenceEndpoints();
 app.MapGitHubRemoteAppPreflightEndpoints();
 app.MapGitHubRemoteTestGrantEndpoints();
 app.MapGitHubRemoteSandboxReviewSessionEndpoints();
+app.MapGitHubRemoteSandboxDispatchIntentEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
