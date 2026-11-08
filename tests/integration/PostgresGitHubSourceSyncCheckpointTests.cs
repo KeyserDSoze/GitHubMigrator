@@ -291,7 +291,11 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
         await using var reopened = fixture.NewContext();
         var persisted = await Journal(reopened, clock).ListRefChangesAsync(
             seed.Run.Id, plan.Id, saved.Id, null, 2, default);
-        Assert.Equal(first, persisted);
+        Assert.Equal(first.CheckpointId, persisted.CheckpointId);
+        Assert.Equal(first.RefManifestSha256, persisted.RefManifestSha256);
+        Assert.Equal(first.RefAttestationSha256, persisted.RefAttestationSha256);
+        Assert.Equal(first.Items.ToArray(), persisted.Items.ToArray());
+        Assert.Equal(first.NextAfter, persisted.NextAfter);
     }
 
     [Fact]
