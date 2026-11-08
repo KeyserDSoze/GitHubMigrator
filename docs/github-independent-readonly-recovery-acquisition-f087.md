@@ -46,8 +46,12 @@ This path is disabled by default. An operator must explicitly set
 `GitHubIndependentRecovery:Enabled` and its exact
 `AllowedRepositoryId` and `AllowedRepository`; the distinct F-086
 and F-054/F-058 allowlists and F-059 source/mirror controls must
-independently permit the same sandbox repository. F-043 GitHub App
-credentials remain in the secure secret store.
+independently permit the same sandbox repository. The separate
+`GitHubIndependentRecovery:ReadCredentialsEnabled` switch (false by default)
+and `AppId`, `InstallationId`, `PrivateKeySecretReference` settings
+select the recovery-only GitHub App installation credential. F-043's
+WRITE-token preflight switch does NOT have to be enabled for recovery.
+The private key remains in the secure secret store.
 
 The token minting adapter uses exactly `repositories=[repo]` and
 `permissions={contents:read}` with implicit Metadata:read; it checks
