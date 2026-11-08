@@ -150,7 +150,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
       return route.fulfill({ json: {
         preparationId: prep, planId: plan,
         items: Array.from({ length: records }, (_, i) =>
-          mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'badrefpage'
+          mode === 'attested' || mode === 'forged' || mode === 'badrefpage'
             ? attestedEpoch(records - i - 1, mode === 'forged')
             : epoch(records - i - 1)),
         nextAfter: null,
@@ -175,7 +175,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
         records === 0 ? null : old);
       expect(path).toBe(check + '/' + (records === 0 ? original : next));
       records++;
-      return route.fulfill({ json: mode === 'attested' || mode === 'forged'
+      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage'
         ? attestedEpoch(records - 1, mode === 'forged')
         : epoch(records - 1) });
     }
