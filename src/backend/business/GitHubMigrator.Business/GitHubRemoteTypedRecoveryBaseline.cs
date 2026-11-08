@@ -45,6 +45,12 @@ public interface IGitHubRemoteTypedRecoveryBaselineJournal
         Guid planId, Guid scopeId, Guid independentOperator,
         GitHubCreateOnlyCandidatePacket source,
         GitHubRefObservation latestBaseline, CancellationToken ct);
+
+    // Server-only recovery read. Never returns an uncommitted F-086
+    // snapshot: F-082's matching irreversible barrier is mandatory.
+    Task<GitHubRemoteTypedRecoveryBaselineReceipt?> ReadAfterBarrierAsync(
+        Guid confirmationId, Guid intentId, Guid preparationId,
+        Guid planId, Guid scopeId, CancellationToken ct);
 }
 
 public static class GitHubRemoteTypedRecoveryBaselineIntegrity
