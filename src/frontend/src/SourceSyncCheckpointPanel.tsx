@@ -27,10 +27,10 @@ function safeRefEvidence(receipt: SourceSyncCheckpointReceipt): boolean {
     isSha(receipt.refChangeAttestationSha256) &&
     refs.sourceConnectionId === receipt.proof.sourceConnectionId &&
     refs.snapshotId === receipt.proof.snapshotId &&
-    [refs.added, refs.changed, refs.restored, refs.missing]
+    [refs.added, refs.changed, refs.restored, refs.missing, refs.total]
       .every(x => Number.isSafeInteger(x) && x >= 0) &&
-    refs.added + refs.changed + refs.restored + refs.missing ===
-      receipt.proof.totalRefChanges;
+    refs.added + refs.changed + refs.restored + refs.missing === refs.total &&
+    refs.total === receipt.proof.totalRefChanges;
 }
 
 function Checkpoint({ receipt }: { receipt: SourceSyncCheckpointReceipt }) {
