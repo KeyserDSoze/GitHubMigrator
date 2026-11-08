@@ -601,6 +601,7 @@ await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxDispatchIntentSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxDispatchConfirmationSchema.InitializeAsync(app.Services);
+await GitHubRemoteSandboxPreSendBarrierSchema.InitializeAsync(app.Services);
 await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
