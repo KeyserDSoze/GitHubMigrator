@@ -20,6 +20,12 @@ dispatch or safe permission to push. It exposes SHA-256 fingerprints
 of staged ref payloads, not GitHub secrets or raw provider credentials.
 It does not claim provider freshness, object closure or destination sync.
 
+The React Source sync workbench lets a superadmin expand a version-2
+checkpoint and inspect paginated, read-only ref changes with the reviewed
+target mapping, before/after fingerprints and explicit unmapped labels.
+The browser rejects unexpected authority, malformed pages, cross-checkpoint
+attestations and non-monotonic cursors; no write endpoint is called.
+
 A version-1 historic F-090 checkpoint is intentionally refused for
 per-ref authenticated viewing: its count-only SHA did not commit to
 F-091's individual ref evidence.

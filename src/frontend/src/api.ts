@@ -42,6 +42,22 @@ export type SourceSyncCheckpointPage = {
   migrationComplete: false;
 };
 
+export type SourceCheckpointRefChange = {
+  sourceId: string; sourceRepositoryId: string; refName: string;
+  kind: 'Added' | 'Changed' | 'Restored' | 'Missing';
+  previousFingerprint: string | null;
+  currentFingerprint: string | null;
+  revision: number; targetRepositoryName: string | null;
+};
+export type SourceCheckpointRefChangePage = {
+  checkpointId: string; snapshotId: string;
+  refManifestSha256: string; refAttestationSha256: string;
+  totalRefChanges: number; items: SourceCheckpointRefChange[];
+  nextAfter: string | null;
+  canPush: false; canRetry: false; canDispatch: false;
+  migrationComplete: false;
+};
+
 export type RepositorySyncSourceDelta = {
   sourceRepositoryId: string; targetRepositoryName: string;
   addedRefs: number; changedRefs: number; restoredRefs: number;
@@ -565,6 +581,13 @@ export const api = {
       after?: string | null, take = 10) =>
     call<SourceSyncCheckpointPage>(
       `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  listSourceCheckpointRefChanges: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      after?: string | null, take = 50) =>
+    call<SourceCheckpointRefChangePage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/ref-changes?take=${take}` +
         (after ? `&after=${encodeURIComponent(after)}` : ''),
       { headers: withToken(token) }),
   captureSourceSyncCheckpoint: (token: string,

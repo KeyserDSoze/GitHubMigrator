@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCheck, Clock3, GitCommitHorizontal, LockKeyhole, RefreshCw, ShieldCheck } from 'lucide-react';
+import SourceCheckpointRefChangePreview from './SourceCheckpointRefChangePreview';
 import {
   api, type SourceSyncCheckpointPage,
   type SourceSyncCheckpointReceipt
@@ -33,7 +34,10 @@ function safeRefEvidence(receipt: SourceSyncCheckpointReceipt): boolean {
     refs.total === receipt.proof.totalRefChanges;
 }
 
-function Checkpoint({ receipt }: { receipt: SourceSyncCheckpointReceipt }) {
+function Checkpoint({ receipt, token, preparationId, planId }: {
+  receipt: SourceSyncCheckpointReceipt;
+  token: string; preparationId: string; planId: string;
+}) {
   const { t } = useTranslation();
   return <article className="source-cp-entry">
     <div className="source-cp-head">
@@ -78,6 +82,10 @@ function Checkpoint({ receipt }: { receipt: SourceSyncCheckpointReceipt }) {
           <small>+{repo.added} · Δ{repo.changed} · ↻{repo.restored} · −{repo.missing}</small>
         </div>)}
     </div>
+    {receipt.evidenceVersion === 2 &&
+      <SourceCheckpointRefChangePreview
+        receipt={receipt} token={token}
+        preparationId={preparationId} planId={planId} />}
   </article>;
 }
 
@@ -190,7 +198,8 @@ export default function SourceSyncCheckpointPanel({
     {page && items.length === 0 && !loading &&
       <p className="muted">{t('cpEmpty')}</p>}
     <div className="source-cp-history">
-      {items.map(x => <Checkpoint key={x.id} receipt={x} />)}
+      {items.map(x => <Checkpoint key={x.id} receipt={x}
+        token={token} preparationId={preparationId} planId={planId} />)}
     </div>
     {page?.nextAfter && <button className="icon-button source-cp-more"
       type="button" disabled={loading || capturing}
