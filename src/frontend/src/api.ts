@@ -1,4 +1,39 @@
 export type Session = { accessToken: string; mustChangePassword: boolean; username: string; role: string };
+export type RemoteRecoveryState =
+  | 'AwaitingIndependentReadback'
+  | 'OperatorReviewRequired'
+  | 'TipsObservedNeedsClosure'
+  | 'IndependentClosureObserved'
+  | 'CheckpointedIndependentClosure';
+export type RemoteRecoveryNextAction =
+  | 'ObserveTipsReadOnly' | 'VerifyFullObjectsReadOnly'
+  | 'CertifyIndependentClosure' | 'OperatorReviewRequired' | 'None';
+export type RemoteRecoveryItem = {
+  barrierId: string; confirmationId: string; intentId: string; sessionId: string;
+  preparationId: string; planId: string; scopeId: string; hazardId: string;
+  grantId: string; repositoryId: number; organization: string; repository: string;
+  possibleSendRecordedAtUtc: string; state: RemoteRecoveryState;
+  recommendedNextAction: RemoteRecoveryNextAction; needsOperatorAttention: boolean;
+  typedBaselineAvailable: boolean; baselineRefCount: number | null;
+  createCandidateCount: number | null; barrierEvidenceSha256: string;
+  typedBaselineEvidenceSha256: string | null;
+  readbackId: string | null; readbackEvidenceSha256: string | null;
+  reconciliationId: string | null; reconciliationEvidenceSha256: string | null;
+  fullObjectClosureSha256: string | null;
+  closureCheckpointId: string | null; closureCheckpointEvidenceSha256: string | null;
+  canPush: false; canRetry: false; canDispatch: false; migrationComplete: false;
+};
+export type RemoteRecoveryWorkbenchPage = {
+  preparationId: string; planId: string; repositoryId: number;
+  items: RemoteRecoveryItem[]; nextAfter: string | null;
+  canPush: false; canRetry: false; canDispatch: false; migrationComplete: false;
+};
+export type RemoteRecoveryActionResult = {
+  state: string; evidenceSha256?: string; readbackId?: string;
+  reconciliationId?: string; canRetry?: false; canPush?: false;
+  migrationComplete: false;
+};
+
 export type Connection = {
   id: string; name: string; providerKey: string; direction: 'source' | 'destination';
   organization: string; createdAtUtc: string; validatedAtUtc: string | null;
@@ -445,6 +480,22 @@ export const api = {
     call<IncrementalOperationPlan[]>(
       `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans`,
       { headers: withToken(token) }),
+  listRemoteRecoveryWorkbench: (token: string, preparationId: string,
+      planId: string, after?: string | null, take = 12) =>
+    call<RemoteRecoveryWorkbenchPage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/remote-recovery-workbench?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  executeIndependentRecoveryAction: (token: string, epoch: RemoteRecoveryItem,
+      action: 'observe-tips' | 'verify-full-objects' | 'closure-checkpoints') => {
+    const root = `/api/incremental-preparations/${encodeURIComponent(epoch.preparationId)}/operation-plans/${encodeURIComponent(epoch.planId)}/github-app-scopes/${encodeURIComponent(epoch.scopeId)}/remote-sandbox-review-sessions/${encodeURIComponent(epoch.sessionId)}/dispatch-intents/${encodeURIComponent(epoch.intentId)}/confirmations/${encodeURIComponent(epoch.confirmationId)}`;
+    const path = action === 'closure-checkpoints'
+      ? `${root}/post-send-recovery/${encodeURIComponent(epoch.barrierId)}/closure-checkpoints`
+      : `${root}/independent-recovery/${encodeURIComponent(epoch.barrierId)}/${action}`;
+    return call<RemoteRecoveryActionResult>(path, {
+      method: 'POST', headers: withToken(token)
+    });
+  },
   getIncrementalOperationPlan: (token: string, id: string, planId: string) =>
     call<IncrementalOperationPlan>(
       `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans/${encodeURIComponent(planId)}`,
