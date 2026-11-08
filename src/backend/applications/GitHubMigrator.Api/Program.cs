@@ -177,6 +177,7 @@ builder.Services.AddSingleton(new GitHubSandboxOneShotOptions(
 // is a disabled-by-default internal sender for explicitly permitted sandbox
 // experiments only; F-082 always marks possible transmission first.
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxPreSendBarrierJournal>();
+builder.Services.AddScoped<PostgresGitHubRemotePostSendRecoveryJournal>();
 builder.Services.AddScoped<IGitHubSandboxPreSendAuthority,
     PostgresGitHubSandboxPreSendAuthority>();
 builder.Services.AddScoped<IGitHubSandboxOneShotGitWriter>(sp =>
@@ -628,6 +629,7 @@ await GitHubRemoteSandboxDispatchIntentSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxDispatchConfirmationSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxPreSendBarrierSchema.InitializeAsync(app.Services);
 await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
+await GitHubRemotePostSendRecoverySchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
@@ -712,6 +714,7 @@ app.MapGitHubRemoteTestGrantEndpoints();
 app.MapGitHubRemoteSandboxReviewSessionEndpoints();
 app.MapGitHubRemoteSandboxDispatchIntentEndpoints();
 app.MapGitHubRemoteSandboxDispatchConfirmationEndpoints();
+app.MapGitHubRemotePostSendRecoveryEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
