@@ -84,7 +84,7 @@ public static class GitHubSourceSyncCheckpointSchema
                             OR
                             (evidence_version = 2
                                 AND length(ref_change_manifest_json) BETWEEN 100 AND 2048
-                                AND ref_change_attestation_sha256 ~ '^[0-9a-f]{64}$')
+                                AND ref_change_attestation_sha256 ~ '^[0-9a-f]{{64}}$')
                         );
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
