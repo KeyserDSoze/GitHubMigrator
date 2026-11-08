@@ -739,6 +739,7 @@ app.MapGitHubRemoteSandboxDispatchIntentEndpoints();
 app.MapGitHubRemoteSandboxDispatchConfirmationEndpoints();
 app.MapGitHubRemotePostSendRecoveryEndpoints();
 app.MapGitHubRemoteTypedRecoveryBaselineEndpoints();
+app.MapGitHubIndependentRecoveryEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
