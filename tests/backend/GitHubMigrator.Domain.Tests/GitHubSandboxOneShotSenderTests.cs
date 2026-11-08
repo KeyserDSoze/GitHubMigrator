@@ -182,6 +182,11 @@ public sealed class GitHubSandboxOneShotSenderTests
 
     private sealed class TypedBaselines : IGitHubRemoteTypedRecoveryBaselineJournal
     {
+        public Task<GitHubRemoteTypedRecoveryBaselineReceipt?> ReadAfterBarrierAsync(
+            Guid confirmationId, Guid intentId, Guid preparationId,
+            Guid planId, Guid scopeId, CancellationToken ct) =>
+            Task.FromResult<GitHubRemoteTypedRecoveryBaselineReceipt?>(null);
+
         public int Calls;
         public bool Refuse;
         public Task<GitHubRemoteTypedRecoveryBaselineReceipt> CaptureAsync(
