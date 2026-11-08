@@ -81,7 +81,7 @@ function epoch(index: number) {
   };
 }
 
-function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' = 'normal') {
+function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' = 'normal') {
   const requests: Array<{ path: string; method: string; body: any }> = [];
   let records = 0;
   void page.route('**/api/incremental-preparations/**', async (route: Route) => {
@@ -95,6 +95,9 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' = 'normal') {
     if (method === 'GET' && path === base + `/${plan}/repository-sync-pulse`)
       return route.fulfill({ json: pulse });
     const check = base + `/${plan}/source-sync-checkpoints`;
+    if (method === 'GET' && path === check && mode === 'disabled')
+      return route.fulfill({ status: 409,
+        json: { error: 'SourceSyncCheckpointDisabled' } });
     if (method === 'GET' && path === check)
       return route.fulfill({ json: {
         preparationId: prep, planId: plan,
@@ -211,4 +214,18 @@ test('F-090 ordinary admin cannot read or create checkpoint evidence', async ({ 
   await expect(page.getByText(/Solo i superadmin|Only superadmins/i))
     .toBeVisible();
   expect(service.requests()).toHaveLength(0);
+});
+
+test('F-090 disabled checkpoints leave existing multi-repository staging monitoring usable', async ({ page }) => {
+  const service = mock(page, 'disabled');
+  await login(page);
+  await open(page);
+  await expect(page.getByText('migration-one').first()).toBeVisible();
+  await expect(page.getByText(/non è abilitata|is not enabled for this environment/i))
+    .toBeVisible();
+  await expect(page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  })).toHaveCount(0);
+  expect(service.saved()).toBe(0);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(0);
 });
