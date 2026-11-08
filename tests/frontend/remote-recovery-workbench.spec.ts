@@ -186,7 +186,12 @@ test('F-088 manual independent actions are explicitly confirmed and body-free, n
   expect(seen.current()).toBe('CheckpointedIndependentClosure');
   expect(seen.actions()).toBe(3);
   expect(seen.calls().filter(x => x.startsWith('POST '))).toHaveLength(3);
-  expect(seen.calls().some(x => /push|dispatch|retry/i.test(x))).toBe(false);
+  // The legitimate historic route contains /dispatch-intents/ as an
+  // identifier, NOT a dispatch invocation. Assert concrete forbidden
+  // execution endpoints rather than matching that harmless path segment.
+  expect(seen.calls().some(x =>
+    /\\/(?:git-push|retry|execute|send|start-dispatch)(?:\\/|$)/i.test(x)
+  )).toBe(false);
 });
 
 test('F-088 a divergent remote forbids both object verification and retry', async ({ page }) => {
