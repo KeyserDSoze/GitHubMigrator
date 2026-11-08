@@ -1,4 +1,36 @@
 export type Session = { accessToken: string; mustChangePassword: boolean; username: string; role: string };
+export type RepositorySyncSourceDelta = {
+  sourceRepositoryId: string; targetRepositoryName: string;
+  addedRefs: number; changedRefs: number; restoredRefs: number;
+  missingRefs: number; plannedRefChanges: number;
+  totalRefChanges: number;
+  stepState: 'Blocked'; stepBlocker: string;
+  recoveryTracking: 'NotMonitored' | 'NoMarkerRecorded' | 'PossibleSendEvidence';
+  recoveryState: RemoteRecoveryState | null;
+  latestBarrierId: string | null; latestPossibleSendUtc: string | null;
+  canOpenRecovery: boolean; canPush: false; canRetry: false;
+  migrationComplete: false;
+};
+export type MultiRepositorySyncPulse = {
+  preparationId: string; planId: string; sourceConnectionId: string;
+  snapshotId: string; organization: string; manifestSha256: string;
+  planIsCurrent: boolean; readyForExecution: false;
+  preparationState: string;
+  stagingState: 'LatestRecordedSnapshot' | 'SupersededInPostgres';
+  latestKnownSnapshotId: string;
+  sourceCollectedAtUtc: string; stagingAppliedAtUtc: string;
+  latestKnownStagingAppliedAtUtc: string; sourceInventoryComplete: boolean;
+  stagingObserved: number; stagingAdded: number; stagingChanged: number;
+  stagingUnchanged: number; stagingMarkedMissing: number;
+  journalAdded: number; journalChanged: number; journalRestored: number;
+  journalMissing: number; latestStageJobId: string | null;
+  stageJobState: string; stageJobErrorCode: string | null;
+  stageJobUpdatedAtUtc: string | null;
+  repositories: RepositorySyncSourceDelta[];
+  providerSourceFreshnessVerified: false;
+  canPush: false; canRetry: false; migrationComplete: false;
+};
+
 export type RemoteRecoveryState =
   | 'AwaitingIndependentReadback'
   | 'OperatorReviewRequired'
@@ -479,6 +511,11 @@ export const api = {
   listIncrementalOperationPlans: (token: string, id: string) =>
     call<IncrementalOperationPlan[]>(
       `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans`,
+      { headers: withToken(token) }),
+  getMultiRepositorySyncPulse: (token: string, preparationId: string,
+      planId: string) =>
+    call<MultiRepositorySyncPulse>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/repository-sync-pulse`,
       { headers: withToken(token) }),
   listRemoteRecoveryWorkbench: (token: string, preparationId: string,
       planId: string, after?: string | null, take = 12) =>
