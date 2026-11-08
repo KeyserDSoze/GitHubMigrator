@@ -213,6 +213,105 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
     }
 
     [Fact]
+    public async Task F092_verified_ref_delta_pages_are_bounded_stable_and_source_scoped()
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        PostgresIncrementalOperationPlanTests.Seed seed;
+        IncrementalOperationPlan plan;
+        await using (var setup = fixture.NewContext())
+            (seed, plan) = await SeedPlanAsync(setup, clock, changed: 7);
+
+        await using var db = fixture.NewContext();
+        var journal = Journal(db, clock);
+        var saved = await journal.CaptureAsync(seed.Run.Id, plan.Id,
+            plan.SnapshotId, null, plan.ManifestSha256,
+            Guid.NewGuid(), default);
+        Assert.Equal(2, saved.EvidenceVersion);
+        var first = await journal.ListRefChangesAsync(
+            seed.Run.Id, plan.Id, saved.Id, null, 2, default);
+        Assert.Equal(saved.RefChangeManifest!.EvidenceSha256,
+            first.RefManifestSha256);
+        Assert.Equal(saved.RefChangeAttestationSha256,
+            first.RefAttestationSha256);
+        Assert.Equal(saved.Proof.TotalRefChanges, first.TotalRefChanges);
+        Assert.Equal(2, first.Items.Count);
+        Assert.NotNull(first.NextAfter);
+        Assert.False(first.CanPush || first.CanRetry ||
+            first.CanDispatch || first.MigrationComplete);
+        GitHubSourceCheckpointRefChangeIntegrity.VerifyPage(first, 2);
+        Assert.All(first.Items, x => {
+            Assert.StartsWith("refs/", x.RefName);
+            Assert.Equal("Added", x.Kind);
+            Assert.Null(x.PreviousFingerprint);
+            Assert.NotNull(x.CurrentFingerprint);
+        });
+
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var all = new List<GitHubSourceCheckpointRefChange>();
+        string? cursor = null;
+        do
+        {
+            var page = await journal.ListRefChangesAsync(
+                seed.Run.Id, plan.Id, saved.Id, cursor, 2, default);
+            GitHubSourceCheckpointRefChangeIntegrity.VerifyPage(page, 2);
+            foreach (var item in page.Items)
+            {
+                Assert.True(ids.Add(item.SourceId));
+                all.Add(item);
+            }
+            cursor = page.NextAfter;
+        } while (cursor is not null);
+        Assert.Equal(saved.Proof.TotalRefChanges, all.Count);
+        Assert.Equal(all.OrderBy(x => x.SourceId, StringComparer.Ordinal)
+            .Select(x => x.SourceId),
+            all.Select(x => x.SourceId));
+
+        // The cursor must actually belong to the same checkpoint's F-025
+        // snapshot; arbitrary well-formed source IDs cannot skip data.
+        var foreignCursor = System.Text.Json.JsonSerializer.Serialize(
+            new[] { "foreign-repo", "refs/heads/missing" });
+        Assert.Equal("SourceSyncCheckpointCursorInvalid",
+            (await Assert.ThrowsAsync<GitHubSourceSyncCheckpointException>(
+                () => journal.ListRefChangesAsync(seed.Run.Id, plan.Id,
+                    saved.Id, foreignCursor, 2, default))).Code);
+        Assert.Equal("SourceSyncCheckpointRefChangesInvalid",
+            (await Assert.ThrowsAsync<GitHubSourceSyncCheckpointException>(
+                () => journal.ListRefChangesAsync(seed.Run.Id, plan.Id,
+                    saved.Id, "not-json", 2, default))).Code);
+        Assert.Equal("SourceSyncCheckpointInvalidPage",
+            (await Assert.ThrowsAsync<GitHubSourceSyncCheckpointException>(
+                () => journal.ListRefChangesAsync(seed.Run.Id, plan.Id,
+                    saved.Id, null, 101, default))).Code);
+        Assert.Equal("SourceSyncCheckpointNotFound",
+            (await Assert.ThrowsAsync<GitHubSourceSyncCheckpointException>(
+                () => journal.ListRefChangesAsync(seed.Run.Id, plan.Id,
+                    Guid.NewGuid(), null, 2, default))).Code);
+
+        await using var reopened = fixture.NewContext();
+        var persisted = await Journal(reopened, clock).ListRefChangesAsync(
+            seed.Run.Id, plan.Id, saved.Id, null, 2, default);
+        Assert.Equal(first, persisted);
+    }
+
+    [Fact]
+    public async Task F092_disabled_never_reads_even_a_sealed_checkpoint()
+    {
+        await using var db = fixture.NewContext();
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        var (seed, plan) = await SeedPlanAsync(db, clock);
+        var checkpoint = await Journal(db, clock).CaptureAsync(
+            seed.Run.Id, plan.Id, plan.SnapshotId, null,
+            plan.ManifestSha256, Guid.NewGuid(), default);
+        Assert.Equal("SourceSyncCheckpointDisabled",
+            (await Assert.ThrowsAsync<GitHubSourceSyncCheckpointException>(
+                () => Journal(db, clock, false).ListRefChangesAsync(
+                    seed.Run.Id, plan.Id, checkpoint.Id, null, 2,
+                    default))).Code);
+    }
+
+    [Fact]
     public async Task F090_six_concurrent_replicas_record_exactly_one_receipt_and_event()
     {
         var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
@@ -310,6 +409,11 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
         Assert.Equal(1, old.EvidenceVersion);
         Assert.Null(old.RefChangeManifest);
         Assert.Null(old.RefChangeAttestationSha256);
+        Assert.Equal("SourceSyncCheckpointLegacyUnattested",
+            (await Assert.ThrowsAsync<GitHubSourceSyncCheckpointException>(
+                () => journal.ListRefChangesAsync(
+                    seed.Run.Id, plan.Id, old.Id, null, 2,
+                    default))).Code);
         Assert.Equal(sha, old.EvidenceSha256);
         GitHubSourceSyncCheckpointIntegrity.VerifyReceipt(old);
 

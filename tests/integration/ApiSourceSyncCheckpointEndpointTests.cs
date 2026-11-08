@@ -56,6 +56,37 @@ public sealed class ApiSourceSyncCheckpointEndpointTests(
         Assert.Equal(before, harness.Calls.Count);
     }
 
+    [Fact]
+    public async Task F092_ref_change_pages_are_superadmin_only_and_default_disabled()
+    {
+        var root = "/api/incremental-preparations/" + Guid.NewGuid() +
+            "/operation-plans/" + Guid.NewGuid() +
+            "/source-sync-checkpoints/" + Guid.NewGuid() + "/ref-changes";
+        var user = await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword);
+        var admin = await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword);
+        var superadmin = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        var before = harness.Calls.Count;
+        using (var denied = await CallAsync(HttpMethod.Get, root, null))
+            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+        using (var denied = await CallAsync(HttpMethod.Get, root, user))
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        using (var denied = await CallAsync(HttpMethod.Get, root, admin))
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        using (var disabled = await CallAsync(
+            HttpMethod.Get, root + "?take=2", superadmin))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, disabled.StatusCode);
+            using var json = JsonDocument.Parse(
+                await disabled.Content.ReadAsStringAsync());
+            Assert.Equal("SourceSyncCheckpointDisabled",
+                json.RootElement.GetProperty("error").GetString());
+        }
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
     private async Task<HttpResponseMessage> CallAsync(
         HttpMethod method, string path, string? bearer)
     {
