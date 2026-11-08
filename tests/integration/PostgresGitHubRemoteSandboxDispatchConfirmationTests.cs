@@ -53,7 +53,7 @@ public sealed class PostgresGitHubRemoteSandboxDispatchConfirmationTests(
     {
         await PostgresGitHubRemoteDispatchReviewTests.SeedAsync(db, e);
         await new PostgresGitHubRemoteAppPreflightEvidenceJournal(
-            db, Options(e)).RecordAsync(
+            db, new(true, e.RepositoryId, "gh-org/sandbox")).RecordAsync(
                 e.Preflight, e.Preflight.ObservedAtUtc, default);
         var review = await e.Verify(db);
         var session = await new PostgresGitHubRemoteSandboxReviewSessionJournal(
