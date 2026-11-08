@@ -203,7 +203,8 @@ public sealed class GitHubIndependentRecoveryAcquisitionTests
                 false, false, false);
             Baseline = raw with {
                 EvidenceSha256 =
-                    GitHubRemoteTypedRecoveryBaselineIntegrity.Digest(raw)
+                    GitHubRemoteTypedRecoveryBaselineIntegrity.Digest(raw),
+                PossibleSendRecordedAtUtc = now.AddTicks(10)
             };
             Typed = new(Baseline);
             var remote = GitHubRefObservationIntegrity.Seal(
