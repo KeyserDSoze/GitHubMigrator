@@ -60,8 +60,8 @@ public static class GitHubSourceSyncCheckpointSchema
                             AND recorded_by <> '00000000-0000-0000-0000-000000000000'::uuid
                             AND previous_checkpoint_id IS DISTINCT FROM id
                             AND length(proof_json) BETWEEN 100 AND 16384
-                            AND manifest_sha256 ~ '^[0-9a-f]{64}$'
-                            AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                            AND manifest_sha256 ~ '^[0-9a-f]{{64}}$'
+                            AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                             AND NOT can_push AND NOT can_retry
                             AND NOT can_dispatch AND NOT migration_complete
                         );
@@ -110,7 +110,7 @@ public static class GitHubSourceSyncCheckpointSchema
                         ADD CONSTRAINT ck_f090_checkpoint_event CHECK (
                             type='Recorded'
                             AND actor_id <> '00000000-0000-0000-0000-000000000000'::uuid
-                            AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                            AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                         );
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
