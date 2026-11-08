@@ -14,7 +14,7 @@ public sealed class PostgresGitHubMultiRepositorySyncPulseReader(
     IIncrementalOperationPlanRepository plans,
     IStagingRepository staging,
     GitHubRemoteRecoveryWorkbenchOptions recoveryOptions,
-    PostgresGitHubRemoteRecoveryWorkbenchReader recovery)
+    IGitHubRemoteRecoveryHistoryReader recovery)
 {
     private sealed record RefKinds(int Added, int Changed,
         int Restored, int Missing)
