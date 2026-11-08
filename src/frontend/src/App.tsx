@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import {
   ArrowRight, CheckCircle2, ChevronRight, CircleHelp, Cloud, Code2, Database, GitBranch,
   Globe2, KeyRound, Languages, LayoutDashboard, LockKeyhole, LogOut, Moon, Plus, ShieldCheck,
-  Sun, Users, Workflow, ClipboardList
+  Sun, Users, Workflow, ClipboardList, RefreshCw
 } from 'lucide-react';
 import { api, type Session } from './api';
 import ConnectionsPage from './ConnectionsPage';
@@ -13,14 +13,16 @@ import IdentityMappingPage from './IdentityMappingPage';
 import MigrationPlanPage from './MigrationPlanPage';
 import RefReconciliationPage from './RefReconciliationPage';
 import RemoteRecoveryWorkbenchPage from './RemoteRecoveryWorkbenchPage';
+import RepositorySyncControlTowerPage from './RepositorySyncControlTowerPage';
 
-type Page = 'overview' | 'connections' | 'identities' | 'repositories' | 'plans' | 'reconciliation' | 'recovery' | 'pipelines' | 'boards' | 'runs' | 'users';
+type Page = 'overview' | 'connections' | 'identities' | 'repositories' | 'plans' | 'reconciliation' | 'recovery' | 'sync' | 'pipelines' | 'boards' | 'runs' | 'users';
 const navigation: { id: Page; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', icon: LayoutDashboard }, { id: 'connections', icon: Cloud },
   { id: 'identities', icon: Users }, { id: 'repositories', icon: GitBranch },
   { id: 'plans', icon: GitBranch },
   { id: 'reconciliation', icon: Database },
   { id: 'recovery', icon: ShieldCheck },
+  { id: 'sync', icon: RefreshCw },
   { id: 'pipelines', icon: Workflow }, { id: 'boards', icon: ClipboardList },
   { id: 'runs', icon: Workflow }, { id: 'users', icon: ShieldCheck }
 ];
@@ -131,7 +133,7 @@ function App() {
     </div>;
   }
 
-  const placeholders: Record<Exclude<Page, 'overview' | 'users' | 'pipelines' | 'boards' | 'plans' | 'reconciliation' | 'recovery'>, { title: string; body: string; icon: typeof Cloud }> = {
+  const placeholders: Record<Exclude<Page, 'overview' | 'users' | 'pipelines' | 'boards' | 'plans' | 'reconciliation' | 'recovery' | 'sync'>, { title: string; body: string; icon: typeof Cloud }> = {
     connections: { title: t('noConnections'), body: t('noConnectionsText'), icon: Cloud },
     identities: { title: t('noIdentities'), body: t('noIdentitiesText'), icon: Users },
     repositories: { title: t('noRepositories'), body: t('noRepositoriesText'), icon: GitBranch },
@@ -164,7 +166,7 @@ function App() {
       <div className="content">
         <div className="page-heading"><div className="eyebrow"><span className="live-dot" /> {t('foundational')}</div>
           <h1>{page === 'overview' ? t('readyToStart') : t(page)}</h1>
-          <p>{page === 'overview' ? t('description') : page === 'users' ? t('userInfo') : page === 'connections' ? t('connIntro') : page === 'repositories' ? t('discoveryIntro') : page === 'plans' ? t('planIntro') : page === 'reconciliation' ? t('reconciliationIntro') : page === 'recovery' ? t('recoveryIntro') : page === 'identities' ? t('mappingIntro') : page === 'pipelines' ? t('pipelineIntro') : page === 'boards' ? t('boardIntro') : t('integrationsPending')}</p>
+          <p>{page === 'overview' ? t('description') : page === 'users' ? t('userInfo') : page === 'connections' ? t('connIntro') : page === 'repositories' ? t('discoveryIntro') : page === 'plans' ? t('planIntro') : page === 'reconciliation' ? t('reconciliationIntro') : page === 'recovery' ? t('recoveryIntro') : page === 'sync' ? t('syncIntro') : page === 'identities' ? t('mappingIntro') : page === 'pipelines' ? t('pipelineIntro') : page === 'boards' ? t('boardIntro') : t('integrationsPending')}</p>
         </div>
         {page === 'overview' && <>
           <div className="hero-banner"><div><span className="hero-label"><ShieldCheck size={16} /> PLATFORM READY · MIGRATION PLANNED</span>
@@ -191,11 +193,19 @@ function App() {
           token={session.accessToken} isSuperAdmin={session.role === 'superadmin'}
           initialPreparationId={reconciliationContext?.preparationId}
           initialPlanId={reconciliationContext?.planId} />}
+        {page === 'sync' && <RepositorySyncControlTowerPage
+          token={session.accessToken} isSuperAdmin={session.role === 'superadmin'}
+          initialPreparationId={reconciliationContext?.preparationId}
+          initialPlanId={reconciliationContext?.planId}
+          onOpenRecovery={(preparationId, planId) => {
+            setReconciliationContext({ preparationId, planId });
+            setPage('recovery');
+          }} />}
         {page === 'plans' && <MigrationPlanPage token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'pipelines' && <WorkloadsPage mode="pipelines" token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'boards' && <WorkloadsPage mode="boards" token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'identities' && <IdentityMappingPage token={session.accessToken} isAdmin={isAdmin} />}
-        {page !== 'overview' && page !== 'users' && page !== 'connections' && page !== 'repositories' && page !== 'identities' && page !== 'plans' && page !== 'reconciliation' && page !== 'recovery' && page !== 'pipelines' && page !== 'boards' && (() => {
+        {page !== 'overview' && page !== 'users' && page !== 'connections' && page !== 'repositories' && page !== 'identities' && page !== 'plans' && page !== 'reconciliation' && page !== 'recovery' && page !== 'sync' && page !== 'pipelines' && page !== 'boards' && (() => {
           const placeholder = placeholders[page]; const Icon = placeholder.icon;
           return <section className="empty-card"><div className="empty-icon"><Icon size={29} /></div><h2>{placeholder.title}</h2>
             <p>{placeholder.body}</p><span className="subtle-tag">{t('planned')}</span></section>;
