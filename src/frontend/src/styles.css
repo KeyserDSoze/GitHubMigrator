@@ -348,3 +348,41 @@
 @media(max-width:1150px){.sync-pulse-stats,.sync-provenance{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.sync-caution,.sync-refresh-source,.sync-pulse-topline,.sync-repo-heading{flex-direction:column;align-items:stretch}.sync-caution>span{margin-left:40px;align-self:flex-start}.sync-prep-controls,.sync-repo-head{flex-direction:column;align-items:stretch}.sync-prep-controls .primary{width:100%}.sync-ref-pills{grid-template-columns:repeat(3,minmax(0,1fr))}.sync-repo-filters input:not([type=checkbox]){flex:1;min-width:0}.sync-repo-head,.sync-repo-foot{padding:16px}.sync-ref-pills{padding:0 16px 16px}}
 @media(max-width:450px){.sync-pulse-stats,.sync-provenance{grid-template-columns:1fr}.sync-ref-pills{grid-template-columns:repeat(2,minmax(0,1fr))}.sync-repo-filters{flex-direction:column;align-items:stretch}}
+
+
+/* F-090 — independently persisted source snapshot checkpoint chain */
+.source-cp-panel{display:grid;gap:14px}
+.source-cp-title{display:flex;align-items:flex-start;justify-content:space-between;gap:15px}
+.source-cp-title h2{display:flex;align-items:center;gap:10px;font-size:20px;margin:0 0 6px}
+.source-cp-title h2 svg{color:var(--accent)}
+.source-cp-title p{font-size:12px;color:var(--muted);margin:0;max-width:750px}
+.source-cp-next{display:flex;align-items:center;justify-content:space-between;gap:15px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--border));background:var(--surface);padding:17px 22px;border-radius:13px}
+.source-cp-next>div{display:flex;align-items:center;gap:12px}
+.source-cp-next svg{color:var(--accent);flex-shrink:0}
+.source-cp-next strong{display:block;font-size:13px}
+.source-cp-next small{display:block;font-size:11px;margin-top:5px;color:var(--muted)}
+.source-cp-next .primary{white-space:nowrap}
+.source-cp-warning{margin:0;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
+.source-cp-warning svg{flex-shrink:0}
+.source-cp-history{display:grid;gap:12px}
+.source-cp-entry{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.source-cp-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 20px;border-bottom:1px solid var(--border)}
+.source-cp-head>div,.source-cp-head>span{display:flex;align-items:center;gap:9px}
+.source-cp-head>div strong{font-size:12px}
+.source-cp-head>div span{color:var(--muted);font-size:10px}
+.source-cp-head>span{font-size:10px;color:var(--accent);font-weight:700}
+.source-cp-head svg{color:var(--accent)}
+.source-cp-evidence{padding:14px 20px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.source-cp-evidence>div{display:grid;gap:6px;min-width:0}
+.source-cp-evidence small{font-size:10px;color:var(--muted)}
+.source-cp-evidence code,.source-cp-evidence strong{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.source-cp-partial{margin:0;padding:8px 20px;color:#dfb465;font-size:11px}
+.source-cp-repositories{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:0 20px 16px}
+.source-cp-repositories>div{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface2);border:1px solid var(--border);padding:12px 14px;border-radius:9px}
+.source-cp-repositories>div>span{font-size:12px;font-weight:700;min-width:0;overflow-wrap:anywhere}
+.source-cp-repositories>div>span small{display:block;font-size:10px;font-weight:400;color:var(--muted);margin-top:4px}
+.source-cp-repositories>div>strong{font-size:11px;white-space:nowrap}
+.source-cp-repositories>div>small{font-size:10px;color:var(--muted);white-space:nowrap}
+.source-cp-more{justify-self:center}
+@media(max-width:1000px){.source-cp-evidence{grid-template-columns:repeat(2,minmax(0,1fr))}.source-cp-repositories{grid-template-columns:1fr}}
+@media(max-width:650px){.source-cp-title,.source-cp-next,.source-cp-head{flex-direction:column;align-items:stretch}.source-cp-next .primary{width:100%}.source-cp-head{padding:14px}.source-cp-head>div{flex-wrap:wrap}.source-cp-evidence{padding:14px}.source-cp-repositories{padding:0 14px 14px}.source-cp-repositories>div{flex-wrap:wrap}}
