@@ -96,6 +96,13 @@ public static class GitHubRemotePostSendRecoveryIntegrity
     public static void VerifyFullClosure(
         GitHubRemoteObjectReconciliationStatus x)
     {
+        if (x.EvidenceSha256 != FullClosureDigest(x))
+            throw Corrupt();
+    }
+
+    public static string FullClosureDigest(
+        GitHubRemoteObjectReconciliationStatus x)
+    {
         if (x is null || x.Id == Guid.Empty || x.GrantId == Guid.Empty ||
             x.ReadbackId == Guid.Empty || x.HazardId == Guid.Empty ||
             x.RepositoryId <= 0 || x.SourceSnapshotId == Guid.Empty ||
@@ -111,7 +118,7 @@ public static class GitHubRemotePostSendRecoveryIntegrity
             x.MayAutomaticallyRetry || x.MigrationComplete)
             throw Corrupt();
 
-        var expected = Hash(new object[] {
+        return Hash(new object[] {
             "f058-immutable-independent-remote-object-evidence-v1",
             x.GrantId.ToString("D"), x.ReadbackId.ToString("D"),
             x.HazardId.ToString("D"), x.RepositoryId,
@@ -123,8 +130,6 @@ public static class GitHubRemotePostSendRecoveryIntegrity
             x.VerifiedAtUtc.ToUnixTimeMilliseconds(),
             false, false, false, false
         });
-        if (x.EvidenceSha256 != expected)
-            throw Corrupt();
     }
 
     private static GitHubRemotePostSendRecoveryException Corrupt() =>
