@@ -167,6 +167,7 @@ builder.Services.AddScoped<IGitHubRemoteDispatchAuthorityVerifier,
     PostgresGitHubRemoteDispatchReviewVerifier>();
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxReviewSessionJournal>();
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxDispatchIntentJournal>();
+builder.Services.AddScoped<PostgresGitHubRemoteSandboxDispatchConfirmationJournal>();
 builder.Services.AddScoped<IGitHubRemoteSandboxReviewSessionRecorder>(
     sp => sp.GetRequiredService<PostgresGitHubRemoteSandboxReviewSessionJournal>());
 builder.Services.AddScoped<GitHubRemoteTrustedDispatchReadOnlyOrchestrator>();
@@ -529,6 +530,13 @@ builder.Services.AddRateLimiter(options =>
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
+    // F-081: separate per-minute budget for independent confirmation.
+    options.AddFixedWindowLimiter("github-remote-sandbox-dispatch-confirmation", limiter =>
+    {
+        limiter.PermitLimit = 8;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
     options.AddFixedWindowLimiter("git-local-sandbox-dispatch", limiter =>
     {
         limiter.PermitLimit = 6;
@@ -592,6 +600,7 @@ await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
 // F-078 has an FK to F-055: never initialize this before the hazard table.
 await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
 await GitHubRemoteSandboxDispatchIntentSchema.InitializeAsync(app.Services);
+await GitHubRemoteSandboxDispatchConfirmationSchema.InitializeAsync(app.Services);
 await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
@@ -676,6 +685,7 @@ app.MapGitHubRemoteAppPreflightEndpoints();
 app.MapGitHubRemoteTestGrantEndpoints();
 app.MapGitHubRemoteSandboxReviewSessionEndpoints();
 app.MapGitHubRemoteSandboxDispatchIntentEndpoints();
+app.MapGitHubRemoteSandboxDispatchConfirmationEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
