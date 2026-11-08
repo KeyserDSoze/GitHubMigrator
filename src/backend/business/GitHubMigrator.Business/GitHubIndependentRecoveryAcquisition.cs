@@ -75,7 +75,11 @@ public sealed class GitHubIndependentRecoveryAcquisition(
         var previous = await readback.GetAsync(
             baseline.GrantId, baseline.RepositoryId, ct);
         if (previous is not null)
+        {
+            if (previous.ObservedAtUtc < baseline.PossibleSendRecordedAtUtc)
+                throw Refused("IndependentRecoveryOldReadback");
             return TipStatus(baseline, previous);
+        }
         return await WithTokenAsync(baseline, async (token, expiry, tokenCt) =>
         {
             // Only the reader's GitHub REST GET operations can run. Both
