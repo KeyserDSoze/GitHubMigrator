@@ -110,6 +110,7 @@ public sealed class GitHubIndependentRecoveryAcquisition(
             observed.BaselineSha256 != baseline.BaselineSha256 ||
             observed.CandidateSetSha256 != baseline.CandidateSetSha256 ||
             observed.ObservedBy == observerId ||
+            observed.ObservedAtUtc < baseline.PossibleSendRecordedAtUtc ||
             !GitSourceBundleStorageCheck.ValidSha(observed.RefSetSha256))
             throw Refused("IndependentRecoveryExactTipsRequired");
         var prior = await reconciliations.GetAsync(
