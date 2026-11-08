@@ -194,6 +194,16 @@ builder.Services.AddScoped<IGitHubSandboxOneShotGitWriter>(sp =>
         builder.Configuration["GitHubSandboxOneShot:ScratchRoot"] ?? "",
         sp.GetRequiredService<GitHubSandboxOneShotOptions>()));
 builder.Services.AddScoped<GitHubSandboxOneShotSender>();
+// F-087 is a separate, explicitly enabled, GET-only recovery capability.
+// It never depends on the F-083 sender switch or remote writer.
+builder.Services.AddSingleton(new GitHubIndependentRecoveryOptions(
+    builder.Configuration.GetValue("GitHubIndependentRecovery:Enabled", false),
+    builder.Configuration.GetValue<long>(
+        "GitHubIndependentRecovery:AllowedRepositoryId", 0),
+    builder.Configuration["GitHubIndependentRecovery:AllowedRepository"] ?? ""));
+builder.Services.AddScoped<GitHubIndependentRecoveryAcquisition>();
+builder.Services.AddScoped<IGitHubRemoteRecoveredReadbackJournal,
+    PostgresGitHubRemoteRecoveredReadbackJournal>();
 builder.Services.AddScoped<IGitHubRemoteSandboxReviewSessionRecorder>(
     sp => sp.GetRequiredService<PostgresGitHubRemoteSandboxReviewSessionJournal>());
 builder.Services.AddScoped<GitHubRemoteTrustedDispatchReadOnlyOrchestrator>();
@@ -257,6 +267,8 @@ builder.Services.AddScoped<IGitSourceSnapshotMirrorMaterializer>(sp =>
         sp.GetRequiredService<GitHubMigrator.Infrastructure.GitObjects.LocalGitSourceSnapshotMirrorMaterializer>(),
         sp.GetRequiredService<IGitSourceMirrorLifecycleJournal>()));
 builder.Services.AddScoped<GitHubTrustedRemoteReadCoordinator>();
+builder.Services.AddScoped<IGitHubTrustedRemoteReadExecutor>(
+    sp => sp.GetRequiredService<GitHubTrustedRemoteReadCoordinator>());
 
 builder.Services.AddScoped<GitHubRemoteTestGrantService>();
 builder.Services.AddHostedService<GitHubRemoteTestGrantBackgroundWorker>();
@@ -327,6 +339,8 @@ builder.Services.AddTransient<IGitHubAppScopedWriteCredentialInspector>(
 builder.Services.AddTransient<IGitHubRemoteAppPreflightReader>(
     p => p.GetRequiredService<GitHubAppScopedWriteCredentialInspector>());
 builder.Services.AddTransient<IGitHubSandboxVerifiedTokenScope>(
+    p => p.GetRequiredService<GitHubAppScopedWriteCredentialInspector>());
+builder.Services.AddTransient<IGitHubRecoveryReadOnlyTokenScope>(
     p => p.GetRequiredService<GitHubAppScopedWriteCredentialInspector>());
 builder.Services.AddHttpClient<GitHubRemoteTipObjectReader>(
         c => c.Timeout = TimeSpan.FromSeconds(12))
