@@ -34,7 +34,7 @@ public sealed class GitHubSandboxCreateOnlyPushRunnerTests
         };
         var input = new GitHubSandboxPushInput(
             evidence.Source, bundle, barrier,
-            evidence.Preflight.ObservedBaselineSha256);
+            evidence.Preflight.ObservedBaselineSha256, evidence.Latest);
         var sandbox = Path.Combine(Path.GetTempPath(),
             "f083-never-connect-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(sandbox);
