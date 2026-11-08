@@ -286,6 +286,51 @@ public sealed class PostgresGitHubRemoteSandboxPreSendBarrierTests(
     }
 
     [Fact]
+    public async Task F083_internal_authority_exposes_only_f055_baseline_then_consumes_once()
+    {
+        var e = PostgresGitHubRemoteDispatchReviewTests.NewCase();
+        await using var db = fixture.NewContext();
+        var confirmation = await SeedAsync(db, e);
+        var p = e.Source.Packet;
+        var adapter = new PostgresGitHubSandboxPreSendAuthority(
+            db, Options(e), Journal(db, e));
+        var baseline = await adapter.GetBaselineAsync(
+            confirmation.Id, confirmation.IntentId,
+            p.PreparationId, p.PlanId, p.ScopeId, e.RepositoryId, default);
+        Assert.Equal(e.Preflight.ObservedBaselineSha256, baseline);
+
+        var actor = Guid.NewGuid();
+        var marker = await adapter.MarkOnceAsync(
+            confirmation.Id, confirmation.IntentId,
+            p.PreparationId, p.PlanId, p.ScopeId, actor, default);
+        Assert.Equal(GitHubRemoteSandboxPreSendBarrierIntegrity.Recorded,
+            marker.State);
+        Assert.False(marker.CanExecute);
+        Assert.False(marker.TransportInvoked);
+        Assert.False(marker.MayAutomaticallyRetry);
+        Assert.Equal(GitHubRemoteTransmitHazardStates.MayHaveTransmitted,
+            (await db.GitHubRemoteTransmitHazards.AsNoTracking()
+                .SingleAsync(x => x.Id == e.HazardId)).State);
+
+        var stale = await Assert.ThrowsAsync<GitHubSandboxOneShotException>(
+            () => adapter.GetBaselineAsync(confirmation.Id,
+                confirmation.IntentId, p.PreparationId, p.PlanId,
+                p.ScopeId, e.RepositoryId, default));
+        Assert.Equal("SandboxSenderAuthorityUnavailable", stale.Code);
+        await Assert.ThrowsAsync<GitHubRemoteSandboxPreSendBarrierException>(
+            () => adapter.MarkOnceAsync(confirmation.Id,
+                confirmation.IntentId, p.PreparationId,
+                p.PlanId, p.ScopeId, actor, default));
+        Assert.Single(await db.GitHubRemoteSandboxPreSendBarriers
+            .AsNoTracking().Where(x => x.HazardId == e.HazardId)
+            .ToArrayAsync());
+        Assert.Single(await db.GitHubRemoteTransmitHazardEvents
+            .AsNoTracking().Where(x => x.HazardId == e.HazardId &&
+                x.Type == GitHubRemoteTransmitHazardStates.MayHaveTransmitted)
+            .ToArrayAsync());
+    }
+
+    [Fact]
     public async Task F082_disabled_by_default_refuses_without_touching_postgresql()
     {
         var e = PostgresGitHubRemoteDispatchReviewTests.NewCase();
