@@ -2,7 +2,7 @@
 
 An extensible, feature-driven platform to migrate source control and (later) pipelines and work tracking from Azure DevOps Services, Azure DevOps Server / TFS, and other systems to GitHub Enterprise.
 
-**Status: Phase 1, F-002 connections + F-003 read-only discovery + F-004 identity mapping drafts + F-005 read-only plan preview.** Azure DevOps Services and GitHub Enterprise Cloud credential connections can be verified and managed. **F-003 read-only inventory** now discovers projects, Git repositories/refs, TFVC roots, Graph users/groups and direct memberships, plus Git ACL allow/deny evidence from Azure DevOps Services. Effective repository permissions, verified GitHub organization membership, full TFVC history and real migrations are **not yet implemented**. The platform must never claim a migration completed without verification.
+**Engineering status (through F-092):** Azure DevOps Services read-only discovery, PostgreSQL staging and durable source sync, Git ref/identity/ACL evidence, versioned source-only checkpoints, per-ref SHA-256 attestation, and read-only paged ref-change inspection are implemented with automated tests. Local Git sandbox transfer and tightly guarded remote-send/recovery foundations exist but are **not an approved, unattended, production GitHub migration flow**. Effective grants, complete TFVC conversion, automatic destination sync and end-to-end verified migration remain open. Never claim a migration completed without independent verification.
 
 ## Architecture
 
@@ -22,6 +22,12 @@ Destination adapters (GitHub Enterprise Cloud / Server / future)
 - Local: Docker Compose, PostgreSQL, Azurite, Grafana LGTM (OpenTelemetry).
 - Azure: Static Web Apps, App Service container, Container Registry, PostgreSQL Flexible Server, Blob Storage, Key Vault, Application Insights and Foundry.
 - Tests: xUnit and Playwright. Feature specs in `features/`, decisions in `ADR/`.
+
+## Verified source-only sync checkpoints (F-090–F-092)
+
+The Source sync workbench captures explicitly reviewed immutable source snapshots. New F-091 receipts preserve the original F-090 digest while binding a versioned SHA-256 of every changed source Git ref in the F-025 journal. **F-092** adds a superadmin-only, read-only API and React preview that page through recorded branch/tag changes using an exact PostgreSQL keyset cursor, with their previous/current fingerprints and reviewed target mapping. Historical count-only F-090 receipts remain readable, but cannot impersonate F-091 attested per-ref history. No feature in this section dispatches a GitHub push.
+
+See [F-091 fingerprint attestation](docs/github-source-ref-fingerprint-manifest-f091.md) and [F-092 bounded ref delta pages](docs/github-checkpoint-ref-delta-pages-f092.md). Full SHA verification is rerun on each F-092 page, so end-to-end page cost still scales with checkpoint size until a persisted verified cursor is added.
 
 ## Quick start
 

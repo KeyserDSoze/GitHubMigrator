@@ -34,6 +34,10 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-050 | Dedicated target-wide GitHub sandbox future-write fence (non-executable) | Default-off exact numeric repository allowlist, F-044/F-047 binding, multi-replica PostgreSQL CAS/epochs, independent superadmin review, short deadlines, quarantine and different-actor recovery; SQL denies all GitHub remote writes |
 | F-051 | Ephemeral GitHub App read-only remote preflight | Fixed one-repo installation-token mint inside infrastructure; exact GET-only full refs/tag-objects and inherited rules; F-044 physical SHA + F-050 generation rechecks, drift fail-close, token-free SHA receipt, no remote Git push |
 | F-052 | Remote GitHub test-intent grant and post-send ref inspection contract | Independent additional review with fresh F-051 proof, one F-050 fence epoch per globally keyed repository, PostgreSQL no-write audit/quarantine/recovery, and complete branch/tag SHA reconciliation with retry forbidden; no GitHub transport |
+| F-089 | Multi-repository source sync control tower | Committed source staging pulse and reviewed mapping/status; never GitHub migration completion |
+| F-090 | Durable source-only incremental staging checkpoints | Explicit PostgreSQL checkpoint chain, exactly-once audit and historical paging; no GitHub write authority |
+| F-091 | SHA-256 per-ref source journal attestation | Versioned F-090 compatible receipts bound to F-025 fingerprint manifest; restart and integrity verification |
+| F-092 | Read-only ref change inspection for verified checkpoints | Superadmin-only PostgreSQL keyset pages + React inspection + xUnit/PostgreSQL/Playwright tests; no destination execution |
 | F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
 | F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |
