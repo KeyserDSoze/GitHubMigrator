@@ -81,17 +81,27 @@ public sealed class PostgresGitHubSourceSyncCheckpointJournal(
         var proof = await BuildProofAsync(
             plan, candidate, prevReceipt, ct);
         var digest = GitHubSourceSyncCheckpointIntegrity.Digest(proof);
+        // An F-091 stream inside the same source-locked transaction is
+        // mandatory for new receipts; it never authorizes a GitHub send.
+        var refManifest = await ReadRefManifestAsync(
+            plan.SourceConnectionId, candidate.SnapshotId,
+            proof.TotalRefChanges, ct);
         var recordedAt = await db.Database.SqlQueryRaw<DateTimeOffset>(
             "SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var checkpointId = Guid.NewGuid();
         var record = new GitHubSourceSyncCheckpointRecord
         {
-            Id = Guid.NewGuid(), PreparationId = preparationId,
+            Id = checkpointId, PreparationId = preparationId,
             PlanId = planId, SourceConnectionId = plan.SourceConnectionId,
             SnapshotId = candidate.SnapshotId,
             PreviousCheckpointId = prior?.Id,
             ManifestSha256 = plan.ManifestSha256,
             ProofJson = JsonSerializer.Serialize(proof),
-            EvidenceSha256 = digest,
+            EvidenceSha256 = digest, EvidenceVersion = 2,
+            RefChangeManifestJson = JsonSerializer.Serialize(refManifest),
+            RefChangeAttestationSha256 =
+                GitHubSourceSyncCheckpointIntegrity.RefAttestationDigest(
+                    checkpointId, digest, refManifest),
             RecordedBy = actorId, RecordedAtUtc = recordedAt,
             CanPush = false, CanRetry = false,
             CanDispatch = false, MigrationComplete = false
@@ -362,16 +372,54 @@ public sealed class PostgresGitHubSourceSyncCheckpointJournal(
         if (GitHubSourceSyncCheckpointIntegrity.Digest(current) !=
                 row.EvidenceSha256)
             throw Refused("SourceSyncCheckpointJournalDrift");
+        if (row.EvidenceVersion == 2)
+        {
+            // Recalculate from the authoritative F-025 journal, not from
+            // the stored JSON. Never silently downgrade a v2 receipt.
+            var actual = await ReadRefManifestAsync(
+                plan.SourceConnectionId, row.SnapshotId,
+                proof.TotalRefChanges, ct);
+            if (receipt.RefChangeManifest != actual)
+                throw Refused("SourceSyncCheckpointJournalDrift");
+        }
         return receipt;
+    }
+
+    private async Task<GitHubSourceRefChangeManifest> ReadRefManifestAsync(
+        Guid sourceConnectionId, Guid snapshotId,
+        int expectedRefCount, CancellationToken ct)
+    {
+        GitHubSourceRefChangeManifest manifest;
+        try
+        {
+            manifest = await new PostgresGitHubSourceRefChangeManifestReader(
+                db, staging).ReadAsync(sourceConnectionId, snapshotId, ct);
+        }
+        catch (GitHubSourceRefChangeManifestException)
+        { throw Refused("SourceSyncCheckpointJournalCorrupt"); }
+        if (manifest.Total != expectedRefCount)
+            throw Refused("SourceSyncCheckpointJournalCorrupt");
+        return manifest;
     }
 
     private static GitHubSourceSyncCheckpointReceipt FromStored(
         GitHubSourceSyncCheckpointRecord row,
-        GitHubSourceSyncCheckpointProof proof) =>
-        new(row.Id, proof, row.EvidenceSha256,
+        GitHubSourceSyncCheckpointProof proof)
+    {
+        GitHubSourceRefChangeManifest? manifest = null;
+        if (row.RefChangeManifestJson is not null)
+        {
+            try { manifest = JsonSerializer.Deserialize<
+                GitHubSourceRefChangeManifest>(row.RefChangeManifestJson); }
+            catch (JsonException)
+            { throw Refused("SourceSyncCheckpointHistoryCorrupt"); }
+        }
+        return new(row.Id, proof, row.EvidenceSha256,
             row.RecordedBy, row.RecordedAtUtc,
             row.CanPush, row.CanRetry, row.CanDispatch,
-            row.MigrationComplete);
+            row.MigrationComplete, manifest,
+            row.RefChangeAttestationSha256, row.EvidenceVersion);
+    }
 
     private static GitHubSourceSyncCheckpointException Refused(string code)
         => new(code);
