@@ -168,6 +168,23 @@ builder.Services.AddScoped<IGitHubRemoteDispatchAuthorityVerifier,
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxReviewSessionJournal>();
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxDispatchIntentJournal>();
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxDispatchConfirmationJournal>();
+builder.Services.AddSingleton(new GitHubSandboxOneShotOptions(
+    builder.Configuration.GetValue("GitHubSandboxOneShot:Enabled", false),
+    builder.Configuration.GetValue<long>("GitHubSandboxOneShot:AllowedRepositoryId", 0),
+    builder.Configuration["GitHubSandboxOneShot:AllowedOrganization"] ?? "",
+    builder.Configuration["GitHubSandboxOneShot:AllowedRepository"] ?? ""));
+// F-083 has NO public API, job queue or hosted worker. This composition
+// is a disabled-by-default internal sender for explicitly permitted sandbox
+// experiments only; F-082 always marks possible transmission first.
+builder.Services.AddScoped<PostgresGitHubRemoteSandboxPreSendBarrierJournal>();
+builder.Services.AddScoped<IGitHubSandboxPreSendAuthority,
+    PostgresGitHubSandboxPreSendAuthority>();
+builder.Services.AddScoped<IGitHubSandboxOneShotGitWriter>(sp =>
+    new GitHubMigrator.Infrastructure.GitObjects.GitHubSandboxCreateOnlyPushRunner(
+        builder.Configuration["GitSourceBundles:BundleRoot"] ?? "",
+        builder.Configuration["GitHubSandboxOneShot:ScratchRoot"] ?? "",
+        sp.GetRequiredService<GitHubSandboxOneShotOptions>()));
+builder.Services.AddScoped<GitHubSandboxOneShotSender>();
 builder.Services.AddScoped<IGitHubRemoteSandboxReviewSessionRecorder>(
     sp => sp.GetRequiredService<PostgresGitHubRemoteSandboxReviewSessionJournal>());
 builder.Services.AddScoped<GitHubRemoteTrustedDispatchReadOnlyOrchestrator>();
@@ -300,6 +317,14 @@ builder.Services.AddTransient<IGitHubAppScopedWriteCredentialInspector>(
     p => p.GetRequiredService<GitHubAppScopedWriteCredentialInspector>());
 builder.Services.AddTransient<IGitHubRemoteAppPreflightReader>(
     p => p.GetRequiredService<GitHubAppScopedWriteCredentialInspector>());
+builder.Services.AddTransient<IGitHubSandboxVerifiedTokenScope>(
+    p => p.GetRequiredService<GitHubAppScopedWriteCredentialInspector>());
+builder.Services.AddHttpClient<GitHubRemoteTipObjectReader>(
+        c => c.Timeout = TimeSpan.FromSeconds(12))
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubRemoteTipObjectReader>(
+    p => p.GetRequiredService<GitHubRemoteTipObjectReader>());
 builder.Services.AddHttpClient<GitHubImportPolicyReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() =>
         new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
