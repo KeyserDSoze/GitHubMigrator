@@ -180,6 +180,46 @@ public sealed class GitHubSandboxOneShotSenderTests
         }
     }
 
+    private sealed class TypedBaselines : IGitHubRemoteTypedRecoveryBaselineJournal
+    {
+        public int Calls;
+        public bool Refuse;
+        public Task<GitHubRemoteTypedRecoveryBaselineReceipt> CaptureAsync(
+            Guid confirmationId, Guid intentId, Guid preparationId,
+            Guid planId, Guid scopeId, Guid independentOperator,
+            GitHubCreateOnlyCandidatePacket source,
+            GitHubRefObservation latestBaseline, CancellationToken ct)
+        {
+            Calls++;
+            if (Refuse)
+                throw new GitHubRemoteTypedRecoveryBaselineException(
+                    "TypedRecoveryBaselineDisabled");
+            Assert.Equal(source.Packet.PreparationId, preparationId);
+            Assert.Equal(source.Packet.PlanId, planId);
+            Assert.Equal(source.Packet.ScopeId, scopeId);
+            Assert.Equal(source.Packet.RepositoryId, 2468);
+            Assert.Equal("gh-org", latestBaseline.Organization);
+            Assert.Equal("sandbox", latestBaseline.Repository);
+            Assert.DoesNotContain(latestBaseline.Refs,
+                r => source.Candidates.Any(c => c.Name == r.Name));
+            var row = new GitHubRemoteTypedRecoveryBaselineReceipt(
+                Guid.NewGuid(), confirmationId, intentId,
+                Guid.NewGuid(), Guid.NewGuid(),
+                preparationId, planId, scopeId,
+                2468, "gh-org", "sandbox", independentOperator,
+                source.Packet.EvidenceSha256,
+                source.Packet.CandidateSetSha256,
+                GitHubRemoteRefFenceIntegrity.Fingerprint(latestBaseline.Refs),
+                latestBaseline, source.Candidates, DateTimeOffset.UtcNow,
+                GitHubRemoteTypedRecoveryBaselineIntegrity.Captured, "",
+                false, false, false);
+            return Task.FromResult(row with {
+                EvidenceSha256 =
+                    GitHubRemoteTypedRecoveryBaselineIntegrity.Digest(row)
+            });
+        }
+    }
+
     private sealed class Writer : IGitHubSandboxOneShotGitWriter
     {
         public int Calls;
@@ -233,6 +273,7 @@ public sealed class GitHubSandboxOneShotSenderTests
         public readonly RefReader Refs;
         public readonly Policies Policy;
         public readonly Authority Marker;
+        public readonly TypedBaselines Baselines = new();
         public readonly Writer Transport = new();
         public readonly Readback Tips;
 
@@ -290,7 +331,7 @@ public sealed class GitHubSandboxOneShotSenderTests
             new(new(enabled, 2468, "gh-org", "sandbox"),
                 new(true, 1234, 88, "sandbox/app-private-key", "gh-org/sandbox"),
                 Secret, Packets, Bundles, Physical, Token,
-                Refs, Policy, Marker, Transport, Tips);
+                Refs, Policy, Marker, Baselines, Transport, Tips);
 
         public Task<GitHubSandboxOneShotOutcome> RunAsync(
             GitHubSandboxOneShotSender? service = null) =>
@@ -313,6 +354,7 @@ public sealed class GitHubSandboxOneShotSenderTests
         Assert.Equal(0, f.Physical.Reads);
         Assert.Equal(0, f.Secret.Reads);
         Assert.Equal(0, f.Token.Calls);
+        Assert.Equal(0, f.Baselines.Calls);
         Assert.Equal(0, f.Marker.Marks);
         Assert.Equal(0, f.Transport.Calls);
     }
@@ -333,9 +375,24 @@ public sealed class GitHubSandboxOneShotSenderTests
         Assert.Equal(2, f.Physical.Reads);
         Assert.Equal(2, f.Refs.Calls);
         Assert.Equal(1, f.Policy.Calls);
+        Assert.Equal(1, f.Baselines.Calls);
         Assert.Equal(1, f.Marker.Marks);
         Assert.Equal(1, f.Transport.Calls);
         Assert.Equal(1, f.Tips.Calls);
+    }
+
+    [Fact]
+    public async Task F086_snapshot_store_failure_prevents_F082_and_git_transport()
+    {
+        var f = new Fixture();
+        f.Baselines.Refuse = true;
+        var ex = await Assert.ThrowsAsync<
+            GitHubRemoteTypedRecoveryBaselineException>(() => f.RunAsync());
+        Assert.Equal("TypedRecoveryBaselineDisabled", ex.Code);
+        Assert.Equal(1, f.Baselines.Calls);
+        Assert.Equal(0, f.Marker.Marks);
+        Assert.Equal(0, f.Transport.Calls);
+        Assert.Equal(0, f.Tips.Calls);
     }
 
     [Fact]
@@ -348,6 +405,7 @@ public sealed class GitHubSandboxOneShotSenderTests
         Assert.True(outcome.TransportMayHaveRun);
         Assert.False(outcome.CanRetry);
         Assert.False(outcome.MigrationComplete);
+        Assert.Equal(1, f.Baselines.Calls);
         Assert.Equal(1, f.Marker.Marks);
         Assert.Equal(1, f.Transport.Calls);
         Assert.Equal(0, f.Tips.Calls);
