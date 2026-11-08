@@ -317,6 +317,26 @@ public sealed class GitHubIndependentRecoveryAcquisitionTests
     }
 
     [Fact]
+    public async Task F087_prebarrier_readback_cannot_be_replayed_as_postsend_evidence()
+    {
+        var f = new Fixture();
+        var result = await f.ObserveAsync();
+        Assert.NotNull(f.Readback.Value);
+        f.Readback.Value = f.Readback.Value with {
+            ObservedAtUtc =
+                f.Baseline.PossibleSendRecordedAtUtc!.Value.AddSeconds(-2)
+        };
+        var ex = await Assert.ThrowsAsync<GitHubIndependentRecoveryException>(
+            () => f.ObserveAsync());
+        Assert.Equal("IndependentRecoveryOldReadback", ex.Code);
+        ex = await Assert.ThrowsAsync<GitHubIndependentRecoveryException>(
+            () => f.VerifyAsync());
+        Assert.Equal("IndependentRecoveryExactTipsRequired", ex.Code);
+        Assert.Equal(1, f.Token.Minted);
+        Assert.Equal(0, f.Closure.Executions);
+    }
+
+    [Fact]
     public async Task F087_mismatch_stays_operator_review_and_never_fetches_objects()
     {
         var f = new Fixture();
