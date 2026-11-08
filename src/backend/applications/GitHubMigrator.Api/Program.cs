@@ -192,6 +192,9 @@ builder.Services.AddSingleton(new GitHubRemoteRecoveryWorkbenchOptions(
         "GitHubRemoteRecoveryWorkbench:AllowedRepositoryId", 0),
     builder.Configuration["GitHubRemoteRecoveryWorkbench:AllowedRepository"] ?? ""));
 builder.Services.AddScoped<PostgresGitHubRemoteRecoveryWorkbenchReader>();
+builder.Services.AddSingleton(new GitHubMultiRepositorySyncPulseOptions(
+    builder.Configuration.GetValue("GitHubMultiRepositorySyncPulse:Enabled", false)));
+builder.Services.AddScoped<PostgresGitHubMultiRepositorySyncPulseReader>();
 builder.Services.AddScoped<IGitHubSandboxPreSendAuthority,
     PostgresGitHubSandboxPreSendAuthority>();
 builder.Services.AddScoped<IGitHubSandboxOneShotGitWriter>(sp =>
@@ -753,6 +756,7 @@ app.MapGitHubRemotePostSendRecoveryEndpoints();
 app.MapGitHubRemoteTypedRecoveryBaselineEndpoints();
 app.MapGitHubIndependentRecoveryEndpoints();
 app.MapGitHubRemoteRecoveryWorkbenchEndpoints();
+app.MapGitHubMultiRepositorySyncPulseEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
