@@ -71,6 +71,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<GitHubRemoteTransmitHazardRecord>();
     public DbSet<GitHubRemoteTransmitHazardEventRecord> GitHubRemoteTransmitHazardEvents =>
         Set<GitHubRemoteTransmitHazardEventRecord>();
+    public DbSet<GitHubRemoteTypedRecoveryBaselineRecord>
+        GitHubRemoteTypedRecoveryBaselines =>
+        Set<GitHubRemoteTypedRecoveryBaselineRecord>();
+    public DbSet<GitHubRemoteTypedRecoveryBaselineEventRecord>
+        GitHubRemoteTypedRecoveryBaselineEvents =>
+        Set<GitHubRemoteTypedRecoveryBaselineEventRecord>();
     public DbSet<GitHubRemotePostSendClosureCheckpointRecord>
         GitHubRemotePostSendClosureCheckpoints =>
         Set<GitHubRemotePostSendClosureCheckpointRecord>();
@@ -802,6 +808,57 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasDatabaseName("github_remote_sandbox_review_session_events_session_id_key");
             entity.HasOne<GitHubRemoteSandboxReviewSessionRecord>().WithMany()
                 .HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<GitHubRemoteTypedRecoveryBaselineRecord>(entity =>
+        {
+            entity.ToTable("github_remote_typed_recovery_baselines");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.ConfirmationId).HasColumnName("confirmation_id");
+            entity.Property(x => x.IntentId).HasColumnName("intent_id");
+            entity.Property(x => x.HazardId).HasColumnName("hazard_id");
+            entity.Property(x => x.GrantId).HasColumnName("grant_id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.ScopeId).HasColumnName("scope_id");
+            entity.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(128);
+            entity.Property(x => x.Repository).HasColumnName("repository").HasMaxLength(128);
+            entity.Property(x => x.CapturedBy).HasColumnName("captured_by");
+            entity.Property(x => x.PacketSha256).HasColumnName("packet_sha256").HasMaxLength(64);
+            entity.Property(x => x.CandidateSetSha256).HasColumnName("candidate_set_sha256").HasMaxLength(64);
+            entity.Property(x => x.BaselineSha256).HasColumnName("baseline_sha256").HasMaxLength(64);
+            entity.Property(x => x.BaselineObservedAtUtc).HasColumnName("baseline_observed_at_utc");
+            entity.Property(x => x.BaselineEvidenceSha256).HasColumnName("baseline_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.BaselineRefsJson).HasColumnName("baseline_refs_json");
+            entity.Property(x => x.CreateCandidatesJson).HasColumnName("create_candidates_json");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(40);
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.CanSend).HasColumnName("can_send");
+            entity.Property(x => x.MayAutomaticallyRetry).HasColumnName("may_automatically_retry");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasIndex(x => x.ConfirmationId).IsUnique();
+            entity.HasIndex(x => x.IntentId).IsUnique();
+            entity.HasIndex(x => x.HazardId).IsUnique();
+            entity.HasIndex(x => x.GrantId).IsUnique();
+            entity.HasOne<GitHubRemoteSandboxDispatchConfirmationRecord>()
+                .WithMany().HasForeignKey(x => x.ConfirmationId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<GitHubRemoteTypedRecoveryBaselineEventRecord>(entity =>
+        {
+            entity.ToTable("github_remote_typed_recovery_baseline_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(16);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasIndex(x => x.SnapshotId).IsUnique();
+            entity.HasOne<GitHubRemoteTypedRecoveryBaselineRecord>()
+                .WithMany().HasForeignKey(x => x.SnapshotId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<GitHubRemotePostSendClosureCheckpointRecord>(entity =>
         {
