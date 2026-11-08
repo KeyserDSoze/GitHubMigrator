@@ -175,6 +175,87 @@ public sealed class PostgresGitHubSourceSyncCheckpointJournal(
             false, false, false, false);
     }
 
+    // F-092: independent, snapshot-consistent, read-only inspection of
+    // a single *verified* version-2 F-091 checkpoint. Never expose raw
+    // Git credentials, target write instructions or mutable catalog state.
+    public async Task<GitHubSourceCheckpointRefChangePage> ListRefChangesAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        string? after, int take, CancellationToken ct)
+    {
+        RequireEnabled();
+        if (preparationId == Guid.Empty || planId == Guid.Empty ||
+            checkpointId == Guid.Empty ||
+            take is < 1 or > GitHubSourceCheckpointRefChangeIntegrity.MaxPageSize)
+            throw Refused("SourceSyncCheckpointInvalidPage");
+        if (after is not null)
+            GitHubSourceCheckpointRefChangeIntegrity.ParseKey(after);
+
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead, ct);
+        var plan = await RequirePlanAsync(preparationId, planId, ct);
+        var checkpoint = await db.GitHubSourceSyncCheckpoints.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == checkpointId &&
+                x.PlanId == plan.Id &&
+                x.PreparationId == preparationId &&
+                x.SourceConnectionId == plan.SourceConnectionId, ct)
+            ?? throw Refused("SourceSyncCheckpointNotFound");
+        var verified = await VerifiedAsync(checkpoint, plan, ct);
+        if (verified.EvidenceVersion != 2 ||
+            verified.RefChangeManifest is null ||
+            verified.RefChangeAttestationSha256 is null)
+            throw Refused("SourceSyncCheckpointLegacyUnattested");
+
+        if (after is not null &&
+            !await db.StagingAssetChanges.AsNoTracking().AnyAsync(x =>
+                x.SnapshotId == checkpoint.SnapshotId &&
+                x.SourceConnectionId == plan.SourceConnectionId &&
+                x.AssetType == "ref" && x.SourceId == after, ct))
+            throw Refused("SourceSyncCheckpointCursorInvalid");
+
+        var mapped = plan.Steps
+            .Where(x => x.Kind == "ReviewTargetName").ToArray();
+        if (mapped.Length != plan.RepositoryCount ||
+            mapped.Select(x => x.SourceRepositoryId)
+                .Distinct(StringComparer.Ordinal).Count() != mapped.Length)
+            throw Refused("SourceSyncCheckpointPlanCorrupt");
+        var targetNames = mapped.ToDictionary(
+            x => x.SourceRepositoryId, x => x.TargetRepositoryName,
+            StringComparer.Ordinal);
+
+        // Keyset pagination over the original F-025 journal. The same
+        // bytewise ordering is used by the verified F-091 streaming SHA.
+        var rows = await db.StagingAssetChanges.FromSqlInterpolated($"""
+            SELECT * FROM staging_asset_changes
+            WHERE snapshot_id = {checkpoint.SnapshotId}
+              AND source_connection_id = {plan.SourceConnectionId}
+              AND asset_type = 'ref'
+              AND source_id COLLATE "C" > {after ?? ""} COLLATE "C"
+            ORDER BY source_id COLLATE "C"
+            LIMIT {take + 1}
+            """).AsNoTracking().ToArrayAsync(ct);
+        var items = rows.Take(take).Select(row =>
+        {
+            var key = GitHubSourceCheckpointRefChangeIntegrity.ParseKey(
+                row.SourceId);
+            targetNames.TryGetValue(key.RepositoryId, out var target);
+            return GitHubSourceCheckpointRefChangeIntegrity.Parse(
+                new StagingChangeView(row.AssetType, row.SourceId,
+                    row.Kind, row.PreviousFingerprint,
+                    row.CurrentFingerprint, row.Revision), target);
+        }).ToArray();
+
+        var page = new GitHubSourceCheckpointRefChangePage(
+            checkpoint.Id, checkpoint.SnapshotId,
+            verified.RefChangeManifest.EvidenceSha256,
+            verified.RefChangeAttestationSha256,
+            verified.Proof.TotalRefChanges, items,
+            rows.Length > take ? items[^1].SourceId : null,
+            false, false, false, false);
+        GitHubSourceCheckpointRefChangeIntegrity.VerifyPage(page, take);
+        await tx.CommitAsync(ct);
+        return page;
+    }
+
     private void RequireEnabled()
     {
         if (!options.Enabled)
