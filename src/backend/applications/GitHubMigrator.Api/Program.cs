@@ -186,6 +186,12 @@ builder.Services.AddSingleton(new GitHubSandboxOneShotOptions(
 // experiments only; F-082 always marks possible transmission first.
 builder.Services.AddScoped<PostgresGitHubRemoteSandboxPreSendBarrierJournal>();
 builder.Services.AddScoped<PostgresGitHubRemotePostSendRecoveryJournal>();
+builder.Services.AddSingleton(new GitHubRemoteRecoveryWorkbenchOptions(
+    builder.Configuration.GetValue("GitHubRemoteRecoveryWorkbench:Enabled", false),
+    builder.Configuration.GetValue<long>(
+        "GitHubRemoteRecoveryWorkbench:AllowedRepositoryId", 0),
+    builder.Configuration["GitHubRemoteRecoveryWorkbench:AllowedRepository"] ?? ""));
+builder.Services.AddScoped<PostgresGitHubRemoteRecoveryWorkbenchReader>();
 builder.Services.AddScoped<IGitHubSandboxPreSendAuthority,
     PostgresGitHubSandboxPreSendAuthority>();
 builder.Services.AddScoped<IGitHubSandboxOneShotGitWriter>(sp =>
@@ -746,6 +752,7 @@ app.MapGitHubRemoteSandboxDispatchConfirmationEndpoints();
 app.MapGitHubRemotePostSendRecoveryEndpoints();
 app.MapGitHubRemoteTypedRecoveryBaselineEndpoints();
 app.MapGitHubIndependentRecoveryEndpoints();
+app.MapGitHubRemoteRecoveryWorkbenchEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
