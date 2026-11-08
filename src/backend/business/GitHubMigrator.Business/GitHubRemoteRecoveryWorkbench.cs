@@ -42,6 +42,16 @@ public sealed record GitHubRemoteRecoveryWorkbenchPage(
     Guid? NextAfter, bool CanPush, bool CanRetry,
     bool CanDispatch, bool MigrationComplete);
 
+// Projection-only interface: multi-repo dashboards can consult the
+// separately allowlisted sandbox without depending on its full F-081
+// PostgreSQL service graph or granting any new remote authority.
+public interface IGitHubRemoteRecoveryHistoryReader
+{
+    Task<GitHubRemoteRecoveryWorkbenchPage> ListAsync(
+        Guid preparationId, Guid planId, Guid? after, int take,
+        CancellationToken ct);
+}
+
 public static class GitHubRemoteRecoveryWorkbenchIntegrity
 {
     public static string NextAction(string state, bool hasTyped)
