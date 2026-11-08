@@ -1,0 +1,59 @@
+name: One-time cleanup of verified integrated branches
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/prune-verified-branches-once.yml
+permissions:
+  contents: write
+jobs:
+  prune:
+    if: github.repository == 'KeyserDSoze/GitHubMigrator'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check exact merged branch tips and delete obsolete refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json, os, sys, urllib.parse, urllib.request
+          REPO = 'KeyserDSoze/GitHubMigrator'
+          MERGED_SHA = '6db326691b5dcab53390078745114187efdbd09b'
+          F090_SHA = 'db3dbfb91eb25b51625b0bcbd84289f2284fd816'
+          EXPECTED = json.loads(r'''{"ci/f029-latest-head-validation":"db53faf2099fa24011ca601de14eeda2945a342a","feature/f005-github-destination-access":"2e5e03373259a52872752e233df308ef08d2c1b6","feature/f005-github-target-preflight":"2038e3f4c500de5fe2e7871d2d3a58abb6d5cf45","feature/f005-readonly-plan-preview":"4b5530c55b48918aa5b2ea88e7cb418bc1ac51f7","feature/f005-versioned-plan-drafts":"4eb981414370b54ec3516a8b341d2c2b334ac609","feature/f008-azdo-security-repo-checkpoints":"6b4455c14f02a30a21a9fff9f581b499e00a83c5","feature/f008-durable-azdo-discovery":"fff2246d8ec0dd8e09418d954cfe40cee93f5932","feature/f008-durable-azdo-page-checkpoints":"487e956a6422780139e4371fe0d55cc5bd58c73e","feature/f008-durable-staging-jobs":"b882f9686b056996665f8b6156a90266f9465ca1","feature/f013-staging-incremental-sync":"1dcd4585e0f675a68ae01ec8948829649343308f","feature/f014-canonical-staging-from-ref-chunks":"4b7ed0bf7f0b637da455c4695e05998b3be88118","feature/f014-immutable-ref-manifests":"32af55e3f3fbc9dbb7a03157dac6c21787e38312","feature/f014-source-ref-externalization":"f4e237bcadec86732826ad8af8ea314cee90b5c4","feature/f014-streamed-git-ref-observations":"fb4df893c66431eab4ef615e6bdf3f910093ed39","feature/f015-graph-identity-page-observations":"53f17c929a431149d68de3e06ebaf579938a2005","feature/f016-paged-f004-identity-review":"4e0e82e81849140e84c119c01f8341a0c6a5e9d3","feature/f017-snapshot-bound-plan-evidence":"589c5879b452fd7f00c16cf9b2d8504a3c9927f1","feature/f018-externalized-graph-identity-scan":"ad5accf37ab7e68dff9fe0a3c27754b8191bca63","feature/f019-graph-security-groups":"311d858e3ef8d4380e42458f310887c8f4a41497","feature/f020-membership-evidence-reconciliation":"8e8c54c8441a1459e0a8de37ea2d7b5c0bae6331","feature/f021-externalized-graph-memberships":"410f06f77025a322495c22743b033643694f1e83","feature/f022-durable-acl-evidence":"c6b6e7b77060b1c00aaa929cc2f098f66aeb8ae9","feature/f022-durable-raw-acl-observations":"410f06f77025a322495c22743b033643694f1e83","feature/f023-externalized-acl-staging":"b74320a2f825aaa64ef4bbfc384d162e1eda2228","feature/f024-externalized-graph-groups":"725bf1bbfdf191db14a18cd09cbf2a50e891d52e","feature/f025-immutable-staging-change-journal":"045805fe2d2b8cc18c2576649976d2634cb71585","feature/f026-incremental-preparation-orchestrator":"ec5ff36178fc2be831e1a7006bf9950be8aa01fd","feature/f027-incremental-review-dry-run":"7a267ccbc2364529657f8f1f8f1e73b113f45e43","feature/f028-live-github-target-preflight":"3b67a8360252911f6a105865e2935ba8d9846bc4","feature/f029-immutable-operation-manifest":"db53faf2099fa24011ca601de14eeda2945a342a","feature/f030-git-ref-reconciliation":"add8f12db8e89741ae4a21321fb856df02c42b3a","feature/f031-live-target-ref-evidence":"e9b9d2817147018e391b0a4d91990ba14c1f7165","feature/f032-proven-source-target-ref-reconciliation":"843f32b1dd516564061eb04c20c2ad726d9bb530","feature/f033-ref-reconciliation-workbench":"a216d74fce6b5fa8cc8d6dc24e1dc03287c48a00","feature/f034-durable-transfer-workpack":"824eb70be96ededa8b16be5c4ecd5b352a6d18b3","feature/f035-bounded-source-git-bundles":"8bef08a87e06c368814d33c0a90d1f078422aeaa","feature/f036-authenticated-azure-git-source-acquisition":"e22cffa4b6d9adaefbec0b22995527114c0cdb9b","feature/f037-durable-azure-git-acquisition-queue":"e55c2094c06404f34722c37039f41fc96554af44","feature/f038-source-bundle-storage-integrity":"342ac8dea6d4fc24afccb1fa568260ecb83f9e7c","feature/f039-github-import-readiness-evidence":"db6cacc4177db31a24ad4da09ffb1bfde7c2009c","feature/f040-two-person-import-intent-policy":"64a2305c1426d30b5b9e76149c54f26fc355ddf0","feature/f041-offline-git-create-only-rehearsal":"e1609f5a5ed5ca06a3a4acbb89facdd2d5b195de","feature/f042-fresh-github-remote-ref-fence":"15fdf41073f4abc85c17e6a4779f6f56df507f08","feature/f043-scoped-github-app-write-credential-attestation":"954c73bfcdbe6e38ad7089b3b6828292e0d9239f","feature/f044-sealed-create-only-execution-packet":"0147f02550da3a46d2ca7812e5cce034d6fe8418","feature/f045-github-target-preview-lease-fencing":"ab3abab0afb9a90d5ba9428d58e1e94693403320","feature/f046-per-ref-github-rules-review-and-ambiguous-outcomes":"732281343459bbe309f55377f380d7d9a427a008","feature/f047-sandbox-transfer-attempt-ledger-and-worker-barrier":"80e20877616eeb46691401e7926aabe41a3b3a22","feature/f048-local-sandbox-create-only-git-transport":"c918711ce62b222d0a2f62294d66c7a48e47bb9f","feature/f049-durable-local-sandbox-dispatch-reconciliation":"40806f6aa81b05d1f29ef9dd500eb83ba60c75e4","feature/f050-remote-sandbox-write-fence-quarantine":"a5f50adb19b51f145497e82945c08be2743c1427","feature/f051-github-app-ephemeral-remote-preflight":"8210f86c2d7ed6df7620016d548a36ca28e1f483","feature/f052-remote-test-write-grant-and-observation-journal":"a3fdffcc764a86554d29b5129ae39ead441a7f5e","feature/f053-remote-postsend-object-tip-readback":"bf905714fb12478c7ff11568311224ad5231269a","feature/f054-durable-remote-readback-evidence-journal":"3bf8ec3f57f63837a83e0b8086ee883aee91797a","feature/f055-remote-may-have-transmitted-journal":"3f0fe564e471b4d44c26c64953e7d80cbe4adb68","feature/f056-offline-git-object-closure-proof":"8e232cb5b7466807e57a9d63a288f06ed0f86cc4","feature/f057-github-readonly-object-mirror-proof":"7ace9c0e5450f399e53e1eeba4f6ae718d97c18e","feature/f058-durable-remote-object-reconciliation":"683718c43988ba0bc52529d50f278e83d2527e6a","feature/f059-trusted-remote-readonly-orchestration":"357e24f1b2a6945e506e2475df5157f6cb908a4f","feature/f060-durable-source-snapshot-mirror-materialization":"2c956552da2d83f71004c70b27919eebabd5104d","feature/f061-durable-source-mirror-leases-and-recovery":"f3610f6e8365c973e2d8148a90eed9f11c38d381","feature/f062-source-mirror-lease-freshness":"d5fa1a5922d9df09555b592a6b8d33bc710d7c90","feature/f063-source-mirror-lease-heartbeat":"ba8af68fa2853382ebf622cfa6a1fbb7e2d4b768","feature/f064-db-authoritative-source-mirror-clock":"a1ff9c761797fdde0c40e5e697f66fd4fb97bb26","feature/f065-source-mirror-fleet-health":"a9022b5f2b2bfd683555a7e4e79418f9cde83f68","feature/f066-incremental-preparation-queue-health":"7d2ebc62d6897a312cea15d25c356475d55e2a1b","feature/f067-incremental-queue-phase-timings":"ef4cdcb83b8c3609ea1aac011c143d8d40366771","feature/f068-incremental-queue-db-clock":"ff85cc2bcf1a53d876272b33c4e1e690359e037c","feature/f069-incremental-expired-lease-recovery-audit":"9860b818689d1dc1289c524b9122d89c0769b336","feature/f070-incremental-multicycle-source-fence":"013a4bf470610f73c2e4108077505cd35d87dbf2","feature/f071-local-git-sandbox-transfer":"f9279a47efc6f1c633921f5dd76dd6f1460b834e","feature/f072-github-app-installation-identity-fence":"3a4b5e519d85a59ca16629d4816e0bf1c5f1619f","feature/f073-github-remote-preflight-final-readback-fence":"988915abd9761453eb04d77bba7a8c992316e244","feature/f074-remote-create-only-dispatch-readiness-envelope":"c61e6027f6aa72b7cf2d7823a97d2884922f1f1c","feature/f075-postgres-remote-dispatch-authority-review":"3c0c846c71209c52cd9f43c853591b3cc8b58f89","feature/f076-trusted-readonly-dispatch-evidence-orchestration":"945aa3f6554ed42bce56071422d9335a3b727b42","feature/f077-immutable-f051-remote-preflight-evidence":"38b651b5e44e892ed7eeeef7bedc200536c6c8e5","feature/f078-immutable-github-sandbox-review-sessions":"9631d6e3062d5b20e2bd5061284f63e3754a816e","feature/f079-production-readonly-sandbox-review-api":"90057faacd90fe2d9610612286518f40d161d98d","feature/f080-immutable-readonly-dispatch-intents":"c3e14d8e4e23ec2587cc00c84044fd3ec53b0004","feature/f081-independent-readonly-dispatch-confirmation":"7fc5c01e23642c21266d2c8c41c9159a02a43a80","feature/f082-atomic-pre-send-barrier":"487e29cd33b488c771c2bf432fb3af1ee9bed496","feature/f083-guarded-one-shot-github-sandbox-sender":"da8543d9ca0643cba92c970f8903510995f18094","feature/f084-live-git-baseline-fence-and-closure-e2e":"731da033053a016900d74808439931c8f71e0c98","feature/f085-durable-post-send-reconciliation-checkpoint":"14728eb27105fe8625c390f60cb6d595ae6d2d76","feature/f086-durable-typed-baseline-for-recovery":"01eb500f3ec4ff43484425b3e1827c4525d68f8d","feature/f087-independent-readonly-recovery-acquisition":"db242dc97fe2f399acee09559a21f8f6b43676a6","feature/f088-operational-recovery-workbench":"4b9b4b31437a94a4f87691b12c320ecf9bb8e689","feature/f089-multirepo-sync-control-tower":"a5e849050e57ed52b89aa3b6d648d4c8efab1093","feature/f090-durable-incremental-source-sync-checkpoints":"db3dbfb91eb25b51625b0bcbd84289f2284fd816","fix/f043-reject-ambiguous-github-app-json":"c7142b40d40a51e7ab51c93dfe7d4a60eb0bc213"}''')
+          assert os.environ.get('GITHUB_REPOSITORY') == REPO, 'Wrong repository'
+          token = os.environ['GH_TOKEN']
+          def api(method, path):
+              url = 'https://api.github.com/repos/' + REPO + '/' + path
+              request = urllib.request.Request(url, method=method, headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'GitHubMigrator-OneTimeBranchCleanup'})
+              with urllib.request.urlopen(request, timeout=40) as response:
+                  data = response.read()
+                  return json.loads(data) if data else None
+          def list_branches():
+              results = []
+              for page in range(1, 5):
+                  part = api('GET', 'branches?per_page=100&page=' + str(page))
+                  results.extend(part)
+                  if len(part) < 100:
+                      return results
+              raise RuntimeError('Too many branches to enumerate safely')
+          pr = api('GET', 'pulls/91')
+          assert pr['merged'] and pr['merge_commit_sha'] == MERGED_SHA, 'Consolidation PR not at expected merge'
+          assert api('GET', 'pulls?state=open&per_page=100') == [], 'Open pull requests detected'
+          main_sha = api('GET', 'branches/main')['commit']['sha']
+          compare = api('GET', 'compare/' + F090_SHA + '...' + main_sha)
+          assert compare.get('behind_by') == 0, 'main is not a descendant of verified F090 tip'
+          actual = {branch['name']: branch for branch in list_branches()}
+          assert len(EXPECTED) == 92, 'Wrong cleanup manifest length'
+          assert set(actual) == set(EXPECTED) | {'main'}, 'Branch set changed; abort without deleting'
+          for name, sha in EXPECTED.items():
+              branch = actual[name]
+              assert branch['commit']['sha'] == sha, 'Branch tip changed: ' + name
+              assert not branch['protected'], 'Protected branch: ' + name
+          print('Preflight passed: exact 92 audited branch refs; all contained in merged main')
+          for name in sorted(EXPECTED):
+              api('DELETE', 'git/refs/heads/' + urllib.parse.quote(name, safe='/'))
+              print('Deleted:', name, flush=True)
+          remaining = [b['name'] for b in list_branches()]
+          assert remaining == ['main'], 'Unexpected remaining branches: ' + str(remaining)
+          print('Success: only main remains')
