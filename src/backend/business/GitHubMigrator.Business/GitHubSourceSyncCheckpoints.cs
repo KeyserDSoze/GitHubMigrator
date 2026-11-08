@@ -37,7 +37,10 @@ public sealed record GitHubSourceSyncCheckpointProof(
 public sealed record GitHubSourceSyncCheckpointReceipt(
     Guid Id, GitHubSourceSyncCheckpointProof Proof,
     string EvidenceSha256, Guid RecordedBy, DateTimeOffset RecordedAtUtc,
-    bool CanPush, bool CanRetry, bool CanDispatch, bool MigrationComplete);
+    bool CanPush, bool CanRetry, bool CanDispatch, bool MigrationComplete,
+    GitHubSourceRefChangeManifest? RefChangeManifest = null,
+    string? RefChangeAttestationSha256 = null,
+    int EvidenceVersion = 1);
 
 public sealed record GitHubSourceSyncCheckpointPage(
     Guid PreparationId, Guid PlanId,
@@ -123,6 +126,32 @@ public static class GitHubSourceSyncCheckpointIntegrity
             SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
+    // Versioned extension: preserve the F-090 count-only digest and bind a
+    // separate source ref fingerprint to the immutable checkpoint identity.
+    public static string RefAttestationDigest(Guid checkpointId,
+        string checkpointSha256, GitHubSourceRefChangeManifest manifest)
+    {
+        if (checkpointId == Guid.Empty || !Sha(checkpointSha256))
+            throw new GitHubSourceSyncCheckpointException(
+                "SourceSyncCheckpointEvidenceInvalid");
+        try { GitHubSourceRefChangeManifestIntegrity.Verify(manifest); }
+        catch (GitHubSourceRefChangeManifestException)
+        {
+            throw new GitHubSourceSyncCheckpointException(
+                "SourceSyncCheckpointEvidenceInvalid");
+        }
+        var material = JsonSerializer.Serialize(new object[] {
+            "f091-source-ref-checkpoint-attestation-v1",
+            checkpointId.ToString("D"), checkpointSha256,
+            manifest.SourceConnectionId.ToString("D"),
+            manifest.SnapshotId.ToString("D"),
+            manifest.Added, manifest.Changed, manifest.Restored,
+            manifest.Missing, manifest.EvidenceSha256
+        });
+        return Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
     public static void VerifyReceipt(GitHubSourceSyncCheckpointReceipt receipt)
     {
         if (receipt.Id == Guid.Empty || receipt.RecordedBy == Guid.Empty ||
@@ -130,6 +159,25 @@ public static class GitHubSourceSyncCheckpointIntegrity
             receipt.CanPush || receipt.CanRetry ||
             receipt.CanDispatch || receipt.MigrationComplete ||
             receipt.EvidenceSha256 != Digest(receipt.Proof))
+            throw new GitHubSourceSyncCheckpointException(
+                "SourceSyncCheckpointHistoryCorrupt");
+
+        if (receipt.EvidenceVersion == 1 &&
+            receipt.RefChangeManifest is null &&
+            receipt.RefChangeAttestationSha256 is null)
+            return; // Existing F-090 records remain explicitly unattested.
+        if (receipt.EvidenceVersion != 2 ||
+            receipt.RefChangeManifest is not { } refs ||
+            !Sha(receipt.RefChangeAttestationSha256) ||
+            refs.SourceConnectionId != receipt.Proof.SourceConnectionId ||
+            refs.SnapshotId != receipt.Proof.SnapshotId ||
+            refs.Total != receipt.Proof.TotalRefChanges ||
+            refs.Added > receipt.Proof.JournalAdded ||
+            refs.Changed > receipt.Proof.JournalChanged ||
+            refs.Restored > receipt.Proof.JournalRestored ||
+            refs.Missing > receipt.Proof.JournalMissing ||
+            receipt.RefChangeAttestationSha256 != RefAttestationDigest(
+                receipt.Id, receipt.EvidenceSha256, refs))
             throw new GitHubSourceSyncCheckpointException(
                 "SourceSyncCheckpointHistoryCorrupt");
     }

@@ -16,8 +16,12 @@ public sealed class PostgresGitHubSourceRefChangeManifestReader(
         if (sourceConnectionId == Guid.Empty || snapshotId == Guid.Empty)
             throw Refused("SourceRefChangeManifestInvalid");
 
-        await using var transaction = await db.Database.BeginTransactionAsync(
-            IsolationLevel.RepeatableRead, ct);
+        // F-090 owns a source-locked transaction during checkpoint creation.
+        // Standalone probes use REPEATABLE READ; nested transactions are forbidden.
+        await using var transaction = db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(
+                IsolationLevel.RepeatableRead, ct)
+            : null;
         var epoch = await db.StagingSnapshotSyncs.AsNoTracking()
             .SingleOrDefaultAsync(x => x.SnapshotId == snapshotId &&
                 x.SourceConnectionId == sourceConnectionId, ct);
@@ -70,7 +74,8 @@ public sealed class PostgresGitHubSourceRefChangeManifestReader(
             manifest.Missing > summary.Missing)
             throw Refused("SourceRefChangeManifestJournalCorrupt");
 
-        await transaction.CommitAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
         return manifest;
     }
 

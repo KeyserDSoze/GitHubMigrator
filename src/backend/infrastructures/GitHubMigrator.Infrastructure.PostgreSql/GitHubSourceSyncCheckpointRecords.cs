@@ -11,6 +11,10 @@ public sealed class GitHubSourceSyncCheckpointRecord
     public string ManifestSha256 { get; set; } = "";
     public string ProofJson { get; set; } = "{}";
     public string EvidenceSha256 { get; set; } = "";
+    // Version 1 = legacy count-only; version 2 = ref-fingerprint evidence.
+    public int EvidenceVersion { get; set; } = 1;
+    public string? RefChangeManifestJson { get; set; }
+    public string? RefChangeAttestationSha256 { get; set; }
     public Guid RecordedBy { get; set; }
     public DateTimeOffset RecordedAtUtc { get; set; }
     public bool CanPush { get; set; }

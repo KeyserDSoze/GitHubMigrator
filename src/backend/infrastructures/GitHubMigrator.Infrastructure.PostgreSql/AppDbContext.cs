@@ -266,6 +266,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256").HasMaxLength(64);
             entity.Property(x => x.ProofJson).HasColumnName("proof_json");
             entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.EvidenceVersion).HasColumnName("evidence_version").HasDefaultValue(1);
+            entity.Property(x => x.RefChangeManifestJson).HasColumnName("ref_change_manifest_json");
+            entity.Property(x => x.RefChangeAttestationSha256).HasColumnName("ref_change_attestation_sha256").HasMaxLength(64);
             entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
             entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
             entity.Property(x => x.CanPush).HasColumnName("can_push");
