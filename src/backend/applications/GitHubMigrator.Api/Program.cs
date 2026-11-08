@@ -517,7 +517,7 @@ builder.Services.AddRateLimiter(options =>
     // Independent, low-volume provider GET + immutable audit budget.
     options.AddFixedWindowLimiter("github-remote-sandbox-session", limiter =>
     {
-        limiter.PermitLimit = 3;
+        limiter.PermitLimit = 8;
         limiter.Window = TimeSpan.FromMinutes(1);
         limiter.QueueLimit = 0;
     });
