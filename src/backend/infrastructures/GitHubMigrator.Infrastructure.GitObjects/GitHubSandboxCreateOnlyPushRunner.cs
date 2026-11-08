@@ -141,7 +141,7 @@ public sealed class GitHubSandboxCreateOnlyPushRunner(
         }
     }
 
-    private static async Task<string> GitAsync(
+    private async Task<string> GitAsync(
         string working, string? authHeader, CancellationToken ct,
         params string[] args)
     {
