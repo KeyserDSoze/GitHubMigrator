@@ -1671,6 +1671,54 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         var verifiedWriter = auditScope.ServiceProvider
                             .GetRequiredService<
                                 PostgresGitIncrementalLaterCheckpointMirrorVerifiedJournal>();
+                        // Even an independently sealed SHA-only receipt
+                        // cannot bypass PostgreSQL F-061v2: direct SQL with
+                        // a FOREIGN WORKER must be rejected by the lease
+                        // scope trigger while the genuine lease is Held.
+                        var foreignProof =
+                            GitIncrementalLaterCheckpointMirrorVerifiedIntegrity.Seal(
+                                staging, committed, imported, Guid.NewGuid(),
+                                renewed.LeaseToken, renewed.Generation,
+                                DateTimeOffset.UtcNow);
+                        Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                            (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                                () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                    INSERT INTO git_later_checkpoint_mirror_verified_evidence (
+                                        mirror_id, workpack_id, evidence_version,
+                                        preparation_id, plan_id, source_snapshot_id,
+                                        checkpoint_id, target_observation_id,
+                                        worker_id, lease_token, lease_generation,
+                                        staging_evidence_sha256,
+                                        full_ref_proof_sha256,
+                                        bundle_evidence_sha256, bundle_sha256,
+                                        source_ref_set_sha256, git_object_format,
+                                        object_set_sha256, object_count,
+                                        physical_verified_at_utc, recorded_at_utc,
+                                        evidence_sha256)
+                                    VALUES ({foreignProof.PhysicalMirrorId},
+                                        {foreignProof.WorkpackId},
+                                        {foreignProof.EvidenceVersion},
+                                        {foreignProof.PreparationId},
+                                        {foreignProof.PlanId},
+                                        {foreignProof.SourceSnapshotId},
+                                        {foreignProof.CheckpointId},
+                                        {foreignProof.TargetObservationId},
+                                        {foreignProof.WorkerId},
+                                        {foreignProof.LeaseToken},
+                                        {foreignProof.LeaseGeneration},
+                                        {foreignProof.StagingEvidenceSha256},
+                                        {foreignProof.FullRefProofSha256},
+                                        {foreignProof.BundleEvidenceSha256},
+                                        {foreignProof.BundleSha256},
+                                        {foreignProof.SourceRefSetSha256},
+                                        {foreignProof.GitObjectFormat},
+                                        {foreignProof.ObjectSetSha256},
+                                        {foreignProof.ObjectCount},
+                                        {foreignProof.PhysicalVerifiedAtUtc},
+                                        {foreignProof.RecordedAtUtc},
+                                        {foreignProof.EvidenceSha256})
+                                    """))).SqlState);
+
                         if (corruptPhysical)
                         {
                             // Corrupt a real imported source Git ref after
