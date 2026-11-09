@@ -46,6 +46,7 @@ public sealed class ApiHarness : IAsyncLifetime
     public bool EnableLaterCheckpointLocalBundle { get; set; }
     public bool EnableLaterCheckpointDurableBundle { get; set; }
     public bool EnableLaterCheckpointMirrorStaging { get; set; }
+    public bool EnableLaterCheckpointMirrorAdmission { get; set; }
     public string? TrustedLocalBundleSourceRoot { get; set; }
     public string? TrustedLocalBundleOutputRoot { get; set; }
     public int TargetObjectIdLength { get; set; } = 40;
@@ -116,6 +117,8 @@ public sealed class ApiHarness : IAsyncLifetime
             values["GitIncrementalLaterCheckpointDurableBundle__Enabled"] = "true";
         if (EnableLaterCheckpointMirrorStaging)
             values["GitIncrementalLaterCheckpointMirrorStaging__Enabled"] = "true";
+        if (EnableLaterCheckpointMirrorAdmission)
+            values["GitIncrementalLaterCheckpointMirrorAdmission__Enabled"] = "true";
         if (TrustedLocalBundleSourceRoot is not null &&
             TrustedLocalBundleOutputRoot is not null)
         {
