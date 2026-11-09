@@ -59,6 +59,76 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
     [Theory]
     [InlineData(40)]
     [InlineData(64)]
+    public void Later_checkpoint_F031_v2_seal_is_strictly_non_executable(
+        int oidLength)
+    {
+        var x = Fixture(oidLength);
+        var plan = x.Plan with { IsCurrent = false };
+        var selection = x.Selection with {
+            EvidenceVersion = 2,
+            TargetEvidenceSha256 = new string('f', 64)
+        };
+        var recId = Guid.NewGuid();
+        var packId = Guid.NewGuid();
+        var actor = Guid.NewGuid();
+        var compared = GitMirrorRefReconciler.Compare(new(
+            plan.Id, plan.ManifestSha256, x.Source.SourceEvidenceSha256,
+            selection.TargetEvidenceSha256,
+            selection.ExpectedSourceRefs, selection.ExpectedTargetRefs));
+        var first = GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+            plan, selection, x.Source, compared, recId, packId, actor);
+        Assert.Equal(2, first.EvidenceVersion);
+        Assert.Equal("Blocked", first.State);
+        Assert.Equal("WriteBlocked", first.Phase);
+        Assert.Equal(selection.TargetEvidenceSha256, first.TargetReceiptSha256);
+        Assert.False(first.ReadyForExecution || first.CanPush ||
+            first.CanRetry || first.CanDispatch || first.MigrationComplete);
+        Assert.Equal(first, GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+            plan, selection, x.Source, compared, recId, packId, actor));
+        GitIncrementalLaterCheckpointWorkpackIntegrity.Verify(
+            first, plan, selection, x.Source, compared);
+
+        foreach (var invalid in new[] {
+            first with { CanPush = true },
+            first with { ReadyForExecution = true },
+            first with { Phase = "Ready" },
+            first with { TargetReceiptSha256 = new string('0', 64) },
+            first with { SourceFullRefProofSha256 = new string('0', 64) },
+            first with { CheckpointId = Guid.NewGuid() },
+            first with { EvidenceSha256 = new string('0', 64) }
+        })
+            Assert.Equal("LaterCheckpointWorkpackEvidenceInvalid",
+                Assert.Throws<GitIncrementalCheckpointWorkpackException>(() =>
+                    GitIncrementalLaterCheckpointWorkpackIntegrity.Verify(
+                        invalid, plan, selection, x.Source, compared)).Code);
+
+        foreach (var invalidSelection in new[] {
+            selection with { EvidenceVersion = 1 },
+            selection with { TargetObservationId = Guid.NewGuid(),
+                TargetEvidenceSha256 = new string('z', 64) },
+            selection with { CanDispatch = true },
+            selection with { SourceSnapshotId = plan.SnapshotId }
+        })
+            Assert.Equal("LaterCheckpointWorkpackEvidenceInvalid",
+                Assert.Throws<GitIncrementalCheckpointWorkpackException>(() =>
+                    GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+                        plan, invalidSelection, x.Source, compared,
+                        recId, packId, actor)).Code);
+        Assert.Equal("LaterCheckpointWorkpackEvidenceInvalid",
+            Assert.Throws<GitIncrementalCheckpointWorkpackException>(() =>
+                GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+                    plan with { IsCurrent = true }, selection, x.Source,
+                    compared, recId, packId, actor)).Code);
+        Assert.Equal("LaterCheckpointWorkpackEvidenceInvalid",
+            Assert.Throws<GitIncrementalCheckpointWorkpackException>(() =>
+                GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+                    plan, selection, x.Source, compared,
+                    recId, packId, Guid.Empty)).Code);
+    }
+
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
     public void Witness_is_versioned_deterministic_and_never_grants_push(int oidLength)
     {
         var x = Fixture(oidLength);
