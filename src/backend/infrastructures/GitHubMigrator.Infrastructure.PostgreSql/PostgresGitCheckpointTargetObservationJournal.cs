@@ -266,12 +266,24 @@ public sealed class PostgresGitCheckpointTargetObservationJournal(
         return sealedReceipt;
     }
 
-    public async Task<GitCheckpointTargetObservation?> ReadScopedAsync(
+    public Task<GitCheckpointTargetObservation?> ReadScopedAsync(
         Guid preparationId, Guid planId, Guid checkpointId,
         string sourceRepositoryId, CancellationToken ct)
     {
         if (!options.Enabled)
             throw Refused("CheckpointTargetObservationDisabled");
+        return ReadHistoricalAsync(preparationId, planId, checkpointId,
+            sourceRepositoryId, ct);
+    }
+
+    // Read a PREVIOUSLY recorded F-031 receipt only. It checks the
+    // immutable SHA-256 seal and the unique append-only audit; it never
+    // invokes preflight, credential lookup or GitHub provider transport.
+    // Caller MUST independently gate this history-only API (#111).
+    public async Task<GitCheckpointTargetObservation?> ReadHistoricalAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        string sourceRepositoryId, CancellationToken ct)
+    {
         if (preparationId == Guid.Empty || planId == Guid.Empty ||
             checkpointId == Guid.Empty ||
             sourceRepositoryId is not { Length: >= 1 and <= 256 } ||

@@ -76,7 +76,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointWorkpackHistory(
                 preparationId, planId, checkpointId, ct);
             source = await sourceLedger.GetVerifiedAsync(
                 preparationId, planId, checkpointId, sourceRepositoryId, ct);
-            target = await targetJournal.ReadScopedAsync(
+            target = await targetJournal.ReadHistoricalAsync(
                 preparationId, planId, checkpointId, sourceRepositoryId, ct);
         }
         catch (Exception ex) when (ex is GitHubSourceSyncCheckpointException
