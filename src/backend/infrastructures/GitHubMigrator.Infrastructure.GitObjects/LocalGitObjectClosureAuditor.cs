@@ -239,10 +239,18 @@ public sealed class LocalGitObjectClosureAuditor(
     internal static async Task<bool> HasCommitAsync(
         string bareRepository, string objectId, CancellationToken ct)
     {
-        var status = await GitAsync(bareRepository, ct, null,
-            "cat-file", "-e", objectId + "^{commit}",
-            acceptExitCode1: true, returnExitCode: true);
-        return status == "0";
+        // cat-file -e exits 128 for unknown objects on some Git versions.
+        // Batch-check reports "missing" as data with exit 0, so a truly
+        // absent target commit is Unknown rather than an operational error.
+        var result = (await GitAsync(bareRepository, ct, objectId + "\n",
+            "cat-file", "--batch-check=%(objectname) %(objecttype)")).Trim();
+        if (result == objectId + " missing") return false;
+        if (result == objectId + " commit") return true;
+        if (result == objectId + " tree" ||
+            result == objectId + " blob" ||
+            result == objectId + " tag") return false;
+        throw new GitObjectClosureAuditException(
+            "GitClosureObjectOutputInvalid");
     }
 
     internal static async Task<bool> IsAncestorAsync(
