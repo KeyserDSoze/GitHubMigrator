@@ -100,7 +100,7 @@ function attestedEpoch(index: number, forged = false) {
   };
 }
 
-function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' | 'badrefpage' | 'targetreview' | 'badtargetreview' | 'humanhistory' | 'humancandidate' | 'humanrejected' | 'humanunsafe' = 'normal') {
+function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' | 'badrefpage' | 'targetreview' | 'badtargetreview' | 'humanhistory' | 'humancandidate' | 'humanrejected' | 'humanunsafe' | 'targetaudit' | 'targetauditunsafe' | 'targetauditmissing' = 'normal') {
   const requests: Array<{ path: string; method: string; body: any }> = [];
   let records = 0;
   void page.route('**/api/incremental-preparations/**', async (route: Route) => {
@@ -223,6 +223,30 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
           mode === 'humanrejected' ? 'Rejected' : 'ApprovedForObservation'
       } });
     }
+    const targetAuditRoot = check + `/${last}/target-ref-observations`;
+    if (method === 'GET' && path === targetAuditRoot) {
+      expect(new URL(request.url()).searchParams.get('sourceRepositoryId'))
+        .toBe('repo-1');
+      if (mode === 'targetauditmissing')
+        return route.fulfill({ status: 404,
+          json: { error: 'CheckpointTargetObservationNotFound' } });
+      return route.fulfill({ json: {
+        id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        evidenceVersion: 1,
+        preparationId: prep, planId: plan, checkpointId: last,
+        sourceSnapshotId: next, sourceRepositoryId: 'repo-1',
+        targetRepositoryName: 'migration-one', organization: 'gh-org',
+        objectFormat: 'sha1',
+        reviewedBy: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        candidateEvidenceSha256: sha('e'),
+        humanReviewEvidenceSha256: sha('f'),
+        targetEvidenceSha256: sha('a'), evidenceSha256: sha('b'),
+        observedAtUtc: stamp, refCount: 2,
+        canObserveTarget: false,
+        canPush: mode === 'targetauditunsafe', canRetry: false,
+        canDispatch: false, migrationComplete: false
+      } });
+    }
     if (method === 'GET' && path === check && mode === 'disabled')
       return route.fulfill({ status: 409,
         json: { error: 'SourceSyncCheckpointDisabled' } });
@@ -230,7 +254,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
       return route.fulfill({ json: {
         preparationId: prep, planId: plan,
         items: Array.from({ length: records }, (_, i) =>
-          mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || mode.startsWith('human')
+          mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || (mode.startsWith('human') || mode.startsWith('targetaudit'))
             ? attestedEpoch(records - i - 1, mode === 'forged')
             : epoch(records - i - 1)),
         nextAfter: null,
@@ -255,7 +279,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
         records === 0 ? null : old);
       expect(path).toBe(check + '/' + (records === 0 ? original : next));
       records++;
-      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || mode.startsWith('human')
+      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || (mode.startsWith('human') || mode.startsWith('targetaudit'))
         ? attestedEpoch(records - 1, mode === 'forged')
         : epoch(records - 1) });
     }
@@ -575,4 +599,54 @@ test('F-097c.4c.0c never displays forged review authority or invokes a provider'
   expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
   expect(service.requests().some(x =>
     /git-push|retry-push|dispatch|github-get/i.test(x.path))).toBe(false);
+});
+
+test('F-097c.4c.0d displays immutable checkpoint target GET evidence without provider actions', async ({ page }) => {
+  const service = mock(page, 'targetaudit');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await page.getByRole('button', {
+    name: /Mostra osservazione GitHub salvata|Inspect saved checkpoint GitHub observation/i
+  }).first().click();
+  await expect(page.getByText(
+    /Osservazione GitHub del checkpoint verificata|Verified checkpoint GitHub observation/i
+  )).toBeVisible();
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-observations'))).toHaveLength(1);
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-observations')).every(x =>
+    x.method === 'GET')).toBe(true);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+});
+
+test('F-097c.4c.0d refuses forged F-031 authority in read-only checkpoint UI', async ({ page }) => {
+  const service = mock(page, 'targetauditunsafe');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await page.getByRole('button', {
+    name: /Mostra osservazione GitHub salvata|Inspect saved checkpoint GitHub observation/i
+  }).first().click();
+  await expect(page.getByRole('alert').getByText(
+    /CheckpointTargetObservationUnsafeResponse/
+  )).toBeVisible();
+  await expect(page.getByText(
+    /Osservazione GitHub del checkpoint verificata|Verified checkpoint GitHub observation/i
+  )).toHaveCount(0);
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-observations')).every(x =>
+    x.method === 'GET')).toBe(true);
 });
