@@ -1423,6 +1423,59 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         committed.CanDispatch || committed.MigrationComplete);
                     GitIncrementalLaterCheckpointBundleReceiptIntegrity.Verify(
                         committed, bundlePreparation, rehearsed);
+                    // #100: F-060v2 currently creates a NON-authorizing
+                    // physical-mirror staging witness from actual sealed
+                    // PostgreSQL F-035v2 and F-097b source OIDs. It is
+                    // explicitly NOT the legacy F-060 importer plan:
+                    // F-029 IsCurrent remains false for the later epoch.
+                    var staging = GitIncrementalLaterCheckpointMirrorStagingIntegrity
+                        .Prepare(latestPlan, joined, fullRefs,
+                            bundlePreparation, committed);
+                    Assert.Equal(1, staging.EvidenceVersion);
+                    Assert.Equal(0L, staging.F061LeaseGeneration);
+                    Assert.Equal(later.Id, staging.CheckpointId);
+                    Assert.Equal(fullRefs.SnapshotId, staging.SourceSnapshotId);
+                    Assert.NotEqual(plan.SnapshotId, staging.SourceSnapshotId);
+                    Assert.Equal(first.WorkpackId, staging.WorkpackId);
+                    Assert.Equal(
+                        GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+                            fullRefs.SnapshotId, first.WorkpackId),
+                        staging.PhysicalMirrorId);
+                    Assert.NotEqual(
+                        GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+                            plan.SnapshotId, first.WorkpackId),
+                        staging.PhysicalMirrorId);
+                    Assert.Equal(fullRefs.Refs, staging.SourceRefs);
+                    Assert.Equal(fullRefs.EvidenceSha256,
+                        staging.SourceFullRefProofSha256);
+                    Assert.Equal(committed.EvidenceSha256,
+                        staging.BundleEvidenceSha256);
+                    Assert.Equal(committed.BundleSha256, staging.BundleSha256);
+                    Assert.Equal(targetReceipt.EvidenceSha256,
+                        staging.TargetReceiptSha256);
+                    Assert.Equal(oidLength == 40 ? "sha1" : "sha256",
+                        staging.GitObjectFormat);
+                    Assert.False(staging.CanMaterialize || staging.CanPush ||
+                        staging.CanRetry || staging.CanDispatch ||
+                        staging.MigrationComplete);
+                    GitIncrementalLaterCheckpointMirrorStagingIntegrity.Verify(
+                        staging, latestPlan, joined, fullRefs,
+                        bundlePreparation, committed);
+                    Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+                        Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                            GitIncrementalLaterCheckpointMirrorStagingIntegrity
+                                .Verify(staging with { F061LeaseGeneration = 1 },
+                                    latestPlan, joined, fullRefs,
+                                    bundlePreparation, committed)).Code);
+                    Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+                        Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                            GitIncrementalLaterCheckpointMirrorStagingIntegrity
+                                .Prepare(latestPlan, joined, fullRefs,
+                                    bundlePreparation,
+                                    committed with {
+                                        TargetReceiptSha256 = new string('0', 64)
+                                    })).Code);
+
                     var storedF035 = await verifiedDb
                         .GitLaterCheckpointBundleEvidence.AsNoTracking()
                         .SingleAsync(x => x.WorkpackId == first.WorkpackId);
