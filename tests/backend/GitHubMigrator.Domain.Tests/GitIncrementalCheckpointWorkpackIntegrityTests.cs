@@ -279,6 +279,43 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
         // live source-locked F-091/F-097b/F-031 provenance preflight.
         GitIncrementalLaterCheckpointMirrorStagingIntegrity
             .VerifyOfflineCandidate(staged, receipt);
+        // #117 only seals a short-lived, non-authorizing read candidate;
+        // no caller-generated hash is ever a PostgreSQL F-061 lease.
+        var reviewedAt = DateTimeOffset.UtcNow;
+        var admit = GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Seal(
+            staged, receipt, reviewedAt);
+        Assert.Equal(staged.EvidenceSha256, admit.StagingEvidenceSha256);
+        Assert.Equal(staged.PhysicalMirrorId, admit.PhysicalMirrorId);
+        Assert.Equal(selection.SourceSnapshotId, admit.SourceSnapshotId);
+        Assert.Equal(receipt.BundleSha256, admit.BundleSha256);
+        Assert.False(admit.DurableLeasePersisted || admit.CanMaterialize ||
+            admit.CanPush || admit.CanRetry || admit.CanDispatch ||
+            admit.MigrationComplete);
+        Assert.Equal(0, admit.F061LeaseGeneration);
+        GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Verify(
+            admit, staged, receipt);
+        foreach (var tampered in new[] {
+            admit with { SourceSnapshotId = plan.SnapshotId },
+            admit with { PhysicalMirrorId = Guid.NewGuid() },
+            admit with { BundleSha256 = new string('0', 64) },
+            admit with { StagingEvidenceSha256 = new string('0', 64) },
+            admit with { SourceRefSetSha256 = new string('f', 64) },
+            admit with { F061LeaseGeneration = 1 },
+            admit with { DurableLeasePersisted = true },
+            admit with { CanMaterialize = true },
+            admit with { CanPush = true },
+            admit with { EvidenceSha256 = new string('0', 64) }
+        })
+            Assert.Equal("LaterCheckpointMirrorAdmissionInvalid",
+                Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                    GitIncrementalLaterCheckpointMirrorAdmissionIntegrity
+                        .Verify(tampered, staged, receipt)).Code);
+        Assert.Equal("LaterCheckpointMirrorAdmissionInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Seal(
+                    staged with { SourceSnapshotId = plan.SnapshotId },
+                    receipt, reviewedAt)).Code);
+
         var physical = GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity
             .Seal(staged, receipt, new string('c', 64), 25, now);
         Assert.Equal(1, physical.EvidenceVersion);
