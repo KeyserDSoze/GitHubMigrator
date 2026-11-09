@@ -23,7 +23,7 @@ public static class GitIncrementalLaterCheckpointBundleLeaseSchema
                 source_snapshot_id uuid NOT NULL REFERENCES
                     staging_snapshot_syncs(snapshot_id) ON DELETE RESTRICT,
                 source_connection_id uuid NOT NULL REFERENCES
-                    connections(id) ON DELETE RESTRICT,
+                    migration_connections(id) ON DELETE RESTRICT,
                 target_observation_id uuid NOT NULL REFERENCES
                     git_checkpoint_target_observations(id) ON DELETE RESTRICT,
                 source_repository_id varchar(256) NOT NULL,
