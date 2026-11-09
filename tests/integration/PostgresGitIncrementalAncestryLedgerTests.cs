@@ -23,6 +23,9 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
             .AddDbContext<AppDbContext>(
                 o => o.UseNpgsql(fixture.ConnectionString))
             .BuildServiceProvider();
+        await GitTransferWorkpackSchema.InitializeAsync(services);
+        await GitSourceBundleSchema.InitializeAsync(services);
+        await GitSourceMirrorLifecycleSchema.InitializeAsync(services);
         await GitHubSourceSyncCheckpointSchema.InitializeAsync(services);
         await GitIncrementalAncestryLedgerSchema.InitializeAsync(services);
     }
@@ -34,8 +37,9 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
         PostgresIncrementalOperationPlanTests.ManualClock clock,
         bool enabled = true,
         IVerifiedSourceGitRefReader? reader = null,
-        ILocalGitIncrementalAncestryAuditor? physical = null) =>
-        new(db, clock, new(enabled, RequireBoundSourceMirror: false),
+        ILocalGitIncrementalAncestryAuditor? physical = null,
+        bool requireBoundMirror = false) =>
+        new(db, clock, new(enabled, RequireBoundSourceMirror: requireBoundMirror),
             new PostgresIncrementalOperationPlanRepository(db, clock),
             Checkpoints(db, clock),
             reader ?? new TestedSourceReader(),
@@ -83,10 +87,150 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
         IncrementalOperationPlan plan,
         GitHubSourceSyncCheckpointReceipt checkpoint,
         GitHubTargetRefEvidenceView target,
-        Guid sandboxId, Guid? actorId = null) =>
+        Guid sandboxId, Guid? actorId = null,
+        Guid? sourceWorkpackId = null) =>
         ledger.AuditAndRecordAsync(seed.Run.Id, plan.Id, checkpoint.Id,
             target.Id, "repo-1", target.EvidenceSha256,
-            sandboxId, actorId ?? Guid.NewGuid(), default);
+            sandboxId, actorId ?? Guid.NewGuid(), default,
+            sourceWorkpackId);
+
+    // A positive F-096 PostgreSQL bridge fixture with real F-035/F-061
+    // keys and SHA-bound source/target metadata. The physical Git subprocess
+    // is independently tested against SHA-1 and SHA-256 bare repositories.
+    private static async Task<Guid> InsertVerifiedMirrorAsync(
+        AppDbContext db,
+        PostgresIncrementalOperationPlanTests.ManualClock clock,
+        IncrementalOperationPlan plan,
+        GitHubTargetRefEvidenceView target)
+    {
+        var now = clock.GetUtcNow();
+        var refs = VerifiedSourceGitRefIntegrity.Seal(
+            plan.SnapshotId, plan.SourceConnectionId, "repo-1",
+            new string('c', 64),
+            [new("refs/heads/b-0000", Oid)]);
+        var workpack = Guid.NewGuid();
+        var reconciliation = Guid.NewGuid();
+        var reconciliationSha = new string('f', 64);
+        var bundleSha = new string('e', 64);
+        var objectSet = new string('d', 64);
+        var mirrorId = GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+            plan.SnapshotId, workpack);
+        var refSetSha = GitSourceSnapshotMirrorIntegrity.SourceRefsSha(refs.Refs);
+        var mirrorProof = GitSourceSnapshotMirrorIntegrity.MirrorEvidenceSha(
+            plan.SnapshotId, mirrorId, workpack, bundleSha,
+            refs.SourceEvidenceSha256, refSetSha, refs.Refs.Count,
+            objectSet, 2);
+
+        db.IncrementalGitRefReconciliations.Add(new()
+        {
+            Id = reconciliation, PlanId = plan.Id, SnapshotId = plan.SnapshotId,
+            SourceRepositoryId = "repo-1", TargetRepositoryName = "migration-one",
+            TargetObservationId = target.Id, ManifestSha256 = plan.ManifestSha256,
+            SourceEvidenceSha256 = refs.SourceEvidenceSha256,
+            SourceManifestRootSha256 = refs.RefManifestRootSha256,
+            TargetEvidenceSha256 = target.EvidenceSha256,
+            ReconciliationSha256 = reconciliationSha, CreatedAtUtc = now,
+            CreatedBy = Guid.NewGuid(), SourceRefCount = 1,
+            TargetRefCount = 1, MatchingCount = 1, ItemsJson = "[]",
+            ReadyForExecution = false
+        });
+        await db.SaveChangesAsync();
+        db.GitTransferWorkpacks.Add(new()
+        {
+            Id = workpack, ReconciliationId = reconciliation,
+            PlanId = plan.Id, SourceConnectionId = plan.SourceConnectionId,
+            SourceRepositoryId = "repo-1", TargetRepositoryName = "migration-one",
+            ManifestSha256 = plan.ManifestSha256,
+            ReconciliationSha256 = reconciliationSha,
+            TargetEvidenceSha256 = target.EvidenceSha256,
+            CreatedBy = Guid.NewGuid(),
+            State = GitTransferWorkpackStates.Blocked,
+            Phase = GitTransferWorkpackPhases.WriteBlocked,
+            Attempts = 0, MaxAttempts = 5,
+            AvailableAtUtc = now, CreatedAtUtc = now,
+            UpdatedAtUtc = now, BlockedAtUtc = now,
+            LastErrorCode = "DestinationWritesNotAuthorized",
+            ReadyForExecution = false
+        });
+        await db.SaveChangesAsync();
+        db.GitSourceBundleEvidence.Add(new()
+        {
+            WorkpackId = workpack, PlanId = plan.Id,
+            ReconciliationId = reconciliation,
+            SourceRepositoryId = "repo-1",
+            SourceEvidenceSha256 = refs.SourceEvidenceSha256,
+            ReconciliationSha256 = reconciliationSha,
+            BundleFileName = workpack.ToString("N") + ".bundle",
+            BundleSha256 = bundleSha, BundleBytes = 1234,
+            RefCount = refs.Refs.Count, AcquiredAtUtc = now,
+            ReadyForExecution = false
+        });
+        db.GitSourceMirrorLifecycles.Add(new()
+        {
+            MirrorId = mirrorId, SourceSnapshotId = plan.SnapshotId,
+            WorkpackId = workpack, PlanId = plan.Id,
+            ReconciliationId = reconciliation, BundleSha256 = bundleSha,
+            SourceEvidenceSha256 = refs.SourceEvidenceSha256,
+            RefsSha256 = refSetSha, State = GitSourceMirrorLifecycleStates.Verified,
+            LeaseGeneration = 1, ObjectSetSha256 = objectSet,
+            ObjectCount = 2, MirrorProofSha256 = mirrorProof,
+            VerifiedAtUtc = now.AddSeconds(-1),
+            CreatedAtUtc = now.AddSeconds(-3), UpdatedAtUtc = now
+        });
+        await db.SaveChangesAsync();
+        db.GitSourceMirrorLifecycleEvents.Add(new()
+        {
+            MirrorId = mirrorId, Type = "Verified", Generation = 1,
+            WorkerId = Guid.NewGuid(), OccurredAtUtc = now
+        });
+        await db.SaveChangesAsync();
+        return workpack;
+    }
+
+    [Fact]
+    public async Task F096_only_database_verified_F060_mirror_can_enter_durable_F095_ledger()
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        await using var db = fixture.NewContext();
+        var (seed, plan, checkpoint, target) = await SetupAsync(db, clock);
+        var ledger = Ledger(db, clock, requireBoundMirror: true);
+        var sandboxId = Guid.NewGuid();
+        var missingWorkpack = await Assert.ThrowsAsync<
+            GitIncrementalAncestryLedgerException>(() =>
+            CaptureAsync(ledger, seed, plan, checkpoint, target, sandboxId));
+        Assert.Equal("GitAncestryLedgerWorkpackRequired", missingWorkpack.Code);
+        var missingMirror = await Assert.ThrowsAsync<
+            GitIncrementalAncestryLedgerException>(() =>
+            CaptureAsync(ledger, seed, plan, checkpoint, target, sandboxId,
+                sourceWorkpackId: Guid.NewGuid()));
+        Assert.Equal("GitAncestryLedgerMirrorNotVerified", missingMirror.Code);
+
+        var workpack = await InsertVerifiedMirrorAsync(db, clock, plan, target);
+        var accepted = await CaptureAsync(ledger, seed, plan,
+            checkpoint, target, sandboxId, sourceWorkpackId: workpack);
+        var mirrorId = GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+            plan.SnapshotId, workpack);
+        Assert.Equal(mirrorId, accepted.Receipt.Request.SourcePhysicalMirrorId);
+        Assert.Equal(accepted.Receipt.SourceObjectSetSha256,
+            (await db.GitSourceMirrorLifecycles.AsNoTracking()
+                .SingleAsync(x => x.MirrorId == mirrorId)).ObjectSetSha256);
+        var duplicate = await CaptureAsync(ledger, seed, plan, checkpoint,
+            target, sandboxId, sourceWorkpackId: workpack);
+        Assert.Equal(accepted.Id, duplicate.Id);
+        Assert.Single(await db.GitIncrementalAncestryLedgerEvents.AsNoTracking()
+            .Where(x => x.LedgerId == accepted.Id).ToArrayAsync());
+
+        await using var restarted = fixture.NewContext();
+        var reloaded = await Ledger(restarted, clock,
+            requireBoundMirror: true).GetAsync(
+                seed.Run.Id, plan.Id, accepted.Id, default);
+        Assert.NotNull(reloaded);
+        Assert.Equal(accepted.Receipt.EvidenceSha256,
+            reloaded.Receipt.EvidenceSha256);
+        Assert.False(reloaded.CanPush || reloaded.CanRetry ||
+            reloaded.CanDispatch || reloaded.MigrationComplete);
+    }
 
     [Fact]
     public async Task F095_db_replay_returns_one_immutable_sha_bound_receipt_and_event()
