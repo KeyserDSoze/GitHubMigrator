@@ -301,6 +301,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableLaterCheckpointAuditRead = true,
             EnableLaterCheckpointWorkpack = true,
             EnableLaterCheckpointHistory = true,
+            EnableLaterCheckpointBundleRead = true,
             TargetObjectIdLength = oidLength
         };
         try
@@ -764,6 +765,38 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     GitIncrementalLaterCheckpointBundleIntegrity.Verify(
                         bundlePreparation, latestPlan, joined, fullRefs,
                         currentComparison, first);
+                    // A separate default-OFF PostgreSQL reader verifies
+                    // both saved history and CURRENT approval before
+                    // preparing the same never-authorizing F-035v2 plan.
+                    var bundleReader = auditScope.ServiceProvider
+                        .GetRequiredService<
+                            PostgresGitIncrementalLaterCheckpointBundleReadPreflight>();
+                    var persistedBundlePlan = await bundleReader.ReadAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256, default);
+                    Assert.Equal(bundlePreparation.EvidenceSha256,
+                        persistedBundlePlan.EvidenceSha256);
+                    Assert.Equal(bundlePreparation.SourceOnlyRequest.ExpectedRefs,
+                        persistedBundlePlan.SourceOnlyRequest.ExpectedRefs);
+                    Assert.False(persistedBundlePlan.CanAcquireBundle ||
+                        persistedBundlePlan.CanPush ||
+                        persistedBundlePlan.CanRetry ||
+                        persistedBundlePlan.CanDispatch ||
+                        persistedBundlePlan.MigrationComplete);
+                    Assert.Equal("LaterCheckpointBundleReadProvenanceUnverified",
+                        (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                            bundleReader.ReadAsync(run.Id, plan.Id,
+                                later.Id, observationId, first.WorkpackId,
+                                "repo-1", new string('0', 64),
+                                default))).Code);
+                    Assert.Equal("LaterCheckpointBundleReadInvalidScope",
+                        (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                            bundleReader.ReadAsync(run.Id, plan.Id,
+                                later.Id, Guid.Empty, first.WorkpackId,
+                                "repo-1", targetReceipt.EvidenceSha256,
+                                default))).Code);
+
                     var replay = await writer.CaptureAsync(
                         run.Id, plan.Id, later.Id, observationId, "repo-1",
                         targetReceipt.EvidenceSha256, candidate.RequestedBy,
@@ -990,6 +1023,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         "currentApprovalVerified").GetBoolean());
                 }
                 await using var scoped = api.Host.Services.CreateAsyncScope();
+                var bundleReader = scoped.ServiceProvider.GetRequiredService<
+                    PostgresGitIncrementalLaterCheckpointBundleReadPreflight>();
+                Assert.Equal("LaterCheckpointBundleReadProvenanceUnverified",
+                    (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                        bundleReader.ReadAsync(run.Id, plan.Id, later.Id,
+                            observationId, recordedWorkpackId, "repo-1",
+                            targetReceiptSha!, default))).Code);
                 var writer = scoped.ServiceProvider.GetRequiredService<
                     PostgresGitIncrementalLaterCheckpointWorkpackJournal>();
                 Assert.Equal("LaterCheckpointWorkpackPreflightUnverified",
