@@ -621,6 +621,74 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 receipt.MigrationComplete);
             GitCheckpointTargetHumanReviewIntegrity.Verify(
                 receipt, candidate);
+
+            // #109 distinct OFF-by-default read-preflight; neither
+            // approval nor this witness can ever permit transport.
+            var readOff = new PostgresGitCheckpointTargetReadPreflight(
+                db, clock, new(false),
+                new PostgresIncrementalOperationPlanRepository(db, clock),
+                enabled);
+            Assert.Equal("CheckpointTargetReadPreflightDisabled",
+                (await Assert.ThrowsAsync<
+                    GitCheckpointTargetReadPreflightException>(() =>
+                    readOff.ReadAsync(run.Id, plan.Id, later.Id, "repo-1",
+                        reviewer, candidate.EvidenceSha256,
+                        receipt.EvidenceSha256, default))).Code);
+            var readGate = new PostgresGitCheckpointTargetReadPreflight(
+                db, clock, new(true),
+                new PostgresIncrementalOperationPlanRepository(db, clock),
+                enabled);
+            if (decision == GitCheckpointTargetHumanReviewStates.ApprovedForObservation)
+            {
+                var readiness = await readGate.ReadAsync(
+                    run.Id, plan.Id, later.Id, "repo-1",
+                    reviewer, candidate.EvidenceSha256,
+                    receipt.EvidenceSha256, default);
+                GitCheckpointTargetReadPreflightIntegrity.Verify(
+                    readiness, candidate, receipt);
+                Assert.Equal(oidLength == 40 ? "sha1" : "sha256",
+                    readiness.ObjectFormat);
+                Assert.Equal(later.Id, readiness.CheckpointId);
+                Assert.True(readiness.ExpiresAtUtc > readiness.ValidatedAtUtc);
+                Assert.False(readiness.ProviderReadAuthorized ||
+                    readiness.CanObserveTarget || readiness.CanPush ||
+                    readiness.CanRetry || readiness.CanDispatch ||
+                    readiness.MigrationComplete);
+                Assert.Equal("CheckpointTargetReadPreflightIndependentReviewerRequired",
+                    (await Assert.ThrowsAsync<
+                        GitCheckpointTargetReadPreflightException>(() =>
+                        readGate.ReadAsync(run.Id, plan.Id, later.Id, "repo-1",
+                            requester, candidate.EvidenceSha256,
+                            receipt.EvidenceSha256, default))).Code);
+                Assert.Equal("CheckpointTargetReadPreflightCandidateChanged",
+                    (await Assert.ThrowsAsync<
+                        GitCheckpointTargetReadPreflightException>(() =>
+                        readGate.ReadAsync(run.Id, plan.Id, later.Id, "repo-1",
+                            reviewer, new string('0', 64),
+                            receipt.EvidenceSha256, default))).Code);
+                Assert.Equal("CheckpointTargetReadPreflightReviewChanged",
+                    (await Assert.ThrowsAsync<
+                        GitCheckpointTargetReadPreflightException>(() =>
+                        readGate.ReadAsync(run.Id, plan.Id, later.Id, "repo-1",
+                            reviewer, candidate.EvidenceSha256,
+                            new string('0', 64), default))).Code);
+                Assert.Equal("CheckpointTargetReadPreflightSourceUnverified",
+                    (await Assert.ThrowsAsync<
+                        GitCheckpointTargetReadPreflightException>(() =>
+                        readGate.ReadAsync(run.Id, plan.Id, later.Id,
+                            "other-repository", reviewer,
+                            candidate.EvidenceSha256,
+                            receipt.EvidenceSha256, default))).Code);
+            }
+            else
+            {
+                Assert.Equal("CheckpointTargetReadPreflightHumanApprovalRequired",
+                    (await Assert.ThrowsAsync<
+                        GitCheckpointTargetReadPreflightException>(() =>
+                        readGate.ReadAsync(run.Id, plan.Id, later.Id, "repo-1",
+                            reviewer, candidate.EvidenceSha256,
+                            receipt.EvidenceSha256, default))).Code);
+            }
             Assert.False((await new PostgresIncrementalOperationPlanRepository(
                 db, clock).GetAsync(run.Id, plan.Id, default))!.IsCurrent);
             Assert.Empty(await db.GitHubTargetRefEvidence.AsNoTracking()
