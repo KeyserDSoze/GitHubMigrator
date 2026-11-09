@@ -223,6 +223,139 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         Assert.True(File.Exists(Path.Combine(outside, "never-delete")));
     }
 
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task Later_checkpoint_offline_audit_checks_real_existing_Git_and_bundle(
+        string format)
+    {
+        using var f = new Fixture();
+        var sourcePlan = f.CreatePlan(format);
+        var (stage, durable) = LaterOfflineEvidence(sourcePlan);
+        var disabled = new LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
+            f.BundleRoot, f.MirrorRoot);
+        Assert.Equal("LaterCheckpointMirrorOfflineAuditDisabled",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                () => disabled.AuditAsync(stage, durable, default))).Code);
+
+        var auditor = new LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
+            f.BundleRoot, f.MirrorRoot, enabled: true);
+        Assert.Equal("LaterCheckpointMirrorOfflineClosureInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                () => auditor.AuditAsync(stage, durable, default))).Code);
+
+        // Only the pre-existing F-060 TEST fixture creates the bare mirror.
+        // The new #114 offline auditor itself NEVER imports or modifies it.
+        await f.Materializer().MaterializeAsync(sourcePlan, default);
+        var first = await auditor.AuditAsync(stage, durable, default);
+        Assert.Equal(stage.SourceSnapshotId, first.SourceSnapshotId);
+        Assert.Equal(stage.CheckpointId, first.CheckpointId);
+        Assert.Equal(stage.PhysicalMirrorId, first.PhysicalMirrorId);
+        Assert.Equal(stage.BundleSha256, first.BundleSha256);
+        Assert.Equal(format, first.GitObjectFormat);
+        Assert.True(first.ObjectCount >= 9);
+        Assert.Equal(64, first.ObjectSetSha256.Length);
+        Assert.False(first.DurableEvidencePersisted || first.CanMaterialize ||
+            first.CanPush || first.CanRetry || first.CanDispatch ||
+            first.MigrationComplete);
+        Assert.Equal(0, first.F061LeaseGeneration);
+        GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity.Verify(
+            first, stage, durable);
+        var second = await auditor.AuditAsync(stage, durable, default);
+        Assert.Equal(first.ObjectSetSha256, second.ObjectSetSha256);
+        Assert.Single(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+
+        Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                auditor.AuditAsync(stage with {
+                    SourceRefs = stage.SourceRefs.Select((r, i) =>
+                        i == 0 ? r with { ObjectId =
+                            new string('0', r.ObjectId.Length) } : r).ToArray()
+                }, durable, default))).Code);
+
+        // An otherwise valid bundle cannot stand in for a broken,
+        // non-self-contained bare object graph.
+        var alternates = Path.Combine(f.Physical(sourcePlan),
+            "objects", "info", "alternates");
+        Directory.CreateDirectory(Path.GetDirectoryName(alternates)!);
+        await File.WriteAllTextAsync(alternates, "/nonexistent");
+        Assert.Equal("LaterCheckpointMirrorOfflineClosureInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                auditor.AuditAsync(stage, durable, default))).Code);
+        File.Delete(alternates);
+
+        var bundle = Path.Combine(f.BundleRoot, durable.BundleFileName);
+        await File.AppendAllTextAsync(bundle, "altered");
+        Assert.Equal("LaterCheckpointMirrorOfflineBundleChanged",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                auditor.AuditAsync(stage, durable, default))).Code);
+        Assert.Single(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+    }
+
+    // Real Git objects are taken from the fixture, while the historical
+    // F-091/F-097b/F-038v2/F-035v2 domain test input is deliberately
+    // synthetic. It is NOT a substitute for the PostgreSQL source lock.
+    private static (
+        GitIncrementalLaterCheckpointMirrorStagingPlan Stage,
+        GitIncrementalLaterCheckpointBundleReceipt Durable) LaterOfflineEvidence(
+            GitHubTrustedRemoteReadPlan physical)
+    {
+        var file = physical.SourceBundle!;
+        var now = DateTimeOffset.UtcNow;
+        var prepId = Guid.NewGuid();
+        var planId = Guid.NewGuid();
+        var sourceConnection = Guid.NewGuid();
+        var baselineId = Guid.NewGuid();
+        var checkpointId = Guid.NewGuid();
+        var observationId = Guid.NewGuid();
+        var sourceRefs = physical.SourceRefs;
+        var objectFormat = sourceRefs[0].ObjectId.Length == 40 ?
+            "sha1" : "sha256";
+        var plan = new IncrementalOperationPlan(
+            planId, prepId, baselineId, sourceConnection, Guid.NewGuid(),
+            "gh-org", new string('a', 64), new string('b', 64),
+            new string('c', 64), new string('d', 64), now, Guid.NewGuid(),
+            1, 6, 1, 0, false, false, [],
+            [new IncrementalOperationStep(1, null, "src-repo",
+                "test-sandbox", "ReviewTargetName", "Blocked",
+                "Blocked", 0)]);
+        var source = new GitHubSourceCheckpointGitRefProof(
+            1, checkpointId, prepId, planId, sourceConnection,
+            physical.SourceSnapshotId, baselineId, "src-repo",
+            new string('c', 64), new string('e', 64),
+            new string('f', 64), physical.SourceEvidenceSha256,
+            Guid.NewGuid(), new string('b', 64), sourceRefs,
+            new string('d', 64), false, false, false, false);
+        var selected = new GitIncrementalCheckpointAuditInputs(
+            2, prepId, planId, sourceConnection,
+            physical.SourceSnapshotId, checkpointId,
+            source.CheckpointRefAttestationSha256, source.EvidenceSha256,
+            observationId, new string('a', 64), "src-repo",
+            "test-sandbox", objectFormat, sourceRefs,
+            [sourceRefs[0]], false, false, false, false);
+        var compared = GitMirrorRefReconciler.Compare(new(
+            plan.Id, plan.ManifestSha256, source.SourceEvidenceSha256,
+            selected.TargetEvidenceSha256, sourceRefs,
+            selected.ExpectedTargetRefs));
+        var workpack = GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+            plan, selected, source, compared, Guid.NewGuid(),
+            file.WorkpackId, Guid.NewGuid());
+        var bundlePlan = GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+            plan, selected, source, compared, workpack);
+        var checkedFile = new GitIncrementalLaterCheckpointLocalBundleResult(
+            workpack.WorkpackId, checkpointId,
+            physical.SourceSnapshotId, bundlePlan.EvidenceSha256,
+            source.EvidenceSha256, selected.TargetEvidenceSha256,
+            file.BundleFileName, file.BundleSha256, file.BundleBytes,
+            sourceRefs.Count, now.AddSeconds(-2), now.AddSeconds(-1),
+            false, false, false, false, false);
+        var receipt = GitIncrementalLaterCheckpointBundleReceiptIntegrity.Seal(
+            bundlePlan, checkedFile, workpack.RecordedBy, now);
+        var stage = GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
+            plan, selected, source, bundlePlan, receipt, workpack);
+        return (stage, receipt);
+    }
+
     internal sealed class Fixture : IDisposable
     {
         public string Root { get; } = Path.Combine(
