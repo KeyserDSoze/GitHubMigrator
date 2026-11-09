@@ -142,3 +142,14 @@ public static class GitIncrementalLaterCheckpointBundleIntegrity
             Encoding.UTF8.GetBytes(JsonSerializer.Serialize(fields) + "\n"));
     }
 }
+
+// The only trusted source of a live F-035v2 read plan is an independently
+// verified, source-locked PostgreSQL preflight. A caller never supplies
+// an arbitrary self-sealed request, local path or remote URI.
+public interface IGitIncrementalLaterCheckpointBundleReadPreflight
+{
+    Task<GitIncrementalLaterCheckpointBundlePlan> ReadAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        Guid targetObservationId, Guid workpackId, string sourceRepositoryId,
+        string expectedTargetReceiptSha256, CancellationToken ct);
+}

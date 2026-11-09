@@ -17,6 +17,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleReadPreflight(
     PostgresGitIncrementalLaterCheckpointAuditPreflight live,
     PostgresGitHubSourceCheckpointGitRefLedger fullRefs,
     IIncrementalOperationPlanRepository plans)
+    : IGitIncrementalLaterCheckpointBundleReadPreflight
 {
     private static GitSourceBundleException Refused(string code) => new(code);
 
