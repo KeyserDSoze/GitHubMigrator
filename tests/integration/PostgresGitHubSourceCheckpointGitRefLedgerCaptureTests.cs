@@ -940,7 +940,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 // F-027 revocation makes new capture invalid, but the
                 // previously sealed proof remains inspectable as HISTORY,
                 // never a renewed approval.
-                await using (var revokedHistory = await SendAsync(
+                using (var revokedHistory = await SendAsync(
                     HttpMethod.Get,
                     "/api/incremental-preparations/" + run.Id +
                     "/operation-plans/" + plan.Id +
