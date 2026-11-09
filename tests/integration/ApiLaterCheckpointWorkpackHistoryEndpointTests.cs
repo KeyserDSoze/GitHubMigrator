@@ -80,6 +80,21 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2_locked_admission_read_is_independently_disabled_by_default()
+    {
+        var before = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var reader = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>();
+        var denied = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+            () => reader.ReadAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                "repo-1", new string('a', 64), Guid.NewGuid(), default));
+        Assert.Equal("LaterCheckpointMirrorAdmissionDisabled", denied.Code);
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F035v2_durable_file_writer_is_independently_disabled_by_default()
     {
         var before = harness.Calls.Count;
