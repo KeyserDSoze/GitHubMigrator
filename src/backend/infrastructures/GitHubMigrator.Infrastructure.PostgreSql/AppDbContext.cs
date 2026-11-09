@@ -279,6 +279,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.CanRetry).HasColumnName("can_retry");
             entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
             entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubSourceSyncCheckpointRecord>().WithMany()
+                .HasForeignKey(x => x.CheckpointId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubTargetRefEvidenceRecord>().WithMany()
+                .HasForeignKey(x => x.TargetObservationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.PlanId, x.CheckpointId, x.TargetObservationId,
+                x.SourceRepositoryId }).IsUnique()
+                .HasDatabaseName("ux_f095_source_target_proof");
         });
         builder.Entity<GitIncrementalAncestryLedgerEventRecord>(entity =>
         {
@@ -290,6 +301,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ActorId).HasColumnName("actor_id");
             entity.Property(x => x.ReceiptSha256).HasColumnName("receipt_sha256").HasMaxLength(64);
             entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitIncrementalAncestryLedgerRecord>().WithMany()
+                .HasForeignKey(x => x.LedgerId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.LedgerId).IsUnique();
         });
         // F-090 source-only append-only checkpoint chain; DDL installed by
         // GitHubSourceSyncCheckpointSchema after EF's base tables.

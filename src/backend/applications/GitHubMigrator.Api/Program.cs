@@ -107,6 +107,18 @@ builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
     PostgresGitHubSourceSyncCheckpointJournal>();
+// F-095: read-only internal persistence, completely disabled by default.
+// Physical bare repositories are deployment-owned, never request paths.
+builder.Services.AddSingleton(new GitIncrementalAncestryLedgerOptions(
+    builder.Configuration.GetValue("GitIncrementalAncestryLedger:Enabled", false)));
+builder.Services.AddScoped<ILocalGitIncrementalAncestryAuditor>(sp =>
+    new GitHubMigrator.Infrastructure.GitObjects.LocalGitIncrementalAncestryAuditor(
+        builder.Configuration["GitIncrementalAncestryLedger:SourceRoot"] ?? "",
+        builder.Configuration["GitIncrementalAncestryLedger:TargetRoot"] ?? "",
+        builder.Configuration.GetValue("GitIncrementalAncestryLedger:PhysicalAuditEnabled", false),
+        sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<IGitIncrementalAncestryLedger,
+    PostgresGitIncrementalAncestryLedger>();
 builder.Services.AddScoped<PostgresGitHubTargetRefEvidenceStore>();
 builder.Services.AddScoped<IGitHubTargetRefEvidenceStore>(
     service => service.GetRequiredService<PostgresGitHubTargetRefEvidenceStore>());
@@ -675,6 +687,7 @@ await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
 await GitHubRemotePostSendRecoverySchema.InitializeAsync(app.Services);
 await GitHubRemoteTypedRecoveryBaselineSchema.InitializeAsync(app.Services);
 await GitHubSourceSyncCheckpointSchema.InitializeAsync(app.Services);
+await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
 
