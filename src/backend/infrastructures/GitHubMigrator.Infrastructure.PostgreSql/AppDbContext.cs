@@ -37,6 +37,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         => Set<GitHubSourceSyncCheckpointRecord>();
     public DbSet<GitHubSourceSyncCheckpointEventRecord> GitHubSourceSyncCheckpointEvents
         => Set<GitHubSourceSyncCheckpointEventRecord>();
+    public DbSet<GitCheckpointTargetHumanReviewRecord> GitCheckpointTargetHumanReviews =>
+        Set<GitCheckpointTargetHumanReviewRecord>();
+    public DbSet<GitCheckpointTargetHumanReviewEventRecord> GitCheckpointTargetHumanReviewEvents =>
+        Set<GitCheckpointTargetHumanReviewEventRecord>();
     public DbSet<GitIncrementalCheckpointWorkpackRecord> GitIncrementalCheckpointWorkpacks =>
         Set<GitIncrementalCheckpointWorkpackRecord>();
     public DbSet<GitIncrementalCheckpointWorkpackEventRecord> GitIncrementalCheckpointWorkpackEvents =>
@@ -350,6 +354,48 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
         });
         // F-097b SQL triggers and constraints are bootstrapped after F-090.
+        builder.Entity<GitCheckpointTargetHumanReviewRecord>(entity =>
+        {
+            entity.ToTable("git_checkpoint_target_human_reviews");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.SourceSnapshotId).HasColumnName("source_snapshot_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id");
+            entity.Property(x => x.TargetRepositoryName).HasColumnName("target_repository_name");
+            entity.Property(x => x.DestinationConnectionId).HasColumnName("destination_connection_id");
+            entity.Property(x => x.CandidateEvidenceSha256).HasColumnName("candidate_evidence_sha256");
+            entity.Property(x => x.RequestedBy).HasColumnName("requested_by");
+            entity.Property(x => x.ReviewedBy).HasColumnName("reviewed_by");
+            entity.Property(x => x.Decision).HasColumnName("decision");
+            entity.Property(x => x.ReceiptJson).HasColumnName("receipt_json");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.ReviewedAtUtc).HasColumnName("reviewed_at_utc");
+            entity.Property(x => x.CanObserveTarget).HasColumnName("can_observe_target");
+            entity.Property(x => x.CanPush).HasColumnName("can_push");
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasIndex(x => new { x.CheckpointId, x.SourceRepositoryId })
+                .IsUnique();
+        });
+        builder.Entity<GitCheckpointTargetHumanReviewEventRecord>(entity =>
+        {
+            entity.ToTable("git_checkpoint_target_human_review_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.DecisionId).HasColumnName("decision_id");
+            entity.Property(x => x.ReviewerId).HasColumnName("reviewer_id");
+            entity.Property(x => x.Type).HasColumnName("type");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitCheckpointTargetHumanReviewRecord>().WithMany()
+                .HasForeignKey(x => x.DecisionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.DecisionId).IsUnique();
+        });
         builder.Entity<GitIncrementalCheckpointWorkpackRecord>(entity =>
         {
             entity.ToTable("git_checkpoint_source_workpack_proofs");
