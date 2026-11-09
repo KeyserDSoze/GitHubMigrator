@@ -37,6 +37,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         => Set<GitHubSourceSyncCheckpointRecord>();
     public DbSet<GitHubSourceSyncCheckpointEventRecord> GitHubSourceSyncCheckpointEvents
         => Set<GitHubSourceSyncCheckpointEventRecord>();
+    public DbSet<GitCheckpointTargetObservationRecord> GitCheckpointTargetObservations
+        => Set<GitCheckpointTargetObservationRecord>();
+    public DbSet<GitCheckpointTargetObservationEventRecord> GitCheckpointTargetObservationEvents
+        => Set<GitCheckpointTargetObservationEventRecord>();
     public DbSet<GitCheckpointTargetHumanReviewRecord> GitCheckpointTargetHumanReviews =>
         Set<GitCheckpointTargetHumanReviewRecord>();
     public DbSet<GitCheckpointTargetHumanReviewEventRecord> GitCheckpointTargetHumanReviewEvents =>
@@ -352,6 +356,55 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ActorId).HasColumnName("actor_id");
             entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
             entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+        });
+        // #109 later F-031 is entirely distinct from historical F-029
+        // F-031 evidence. Append-only constraints/triggers are installed
+        // by the separate startup schema initializer.
+        builder.Entity<GitCheckpointTargetObservationRecord>(entity =>
+        {
+            entity.ToTable("git_checkpoint_target_observations");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.SourceSnapshotId).HasColumnName("source_snapshot_id");
+            entity.Property(x => x.DestinationConnectionId).HasColumnName("destination_connection_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id");
+            entity.Property(x => x.TargetRepositoryName).HasColumnName("target_repository_name");
+            entity.Property(x => x.Organization).HasColumnName("organization");
+            entity.Property(x => x.ObjectFormat).HasColumnName("object_format");
+            entity.Property(x => x.ReviewedBy).HasColumnName("reviewed_by");
+            entity.Property(x => x.CandidateEvidenceSha256).HasColumnName("candidate_evidence_sha256");
+            entity.Property(x => x.HumanReviewEvidenceSha256).HasColumnName("human_review_evidence_sha256");
+            entity.Property(x => x.ReadPreflightEvidenceSha256).HasColumnName("read_preflight_evidence_sha256");
+            entity.Property(x => x.TargetEvidenceSha256).HasColumnName("target_evidence_sha256");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.ObservedAtUtc).HasColumnName("observed_at_utc");
+            entity.Property(x => x.RefCount).HasColumnName("ref_count");
+            entity.Property(x => x.ReceiptJson).HasColumnName("receipt_json");
+            entity.Property(x => x.CanObserveTarget).HasColumnName("can_observe_target");
+            entity.Property(x => x.CanPush).HasColumnName("can_push");
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasIndex(x => new { x.CheckpointId, x.SourceRepositoryId })
+                .IsUnique();
+        });
+        builder.Entity<GitCheckpointTargetObservationEventRecord>(entity =>
+        {
+            entity.ToTable("git_checkpoint_target_observation_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.ObservationId).HasColumnName("observation_id");
+            entity.Property(x => x.ReviewedBy).HasColumnName("reviewed_by");
+            entity.Property(x => x.Type).HasColumnName("type");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitCheckpointTargetObservationRecord>().WithMany()
+                .HasForeignKey(x => x.ObservationId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.ObservationId).IsUnique();
         });
         // F-097b SQL triggers and constraints are bootstrapped after F-090.
         builder.Entity<GitCheckpointTargetHumanReviewRecord>(entity =>
