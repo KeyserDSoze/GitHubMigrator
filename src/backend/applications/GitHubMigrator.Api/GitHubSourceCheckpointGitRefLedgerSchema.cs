@@ -50,8 +50,8 @@ public static class GitHubSourceCheckpointGitRefLedgerSchema
                         AND recorded_by <> '00000000-0000-0000-0000-000000000000'::uuid
                         AND length(source_repository_id) BETWEEN 1 AND 256
                         AND length(proof_json) BETWEEN 100 AND 65536
-                        AND source_manifest_root_sha256 ~ '^[0-9a-f]{64}$'
-                        AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND source_manifest_root_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND NOT can_push AND NOT can_retry
                         AND NOT can_dispatch AND NOT migration_complete);
                 END IF;
@@ -76,7 +76,7 @@ public static class GitHubSourceCheckpointGitRefLedgerSchema
                     ADD CONSTRAINT ck_f097_proof_recorded_event CHECK (
                         type = 'Recorded'
                         AND actor_id <> '00000000-0000-0000-0000-000000000000'::uuid
-                        AND evidence_sha256 ~ '^[0-9a-f]{64}$');
+                        AND evidence_sha256 ~ '^[0-9a-f]{{64}}$');
                 END IF;
             END
             $f097_event_checks$;
