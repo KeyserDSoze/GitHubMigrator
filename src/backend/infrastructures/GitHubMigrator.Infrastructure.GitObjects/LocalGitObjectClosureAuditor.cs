@@ -100,7 +100,7 @@ public sealed class LocalGitObjectClosureAuditor(
         return first;
     }
 
-    private static string SafeBarePath(string root, Guid id)
+    internal static string SafeBarePath(string root, Guid id)
     {
         if (string.IsNullOrWhiteSpace(root) || id == Guid.Empty ||
             !Path.IsPathFullyQualified(root) || !Directory.Exists(root))
@@ -234,11 +234,32 @@ public sealed class LocalGitObjectClosureAuditor(
         return (objects.Count, Convert.ToHexStringLower(sha.GetHashAndReset()));
     }
 
+    // F-094 reuses the same hardened local-only Git invocation and
+    // rejects anything but an exact exit-0/exit-1 graph predicate result.
+    internal static async Task<bool> HasCommitAsync(
+        string bareRepository, string objectId, CancellationToken ct)
+    {
+        var status = await GitAsync(bareRepository, ct, null,
+            "cat-file", "-e", objectId + "^{commit}",
+            acceptExitCode1: true, returnExitCode: true);
+        return status == "0";
+    }
+
+    internal static async Task<bool> IsAncestorAsync(
+        string bareRepository, string ancestor, string descendant,
+        CancellationToken ct)
+    {
+        var status = await GitAsync(bareRepository, ct, null,
+            "merge-base", "--is-ancestor", ancestor, descendant,
+            acceptExitCode1: true, returnExitCode: true);
+        return status == "0";
+    }
+
     private static async Task<string> GitAsync(
         string repository, CancellationToken external, string? standardInput,
         string arg1, string? arg2 = null, string? arg3 = null,
         string? arg4 = null, string? arg5 = null,
-        bool acceptExitCode1 = false)
+        bool acceptExitCode1 = false, bool returnExitCode = false)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(external);
         deadline.CancelAfter(CommandDeadline);
@@ -288,7 +309,7 @@ public sealed class LocalGitObjectClosureAuditor(
             if (process.ExitCode != 0 &&
                 !(acceptExitCode1 && process.ExitCode == 1))
                 throw new GitObjectClosureAuditException("GitClosureGitCommandRejected");
-            return result;
+            return returnExitCode ? process.ExitCode.ToString() : result;
         }
         catch (OperationCanceledException) when (!external.IsCancellationRequested)
         {
