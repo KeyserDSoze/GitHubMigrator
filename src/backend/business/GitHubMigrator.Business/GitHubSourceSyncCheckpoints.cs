@@ -185,6 +185,12 @@ public static class GitHubSourceSyncCheckpointIntegrity
 
 public interface IGitHubSourceSyncCheckpointJournal
 {
+    // Verified direct read for F-095 and future durable consumers.
+    // Historical receipts stay inspectable after newer epochs exist.
+    Task<GitHubSourceSyncCheckpointReceipt?> GetVerifiedAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        CancellationToken ct);
+
     Task<GitHubCheckpointTargetRefReviewPage> ReviewTargetRefNamesAsync(
         Guid preparationId, Guid planId, Guid checkpointId,
         Guid targetObservationId, string sourceRepositoryId,

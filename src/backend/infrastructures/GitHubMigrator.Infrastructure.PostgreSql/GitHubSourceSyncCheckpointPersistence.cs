@@ -123,6 +123,22 @@ public sealed class PostgresGitHubSourceSyncCheckpointJournal(
         return FromStored(record, proof);
     }
 
+    public async Task<GitHubSourceSyncCheckpointReceipt?> GetVerifiedAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        CancellationToken ct)
+    {
+        RequireEnabled();
+        if (preparationId == Guid.Empty || planId == Guid.Empty ||
+            checkpointId == Guid.Empty)
+            throw Refused("SourceSyncCheckpointInvalidPage");
+        var plan = await RequirePlanAsync(preparationId, planId, ct);
+        var row = await db.GitHubSourceSyncCheckpoints.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == checkpointId &&
+                x.PlanId == planId && x.PreparationId == preparationId &&
+                x.SourceConnectionId == plan.SourceConnectionId, ct);
+        return row is null ? null : await VerifiedAsync(row, plan, ct);
+    }
+
     public async Task<GitHubSourceSyncCheckpointPage> ListAsync(
         Guid preparationId, Guid planId, Guid? after, int take,
         CancellationToken ct)
