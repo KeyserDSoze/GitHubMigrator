@@ -67,15 +67,15 @@ public static class GitIncrementalLaterCheckpointBundleEvidenceSchema
                     ALTER TABLE git_later_checkpoint_bundle_evidence
                     ADD CONSTRAINT ck_later_checkpoint_f035_blocked CHECK (
                         length(source_repository_id) BETWEEN 1 AND 256
-                        AND workpack_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND bundle_plan_sha256 ~ '^[0-9a-f]{64}$'
-                        AND full_ref_proof_sha256 ~ '^[0-9a-f]{64}$'
-                        AND source_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND source_manifest_root_sha256 ~ '^[0-9a-f]{64}$'
-                        AND target_receipt_sha256 ~ '^[0-9a-f]{64}$'
-                        AND reconciliation_sha256 ~ '^[0-9a-f]{64}$'
-                        AND bundle_sha256 ~ '^[0-9a-f]{64}$'
-                        AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND workpack_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND bundle_plan_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND full_ref_proof_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND source_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND source_manifest_root_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND target_receipt_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND reconciliation_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND bundle_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND bundle_file_name = replace(workpack_id::text,
                             '-', '') || '.bundle'
                         AND bundle_bytes BETWEEN 1 AND 536870912
@@ -92,7 +92,7 @@ public static class GitIncrementalLaterCheckpointBundleEvidenceSchema
                     ALTER TABLE git_later_checkpoint_bundle_events
                     ADD CONSTRAINT ck_later_checkpoint_f035_event CHECK (
                         type = 'Recorded'
-                        AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND actor_id != '00000000-0000-0000-0000-000000000000'::uuid);
                 END IF;
             END $later_f035_constraints$;
