@@ -767,6 +767,19 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 observationId, "repo-1", new string('0', 64),
                                 candidate.RequestedBy, default))).Code);
 
+                    foreach (var wrong in new[] {
+                        (CheckpointId: Guid.NewGuid(), RepositoryId: "repo-1"),
+                        (CheckpointId: later.Id, RepositoryId: "foreign-repo")
+                    })
+                        Assert.Equal("LaterCheckpointWorkpackPreflightUnverified",
+                            (await Assert.ThrowsAsync<
+                                GitIncrementalCheckpointWorkpackException>(() =>
+                                writer.CaptureAsync(run.Id, plan.Id,
+                                    wrong.CheckpointId, observationId,
+                                    wrong.RepositoryId,
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, default))).Code);
+
                     var recon = await verifiedDb.GitLaterCheckpointReconciliations
                         .AsNoTracking().SingleAsync(x => x.Id ==
                             first.ReconciliationId);
