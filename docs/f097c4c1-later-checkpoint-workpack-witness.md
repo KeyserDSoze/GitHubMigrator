@@ -62,3 +62,27 @@ refusal, tamper rejection and false write flags. A positive, truly
 later-epoch PostgreSQL readback and concurrency test is **not possible
 until #105 is completed**. The issue checklist must remain OPEN until
 that path is safe and verified.
+
+## V2 checkpoint F-031 read-only join (2026-11-09)
+
+After [#109](https://github.com/KeyserDSoze/GitHubMigrator/issues/109)
+closed with CI 4/4 on main, [29bcfb6](https://github.com/KeyserDSoze/GitHubMigrator/commit/29bcfb687f858f650ffbd3ab4a5dc00709d59938)
+adds `GitIncrementalCheckpointTargetJoin.ForReadOnlyComparison`.
+It accepts the immutable historical F-029 mapping **with IsCurrent=false**,
+a verified-later-epoch F-091 receipt, F-097b source ref/OID proof,
+and the separately versioned immutable checkpoint F-031 observation. The
+method refuses mixed SHA1/SHA256 OIDs, changed target approval seals,
+foreign checkpoint/snapshot, invalid ref collisions, baseline epochs,
+and changed or executable planning authority. It returns a **version 2**
+`GitIncrementalCheckpointAuditInputs` whose target evidence digest is the
+**full checkpoint F-031 receipt digest**, not merely the target-ref hash.
+
+**Security boundary:** this is a *pure, non-authorizing* domain join,
+not a verified PostgreSQL latest-epoch reader. The existing
+`PostgresGitIncrementalCheckpointAuditPreflight` and
+`PostgresGitIncrementalCheckpointWorkpackJournal` still require the
+historical **version 1/current F-029** gate and remain fail-closed for
+real second epochs. No F-032/F-038 row is produced; all execution flags
+stay false. Source-locking, F-031 audit revalidation, safe append-only
+F-032/F-038 storage, replay and real PostgreSQL positive tests are the
+next #104 work; #103/#100/#96/#92 remain open.
