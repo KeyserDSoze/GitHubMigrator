@@ -53,3 +53,22 @@ designed, persisted and verified under the source lock in #105.
 Only then can #104 and #103 create a later-checkpoint F-032/F-038
 and F-035 source-only bundle without violating historical F-029
 integrity. No remote GitHub push or migration-complete authority.
+
+## Integration and safety regression coverage
+
+The F-097 full-ref proof is not inferred from F-091 staging fingerprints.
+The real PostgreSQL integration fixture records the F-014 and F-091
+**baseline** and an independent, completed later F-014 snapshot with
+its own SHA-1 or SHA-256 ref/OID set, then seals the F-097 predecessor
+chain. The old F-029 plan remains `IsCurrent=false`.
+
+Scoped tests check that the candidate can be computed on the later
+snapshot without inserting any F-031/F-032/F-038 rows, that re-opening
+the database yields the same source snapshot, and that disabled mode,
+wrong operator, foreign repository, superseded *baseline* F-091
+checkpoint, expired destination validation, revoked historical review,
+and tampered proof authority bits fail closed.
+
+The candidate's `CanObserveTarget=false` is intentional and permanent.
+A new explicit reviewer decision and actual read-only GitHub target
+observation are **not** covered by these tests, nor by the receipt.
