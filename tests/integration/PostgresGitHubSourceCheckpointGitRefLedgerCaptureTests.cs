@@ -391,6 +391,27 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 "repo-1", actor, default);
             Assert.Equal(laterId, reviewed.SourceSnapshotId);
             Assert.False(reviewed.CanObserveTarget);
+
+            // A historical review cannot outlive its previously
+            // validated destination connection; this witness is not
+            // an evergreen permit after staging advances.
+            clock.Advance(TimeSpan.FromMinutes(6));
+            Assert.Equal("CheckpointTargetReReviewDestinationValidationExpired",
+                (await Assert.ThrowsAsync<GitCheckpointTargetReReviewException>(
+                    () => ReReview(restarted, clock).ReadAsync(
+                        run.Id, plan.Id,
+                        reviewed.CheckpointId, "repo-1", actor, default))).Code);
+            // Revocation is fail-closed independently of the expiry
+            // guard, even with a previously verified F-097 chain.
+            var reviewRow = await restarted.IncrementalReviews
+                .SingleAsync(x => x.PreparationId == run.Id);
+            reviewRow.State = IncrementalReviewStates.Revoked;
+            await restarted.SaveChangesAsync();
+            Assert.Equal("CheckpointTargetReReviewHistoricalReviewInvalid",
+                (await Assert.ThrowsAsync<GitCheckpointTargetReReviewException>(
+                    () => ReReview(restarted, clock).ReadAsync(
+                        run.Id, plan.Id,
+                        reviewed.CheckpointId, "repo-1", actor, default))).Code);
             Assert.Empty(await restarted.IncrementalGitRefReconciliations
                 .AsNoTracking().Where(x => x.SnapshotId == laterId)
                 .ToArrayAsync());
