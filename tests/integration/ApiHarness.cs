@@ -141,6 +141,14 @@ public sealed class ApiHarness : IAsyncLifetime
         var now = DateTimeOffset.UtcNow;
         await secrets.SaveAsync("mock-api-source-" + SourceConnectionId.ToString("N"), SourceToken, default);
         await secrets.SaveAsync("mock-api-target-" + DestinationConnectionId.ToString("N"), TargetToken, default);
+        if (EnableCheckpointTargetObservation)
+        {
+            // Independent real two-epoch F-029 test fixtures have a
+            // PostgreSQL-owned destination connection named "dest-secret".
+            // Only this explicit test host supplies its encrypted credential.
+            // The target-ref endpoint still has NO caller PAT or URL.
+            await secrets.SaveAsync("dest-secret", TargetToken, default);
+        }
         await connections.SaveAsync(new(SourceConnectionId, "Source Fixture", "azure-devops-services",
             ConnectionDirection.Source, "az-org", "mock-api-source-" + SourceConnectionId.ToString("N"),
             now, now, "Verified", "test", "not_verified"), default);
