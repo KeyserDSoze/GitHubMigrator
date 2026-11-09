@@ -255,6 +255,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     // tries to smuggle two different actor UUIDs into the JSON request.
     [Theory]
     [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation)]
     [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected)]
     public async Task F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_immutable(
         int oidLength, string decision)
@@ -635,6 +636,42 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     }
                 }
                 Assert.Equal(outboundBefore + 2, api.Calls.Count);
+
+                // #104 post-#109: join actual independently sealed F-091/
+                // F-097b source and saved checkpoint F-031 into a VERSION 2
+                // read-only comparison. Even after legitimate target GET,
+                // original F-029 must remain stale and no workpack exists.
+                await using (var verifiedDb = fixture.NewContext())
+                {
+                    var latestPlan = await new PostgresIncrementalOperationPlanRepository(
+                        verifiedDb, clock).GetAsync(run.Id, plan.Id, default);
+                    Assert.NotNull(latestPlan);
+                    Assert.False(latestPlan.IsCurrent);
+                    var fullRefs = await Ledger(verifiedDb, clock).GetVerifiedAsync(
+                        run.Id, plan.Id, later.Id, "repo-1", default);
+                    Assert.NotNull(fullRefs);
+                    var savedTarget = await verifiedDb.GitCheckpointTargetObservations
+                        .AsNoTracking().SingleAsync(x => x.Id == observationId);
+                    var targetReceipt = JsonSerializer.Deserialize<
+                        GitCheckpointTargetObservation>(savedTarget.ReceiptJson);
+                    Assert.NotNull(targetReceipt);
+                    var joined = GitIncrementalCheckpointTargetJoin
+                        .ForReadOnlyComparison(latestPlan, later, fullRefs,
+                            targetReceipt);
+                    Assert.Equal(2, joined.EvidenceVersion);
+                    Assert.Equal(fullRefs.EvidenceSha256,
+                        joined.SourceFullRefProofSha256);
+                    Assert.Equal(targetReceipt.EvidenceSha256,
+                        joined.TargetEvidenceSha256);
+                    Assert.False(joined.CanPush || joined.CanRetry ||
+                        joined.CanDispatch || joined.MigrationComplete);
+                    Assert.Empty(await verifiedDb.GitIncrementalCheckpointWorkpacks
+                        .AsNoTracking().Where(x => x.CheckpointId == later.Id)
+                        .ToArrayAsync());
+                    Assert.Empty(await verifiedDb.IncrementalGitRefReconciliations
+                        .AsNoTracking().Where(x => x.SnapshotId ==
+                            candidate.SourceSnapshotId).ToArrayAsync());
+                }
             }
 
             // Revoke the historical F-027 review: future POSTs must fail,
