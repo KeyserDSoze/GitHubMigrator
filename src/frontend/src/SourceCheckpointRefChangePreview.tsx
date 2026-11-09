@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import SourceCheckpointTargetReview from './SourceCheckpointTargetReview';
 import {
   api, type SourceCheckpointRefChange, type SourceCheckpointRefChangePage,
   type SourceSyncCheckpointReceipt
@@ -131,6 +132,8 @@ export default function SourceCheckpointRefChangePreview({
             {short(item.currentFingerprint)}</small>
         </div>)}
       </div>
+      <SourceCheckpointTargetReview receipt={receipt}
+        token={token} preparationId={preparationId} planId={planId} />
       {nextAfter && <button type="button" className="icon-button"
         disabled={busy} onClick={() => void load(nextAfter)}>
         {t('cpRefDetailsLoadMore')}

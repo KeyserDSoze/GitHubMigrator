@@ -58,6 +58,22 @@ export type SourceCheckpointRefChangePage = {
   migrationComplete: false;
 };
 
+export type CheckpointTargetReviewItem = {
+  sourceChange: SourceCheckpointRefChange;
+  targetRefObserved: boolean;
+  reviewState: string;
+};
+export type CheckpointTargetRefReviewPage = {
+  checkpointId: string; sourceSnapshotId: string;
+  targetObservationId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; sourceRefManifestSha256: string;
+  sourceRefAttestationSha256: string; targetEvidenceSha256: string;
+  targetObservedAtUtc: string; repositoryRefChanges: number;
+  items: CheckpointTargetReviewItem[]; nextAfter: string | null;
+  canPush: false; canRetry: false; canDispatch: false;
+  migrationComplete: false;
+};
+
 export type RepositorySyncSourceDelta = {
   sourceRepositoryId: string; targetRepositoryName: string;
   addedRefs: number; changedRefs: number; restoredRefs: number;
@@ -588,6 +604,15 @@ export const api = {
       after?: string | null, take = 50) =>
     call<SourceCheckpointRefChangePage>(
       `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/ref-changes?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  reviewCheckpointTargetRefNames: (
+      token: string, preparationId: string, planId: string,
+      checkpointId: string, targetObservationId: string,
+      sourceRepositoryId: string, expectedTargetEvidenceSha256: string,
+      after?: string | null, take = 50) =>
+    call<CheckpointTargetRefReviewPage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-ref-review/${encodeURIComponent(targetObservationId)}?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}&expectedTargetEvidenceSha256=${encodeURIComponent(expectedTargetEvidenceSha256)}&take=${take}` +
         (after ? `&after=${encodeURIComponent(after)}` : ''),
       { headers: withToken(token) }),
   captureSourceSyncCheckpoint: (token: string,
