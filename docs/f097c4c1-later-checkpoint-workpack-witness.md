@@ -152,3 +152,29 @@ The reader independently verifies the **stored** F-091/F-097b complete source re
 The returned projection contains **only** checkpoint/target/workpack/reconciliation IDs, SHA-256 digests, bounded category counts, record time and `Blocked` / `WriteBlocked` state; `historicalOnly=true`, `currentApprovalVerified=false`, and all other execution flags are false. This is intentionally different from a live admission: historical signed evidence remains inspectable after an F-027 revocation, expiry or superseding source epoch, but a historical receipt is **never** a current permission, a retry token or migration-completion evidence. Any future action must recheck current source, human review and GitHub target under a new source-locked gate. See #111 and parent #103.
 
 The frontend exposes an explicit UUID-driven **read-only inspector** under the saved F-031 target observation. No auto-load, POST or provider GET occurs. The UI requires an exact allowlist of response fields and rejects any forged push, retry, dispatch, non-`WriteBlocked`, raw ref/OID or extra actor information rather than rendering it. Actual two-epoch SHA-1 and SHA-256 PostgreSQL tests check JWT role/default-OFF, positive history, wrong target/receipt, redaction, and the original approval's revocation. Playwright checks that the browser makes exactly one GET and rejects executable server responses. CI must pass **4/4** before closing #111.
+
+## #112 F-035v2 source-only preparation contract (2026-11-09)
+
+The new `GitIncrementalLaterCheckpointBundleIntegrity.Prepare/Verify`
+produces a **domain-only, non-authorizing F-035v2 read plan** from an
+independently loaded and sealed later F-091/F-097b checkpoint, original
+F-029 mapping, exact #109 F-031 receipt, F-032v2 canonical reconciliation
+and F-038v2 permanently `Blocked/WriteBlocked` receipt. The versioned
+SHA-256 plan binds the full F-038v2 digest, checkpoint, source snapshot,
+source manifest root, F-097b full-ref proof, F-031 reviewed observation
+and all canonical source branch/tag Git ref names + **real object IDs**.
+It supports homogeneous SHA-1 and SHA-256 OIDs and limits bundle inputs
+to 128 refs. Changed digests, ref names/OIDs, source scope, target
+observation, baseline/current plan, and all authority flags fail closed.
+
+The nested `GitSourceBundleRequest` is **internal only**. No API, caller
+bundle path, GitHub credential/URL or local acquirer/worker is exposed;
+`CanAcquireBundle=false` and every destination write flag is false.
+The existing baseline F-035 contract/storage/hash and legacy sender
+remain unchanged. Self-sealed synthetic input is not database
+provenance: a later source-first locked PostgreSQL verifier must reload
+current F-091/F-097b, F-031, F-032v2, F-038v2, latest snapshot and
+human gate before any actual local Git export, then verify source mirror
+refs/OIDs with fsck and persist bundle SHA/bytes and lease fencing.
+This future physical acquisition/replay is **still open** under #112/#103,
+as are F-061 and F-095 under #100/#96. See [issue #112](https://github.com/KeyserDSoze/GitHubMigrator/issues/112).
