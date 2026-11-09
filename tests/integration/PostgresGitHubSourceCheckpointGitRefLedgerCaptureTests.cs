@@ -105,6 +105,25 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
 
 
 
+    // #120 real local-import wrapper for cross-DbContext heartbeat tests:
+    // delay only the sandbox fixture; the real importer still performs
+    // actual immutable bundle import + Git OID/fsck/closed-graph checks.
+    private sealed class DelayedVerifiedImporter(
+        IGitIncrementalLaterCheckpointMirrorImporter inner)
+        : IGitIncrementalLaterCheckpointMirrorImporter
+    {
+        public async Task<GitIncrementalLaterCheckpointMirrorOfflineAudit>
+            MaterializeLaterCheckpointAsync(
+                GitIncrementalLaterCheckpointMirrorStagingPlan stage,
+                GitIncrementalLaterCheckpointBundleReceipt durable,
+                CancellationToken ct)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3), ct);
+            return await inner.MaterializeLaterCheckpointAsync(
+                stage, durable, ct);
+        }
+    }
+
     private static PostgresGitHubSourceCheckpointGitRefLedger Ledger(
         AppDbContext db, TimeProvider clock) =>
         new(db, clock, new(true),
@@ -1534,9 +1553,17 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         // source-fenced acquisition, periodic SQL heartbeat,
                         // exact UUID.bundle -> UUID.git import, double
                         // physical fsck and immutable F-061v2 Verified.
-                        var coordinator = auditScope.ServiceProvider
-                            .GetRequiredService<
-                                GitIncrementalLaterCheckpointMirrorImportWorker>();
+                        var coordinator = new
+                            GitIncrementalLaterCheckpointMirrorImportWorker(
+                                api.Host.Services.GetRequiredService<
+                                    IServiceScopeFactory>(),
+                                new(
+                                    true, TimeSpan.FromMinutes(3),
+                                    TimeSpan.FromMilliseconds(250)),
+                                new DelayedVerifiedImporter(
+                                    auditScope.ServiceProvider
+                                        .GetRequiredService<
+                                            IGitIncrementalLaterCheckpointMirrorImporter>()));
                         var activeWorker = Guid.NewGuid();
                         var actual = await coordinator.RunAsync(
                             run.Id, plan.Id, later.Id, observationId,
@@ -1576,7 +1603,12 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 WHERE mirror_id = {actual.PhysicalMirrorId}
                                 """).ToArrayAsync();
                         Assert.Contains("Acquired", events);
-                        Assert.Contains("Renewed", events);
+                        // The three-second delayed *real* Git import is
+                        // longer than heartbeat interval, so repeated SQL
+                        // Renewed events prove the source-bound pulse ran
+                        // WHILE physical Git work was pending, not just
+                        // the one final renewal after the import finished.
+                        Assert.True(events.Count(x => x == "Renewed") >= 2);
                         Assert.Equal(1, events.Count(x => x == "Verified"));
                         Assert.DoesNotContain("Quarantined", events);
                         var replay = await Assert.ThrowsAsync<
