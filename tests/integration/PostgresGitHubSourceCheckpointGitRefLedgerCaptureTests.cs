@@ -312,7 +312,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 // original requester must not self-approve, even if the
                 // JSON tries to spoof a different reviewer's UUID.
                 var requesterUser = new ApplicationUser {
-                    Id = candidate.RequestedBy, UserName = requesterName
+                    Id = candidate.RequestedBy, UserName = requesterName,
+                    MustChangePassword = false
                 };
                 var createdRequester = await users.CreateAsync(
                     requesterUser, ApiHarness.SuperadminPassword);
@@ -321,7 +322,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     requesterUser, "superadmin");
                 Assert.True(requesterRole.Succeeded);
                 var secondReviewer = new ApplicationUser {
-                    UserName = secondReviewerName
+                    UserName = secondReviewerName, MustChangePassword = false
                 };
                 var createdOther = await users.CreateAsync(
                     secondReviewer, ApiHarness.SuperadminPassword);
