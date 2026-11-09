@@ -177,6 +177,117 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
         return changed == 1;
     }
 
+    // An unsuccessful or cancelled local export can leave UUID.bundle
+    // bytes without a DB receipt. Quarantine the exact still-held lease,
+    // rather than releasing it for automatic orphan adoption. Idempotent
+    // on an already-quarantined generation, with no Git or remote I/O.
+    public async Task<bool> QuarantineAsync(
+        Guid workpackId, Guid token, long generation, Guid actorId,
+        string bundlePlanSha256, CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("LaterCheckpointBundleLeaseDisabled");
+        RequireHandle(workpackId, token, generation, actorId, bundlePlanSha256);
+        var parent = await db.GitLaterCheckpointBundleLeases.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.WorkpackId == workpackId, ct);
+        if (parent is null) return false;
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted, ct);
+        await LockAsync(parent.SourceConnectionId, parent.PlanId, ct);
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
+        var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE git_later_checkpoint_bundle_leases
+            SET state = 'RecoveryRequired', lease_until_utc = NULL,
+                updated_at_utc = {now}
+            WHERE workpack_id = {workpackId} AND state = 'Held'
+                AND lease_token = {token} AND generation = {generation}
+                AND actor_id = {actorId}
+                AND bundle_plan_sha256 = {bundlePlanSha256}
+                AND durable_evidence_persisted = false
+                AND can_push = false AND can_retry = false
+                AND can_dispatch = false AND migration_complete = false
+            """, ct);
+        if (changed == 1)
+            await EventAsync(workpackId, generation, actorId, "Quarantined",
+                bundlePlanSha256, now, ct);
+        await tx.CommitAsync(ct);
+        return changed == 1;
+    }
+
+    // Explicit operator-mediated release of a QUARANTINED worker lease.
+    // Only the actual immutable F-031 independent human reviewer may
+    // recover a crashed source actor's workpack; NOT the old worker.
+    // This still does not adopt orphan bytes, create evidence or acquire
+    // a new lease. Caller must separately request a fresh claim.
+    public async Task<bool> RecoverAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        Guid targetObservationId, Guid workpackId, string sourceRepositoryId,
+        string expectedTargetReceiptSha256, Guid recoveryReviewerId,
+        long expectedGeneration, string expectedBundlePlanSha256,
+        CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("LaterCheckpointBundleLeaseDisabled");
+        if (recoveryReviewerId == Guid.Empty || expectedGeneration < 1 ||
+            !GitSourceBundleStorageCheck.ValidSha(expectedBundlePlanSha256))
+            throw Refused("LaterCheckpointBundleRecoveryInvalid");
+        var plan = await preflight.ReadAsync(preparationId, planId,
+            checkpointId, targetObservationId, workpackId,
+            sourceRepositoryId, expectedTargetReceiptSha256, ct);
+        RequirePlan(plan, preparationId, planId, checkpointId,
+            targetObservationId, workpackId, sourceRepositoryId,
+            expectedTargetReceiptSha256);
+        if (plan.EvidenceSha256 != expectedBundlePlanSha256)
+            throw Refused("LaterCheckpointBundleRecoveryProofChanged");
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted, ct);
+        await LockAsync(plan.SourceOnlyRequest.SourceConnectionId, planId, ct);
+        var row = await db.GitLaterCheckpointBundleLeases.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.WorkpackId == workpackId, ct);
+        if (row is null || row.Generation != expectedGeneration ||
+            row.State != "RecoveryRequired")
+            return false;
+        RequireMatch(row, plan);
+        await RequireLiveLockedAsync(plan, row.ActorId, ct);
+        var human = await db.GitCheckpointTargetHumanReviews.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.CheckpointId == checkpointId &&
+                x.SourceRepositoryId == sourceRepositoryId, ct);
+        if (human is null ||
+            human.ReviewedBy != recoveryReviewerId ||
+            recoveryReviewerId == row.ActorId ||
+            human.Decision !=
+                GitCheckpointTargetHumanReviewStates.ApprovedForObservation)
+            throw Refused("LaterCheckpointBundleRecoveryReviewerRequired");
+        if (row.Generation >= long.MaxValue - 1 ||
+            await db.GitLaterCheckpointBundleEvidence.AsNoTracking()
+                .AnyAsync(x => x.WorkpackId == workpackId, ct))
+            throw Refused("LaterCheckpointBundleRecoveryBlocked");
+        var next = checked(row.Generation + 1);
+        var token = Guid.NewGuid();
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
+        var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE git_later_checkpoint_bundle_leases
+            SET state = 'Released', lease_token = {token},
+                generation = {next}, actor_id = {recoveryReviewerId},
+                lease_until_utc = NULL, updated_at_utc = {now}
+            WHERE workpack_id = {workpackId} AND state = 'RecoveryRequired'
+                AND generation = {expectedGeneration}
+                AND lease_token = {row.LeaseToken}
+                AND actor_id = {row.ActorId}
+                AND bundle_plan_sha256 = {expectedBundlePlanSha256}
+                AND durable_evidence_persisted = false
+                AND can_push = false AND can_retry = false
+                AND can_dispatch = false AND migration_complete = false
+            """, ct);
+        if (changed == 1)
+            await EventAsync(workpackId, next, recoveryReviewerId,
+                "Recovered", expectedBundlePlanSha256, now, ct);
+        await tx.CommitAsync(ct);
+        return changed == 1;
+    }
+
     // The ONLY F-035v2 evidence INSERT. Both the original claim and this
     // final phase are bounded, source-locked PostgreSQL transactions. Git
     // subprocesses run only between them, outside any SQL transaction.
