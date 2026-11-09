@@ -45,6 +45,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<GitCheckpointTargetHumanReviewRecord>();
     public DbSet<GitCheckpointTargetHumanReviewEventRecord> GitCheckpointTargetHumanReviewEvents =>
         Set<GitCheckpointTargetHumanReviewEventRecord>();
+    public DbSet<GitLaterCheckpointReconciliationRecord> GitLaterCheckpointReconciliations =>
+        Set<GitLaterCheckpointReconciliationRecord>();
+    public DbSet<GitLaterCheckpointWorkpackRecord> GitLaterCheckpointWorkpacks =>
+        Set<GitLaterCheckpointWorkpackRecord>();
+    public DbSet<GitLaterCheckpointWorkpackEventRecord> GitLaterCheckpointWorkpackEvents =>
+        Set<GitLaterCheckpointWorkpackEventRecord>();
     public DbSet<GitIncrementalCheckpointWorkpackRecord> GitIncrementalCheckpointWorkpacks =>
         Set<GitIncrementalCheckpointWorkpackRecord>();
     public DbSet<GitIncrementalCheckpointWorkpackEventRecord> GitIncrementalCheckpointWorkpackEvents =>
@@ -448,6 +454,71 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.DecisionId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => x.DecisionId).IsUnique();
+        });
+        builder.Entity<GitLaterCheckpointReconciliationRecord>(entity =>
+        {
+            entity.ToTable("git_later_checkpoint_reconciliations");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.SourceSnapshotId).HasColumnName("source_snapshot_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id");
+            entity.Property(x => x.TargetObservationId).HasColumnName("target_observation_id");
+            entity.Property(x => x.ManifestSha256).HasColumnName("manifest_sha256");
+            entity.Property(x => x.SourceEvidenceSha256).HasColumnName("source_evidence_sha256");
+            entity.Property(x => x.FullRefProofSha256).HasColumnName("full_ref_proof_sha256");
+            entity.Property(x => x.TargetReceiptSha256).HasColumnName("target_receipt_sha256");
+            entity.Property(x => x.ReconciliationSha256).HasColumnName("reconciliation_sha256");
+            entity.Property(x => x.ItemsJson).HasColumnName("items_json");
+            entity.Property(x => x.SourceRefCount).HasColumnName("source_ref_count");
+            entity.Property(x => x.TargetRefCount).HasColumnName("target_ref_count");
+            entity.Property(x => x.MatchingCount).HasColumnName("matching_count");
+            entity.Property(x => x.CreateCandidateCount).HasColumnName("create_candidate_count");
+            entity.Property(x => x.DivergedCount).HasColumnName("diverged_count");
+            entity.Property(x => x.TargetOnlyCount).HasColumnName("target_only_count");
+            entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+        });
+        builder.Entity<GitLaterCheckpointWorkpackRecord>(entity =>
+        {
+            entity.ToTable("git_later_checkpoint_workpacks");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.ReconciliationId).HasColumnName("reconciliation_id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.SourceSnapshotId).HasColumnName("source_snapshot_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id");
+            entity.Property(x => x.TargetObservationId).HasColumnName("target_observation_id");
+            entity.Property(x => x.TargetReceiptSha256).HasColumnName("target_receipt_sha256");
+            entity.Property(x => x.FullRefProofSha256).HasColumnName("full_ref_proof_sha256");
+            entity.Property(x => x.ReceiptJson).HasColumnName("receipt_json");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.State).HasColumnName("state");
+            entity.Property(x => x.Phase).HasColumnName("phase");
+            entity.Property(x => x.Attempts).HasColumnName("attempts");
+            entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.Property(x => x.CanPush).HasColumnName("can_push");
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+        });
+        builder.Entity<GitLaterCheckpointWorkpackEventRecord>(entity =>
+        {
+            entity.ToTable("git_later_checkpoint_workpack_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.Type).HasColumnName("type");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
         });
         builder.Entity<GitIncrementalCheckpointWorkpackRecord>(entity =>
         {
