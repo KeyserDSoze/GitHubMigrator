@@ -1642,60 +1642,183 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 WHERE mirror_id =
                                     {checkedAdmission.PhysicalMirrorId}
                                 """))).SqlState);
-                    // Simulate an expired, possibly crashed F-061v2
-                    // worker without sleeping or claiming it is verified.
-                    // The SQL invariant still requires expiry > acquired;
-                    // only the special test fixture moves it just into
-                    // the past. Runtime never adjusts an active lease.
-                    await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
-                        UPDATE git_later_checkpoint_mirror_leases
-                        SET lease_until_utc =
-                            acquired_at_utc + interval '1 millisecond',
-                            updated_at_utc = clock_timestamp()
-                        WHERE mirror_id = {checkedAdmission.PhysicalMirrorId}
-                        """);
-                    Assert.Equal("LaterCheckpointMirrorLeaseRecoveryRequired",
-                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
-                            () => leaseStore.ClaimAsync(
-                                run.Id, plan.Id, later.Id, observationId,
-                                first.WorkpackId, "repo-1",
-                                targetReceipt.EvidenceSha256,
-                                candidate.RequestedBy, Guid.NewGuid(),
-                                TimeSpan.FromSeconds(90), default))).Code);
-                    var quarantineState = await verifiedDb.Database
-                        .SqlQuery<string>($"""
-                            SELECT state AS "Value"
-                            FROM git_later_checkpoint_mirror_leases
-                            WHERE mirror_id = {checkedAdmission.PhysicalMirrorId}
+                    if (verifyPhysical)
+                    {
+                        // #119: two genuine SHA-1/SHA-256 source epochs
+                        // and sealed v2 F-035 bytes. Materialize only
+                        // the trusted local UUID.git, THEN independently
+                        // double-fsck and rehash it inside the durable
+                        // source-first F-061v2 Verified journal.
+                        var actualImporter =
+                            new LocalGitSourceSnapshotMirrorMaterializer(
+                                physicalMirror!.BundleRoot,
+                                physicalMirror.VerifiedMirrorRoot,
+                                new LocalGitBundleArtifactStore(
+                                    physicalMirror.BundleRoot),
+                                laterCheckpointEnabled: true);
+                        var imported = await actualImporter
+                            .MaterializeLaterCheckpointAsync(
+                                staging, committed, default);
+                        Assert.Equal(staging.PhysicalMirrorId,
+                            imported.PhysicalMirrorId);
+                        Assert.Equal(staging.SourceRefSetSha256,
+                            imported.SourceRefSetSha256);
+                        Assert.False(imported.DurableEvidencePersisted ||
+                            imported.CanMaterialize || imported.CanPush ||
+                            imported.CanRetry || imported.CanDispatch ||
+                            imported.MigrationComplete);
+                        var verifiedWriter = auditScope.ServiceProvider
+                            .GetRequiredService<
+                                PostgresGitIncrementalLaterCheckpointMirrorVerifiedJournal>();
+                        Assert.Equal("LaterCheckpointMirrorVerifiedLeaseFenced",
+                            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                () => verifiedWriter.CompleteAsync(
+                                    renewed with { WorkerId = Guid.NewGuid() },
+                                    run.Id, plan.Id, observationId,
+                                    "repo-1", targetReceipt.EvidenceSha256,
+                                    default))).Code);
+                        var committedMirror = await verifiedWriter.CompleteAsync(
+                            renewed, run.Id, plan.Id, observationId,
+                            "repo-1", targetReceipt.EvidenceSha256, default);
+                        Assert.Equal(1, committedMirror.EvidenceVersion);
+                        Assert.Equal(renewed.LeaseToken, committedMirror.LeaseToken);
+                        Assert.Equal(renewed.Generation,
+                            committedMirror.LeaseGeneration);
+                        Assert.Equal(worker, committedMirror.WorkerId);
+                        Assert.Equal(staging.EvidenceSha256,
+                            committedMirror.StagingEvidenceSha256);
+                        Assert.Equal(fullRefs.SnapshotId,
+                            committedMirror.SourceSnapshotId);
+                        Assert.Equal(staging.PhysicalMirrorId,
+                            committedMirror.PhysicalMirrorId);
+                        Assert.Equal(committed.BundleSha256,
+                            committedMirror.BundleSha256);
+                        Assert.Equal(imported.ObjectSetSha256,
+                            committedMirror.ObjectSetSha256);
+                        Assert.Equal(imported.ObjectCount,
+                            committedMirror.ObjectCount);
+                        Assert.True(committedMirror.DurableEvidencePersisted);
+                        Assert.False(committedMirror.CanMaterialize ||
+                            committedMirror.CanPush || committedMirror.CanRetry ||
+                            committedMirror.CanDispatch ||
+                            committedMirror.MigrationComplete);
+                        var state = await verifiedDb.Database
+                            .SqlQuery<string>($"""
+                                SELECT state AS "Value"
+                                FROM git_later_checkpoint_mirror_leases
+                                WHERE mirror_id = {staging.PhysicalMirrorId}
+                                """).SingleAsync();
+                        Assert.Equal("Verified", state);
+                        var written = await verifiedDb.Database.SqlQuery<long>($"""
+                            SELECT count(*)::bigint AS "Value"
+                            FROM git_later_checkpoint_mirror_verified_evidence
+                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                AND evidence_sha256 = {committedMirror.EvidenceSha256}
+                                AND lease_token = {renewed.LeaseToken}
+                                AND lease_generation = {renewed.Generation}
+                                AND worker_id = {worker}
+                                AND durable_evidence_persisted
+                                AND NOT can_materialize AND NOT can_push
+                                AND NOT can_retry AND NOT can_dispatch
+                                AND NOT migration_complete
                             """).SingleAsync();
-                    Assert.Equal("RecoveryRequired", quarantineState);
-                    Assert.Equal("LaterCheckpointMirrorLeaseFenced",
-                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
-                            () => leaseStore.RenewAsync(
-                                renewed, TimeSpan.FromSeconds(90),
-                                default))).Code);
-                    Assert.Equal("LaterCheckpointMirrorLeaseRecoveryRequired",
-                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
-                            () => leaseStore.ClaimAsync(
-                                run.Id, plan.Id, later.Id, observationId,
-                                first.WorkpackId, "repo-1",
-                                targetReceipt.EvidenceSha256,
-                                candidate.RequestedBy, Guid.NewGuid(),
-                                TimeSpan.FromSeconds(90), default))).Code);
-                    var quarantines = await verifiedDb.Database
-                        .SqlQuery<long>($"""
+                        Assert.Equal(1L, written);
+                        var savedEvent = await verifiedDb.Database.SqlQuery<long>($"""
                             SELECT count(*)::bigint AS "Value"
                             FROM git_later_checkpoint_mirror_lease_events
-                            WHERE mirror_id = {checkedAdmission.PhysicalMirrorId}
-                                AND type = 'Quarantined'
+                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                AND generation = {renewed.Generation}
+                                AND worker_id = {worker}
+                                AND type = 'Verified'
                             """).SingleAsync();
-                    Assert.Equal(1L, quarantines);
-                    // No durable Verified state or GitHub destination
-                    // side effect can ever result from a crashed lease.
-                    Assert.Empty(await verifiedDb.GitSourceMirrorLifecycles
-                        .AsNoTracking().Where(x =>
-                            x.MirrorId == checkedAdmission.PhysicalMirrorId)
-                        .ToArrayAsync());
+                        Assert.Equal(1L, savedEvent);
+                        Assert.Equal("LaterCheckpointMirrorVerifiedLeaseFenced",
+                            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                () => verifiedWriter.CompleteAsync(
+                                    renewed, run.Id, plan.Id, observationId,
+                                    "repo-1", targetReceipt.EvidenceSha256,
+                                    default))).Code);
+                        Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                            (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                                () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                    UPDATE git_later_checkpoint_mirror_verified_evidence
+                                    SET can_push = {true}
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """))).SqlState);
+                        Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                            (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                                () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                    DELETE FROM git_later_checkpoint_mirror_verified_evidence
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """))).SqlState);
+                        // Terminal Verified can never be reclaimed/released
+                        // by an unrelated worker, nor sent to GitHub.
+                        Assert.Equal("LaterCheckpointMirrorLeaseAlreadyVerified",
+                            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                () => leaseStore.ClaimAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, Guid.NewGuid(),
+                                    TimeSpan.FromSeconds(90), default))).Code);
+                    }
+                    else
+                    {
+                        // Simulate an expired, possibly crashed F-061v2
+                        // worker without sleeping or claiming it is verified.
+                        // The SQL invariant still requires expiry > acquired;
+                        // only the special test fixture moves it just into
+                        // the past. Runtime never adjusts an active lease.
+                        await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                            UPDATE git_later_checkpoint_mirror_leases
+                            SET lease_until_utc =
+                                acquired_at_utc + interval '1 millisecond',
+                                updated_at_utc = clock_timestamp()
+                            WHERE mirror_id = {checkedAdmission.PhysicalMirrorId}
+                            """);
+                        Assert.Equal("LaterCheckpointMirrorLeaseRecoveryRequired",
+                            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                () => leaseStore.ClaimAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, Guid.NewGuid(),
+                                    TimeSpan.FromSeconds(90), default))).Code);
+                        var quarantineState = await verifiedDb.Database
+                            .SqlQuery<string>($"""
+                                SELECT state AS "Value"
+                                FROM git_later_checkpoint_mirror_leases
+                                WHERE mirror_id = {checkedAdmission.PhysicalMirrorId}
+                                """).SingleAsync();
+                        Assert.Equal("RecoveryRequired", quarantineState);
+                        Assert.Equal("LaterCheckpointMirrorLeaseFenced",
+                            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                () => leaseStore.RenewAsync(
+                                    renewed, TimeSpan.FromSeconds(90),
+                                    default))).Code);
+                        Assert.Equal("LaterCheckpointMirrorLeaseRecoveryRequired",
+                            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                () => leaseStore.ClaimAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, Guid.NewGuid(),
+                                    TimeSpan.FromSeconds(90), default))).Code);
+                        var quarantines = await verifiedDb.Database
+                            .SqlQuery<long>($"""
+                                SELECT count(*)::bigint AS "Value"
+                                FROM git_later_checkpoint_mirror_lease_events
+                                WHERE mirror_id = {checkedAdmission.PhysicalMirrorId}
+                                    AND type = 'Quarantined'
+                                """).SingleAsync();
+                        Assert.Equal(1L, quarantines);
+                        // No durable Verified state or GitHub destination
+                        // side effect can ever result from a crashed lease.
+                        Assert.Empty(await verifiedDb.GitSourceMirrorLifecycles
+                            .AsNoTracking().Where(x =>
+                                x.MirrorId == checkedAdmission.PhysicalMirrorId)
+                            .ToArrayAsync());
+                    }
 
                     Assert.Equal("LaterCheckpointMirrorStagingProvenanceUnverified",
                         (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
