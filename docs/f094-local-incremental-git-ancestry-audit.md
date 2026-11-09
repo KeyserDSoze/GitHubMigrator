@@ -34,3 +34,24 @@ This receipt is a local observation, not a claim that a remote GitHub
 repository has identical objects at the time of reading. It does not
 verify a live target branch or transfer missing objects. It cannot
 authorize GitHub API writes, pushes, retries or migration completion.
+
+## Current implementation and limitations
+
+The F-094 core is `GitIncrementalAncestryIntegrity` in Business;
+`LocalGitIncrementalAncestryAuditor` lives in the GitObjects adapter and
+reuses the hardened F-056 Git subprocess and complete local mirror checks.
+No GitHub adapter, remote token or outbound HTTP path is present in this
+component. Auditing is explicitly opt-in through its constructor.
+
+The receipt SHA-256 binds the checkpoint and observation identities,
+the supplied proof digests, complete source and destination ref/OID sets,
+both reachable object-set digests/counts and every per-ref decision.
+The wall-clock time is an observation timestamp, excluded from the
+deterministic content digest. The result contains explicit false values
+for transport/write/retry/migration completion.
+
+**Not yet done:** fetch the exact F-032/F-091 and F-031 persisted object
+IDs and cryptographically validate their mapping into an F-094 request
+inside a database transaction, provide a durable result ledger and an
+authenticated diagnostic API, and independently compare a fresh live
+GitHub target immediately before any authorized remote operation.

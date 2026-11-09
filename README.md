@@ -31,6 +31,12 @@ The Source sync workbench captures explicitly reviewed immutable source snapshot
 
 See [F-091 fingerprint attestation](docs/github-source-ref-fingerprint-manifest-f091.md), [F-092 bounded ref delta pages](docs/github-checkpoint-ref-delta-pages-f092.md), and [F-093 source/GitHub name-only review](docs/f093-checkpoint-github-target-name-review.md). Full SHA verification is rerun on each page, so end-to-end page cost still scales with checkpoint and target observation sizes until a persisted verified cursor is added.
 
+## F-094 offline Git object ancestry foundation
+
+A separate, **disabled-by-default local-only audit** now checks physical Git commit ancestry between two self-contained bare mirrors. The bounded audit is SHA-1/SHA-256 aware and can classify identical ref tips, possible fast-forward, target-ahead, divergent history, missing objects, target-only refs and changed tags. It seals the decisions to the source checkpoint and destination observation proof identities and performs strict fsck/closed-object checks before and after graph inspection.
+
+This is **not yet wired to an externally actionable source-sync endpoint or GitHub remote push**. Offline fast-forward candidates stay blocked until the independently verified GitHub destination, live object closure, policy, authorization and replay fences can be enforced. See [F-094 design, limits and real Git tests](docs/f094-local-incremental-git-ancestry-audit.md).
+
 ## Quick start
 
 Requirements: Docker Desktop / Docker Engine with Compose v2.

@@ -39,6 +39,7 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-091 | SHA-256 per-ref source journal attestation | Versioned F-090 compatible receipts bound to F-025 fingerprint manifest; restart and integrity verification |
 | F-092 | Read-only ref change inspection for verified checkpoints | Superadmin-only PostgreSQL keyset pages + React inspection + xUnit/PostgreSQL/Playwright tests; no destination execution |
 | F-093 | Verified source checkpoint vs saved GitHub ref-name review | Source F-091/F-092 checkpoint joined to current F-031 target observation, SHA-bound paged GET, Source sync UI and safety tests; no object equality, live send or write authorization |
+| F-094 | Read-only local Git ancestry and object integrity proof | Disabled-by-default SHA-1/SHA-256 bare-repository graph inspection, F-056 fsck/closure reused, versioned SHA-256 receipt, physical Git integration tests; not yet bound to API/worker or remote writes |
 | F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
 | F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |
