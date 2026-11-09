@@ -239,6 +239,10 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
         var checkpoint = await journal.CaptureAsync(seed.Run.Id, plan.Id,
             plan.SnapshotId, null, plan.ManifestSha256,
             Guid.NewGuid(), default);
+        // F-013 persisted the source stage with database clock_timestamp.
+        // A destination observation must follow that committed stage,
+        // rather than reusing the fixture's frozen pre-stage timestamp.
+        clock.Advance(TimeSpan.FromSeconds(2));
         var destination = await TargetRefEvidenceAsync(db, clock, plan,
             "repo-1", "migration-one", [
                 new("refs/heads/b-0000", new string('a', 40), "commit"),
