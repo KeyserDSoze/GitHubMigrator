@@ -37,6 +37,8 @@ public sealed class ApiHarness : IAsyncLifetime
     // fixture must continue exercising the production default OFF.
     public bool EnableCheckpointHumanReview { get; set; }
     public bool EnableCheckpointTargetReadPreflight { get; set; }
+    public bool EnableCheckpointTargetObservation { get; set; }
+    public int TargetObjectIdLength { get; set; } = 40;
 
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
@@ -80,6 +82,15 @@ public sealed class ApiHarness : IAsyncLifetime
         }
         if (EnableCheckpointTargetReadPreflight)
         {
+            values["GitCheckpointTargetReadPreflight__Enabled"] = "true";
+            values["GitCheckpointTargetHumanReview__Enabled"] = "true";
+            values["GitCheckpointTargetReReview__Enabled"] = "true";
+            values["GitHubSourceCheckpointGitRefLedger__Enabled"] = "true";
+            values["GitHubSourceSyncCheckpoints__Enabled"] = "true";
+        }
+        if (EnableCheckpointTargetObservation)
+        {
+            values["GitCheckpointTargetObservation__Enabled"] = "true";
             values["GitCheckpointTargetReadPreflight__Enabled"] = "true";
             values["GitCheckpointTargetHumanReview__Enabled"] = "true";
             values["GitCheckpointTargetReReview__Enabled"] = "true";
@@ -239,7 +250,7 @@ public sealed class ApiHarness : IAsyncLifetime
         throw new InvalidOperationException("Unmocked Azure route: " + path);
     }
 
-    private static HttpResponseMessage ReplyGitHub(HttpRequestMessage req)
+    private HttpResponseMessage ReplyGitHub(HttpRequestMessage req)
     {
         var path = req.RequestUri!.AbsolutePath;
         if (path.EndsWith("/actions/secrets", StringComparison.Ordinal))
@@ -256,6 +267,22 @@ public sealed class ApiHarness : IAsyncLifetime
             return Json("""{"state":"active","role":"admin","user":{"login":"test"},"organization":{"login":"gh-org"}}""");
         if (path == "/orgs/gh-org")
             return Json("""{"login":"gh-org","members_can_create_private_repositories":true}""");
+        if (path == "/repos/gh-org/migration-one/git/matching-refs/heads")
+            return Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/heads/main",
+                    @object = new {
+                        sha = new string('c', TargetObjectIdLength),
+                        type = "commit"
+                    } }
+            }));
+        if (path == "/repos/gh-org/migration-one/git/matching-refs/tags")
+            return Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/tags/v1",
+                    @object = new {
+                        sha = new string('d', TargetObjectIdLength),
+                        type = "tag"
+                    } }
+            }));
         if (path == "/repos/gh-org/occupied/git/matching-refs/heads")
             return Json(JsonSerializer.Serialize(new[] {
                 new { @ref = "refs/heads/main",
