@@ -169,6 +169,13 @@ builder.Services.AddSingleton(new GitIncrementalLaterCheckpointMirrorAdmissionOp
         "GitIncrementalLaterCheckpointMirrorAdmission:Enabled", false)));
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>();
+// #118 internal-only F-061v2 claim and renew coordinator. Must be
+// deliberately opted in, independently of the non-authorizing preflight.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointMirrorLeaseOptions(
+    builder.Configuration.GetValue(
+        "GitIncrementalLaterCheckpointMirrorLease:Enabled", false)));
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>();
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
