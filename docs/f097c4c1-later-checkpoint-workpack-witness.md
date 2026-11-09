@@ -207,3 +207,43 @@ preparation, wrong F-031 SHA/scope and F-027 revocation. #112 and #103
 remain open for the physical source-only acquisition. The closed #111
 history readback remains safe and available as *history* even when
 the new current F-035v2 gate rejects a bundle.
+
+## #112 F-035v2 local-only rehearsal (2026-11-09)
+
+A new **internal, separate, default-OFF** `GitIncrementalLaterCheckpointLocalBundleAcquisition`
+is registered under `GitIncrementalLaterCheckpointLocalBundle:Enabled=false`.
+It has **no HTTP route, job queue, worker, GitHub credential or destination
+write authorization**. It is explicitly **not durable F-035v2 evidence**.
+
+When invoked by a trusted host with both the source-only F-035v2 PostgreSQL
+read gate and the local filesystem adapter intentionally enabled, it:
+
+1. Loads the **current** F-091/F-097b/#109 F-031 and historical F-032v2/F-038v2
+   evidence through the independent source-locked PostgreSQL reader.
+2. Passes only these verified real Git ref/OID entries and server-derived
+   source repository/workpack IDs to the existing sandboxed
+   `LocalGitSourceBundleAcquirer`: this adapter checks *all* bare-mirror
+   refs, verifies strict `git fsck`, enforces bounded size/quota/symlink
+   limits, creates a binary Git bundle to a generated `UUID.bundle`
+   with no shell or network and verifies `git bundle verify/list-heads`.
+3. Rechecks the **current** approval, source checkpoint/snapshot and immutable
+   target receipt after export. The before/after plan digests and **full**
+   canonical source refs/OIDs must still match. A revoked/superseded gate
+   refuses the rehearsal even if a local orphan bundle file was created.
+4. Independently rehashes the **on-disk** file using the existing
+   `IGitSourceBundleArtifactVerifier`, checks expected bundle SHA/bytes,
+   workpack UUID and false authority flags. A successful result explicitly
+   says `DurableEvidencePersisted=false`, and all
+   `CanPush/CanRetry/CanDispatch/MigrationComplete` fields are false.
+
+Real local Git SHA-1/SHA-256 tests exercise actual binary export, clone
+from the bundle, filesystem SHA-256, deterministic orphan-file replay,
+wrong ref/OID denial and mid-export approval revocation; an API-host
+fixture confirms the independent feature flag denies access by default.
+**This is intentionally a rehearsal only**, not an F-061 import admission.
+The missing next step under #112/#103 is a fenced, source-first
+PostgreSQL lease/commit transaction for F-035v2 file SHA, length and
+immutable event with crash recovery, corruption quarantine and
+fresh local Git fsck, including an actual two-epoch PostgreSQL + Git
+integration test. Never re-use the baseline F-035 storage foreign key
+to point to an F-038v2 workpack.
