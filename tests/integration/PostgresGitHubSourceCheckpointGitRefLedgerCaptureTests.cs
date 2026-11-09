@@ -27,6 +27,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         await GitSourceMirrorLifecycleSchema.InitializeAsync(services);
         await GitIncrementalAncestryLedgerSchema.InitializeAsync(services);
         await GitIncrementalCheckpointWorkpackSchema.InitializeAsync(services);
+        await GitCheckpointTargetHumanReviewSchema.InitializeAsync(services);
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
@@ -247,6 +248,158 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 new PostgresIncrementalOperationPlanRepository(db, clock),
                 new PostgresStagingRepository(db, clock)),
             Ledger(db, clock));
+
+    [Theory]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.Rejected)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected)]
+    public async Task F097c4c0b_real_second_epoch_independent_human_decision_is_append_only(
+        int oidLength, string decision)
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        IncrementalPreparationView run;
+        IncrementalOperationPlan plan;
+        GitHubSourceSyncCheckpointReceipt later;
+        GitCheckpointTargetReReviewCandidate candidate;
+        GitCheckpointTargetHumanReviewDecision receipt;
+        Guid requester;
+        var reviewer = Guid.NewGuid();
+        await using (var db = fixture.NewContext())
+        {
+            var setup = await SetupAsync(db, clock, oidLength);
+            run = setup.Preparation;
+            plan = setup.Plan;
+            requester = setup.ActorId;
+            var initial = await Ledger(db, clock).CaptureAsync(
+                run.Id, plan.Id, setup.Checkpoint.Id,
+                "repo-1", requester, default);
+            var laterId = await LaterF014SnapshotAsync(
+                db, clock, plan, oidLength);
+            later = await new PostgresGitHubSourceSyncCheckpointJournal(
+                db, clock, new(true),
+                new PostgresIncrementalOperationPlanRepository(db, clock),
+                new PostgresStagingRepository(db, clock)).CaptureAsync(
+                    run.Id, plan.Id, laterId, setup.Checkpoint.Id,
+                    plan.ManifestSha256, requester, default);
+            var full = await Ledger(db, clock).CaptureAsync(
+                run.Id, plan.Id, later.Id, "repo-1", requester, default);
+            Assert.Equal(initial.EvidenceSha256,
+                full.PreviousFullRefProofSha256);
+            clock.Advance(TimeSpan.FromSeconds(2));
+            candidate = await ReReview(db, clock).ReadAsync(
+                run.Id, plan.Id, later.Id, "repo-1", requester, default);
+            Assert.Equal(laterId, candidate.SourceSnapshotId);
+            Assert.False(candidate.CanObserveTarget);
+            var enabled = new PostgresGitCheckpointTargetHumanReviewJournal(
+                db, clock, new(true), ReReview(db, clock));
+            var disabled = new PostgresGitCheckpointTargetHumanReviewJournal(
+                db, clock, new(false), ReReview(db, clock));
+            Assert.Equal("CheckpointHumanReviewDisabled",
+                (await Assert.ThrowsAsync<
+                    GitCheckpointTargetHumanReviewException>(() =>
+                    disabled.RecordAsync(run.Id, plan.Id, later.Id,
+                        "repo-1", requester, reviewer, decision,
+                        candidate.EvidenceSha256, default))).Code);
+            Assert.Equal("CheckpointHumanReviewInvalidRequest",
+                (await Assert.ThrowsAsync<
+                    GitCheckpointTargetHumanReviewException>(() =>
+                    enabled.RecordAsync(run.Id, plan.Id, later.Id,
+                        "repo-1", requester, requester, decision,
+                        candidate.EvidenceSha256, default))).Code);
+            Assert.Equal("CheckpointHumanReviewCandidateChanged",
+                (await Assert.ThrowsAsync<
+                    GitCheckpointTargetHumanReviewException>(() =>
+                    enabled.RecordAsync(run.Id, plan.Id, later.Id,
+                        "repo-1", requester, reviewer, decision,
+                        new string('0', 64), default))).Code);
+            Assert.Empty(await db.GitCheckpointTargetHumanReviews
+                .AsNoTracking().Where(x => x.PlanId == plan.Id)
+                .ToArrayAsync());
+
+            receipt = await enabled.RecordAsync(
+                run.Id, plan.Id, later.Id, "repo-1",
+                requester, reviewer, decision,
+                candidate.EvidenceSha256, default);
+            Assert.Equal(1, receipt.EvidenceVersion);
+            Assert.Equal(later.Id, receipt.CheckpointId);
+            Assert.Equal(candidate.SourceSnapshotId, receipt.SourceSnapshotId);
+            Assert.Equal(candidate.EvidenceSha256,
+                receipt.CandidateEvidenceSha256);
+            Assert.Equal(reviewer, receipt.ReviewedBy);
+            Assert.Equal(decision, receipt.Decision);
+            Assert.False(receipt.CanObserveTarget || receipt.CanPush ||
+                receipt.CanRetry || receipt.CanDispatch ||
+                receipt.MigrationComplete);
+            GitCheckpointTargetHumanReviewIntegrity.Verify(
+                receipt, candidate);
+            Assert.False((await new PostgresIncrementalOperationPlanRepository(
+                db, clock).GetAsync(run.Id, plan.Id, default))!.IsCurrent);
+            Assert.Empty(await db.GitHubTargetRefEvidence.AsNoTracking()
+                .Where(x => x.PlanId == plan.Id).ToArrayAsync());
+            Assert.Empty(await db.IncrementalGitRefReconciliations
+                .AsNoTracking().Where(x => x.SnapshotId == laterId)
+                .ToArrayAsync());
+        }
+
+        async Task<GitCheckpointTargetHumanReviewDecision> ReplayAsync()
+        {
+            await using var db = fixture.NewContext();
+            return await new PostgresGitCheckpointTargetHumanReviewJournal(
+                db, clock, new(true), ReReview(db, clock)).RecordAsync(
+                    run.Id, plan.Id, later.Id, "repo-1",
+                    requester, reviewer, decision,
+                    candidate.EvidenceSha256, default);
+        }
+        var repeats = await Task.WhenAll(
+            Enumerable.Range(0, 3).Select(_ => ReplayAsync()));
+        Assert.All(repeats, x => Assert.Equal(receipt, x));
+
+        await using (var db = fixture.NewContext())
+        {
+            Assert.Single(await db.GitCheckpointTargetHumanReviews
+                .AsNoTracking().Where(x => x.CheckpointId == later.Id)
+                .ToArrayAsync());
+            Assert.Single(await db.GitCheckpointTargetHumanReviewEvents
+                .AsNoTracking().Where(x => x.DecisionId == receipt.Id)
+                .ToArrayAsync());
+            var journal = new PostgresGitCheckpointTargetHumanReviewJournal(
+                db, clock, new(true), ReReview(db, clock));
+            Assert.Equal("CheckpointHumanReviewConflict",
+                (await Assert.ThrowsAsync<
+                    GitCheckpointTargetHumanReviewException>(() =>
+                    journal.RecordAsync(run.Id, plan.Id, later.Id,
+                        "repo-1", requester, Guid.NewGuid(), decision,
+                        candidate.EvidenceSha256, default))).Code);
+            Assert.Equal("CheckpointHumanReviewConflict",
+                (await Assert.ThrowsAsync<
+                    GitCheckpointTargetHumanReviewException>(() =>
+                    journal.RecordAsync(run.Id, plan.Id, later.Id,
+                        "repo-1", requester, reviewer,
+                        decision == GitCheckpointTargetHumanReviewStates.Rejected
+                            ? GitCheckpointTargetHumanReviewStates.ApprovedForObservation
+                            : GitCheckpointTargetHumanReviewStates.Rejected,
+                        candidate.EvidenceSha256, default))).Code);
+            var mutation = await Assert.ThrowsAsync<
+                Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlInterpolatedAsync($"""
+                        UPDATE git_checkpoint_target_human_reviews
+                        SET can_observe_target = {true}
+                        WHERE id = {receipt.Id}
+                        """));
+            Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                mutation.SqlState);
+
+            clock.Advance(TimeSpan.FromMinutes(6));
+            Assert.Equal("CheckpointHumanReviewCandidateUnverified",
+                (await Assert.ThrowsAsync<
+                    GitCheckpointTargetHumanReviewException>(() =>
+                    journal.RecordAsync(run.Id, plan.Id, later.Id,
+                        "repo-1", requester, reviewer, decision,
+                        candidate.EvidenceSha256, default))).Code);
+        }
+    }
 
     private static PostgresGitIncrementalCheckpointMirrorPreflight Physical(
         AppDbContext db, TimeProvider clock, bool enabled = true) =>
