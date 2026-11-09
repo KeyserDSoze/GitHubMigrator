@@ -247,3 +247,28 @@ immutable event with crash recovery, corruption quarantine and
 fresh local Git fsck, including an actual two-epoch PostgreSQL + Git
 integration test. Never re-use the baseline F-035 storage foreign key
 to point to an F-038v2 workpack.
+
+## #112 additive F-035v2 PostgreSQL storage *without a writer* (2026-11-09)
+
+New separate `git_later_checkpoint_bundle_evidence` and
+`git_later_checkpoint_bundle_events` tables prepare future append-only
+source-bundle metadata. Their F-038 foreign key points to **v2**
+`git_later_checkpoint_workpacks(id)`, **never** the legacy F-038
+`git_transfer_workpacks`. Bundle filenames are SQL-restricted to the
+server-derived `{workpack-id:N}.bundle`; the SHA-256 of the **actual
+binary file**, bundle length (1–512 MiB), ref count (1–128), entire
+F-035v2 read plan, F-097b source proof/manifest, checkpoint F-031
+target digest, F-032v2 reconciliation and F-038v2 workpack digest are
+separate metadata fields. PostgreSQL CHECK constraints require all
+destination execution flags `false`, single-shot event identity,
+valid lower-case SHA-256 fields and immutable UPDATE/DELETE triggers.
+Entity Framework's `EnsureCreated` mappings include these foreign keys;
+`InitializeAsync` creates and backfills CHECKs/triggers in existing DBs.
+
+This migration **does not make the current rehearsal durable**:
+no code currently INSERTs these rows. In particular, a successful local
+bundle export alone does **not** assert that its file exists unchanged
+or that it is eligible for F-060/F-061. The missing next step is a
+source-locked, independently revalidated **lease + fenced INSERT writer**
+with exactly one append-only event, true Git fsck/re-hash and crash/restart
+quarantine. No API, worker or remote GitHub operation is enabled.
