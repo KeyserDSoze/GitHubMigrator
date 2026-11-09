@@ -205,6 +205,87 @@ public static class GitIncrementalLaterCheckpointMirrorStagingIntegrity
             throw Refused();
     }
 
+    // #114: offline *shape and checksum* verifier. This never establishes
+    // live PostgreSQL F-091/F-097b provenance: only the source-locked DB
+    // preflight can do that. In particular, it grants NO F-061 authority.
+    public static void VerifyOfflineCandidate(
+        GitIncrementalLaterCheckpointMirrorStagingPlan stage,
+        GitIncrementalLaterCheckpointBundleReceipt durable)
+    {
+        if (stage is null || durable is null)
+            throw Refused();
+        try
+        {
+            GitIncrementalLaterCheckpointBundleReceiptIntegrity
+                .VerifyHistorical(durable);
+        }
+        catch (GitSourceBundleException) { throw Refused(); }
+
+        if (stage.EvidenceVersion != 1 ||
+            stage.PreparationId == Guid.Empty || stage.PlanId == Guid.Empty ||
+            stage.SourceConnectionId == Guid.Empty ||
+            stage.BaselineSnapshotId == Guid.Empty ||
+            stage.SourceSnapshotId == Guid.Empty ||
+            stage.SourceSnapshotId == stage.BaselineSnapshotId ||
+            stage.CheckpointId == Guid.Empty ||
+            stage.TargetObservationId == Guid.Empty ||
+            stage.WorkpackId == Guid.Empty ||
+            stage.SourceRepositoryId is not { Length: >= 1 and <= 256 } ||
+            string.IsNullOrWhiteSpace(stage.SourceRepositoryId) ||
+            string.IsNullOrWhiteSpace(stage.TargetRepositoryName) ||
+            stage.TargetRepositoryName.Length > 256 ||
+            stage.PhysicalMirrorId != GitSourceSnapshotMirrorIntegrity
+                .PhysicalMirrorId(stage.SourceSnapshotId, stage.WorkpackId) ||
+            stage.GitObjectFormat is not ("sha1" or "sha256") ||
+            stage.SourceRefs is not { Count: >= 1 and <= 128 } ||
+            stage.F061LeaseGeneration != 0 ||
+            stage.CanMaterialize || stage.CanPush || stage.CanRetry ||
+            stage.CanDispatch || stage.MigrationComplete ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.SourceFullRefProofSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.SourceManifestRootSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.TargetReceiptSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.ReconciliationSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.WorkpackEvidenceSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.BundlePlanSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.BundleEvidenceSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.BundleSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.SourceRefSetSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(stage.EvidenceSha256) ||
+            stage.BundleBytes is < 1 or > 536_870_912 ||
+            stage.PreparationId != durable.PreparationId ||
+            stage.PlanId != durable.PlanId ||
+            stage.SourceSnapshotId != durable.SourceSnapshotId ||
+            stage.CheckpointId != durable.CheckpointId ||
+            stage.TargetObservationId != durable.TargetObservationId ||
+            stage.WorkpackId != durable.WorkpackId ||
+            stage.SourceRepositoryId != durable.SourceRepositoryId ||
+            stage.SourceFullRefProofSha256 != durable.FullRefProofSha256 ||
+            stage.SourceManifestRootSha256 != durable.SourceManifestRootSha256 ||
+            stage.TargetReceiptSha256 != durable.TargetReceiptSha256 ||
+            stage.ReconciliationSha256 != durable.ReconciliationSha256 ||
+            stage.WorkpackEvidenceSha256 != durable.WorkpackEvidenceSha256 ||
+            stage.BundlePlanSha256 != durable.BundlePlanSha256 ||
+            stage.BundleEvidenceSha256 != durable.EvidenceSha256 ||
+            stage.BundleSha256 != durable.BundleSha256 ||
+            stage.BundleBytes != durable.BundleBytes ||
+            stage.SourceRefs.Count != durable.RefCount)
+            throw Refused();
+
+        try
+        {
+            var refs = GitMirrorRefReconciler.CanonicalizeObservedRefs(
+                stage.SourceRefs);
+            if (!refs.SequenceEqual(stage.SourceRefs) ||
+                refs.Any(x => x.ObjectId.Length !=
+                    (stage.GitObjectFormat == "sha1" ? 40 : 64)) ||
+                stage.SourceRefSetSha256 !=
+                    GitSourceSnapshotMirrorIntegrity.SourceRefsSha(refs) ||
+                stage.EvidenceSha256 != Digest(stage))
+                throw Refused();
+        }
+        catch (GitMirrorRefReconciliationException) { throw Refused(); }
+    }
+
     private static string Digest(GitIncrementalLaterCheckpointMirrorStagingPlan p)
     {
         using var h = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
