@@ -6,7 +6,7 @@ The F-091 source-change journal authenticates **fingerprints of changed refs**, 
 
 ## Implemented in this slice
 
-`GitHubSourceCheckpointGitRefProofIntegrity` is an **internal business proof core**, with no database writer, API route or sender. It accepts only an already verified F-091 version-2 checkpoint and a typed `VerifiedSourceGitRefs` for **the exact checkpoint snapshot**, which the future PostgreSQL adapter MUST derive from a separately verified, **complete and sealed** F-014-style snapshot ref/OID manifest. It rejects legacy count-only checkpoints, incomplete source scans, missing manifest roots, noncanonical refs, mixed SHA-1/SHA-256 object IDs, missing/foreign predecessor full-ref proofs and >128-ref local ancestry workpacks.
+`GitHubSourceCheckpointGitRefProofIntegrity` is an **internal business proof core**, with no database writer, API route or sender. It accepts only an already verified F-091 version-2 checkpoint and a typed `VerifiedSourceGitRefs` for **the exact checkpoint snapshot**, which the future PostgreSQL adapter MUST derive from a separately verified, **complete and sealed** F-014-style snapshot ref/OID manifest. It rejects legacy count-only checkpoints, missing full-ref source manifests, noncanonical refs, mixed SHA-1/SHA-256 object IDs, missing/foreign predecessor full-ref proofs and >128-ref local ancestry workpacks. The global F-090 `SourceInventoryComplete` flag also requires effective ACL/identity verification, which Azure DevOps discovery explicitly does **not** claim. Full Git ref/OID coverage must instead be independently proven by completed F-014 source pages and an allowlisted non-Git warning set; unknown/project/ref warnings fail closed.
 
 The version-1 F-097a SHA-256 proof binds:
 
@@ -28,7 +28,7 @@ Parent #92 remains open for real source-side ingestion, PostgreSQL immutable man
 The internal `PostgresVerifiedSourceGitRefReader.ReadSealedSnapshotAsync`
 takes a **checkpoint-selected snapshot UUID**, not the original F-029 baseline.
 Unlike the legacy F-032 reader, it requires a completed durable F-014 externalized
-source ref manifest, fully covered F-013 staging, an exact selected Git repository
+source ref manifest, source-scoped F-014 page/chunk integrity even when F-013 global ACL coverage is partial, an exact selected Git repository
 in the reviewed F-029 mapping, no more than 128 canonical refs and consistent
 SHA-1 or SHA-256 object IDs. It reads the immutable F-014 chunks rather than
 mutable staging catalog rows. Cross-repository source ID mismatches or tampered

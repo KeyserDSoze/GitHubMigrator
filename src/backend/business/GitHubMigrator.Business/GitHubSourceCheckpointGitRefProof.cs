@@ -48,7 +48,10 @@ public static class GitHubSourceCheckpointGitRefProofIntegrity
         if (checkpoint.EvidenceVersion != 2 ||
             checkpoint.RefChangeManifest is null ||
             !Sha(checkpoint.RefChangeAttestationSha256) ||
-            !epoch.SourceInventoryComplete ||
+            // Global F-013 completeness also includes effective ACL grants.
+            // F-014's independently sealed Git ref coverage is required by
+            // the trusted PostgreSQL reader instead; a partial ACL scan
+            // must not turn complete, verified Git refs into unknown OIDs.
             source.SnapshotId != epoch.SnapshotId ||
             source.SourceConnectionId != epoch.SourceConnectionId ||
             source.SourceRepositoryId is not { Length: >= 1 and <= 256 } ||

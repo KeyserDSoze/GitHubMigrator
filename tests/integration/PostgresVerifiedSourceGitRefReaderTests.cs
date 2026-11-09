@@ -162,9 +162,9 @@ public sealed class PostgresVerifiedSourceGitRefReaderTests(PostgresDraftFixture
                 Identities = [], AccessGrants = []
             },
             Refs = [], RefsExternalized = true, RefCount = refs.Length,
-            Issues = [], Completeness = DiscoveryCompleteness.Complete,
-            IdentitiesComplete = true, PermissionsComplete = true,
-            SecurityCoverage = new DiscoveryCoverage(true, true, true, false)
+            Issues = [new DiscoveryIssue("EffectivePermissionsNotVerified")],
+            Completeness = DiscoveryCompleteness.Partial,
+            IdentitiesComplete = false, PermissionsComplete = false
         };
         await new PostgresDiscoveryRepository(db).SaveAsync(inventory, default);
         Assert.True(await jobs.CheckpointSnapshotAsync(lease, job.Id, default));
@@ -195,7 +195,9 @@ public sealed class PostgresVerifiedSourceGitRefReaderTests(PostgresDraftFixture
             .SyncUsingRefManifestAsync(
                 lease with { SnapshotId = lease.Id }, default);
         Assert.True(await jobs.CompleteAsync(lease, applied, default));
-        Assert.True((await db.StagingSnapshotSyncs.AsNoTracking()
+        // Effective grants are deliberately unverified. Only *Git refs*
+        // have the independent complete, sealed F-014 proof.
+        Assert.False((await db.StagingSnapshotSyncs.AsNoTracking()
             .SingleAsync(x => x.SnapshotId == job.Id)).SourceInventoryComplete);
 
         var proof = await reader.ReadSealedSnapshotAsync(

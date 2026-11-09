@@ -59,10 +59,17 @@ public sealed class PostgresVerifiedSourceGitRefReader(
                     x.VersionControl == VersionControlKind.Git))
             throw new IncrementalGitRefReconciliationException("SourceRefSnapshotUnavailable");
 
+        // ADO inventory is intentionally globally Partial until effective
+        // identity/ACL permissions can be verified. That must NOT hide a
+        // separately complete F-014 Git ref page chain. Accept only the
+        // known non-Git coverage warning; any unknown/project/ref warning,
+        // truncation or pagination-loop error refuses the source proof.
+        // The F-014 reader below independently requires a Succeeded worker,
+        // exact ref count, complete root, canonical OIDs and every chunk SHA.
         if (requireCompleteSealedEpoch &&
             (!inventory.RefsExternalized ||
-             !sync.SourceInventoryComplete ||
-             inventory.Completeness != DiscoveryCompleteness.Complete))
+             inventory.Issues.Any(issue =>
+                 issue.Code != "EffectivePermissionsNotVerified")))
             throw new IncrementalGitRefReconciliationException(
                 "SourceRefCheckpointCoverageUnverified");
 

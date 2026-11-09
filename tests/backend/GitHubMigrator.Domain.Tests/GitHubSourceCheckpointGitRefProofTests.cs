@@ -88,15 +88,20 @@ public sealed class GitHubSourceCheckpointGitRefProofTests
     }
 
     [Fact]
-    public void Only_complete_F091_v2_checkpoints_with_full_manifest_can_pass()
+    public void Only_F091_v2_with_sealed_Git_refs_can_pass_even_with_partial_ACLs()
     {
-        foreach (var checkpoint in new[] {
-            Checkpoint(complete: false), Checkpoint(legacy: true)
-        })
-            Assert.Equal("SourceCheckpointGitRefsInvalid",
-                Assert.Throws<GitHubSourceCheckpointGitRefProofException>(() =>
-                    GitHubSourceCheckpointGitRefProofIntegrity.Seal(
-                        checkpoint, Source(checkpoint))).Code);
+        var incompletePermissions = Checkpoint(complete: false);
+        var provenRefs = GitHubSourceCheckpointGitRefProofIntegrity.Seal(
+            incompletePermissions, Source(incompletePermissions));
+        Assert.False(incompletePermissions.Proof.SourceInventoryComplete);
+        GitHubSourceCheckpointGitRefProofIntegrity.Verify(
+            provenRefs, incompletePermissions, Source(incompletePermissions));
+
+        var legacy = Checkpoint(legacy: true);
+        Assert.Equal("SourceCheckpointGitRefsInvalid",
+            Assert.Throws<GitHubSourceCheckpointGitRefProofException>(() =>
+                GitHubSourceCheckpointGitRefProofIntegrity.Seal(
+                    legacy, Source(legacy))).Code);
 
         var baseline = Checkpoint();
         var source = Source(baseline);
