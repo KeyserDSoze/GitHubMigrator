@@ -421,6 +421,36 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.git"));
     }
 
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task F060v2_replay_rejects_corrupt_promoted_objects_without_repair(
+        string format)
+    {
+        using var f = new Fixture();
+        var source = f.CreatePlan(format);
+        var (stage, durable) = LaterOfflineEvidence(source);
+        var local = new LocalGitSourceSnapshotMirrorMaterializer(
+            f.BundleRoot, f.MirrorRoot,
+            new LocalGitBundleArtifactStore(f.BundleRoot),
+            laterCheckpointEnabled: true);
+        await local.MaterializeLaterCheckpointAsync(stage, durable, default);
+
+        var mirror = f.Physical(source);
+        f.Git("--git-dir=" + mirror, "repack", "-a", "-d");
+        f.Git("--git-dir=" + mirror, "prune-packed");
+        var pack = Assert.Single(Directory.GetFiles(
+            Path.Combine(mirror, "objects", "pack"), "*.pack"));
+        await File.WriteAllBytesAsync(pack, [1, 2, 3, 4, 5]);
+
+        Assert.Equal("SourceMirrorGitClosureInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                local.MaterializeLaterCheckpointAsync(stage, durable, default))).Code);
+        Assert.True(Directory.Exists(mirror));
+        Assert.Single(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+        Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.tmp"));
+    }
+
     // Real Git objects are taken from the fixture, while the historical
     // F-091/F-097b/F-038v2/F-035v2 domain test input is deliberately
     // synthetic. It is NOT a substitute for the PostgreSQL source lock.
