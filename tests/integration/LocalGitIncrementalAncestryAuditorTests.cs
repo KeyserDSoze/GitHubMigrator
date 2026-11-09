@@ -188,14 +188,13 @@ public sealed class LocalGitIncrementalAncestryAuditorTests
                 Git("--git-dir=" + Source, "rev-parse",
                     "refs/tags/tag-right").Trim()
             };
+            var parentTree = Git("--git-dir=" + Target,
+                "rev-parse", second + "^{tree}").Trim();
             var newTarget = Git("--git-dir=" + Target,
                 "-c", "user.name=F094 Fixture",
                 "-c", "user.email=f094@example.invalid",
-                "commit-tree", second + "^{tree}",
+                "commit-tree", parentTree,
                 "-p", second, "-m", "new target-only commit").Trim();
-            // commit-tree requires a TREE, not a tree-ish rev expression.
-            // The explicit resolved tree SHA is supplied below instead if
-            // the platform version rejects the tree-ish input.
 
             void Put(string repository, string name, string oid) =>
                 Git("--git-dir=" + repository, "update-ref", name, oid);
