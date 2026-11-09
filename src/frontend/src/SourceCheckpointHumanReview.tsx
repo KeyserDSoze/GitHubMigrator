@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LockKeyhole, ShieldCheck } from 'lucide-react';
+import SourceCheckpointTargetObservationHistory from './SourceCheckpointTargetObservationHistory';
 import {
   api, type CheckpointHumanReviewCandidate,
   type CheckpointHumanReviewReceipt, type SourceSyncCheckpointReceipt
@@ -129,6 +130,14 @@ export default function SourceCheckpointHumanReview(props: Props) {
           <small>{t('cpHumanReviewedAt')}: {
             new Date(view.value.reviewedAtUtc).toLocaleString()}</small>}
       </div>}
+      {view && view.kind === 'decision' &&
+        view.value.decision === 'ApprovedForObservation' &&
+        <SourceCheckpointTargetObservationHistory
+          token={props.token} preparationId={props.preparationId}
+          planId={props.planId} checkpoint={props.receipt}
+          sourceRepositoryId={props.sourceRepositoryId}
+          targetRepositoryName={props.targetRepositoryName}
+          human={view.value} />}
     </>}
   </section>;
 }
