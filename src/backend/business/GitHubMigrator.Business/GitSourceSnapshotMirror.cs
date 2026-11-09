@@ -99,6 +99,32 @@ public static class GitSourceSnapshotMirrorIntegrity
         }
     }
 
+    // F-096 recomputes F-060's existing digest from F-035/F-061 evidence.
+    // Serialization is identical to the original F-060 receipt format.
+    public static string MirrorEvidenceSha(
+        Guid snapshotId, Guid mirrorId, Guid workpackId,
+        string bundleSha, string sourceEvidenceSha, string refSetSha,
+        int refCount, string objectSetSha, int objectCount)
+    {
+        if (snapshotId == Guid.Empty || workpackId == Guid.Empty ||
+            mirrorId != PhysicalMirrorId(snapshotId, workpackId) ||
+            !GitSourceBundleStorageCheck.ValidSha(bundleSha) ||
+            !GitSourceBundleStorageCheck.ValidSha(sourceEvidenceSha) ||
+            !GitSourceBundleStorageCheck.ValidSha(refSetSha) ||
+            !GitSourceBundleStorageCheck.ValidSha(objectSetSha) ||
+            refCount is < 1 or > GitMirrorRefReconciler.MaxRefsPerSide ||
+            objectCount is < 1 or > GitObjectClosureAuditIntegrity.MaxObjects)
+            throw new GitSourceSnapshotMirrorException("SourceMirrorEvidenceInvalid");
+        return Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new object[] {
+                "f060-verified-local-source-mirror-v1",
+                snapshotId.ToString("D"), mirrorId.ToString("D"),
+                workpackId.ToString("D"), bundleSha, sourceEvidenceSha,
+                refSetSha, refCount, objectSetSha, objectCount,
+                false, false, false, false
+            }))));
+    }
+
     public static GitSourceSnapshotMirrorProof Seal(
         GitHubTrustedRemoteReadPlan plan, string objectSetSha,
         int objectCount, DateTimeOffset when)
@@ -113,16 +139,10 @@ public static class GitSourceSnapshotMirrorIntegrity
                 "SourceMirrorTimeInvalid");
         var b = plan.SourceBundle!;
         var refSha = SourceRefsSha(plan.SourceRefs);
-        var evidence = Convert.ToHexStringLower(SHA256.HashData(
-            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new object[] {
-                "f060-verified-local-source-mirror-v1",
-                plan.SourceSnapshotId.ToString("D"),
-                plan.SourceMirrorId.ToString("D"),
-                b.WorkpackId.ToString("D"),
-                b.BundleSha256, b.SourceEvidenceSha256,
-                refSha, b.RefCount, objectSetSha, objectCount,
-                false, false, false, false
-            }))));
+        var evidence = MirrorEvidenceSha(
+            plan.SourceSnapshotId, plan.SourceMirrorId, b.WorkpackId,
+            b.BundleSha256, b.SourceEvidenceSha256, refSha,
+            b.RefCount, objectSetSha, objectCount);
         // Keep the stable F-060 physical-object digest unchanged across
         // legitimate re-verifications; bind the *individual receipt's*
         // timestamp separately so it cannot be silently edited or replayed.

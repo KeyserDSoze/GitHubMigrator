@@ -69,6 +69,40 @@ public sealed class GitIncrementalAncestryIntegrityTests
     }
 
     [Fact]
+    public void F096_physical_mirror_binding_changes_digest_and_rejects_incomplete_proof()
+    {
+        var original = Request();
+        var mirror = Guid.NewGuid();
+        var bound = original with {
+            SourcePhysicalMirrorId = mirror,
+            SourcePhysicalMirrorProofSha256 = B
+        };
+        GitIncrementalAncestryIntegrity.VerifyRequest(bound);
+        var item = new GitIncrementalAncestryItem(
+            "refs/heads/main", C, C,
+            GitIncrementalAncestryStatus.MatchingObjectId);
+        var legacy = GitIncrementalAncestryIntegrity.Seal(
+            original, "sha1", A, B, 2, 2, [item], DateTimeOffset.UtcNow);
+        var proven = GitIncrementalAncestryIntegrity.Seal(
+            bound, "sha1", A, B, 2, 2, [item], DateTimeOffset.UtcNow);
+        Assert.NotEqual(legacy.EvidenceSha256, proven.EvidenceSha256);
+        GitIncrementalAncestryIntegrity.VerifyReceipt(proven);
+        Assert.Throws<GitIncrementalAncestryException>(() =>
+            GitIncrementalAncestryIntegrity.VerifyReceipt(proven with {
+                Request = bound with { SourcePhysicalMirrorId = Guid.NewGuid() }
+            }));
+        foreach (var bad in new[] {
+            bound with { SourcePhysicalMirrorId = null },
+            bound with { SourcePhysicalMirrorProofSha256 = null },
+            bound with { SourcePhysicalMirrorProofSha256 = "bad" },
+            bound with { SourcePhysicalMirrorId = original.SourceSnapshotId },
+            bound with { SourcePhysicalMirrorId = original.TargetSandboxId }
+        })
+            Assert.Throws<GitIncrementalAncestryException>(() =>
+                GitIncrementalAncestryIntegrity.VerifyRequest(bad));
+    }
+
+    [Fact]
     public void F094_mismatched_oid_or_tag_cannot_claim_unblocked_migration()
     {
         var request = Request() with {

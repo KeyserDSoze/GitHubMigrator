@@ -25,8 +25,10 @@ public sealed class LocalGitIncrementalAncestryAuditor(
         {
             // SafeBarePath rejects symlinked repository roots, refs and
             // objects, alternate storage, grafts, shallow, and promisor.
+            var sourceId = request.SourcePhysicalMirrorId
+                ?? request.SourceSnapshotId;
             var source = LocalGitObjectClosureAuditor.SafeBarePath(
-                sourceRoot, request.SourceSnapshotId);
+                sourceRoot, sourceId);
             var target = LocalGitObjectClosureAuditor.SafeBarePath(
                 targetRoot, request.TargetSandboxId);
             if (string.Equals(source, target, StringComparison.Ordinal))
@@ -37,7 +39,7 @@ public sealed class LocalGitIncrementalAncestryAuditor(
             // on BOTH repos. Never infer an absent target commit is divergent:
             // it may exist only in the target's independent history.
             var sourceSet = await LocalGitObjectClosureAuditor.VerifyOneAsync(
-                sourceRoot, request.SourceSnapshotId, sourceRefs, ct);
+                sourceRoot, sourceId, sourceRefs, ct);
             var targetSet = await LocalGitObjectClosureAuditor.VerifyOneAsync(
                 targetRoot, request.TargetSandboxId, targetRefs, ct);
             var bySource = sourceRefs.ToDictionary(x => x.Name,
@@ -94,7 +96,7 @@ public sealed class LocalGitIncrementalAncestryAuditor(
             // invalidates the evidence, even when the final name set is
             // unchanged but a referenced object disappears or is replaced.
             var sourceAfter = await LocalGitObjectClosureAuditor.VerifyOneAsync(
-                sourceRoot, request.SourceSnapshotId, sourceRefs, ct);
+                sourceRoot, sourceId, sourceRefs, ct);
             var targetAfter = await LocalGitObjectClosureAuditor.VerifyOneAsync(
                 targetRoot, request.TargetSandboxId, targetRefs, ct);
             if (sourceSet != sourceAfter || targetSet != targetAfter)
