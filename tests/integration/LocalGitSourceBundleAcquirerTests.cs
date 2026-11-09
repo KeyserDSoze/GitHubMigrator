@@ -10,6 +10,159 @@ namespace GitHubMigrator.Integration.Tests;
 // Azure/GitHub PAT, target writes, mock "Git output" or HTTP is involved.
 public sealed class LocalGitSourceBundleAcquirerTests
 {
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
+    public async Task F035v2_internal_rehearsal_exports_real_offline_bundle_and_rechecks_provenance(
+        int oidLength)
+    {
+        using var root = new LocalFixture();
+        var (_, refs, commit) = root.ProvisionBareMirror(oidLength);
+        var plan = RehearsalPlan(root, refs);
+        var gate = new StubLaterCheckpointBundlePreflight(plan);
+        var service = new GitIncrementalLaterCheckpointLocalBundleAcquisition(
+            new(true), gate, root.Acquirer,
+            new LocalGitBundleArtifactStore(root.BundleRoot),
+            TimeProvider.System);
+        var before = Directory.GetFiles(root.BundleRoot, "*.bundle");
+        Assert.Empty(before);
+        var result = await service.RehearseAsync(
+            plan.PreparationId, plan.PlanId, plan.CheckpointId,
+            plan.TargetObservationId, plan.SourceOnlyRequest.WorkpackId,
+            plan.SourceOnlyRequest.SourceRepositoryId, plan.TargetReceiptSha256,
+            default);
+        Assert.Equal(2, gate.Calls);
+        Assert.False(result.DurableEvidencePersisted ||
+            result.CanPush || result.CanRetry ||
+            result.CanDispatch || result.MigrationComplete);
+        Assert.Equal(plan.EvidenceSha256, result.ReadPlanSha256);
+        Assert.Equal(plan.SourceFullRefProofSha256,
+            result.SourceFullRefProofSha256);
+        Assert.Equal(plan.TargetReceiptSha256,
+            result.TargetReceiptSha256);
+        Assert.Equal(oidLength, commit.Length);
+        Assert.Equal(2, result.RefCount);
+        var bundlePath = Path.Combine(root.BundleRoot, result.BundleFileName);
+        Assert.True(File.Exists(bundlePath));
+        await using (var file = File.OpenRead(bundlePath))
+            Assert.Equal(result.BundleSha256,
+                Convert.ToHexStringLower(await SHA256.HashDataAsync(file)));
+        Assert.Equal(new FileInfo(bundlePath).Length, result.BundleBytes);
+        var imported = Path.Combine(root.Temp, "v2-inspected.git");
+        RunGit("clone", "--mirror", "--quiet", bundlePath, imported);
+        Assert.Equal(commit, RunGit("--git-dir=" + imported,
+            "rev-parse", "refs/heads/main").Trim());
+        var replay = await service.RehearseAsync(
+            plan.PreparationId, plan.PlanId, plan.CheckpointId,
+            plan.TargetObservationId, plan.SourceOnlyRequest.WorkpackId,
+            plan.SourceOnlyRequest.SourceRepositoryId, plan.TargetReceiptSha256,
+            default);
+        Assert.Equal(4, gate.Calls);
+        Assert.Equal(result.BundleSha256, replay.BundleSha256);
+        Assert.Equal(result.BundleBytes, replay.BundleBytes);
+        Assert.Single(Directory.GetFiles(root.BundleRoot, "*.bundle"));
+    }
+
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
+    public async Task F035v2_rehearsal_refuses_revoked_gate_and_wrong_source_OIDs(
+        int oidLength)
+    {
+        using var root = new LocalFixture();
+        var (_, refs, _) = root.ProvisionBareMirror(oidLength);
+        var plan = RehearsalPlan(root, refs);
+        var gate = new StubLaterCheckpointBundlePreflight(plan) {
+            RejectSecond = true
+        };
+        var service = new GitIncrementalLaterCheckpointLocalBundleAcquisition(
+            new(true), gate, root.Acquirer,
+            new LocalGitBundleArtifactStore(root.BundleRoot),
+            TimeProvider.System);
+        var revoked = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            service.RehearseAsync(plan.PreparationId, plan.PlanId,
+                plan.CheckpointId, plan.TargetObservationId,
+                plan.SourceOnlyRequest.WorkpackId,
+                plan.SourceOnlyRequest.SourceRepositoryId,
+                plan.TargetReceiptSha256, default));
+        Assert.Equal("FakeLaterCheckpointApprovalRevoked", revoked.Code);
+        Assert.Equal(2, gate.Calls);
+        // A promoted orphan cannot authorize migration: nothing was
+        // returned or persisted to PostgreSQL.
+        Assert.Single(Directory.GetFiles(root.BundleRoot, "*.bundle"));
+
+        var separate = plan with {
+            SourceOnlyRequest = plan.SourceOnlyRequest with {
+                WorkpackId = Guid.NewGuid(),
+                ExpectedRefs = refs.Select((x, i) => i == 0
+                    ? x with { ObjectId = new string('f', oidLength) }
+                    : x).ToArray()
+            }
+        };
+        var mismatched = new StubLaterCheckpointBundlePreflight(separate);
+        var refused = new GitIncrementalLaterCheckpointLocalBundleAcquisition(
+            new(true), mismatched, root.Acquirer,
+            new LocalGitBundleArtifactStore(root.BundleRoot),
+            TimeProvider.System);
+        var error = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            refused.RehearseAsync(separate.PreparationId, separate.PlanId,
+                separate.CheckpointId, separate.TargetObservationId,
+                separate.SourceOnlyRequest.WorkpackId,
+                separate.SourceOnlyRequest.SourceRepositoryId,
+                separate.TargetReceiptSha256, default));
+        Assert.Equal("BundleSourceRefMismatch", error.Code);
+        Assert.Equal(1, mismatched.Calls);
+        Assert.Single(Directory.GetFiles(root.BundleRoot, "*.bundle"));
+
+        var disabled = new StubLaterCheckpointBundlePreflight(plan);
+        var safeDefault = new GitIncrementalLaterCheckpointLocalBundleAcquisition(
+            new(false), disabled, root.Acquirer,
+            new LocalGitBundleArtifactStore(root.BundleRoot),
+            TimeProvider.System);
+        var closed = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            safeDefault.RehearseAsync(plan.PreparationId, plan.PlanId,
+                plan.CheckpointId, plan.TargetObservationId,
+                plan.SourceOnlyRequest.WorkpackId,
+                plan.SourceOnlyRequest.SourceRepositoryId,
+                plan.TargetReceiptSha256, default));
+        Assert.Equal("LaterCheckpointLocalBundleDisabled", closed.Code);
+        Assert.Equal(0, disabled.Calls);
+    }
+
+    private static GitIncrementalLaterCheckpointBundlePlan RehearsalPlan(
+        LocalFixture root, IReadOnlyList<GitMirrorRef> refs)
+    {
+        var baseline = Guid.NewGuid();
+        var snapshot = Guid.NewGuid();
+        return new(1, Guid.NewGuid(), Guid.NewGuid(),
+            baseline, snapshot, Guid.NewGuid(), Guid.NewGuid(),
+            new string('a', 64), new string('b', 64),
+            new string('c', 64), new string('d', 64),
+            root.Request(refs), new string('e', 64),
+            false, false, false, false, false);
+    }
+
+    // Stub is only a test boundary. Production resolves independently
+    // verified PostgreSQL F-091/F-097b/F-031/F-038v2 evidence.
+    private sealed class StubLaterCheckpointBundlePreflight(
+        GitIncrementalLaterCheckpointBundlePlan plan)
+        : IGitIncrementalLaterCheckpointBundleReadPreflight
+    {
+        public int Calls { get; private set; }
+        public bool RejectSecond { get; set; }
+        public Task<GitIncrementalLaterCheckpointBundlePlan> ReadAsync(
+            Guid preparationId, Guid planId, Guid checkpointId,
+            Guid targetObservationId, Guid workpackId, string sourceRepositoryId,
+            string expectedTargetReceiptSha256, CancellationToken ct)
+        {
+            ++Calls;
+            if (RejectSecond && Calls == 2)
+                throw new GitSourceBundleException(
+                    "FakeLaterCheckpointApprovalRevoked");
+            return Task.FromResult(plan);
+        }
+    }
+
     [Fact]
     public async Task Real_git_bundle_exports_complete_history_and_exact_tag_branch_refs()
     {
@@ -226,11 +379,14 @@ public sealed class LocalGitSourceBundleAcquirerTests
         }
 
         public (string Source, IReadOnlyList<GitMirrorRef> Refs, string Commit)
-            ProvisionBareMirror()
+            ProvisionBareMirror(int oidLength = 40)
         {
             var work = Path.Combine(Temp, "working");
             Directory.CreateDirectory(work);
-            RunGit("init", "-q", work);
+            if (oidLength == 64)
+                RunGit("init", "--object-format=sha256", "-q", work);
+            else
+                RunGit("init", "-q", work);
             RunGit("-C", work, "config", "user.email", "git-test@example.invalid");
             RunGit("-C", work, "config", "user.name", "Git Test");
             File.WriteAllText(Path.Combine(work, "README.md"), "source content\n");
