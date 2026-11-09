@@ -110,6 +110,24 @@ export type CheckpointTargetObservation = {
   canDispatch: false; migrationComplete: false;
 };
 
+// #111 strictly redacted history of an immutable later-epoch workpack.
+// No ref/OID arrays, credential, filesystem path, actor or current permit.
+export type LaterCheckpointWorkpackHistory = {
+  evidenceVersion: 2; preparationId: string; planId: string;
+  checkpointId: string; sourceSnapshotId: string;
+  targetObservationId: string; reconciliationId: string;
+  workpackId: string; evidenceSha256: string;
+  reconciliationSha256: string; sourceFullRefProofSha256: string;
+  targetReceiptSha256: string; recordedAtUtc: string;
+  sourceRefCount: number; targetRefCount: number;
+  matchingCount: number; createCandidateCount: number;
+  divergedCount: number; targetOnlyCount: number;
+  state: 'Blocked'; phase: 'WriteBlocked';
+  historicalOnly: true; currentApprovalVerified: false;
+  readyForExecution: false; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+};
+
 export type RepositorySyncSourceDelta = {
   sourceRepositoryId: string; targetRepositoryName: string;
   addedRefs: number; changedRefs: number; restoredRefs: number;
@@ -668,6 +686,13 @@ export const api = {
       sourceRepositoryId: string) =>
     call<CheckpointTargetObservation>(
       `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-ref-observations?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}`,
+      { headers: withToken(token) }),
+  readLaterCheckpointWorkpackHistory: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      workpackId: string, sourceRepositoryId: string,
+      targetObservationId: string, expectedTargetReceiptSha256: string) =>
+    call<LaterCheckpointWorkpackHistory>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/later-workpacks/${encodeURIComponent(workpackId)}/history?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}&targetObservationId=${encodeURIComponent(targetObservationId)}&expectedTargetReceiptSha256=${encodeURIComponent(expectedTargetReceiptSha256)}`,
       { headers: withToken(token) }),
   captureSourceSyncCheckpoint: (token: string,
       preparationId: string, planId: string, snapshotId: string,
