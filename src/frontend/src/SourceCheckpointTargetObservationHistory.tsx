@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LockKeyhole, ShieldCheck } from 'lucide-react';
+import SourceCheckpointLaterWorkpackHistory from './SourceCheckpointLaterWorkpackHistory';
 import {
   api, type CheckpointHumanReviewReceipt,
   type CheckpointTargetObservation, type SourceSyncCheckpointReceipt
@@ -107,6 +108,12 @@ export default function SourceCheckpointTargetObservationHistory(props: Props) {
         <code title={receipt.evidenceSha256}>
           {receipt.evidenceSha256.slice(0, 20)}…</code>
       </div>}
+      {receipt && <SourceCheckpointLaterWorkpackHistory
+        token={props.token} preparationId={props.preparationId}
+        planId={props.planId} sourceRepositoryId={props.sourceRepositoryId}
+        checkpointId={props.checkpoint.id}
+        sourceSnapshotId={props.checkpoint.proof.snapshotId}
+        observation={receipt} />}
     </>}
   </section>;
 }
