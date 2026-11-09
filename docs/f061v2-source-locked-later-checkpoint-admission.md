@@ -112,3 +112,57 @@ evidence, use database clock/generation fencing and never run Git
 while holding SQL locks. Immutable `Verified` commits and physical
 quarantine remain **not implemented**. Keep #118/#115/#100 open until
 those requirements and full CI are demonstrated.
+
+
+## #118: opt-in F-061v2 **claim / renew** coordinator
+
+`PostgresGitIncrementalLaterCheckpointMirrorLeaseStore` is now
+registered as an *internal* service with a separately default-OFF
+`GitIncrementalLaterCheckpointMirrorLease:Enabled` gate. It does not
+expose an HTTP route, start a worker, invoke local Git or send to GitHub.
+
+A new `ClaimAsync`:
+
+- Obtains the non-authorizing latest #117 review with actual F-035v2
+  binary rehash, then opens a **source-first / plan-second PostgreSQL**
+  advisory transaction (matching F-035v2).
+- While locked, independently rechecks that the latest physical source
+  snapshot and F-091 checkpoint, F-097b receipt, still-approved
+  checkpoint F-031, human review and recent destination validation,
+  immutable F-038v2/F-035v2 and its already `Recorded` lease all
+  belong to the exact immutable source / workpack / target scope.
+- Uses `clock_timestamp()` from the **PostgreSQL server** rather than
+  worker clock or caller-supplied timestamps. It inserts at most one
+  random opaque lease token, generation 1, one worker ID and a bounded
+  deadline (30 seconds–3 minutes) and an immutable `Acquired` event
+  in the same transaction. Competing writers serialize on source lock;
+  a second worker is refused.
+- If the old generation is already past its deadline, transitions to
+  `RecoveryRequired` plus one append-only `Quarantined` event. It
+  never silently reclaims, deletes or trusts a possibly orphaned
+  UUID.git; a separate reviewed recovery flow is still necessary.
+
+`RenewAsync` independently repeats the full live admission and
+source-first locked latest-source/approval checks. It requires the
+**same** mirror/workpack/snapshot, worker ID, generation, token, SHA
+and previous expiry, using an atomic SQL compare-and-swap. The token
+and generation are unchanged. Individual renewals are capped at 3
+minutes, the total lifetime at 2 hours from first acquisition, and
+every renewal appends a separate immutable `Renewed` event. A stale
+worker cannot renew a newer deadline or another worker's lease.
+
+The integration suite exercises real two-epoch SHA-1/SHA-256 source
+proofs and bundles, multiple contention attempts through independent
+DbContexts, repeated renewals, wrong-worker and old-deadline refusal,
+tamper/append-only triggers and an expired worker's quarantine. The
+runtime lease and its records are **coordination only**:
+`CanMaterialize=false`, `CanPush=false`, `CanRetry=false`,
+`CanDispatch=false`, `MigrationComplete=false`. The coordinator is
+not connected to the #116 physical importer yet; it does **not** create
+a durable `Verified` result or authorize F-095. F-061v2
+Verified/complete, explicit recovery of quarantined orphans, lease
+heartbeat wrapper during import, crash/restart validation and F-095v3
+physical ancestry remain #115/#100/#96.
+
+Do not close #118 before the real test suite and CI are green 4/4, and
+do not claim production readiness from a passing lease test.
