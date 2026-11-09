@@ -37,5 +37,12 @@ and an F-097 receipt has **no** migration-authority flag. F-014 full-ref
 coverage is independent of Azure DevOps effective ACL verification; an
 unknown source discovery error still fails closed. This first workpack
 supports 1–128 refs per selected repository, homogeneous SHA-1 or SHA-256.
+Real PostgreSQL regression tests validate additive/idempotent schema
+bootstrap, disabled mode, fail-closed legacy source admission, write-deny
+CHECK constraints, immutability triggers and restart readback of the
+SQL ledger and Recorded event. A positive complete-source **trusted
+capture** integration fixture is not yet implemented and must be
+verified before issue #94 is closed.
+
 Larger pages, complete real F-014→F-090→F-097 integration and
 F-095 physical-bound source history remain tracked in #94/#92 until verified.

@@ -216,6 +216,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedger(
             row.CanPush || row.CanRetry || row.CanDispatch ||
             row.MigrationComplete || row.RecordedBy == Guid.Empty ||
             row.RecordedAtUtc == default ||
+            proof.Refs is null ||
             !proof.Refs.SequenceEqual(expected.Refs) ||
             proof with { Refs = expected.Refs } != expected)
             throw Refused("SourceGitRefLedgerHistoryCorrupt");
