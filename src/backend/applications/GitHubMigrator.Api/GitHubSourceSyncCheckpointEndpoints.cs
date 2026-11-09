@@ -44,6 +44,26 @@ public static class GitHubSourceSyncCheckpointEndpoints
             { return Failure(ex); }
         });
 
+        group.MapGet("/{checkpointId:guid}/target-ref-review/{targetObservationId:guid}",
+            async Task<IResult> (Guid id, Guid planId,
+                Guid checkpointId, Guid targetObservationId,
+                string? sourceRepositoryId, string? expectedTargetEvidenceSha256,
+                string? after, int? take,
+                IGitHubSourceSyncCheckpointJournal journal,
+                CancellationToken ct) =>
+        {
+            try
+            {
+                return Results.Ok(await journal.ReviewTargetRefNamesAsync(
+                    id, planId, checkpointId, targetObservationId,
+                    sourceRepositoryId ?? "",
+                    expectedTargetEvidenceSha256 ?? "",
+                    after, take ?? 50, ct));
+            }
+            catch (GitHubSourceSyncCheckpointException ex)
+            { return Failure(ex); }
+        });
+
         group.MapPost("/{snapshotId:guid}", async Task<IResult> (
             Guid id, Guid planId, Guid snapshotId,
             RecordSourceSyncCheckpointRequest request,
@@ -71,10 +91,12 @@ public static class GitHubSourceSyncCheckpointEndpoints
         => ex.Code is "SourceSyncCheckpointInvalidRequest" or
             "SourceSyncCheckpointInvalidPage" or
             "SourceSyncCheckpointCursorInvalid" or
-            "SourceSyncCheckpointRefChangesInvalid"
+            "SourceSyncCheckpointRefChangesInvalid" or
+            "SourceSyncCheckpointTargetReviewInvalid"
             ? Results.BadRequest(new { error = ex.Code })
             : ex.Code is "SourceSyncCheckpointPlanNotFound" or
-                "SourceSyncCheckpointNotFound"
+                "SourceSyncCheckpointNotFound" or
+                "SourceSyncCheckpointTargetObservationNotFound"
                 ? Results.NotFound(new { error = ex.Code })
                 : Results.Conflict(new { error = ex.Code });
 }

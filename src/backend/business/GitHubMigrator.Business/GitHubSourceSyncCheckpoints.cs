@@ -185,6 +185,12 @@ public static class GitHubSourceSyncCheckpointIntegrity
 
 public interface IGitHubSourceSyncCheckpointJournal
 {
+    Task<GitHubCheckpointTargetRefReviewPage> ReviewTargetRefNamesAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        Guid targetObservationId, string sourceRepositoryId,
+        string expectedTargetEvidenceSha256, string? after,
+        int take, CancellationToken ct);
+
     Task<GitHubSourceCheckpointRefChangePage> ListRefChangesAsync(
         Guid preparationId, Guid planId, Guid checkpointId,
         string? after, int take, CancellationToken ct);

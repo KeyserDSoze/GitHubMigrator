@@ -256,6 +256,121 @@ public sealed class PostgresGitHubSourceSyncCheckpointJournal(
         return page;
     }
 
+    // F-093: crosscheck attested source ref change *names* against one
+    // current, independently sealed F-031 target observation.
+    // This is not OID equality, ancestry, a send permit or a migration.
+    public async Task<GitHubCheckpointTargetRefReviewPage> ReviewTargetRefNamesAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        Guid targetObservationId, string sourceRepositoryId,
+        string expectedTargetEvidenceSha256, string? after,
+        int take, CancellationToken ct)
+    {
+        RequireEnabled();
+        if (preparationId == Guid.Empty || planId == Guid.Empty ||
+            checkpointId == Guid.Empty || targetObservationId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(sourceRepositoryId) ||
+            sourceRepositoryId.Length > 256 ||
+            expectedTargetEvidenceSha256 is not { Length: 64 } ||
+            expectedTargetEvidenceSha256.Any(c =>
+                c is not (>= 'a' and <= 'f' or >= '0' and <= '9')) ||
+            take is < 1 or > GitHubCheckpointTargetRefReviewIntegrity.MaxPageSize)
+            throw Refused("SourceSyncCheckpointTargetReviewInvalid");
+        if (after is not null &&
+            GitHubSourceCheckpointRefChangeIntegrity.ParseKey(after)
+                .RepositoryId != sourceRepositoryId)
+            throw Refused("SourceSyncCheckpointTargetReviewInvalid");
+
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead, ct);
+        var plan = await RequirePlanAsync(preparationId, planId, ct);
+        if (!plan.IsCurrent)
+            throw Refused("SourceSyncCheckpointTargetReviewStale");
+        var mappings = plan.Steps.Where(x =>
+            x.Kind == "ReviewTargetName" &&
+            x.SourceRepositoryId == sourceRepositoryId).ToArray();
+        if (mappings.Length != 1)
+            throw Refused("SourceSyncCheckpointTargetMappingInvalid");
+        var targetName = mappings[0].TargetRepositoryName;
+
+        var record = await db.GitHubSourceSyncCheckpoints.AsNoTracking()
+            .SingleOrDefaultAsync(x =>
+                x.Id == checkpointId &&
+                x.PlanId == plan.Id &&
+                x.PreparationId == preparationId &&
+                x.SourceConnectionId == plan.SourceConnectionId, ct)
+            ?? throw Refused("SourceSyncCheckpointNotFound");
+        var checkpoint = await VerifiedAsync(record, plan, ct);
+        if (checkpoint.EvidenceVersion != 2 ||
+            checkpoint.RefChangeManifest is null ||
+            checkpoint.RefChangeAttestationSha256 is null)
+            throw Refused("SourceSyncCheckpointLegacyUnattested");
+
+        var target = await new PostgresGitHubTargetRefEvidenceStore(
+            db, clock).ReadVerifiedSnapshotAsync(
+                preparationId, planId, targetObservationId, ct);
+        if (target is null)
+            throw Refused("SourceSyncCheckpointTargetObservationNotFound");
+        var targetView = target.Value.View;
+        if (!targetView.IsCurrent ||
+            targetView.ManifestSha256 != plan.ManifestSha256 ||
+            targetView.EvidenceSha256 != expectedTargetEvidenceSha256 ||
+            targetView.SourceRepositoryId != sourceRepositoryId ||
+            targetView.TargetRepositoryName != targetName ||
+            targetView.ObservedAtUtc < checkpoint.Proof.StagingAppliedAtUtc)
+            throw Refused("SourceSyncCheckpointTargetReviewStale");
+
+        var repoDelta = checkpoint.Proof.Repositories
+            .SingleOrDefault(x => x.SourceRepositoryId == sourceRepositoryId &&
+                x.TargetRepositoryName == targetName)
+            ?? throw Refused("SourceSyncCheckpointTargetMappingInvalid");
+
+        if (after is not null &&
+            !await db.StagingAssetChanges.AsNoTracking().AnyAsync(x =>
+                x.SnapshotId == record.SnapshotId &&
+                x.SourceConnectionId == plan.SourceConnectionId &&
+                x.AssetType == "ref" && x.SourceId == after, ct))
+            throw Refused("SourceSyncCheckpointCursorInvalid");
+
+        var observedNames = target.Value.Observation.Refs
+            .Select(x => x.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var rows = await db.StagingAssetChanges.FromSqlInterpolated($"""
+            SELECT * FROM staging_asset_changes
+            WHERE snapshot_id = {record.SnapshotId}
+              AND source_connection_id = {plan.SourceConnectionId}
+              AND asset_type = 'ref'
+              AND source_id::jsonb ->> 0 = {sourceRepositoryId}
+              AND source_id COLLATE "C" > {after ?? ""} COLLATE "C"
+            ORDER BY source_id COLLATE "C"
+            LIMIT {take + 1}
+            """).AsNoTracking().ToArrayAsync(ct);
+        var items = rows.Take(take).Select(row =>
+        {
+            var change = GitHubSourceCheckpointRefChangeIntegrity.Parse(
+                new StagingChangeView(row.AssetType, row.SourceId,
+                    row.Kind, row.PreviousFingerprint,
+                    row.CurrentFingerprint, row.Revision), targetName);
+            var present = observedNames.Contains(change.RefName);
+            return new GitHubCheckpointTargetRefReviewItem(
+                change, present,
+                GitHubCheckpointTargetRefReviewIntegrity.ReviewState(
+                    change.Kind, present));
+        }).ToArray();
+        var review = new GitHubCheckpointTargetRefReviewPage(
+            checkpoint.Id, checkpoint.Proof.SnapshotId,
+            targetObservationId, sourceRepositoryId, targetName,
+            checkpoint.RefChangeManifest.EvidenceSha256,
+            checkpoint.RefChangeAttestationSha256,
+            targetView.EvidenceSha256, targetView.ObservedAtUtc,
+            repoDelta.Total, items,
+            rows.Length > take ? items[^1].SourceChange.SourceId : null,
+            false, false, false, false);
+        GitHubCheckpointTargetRefReviewIntegrity.VerifyPage(
+            review, take, after);
+        await tx.CommitAsync(ct);
+        return review;
+    }
+
     private void RequireEnabled()
     {
         if (!options.Enabled)
