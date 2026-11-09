@@ -238,6 +238,16 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         return job.Id;
     }
 
+    private static PostgresGitCheckpointTargetReReviewPrerequisites ReReview(
+        AppDbContext db, TimeProvider clock, bool enabled = true) =>
+        new(db, clock, new(enabled),
+            new PostgresIncrementalOperationPlanRepository(db, clock),
+            new PostgresGitHubSourceSyncCheckpointJournal(
+                db, clock, new(true),
+                new PostgresIncrementalOperationPlanRepository(db, clock),
+                new PostgresStagingRepository(db, clock)),
+            Ledger(db, clock));
+
     private static PostgresGitIncrementalCheckpointMirrorPreflight Physical(
         AppDbContext db, TimeProvider clock, bool enabled = true) =>
         new(db, clock, new(enabled),
@@ -293,6 +303,54 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             Assert.NotNull(stale);
             Assert.False(stale.IsCurrent);
             clock.Advance(TimeSpan.FromSeconds(2));
+
+            // F-097c.4c.0a: source-locked historical mapping rereview
+            // eligibility can be SHA-verified for the LATER epoch without
+            // converting F-029 back to Current or reading GitHub.
+            Assert.Equal("CheckpointTargetReReviewDisabled",
+                (await Assert.ThrowsAsync<GitCheckpointTargetReReviewException>(
+                    () => ReReview(db, clock, false).ReadAsync(
+                        run.Id, plan.Id, later.Id, "repo-1",
+                        actor, default))).Code);
+            var candidate = await ReReview(db, clock).ReadAsync(
+                run.Id, plan.Id, later.Id, "repo-1", actor, default);
+            Assert.Equal(1, candidate.EvidenceVersion);
+            Assert.Equal(plan.SnapshotId, candidate.BaselineSnapshotId);
+            Assert.Equal(laterId, candidate.SourceSnapshotId);
+            Assert.Equal(later.Id, candidate.CheckpointId);
+            Assert.Equal(verified.EvidenceSha256,
+                candidate.SourceFullRefProofSha256);
+            Assert.Equal(verified.SourceManifestRootSha256,
+                candidate.SourceManifestRootSha256);
+            Assert.Equal(oidLength == 40 ? "sha1" : "sha256",
+                candidate.ObjectFormat);
+            Assert.Equal(2, candidate.SourceRefCount);
+            Assert.Equal("migration-one", candidate.TargetRepositoryName);
+            Assert.False(candidate.CanObserveTarget || candidate.CanPush ||
+                candidate.CanRetry || candidate.CanDispatch ||
+                candidate.MigrationComplete);
+            Assert.Equal(64, candidate.EvidenceSha256.Length);
+            var originalReviewer = (await db.IncrementalReviews
+                .AsNoTracking().SingleAsync(x => x.PreparationId == run.Id))
+                .ReviewerId!.Value;
+            GitCheckpointTargetReReviewIntegrity.Verify(
+                candidate, stale, later, verified, originalReviewer);
+            Assert.Equal("CheckpointTargetReReviewEvidenceInvalid",
+                Assert.Throws<GitCheckpointTargetReReviewException>(() =>
+                    GitCheckpointTargetReReviewIntegrity.Verify(
+                        candidate with { CanObserveTarget = true },
+                        stale, later, verified, originalReviewer)).Code);
+            Assert.Equal("CheckpointTargetReReviewHistoricalReviewInvalid",
+                (await Assert.ThrowsAsync<GitCheckpointTargetReReviewException>(
+                    () => ReReview(db, clock).ReadAsync(
+                        run.Id, plan.Id, later.Id, "repo-1",
+                        Guid.NewGuid(), default))).Code);
+            Assert.Equal("CheckpointTargetReReviewSourceUnverified",
+                (await Assert.ThrowsAsync<GitCheckpointTargetReReviewException>(
+                    () => ReReview(db, clock).ReadAsync(
+                        run.Id, plan.Id, later.Id, "foreign-repo",
+                        actor, default))).Code);
+
             var observation = GitHubRefObservationIntegrity.Seal(
                 plan.Organization, "migration-one", clock.GetUtcNow(),
                 [new("refs/heads/main",
@@ -325,6 +383,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
 
         await using (var restarted = fixture.NewContext())
         {
+            var reviewed = await ReReview(restarted, clock).ReadAsync(
+                run.Id, plan.Id,
+                (await restarted.GitHubSourceSyncCheckpoints.AsNoTracking()
+                    .SingleAsync(x => x.PlanId == plan.Id &&
+                        x.SnapshotId == laterId)).Id,
+                "repo-1", actor, default);
+            Assert.Equal(laterId, reviewed.SourceSnapshotId);
+            Assert.False(reviewed.CanObserveTarget);
             Assert.Empty(await restarted.IncrementalGitRefReconciliations
                 .AsNoTracking().Where(x => x.SnapshotId == laterId)
                 .ToArrayAsync());
