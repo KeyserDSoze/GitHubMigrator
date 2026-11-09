@@ -14,6 +14,42 @@ public sealed class LocalGitSourceBundleAcquirerTests
     [Theory]
     [InlineData(40)]
     [InlineData(64)]
+    public async Task F035v2_orphan_quarantine_preserves_bytes_without_adopting_old_file(
+        int oidLength)
+    {
+        using var root = new LocalFixture();
+        var (_, refs, _) = root.ProvisionBareMirror(oidLength);
+        var artifact = await root.Acquirer.AcquireAsync(root.Request(refs), default);
+        var store = new LocalGitBundleArtifactStore(root.BundleRoot);
+        var original = Path.Combine(root.BundleRoot, artifact.BundleFileName);
+        Assert.True(File.Exists(original));
+        Assert.True(await store.QuarantineOrphanAsync(root.WorkpackId, default));
+        Assert.False(File.Exists(original));
+        var quarantined = Directory.GetFiles(root.BundleRoot,
+            root.WorkpackId.ToString("N") + ".*.quarantine");
+        Assert.Single(quarantined);
+        Assert.Equal(artifact.BundleBytes, new FileInfo(quarantined[0]).Length);
+        await using (var bytes = File.OpenRead(quarantined[0]))
+            Assert.Equal(artifact.BundleSha256,
+                Convert.ToHexStringLower(await SHA256.HashDataAsync(bytes)));
+        Assert.False(await store.QuarantineOrphanAsync(root.WorkpackId, default));
+        Assert.Equal("BundleQuarantineHandleInvalid",
+            (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                store.QuarantineOrphanAsync(Guid.Empty, default))).Code);
+
+        // Recovery never silently adopts the quarantined bytes.
+        // A newly verified source export uses a fresh UUID.bundle.
+        var rebuilt = await root.Acquirer.AcquireAsync(
+            root.Request(refs), default);
+        Assert.Equal(root.WorkpackId, rebuilt.WorkpackId);
+        Assert.True(File.Exists(original));
+        Assert.Single(Directory.GetFiles(root.BundleRoot, "*.quarantine"));
+        store.AssertWithinQuota();
+    }
+
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
     public async Task F035v2_internal_rehearsal_exports_real_offline_bundle_and_rechecks_provenance(
         int oidLength)
     {
