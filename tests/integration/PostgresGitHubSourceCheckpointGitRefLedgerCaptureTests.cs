@@ -351,6 +351,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         run.Id, plan.Id, later.Id, "foreign-repo",
                         actor, default))).Code);
 
+            // Even a fully verified BASELINE checkpoint must lose this
+            // candidate role once F-091 has a newer source snapshot.
+            Assert.Equal("CheckpointTargetReReviewSourceSuperseded",
+                (await Assert.ThrowsAsync<GitCheckpointTargetReReviewException>(
+                    () => ReReview(db, clock).ReadAsync(
+                        run.Id, plan.Id, checkpoint.Id, "repo-1",
+                        actor, default))).Code);
+
             var observation = GitHubRefObservationIntegrity.Seal(
                 plan.Organization, "migration-one", clock.GetUtcNow(),
                 [new("refs/heads/main",
