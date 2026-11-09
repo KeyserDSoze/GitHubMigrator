@@ -200,6 +200,9 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
         var source = await db.GitHubSourceCheckpointGitRefLedgers.AsNoTracking()
             .SingleOrDefaultAsync(x => x.CheckpointId == plan.CheckpointId &&
                 x.SourceRepositoryId == req.SourceRepositoryId, ct);
+        var reconciliation = await db.GitLaterCheckpointReconciliations
+            .AsNoTracking().SingleOrDefaultAsync(x =>
+                x.Id == (pack == null ? Guid.Empty : pack.ReconciliationId), ct);
         var target = await db.GitCheckpointTargetObservations.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == plan.TargetObservationId, ct);
         var human = await db.GitCheckpointTargetHumanReviews.AsNoTracking()
@@ -239,8 +242,20 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
             source.SnapshotId != plan.SourceSnapshotId ||
             source.SourceConnectionId != req.SourceConnectionId ||
             source.EvidenceSha256 != plan.SourceFullRefProofSha256 ||
-            source.SourceEvidenceSha256 != req.SourceEvidenceSha256 ||
             source.SourceManifestRootSha256 != plan.SourceManifestRootSha256 ||
+            reconciliation is null ||
+            reconciliation.PlanId != plan.PlanId ||
+            reconciliation.CheckpointId != plan.CheckpointId ||
+            reconciliation.SourceSnapshotId != plan.SourceSnapshotId ||
+            reconciliation.TargetObservationId != plan.TargetObservationId ||
+            reconciliation.SourceRepositoryId != req.SourceRepositoryId ||
+            reconciliation.ReconciliationSha256 != req.ReconciliationSha256 ||
+            reconciliation.SourceEvidenceSha256 != req.SourceEvidenceSha256 ||
+            reconciliation.FullRefProofSha256 != plan.SourceFullRefProofSha256 ||
+            reconciliation.TargetReceiptSha256 != plan.TargetReceiptSha256 ||
+            reconciliation.RecordedBy != actorId ||
+            reconciliation.ReadyForExecution ||
+
             source.RecordedBy != actorId ||
             target is null || target.PlanId != plan.PlanId ||
             target.CheckpointId != plan.CheckpointId ||
