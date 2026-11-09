@@ -116,6 +116,10 @@ builder.Services.AddSingleton(new GitHubSourceCheckpointGitRefLedgerOptions(
 builder.Services.AddScoped<PostgresGitHubSourceCheckpointGitRefLedger>();
 builder.Services.AddScoped<PostgresGitCheckpointTargetReReviewPrerequisites>();
 builder.Services.AddScoped<PostgresGitCheckpointTargetHumanReviewJournal>();
+// #109 source-locked read preflight is NOT provider GET authorization.
+builder.Services.AddSingleton(new GitCheckpointTargetReadPreflightOptions(
+    builder.Configuration.GetValue("GitCheckpointTargetReadPreflight:Enabled", false)));
+builder.Services.AddScoped<PostgresGitCheckpointTargetReadPreflight>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
@@ -796,6 +800,7 @@ app.MapGitHubRemoteRecoveryWorkbenchEndpoints();
 app.MapGitHubMultiRepositorySyncPulseEndpoints();
 app.MapGitHubSourceSyncCheckpointEndpoints();
 app.MapGitCheckpointTargetHumanReviewEndpoints();
+app.MapGitCheckpointTargetReadPreflightEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
