@@ -100,7 +100,7 @@ function attestedEpoch(index: number, forged = false) {
   };
 }
 
-function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' | 'badrefpage' = 'normal') {
+function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' | 'badrefpage' | 'targetreview' | 'badtargetreview' = 'normal') {
   const requests: Array<{ path: string; method: string; body: any }> = [];
   let records = 0;
   void page.route('**/api/incremental-preparations/**', async (route: Route) => {
@@ -114,6 +114,57 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
     if (method === 'GET' && path === base + `/${plan}/repository-sync-pulse`)
       return route.fulfill({ json: pulse });
     const check = base + `/${plan}/source-sync-checkpoints`;
+    const observationId = '88888888-8888-4888-8888-888888888888';
+    if (method === 'GET' && path === base + `/${plan}/target-ref-evidence`) {
+      return route.fulfill({ json: [{
+        id: observationId, planId: plan,
+        sourceRepositoryId: 'repo-1',
+        targetRepositoryName: 'migration-one',
+        organization: 'gh-org',
+        manifestSha256: sha('a'), evidenceSha256: sha('f'),
+        observedAtUtc: stamp, refCount: 1,
+        isCurrent: true, readyForExecution: false
+      }] });
+    }
+    if (method === 'GET' &&
+        path === check + `/${old}/target-ref-review/${observationId}`) {
+      const query = new URL(request.url()).searchParams;
+      expect(query.get('sourceRepositoryId')).toBe('repo-1');
+      expect(query.get('expectedTargetEvidenceSha256')).toBe(sha('f'));
+      const after = query.get('after');
+      const change = (name: string, kind: string,
+          before: string | null, current: string | null,
+          present: boolean, state: string) => ({
+        sourceChange: {
+          sourceId: JSON.stringify(['repo-1', name]),
+          sourceRepositoryId: 'repo-1', refName: name,
+          kind, previousFingerprint: before,
+          currentFingerprint: current, revision: 1,
+          targetRepositoryName: 'migration-one'
+        },
+        targetRefObserved: present, reviewState: state
+      });
+      const first = change('refs/heads/a', 'Added', null, sha('a'),
+        true, 'SourceAddedTargetPresentReview');
+      const second = change('refs/heads/b', 'Added', null, sha('b'),
+        false, 'SourceAddedTargetAbsentReview');
+      const third = change('refs/tags/v1', 'Changed', sha('a'), sha('b'),
+        false, 'SourceChangedTargetAbsentBlocked');
+      return route.fulfill({ json: {
+        checkpointId: old, sourceSnapshotId: original,
+        targetObservationId: observationId,
+        sourceRepositoryId: 'repo-1',
+        targetRepositoryName: 'migration-one',
+        sourceRefManifestSha256: sha('d'),
+        sourceRefAttestationSha256: sha('e'),
+        targetEvidenceSha256: sha('f'),
+        targetObservedAtUtc: stamp, repositoryRefChanges: 3,
+        items: after ? [third] : [first, second],
+        nextAfter: after ? null : second.sourceChange.sourceId,
+        canPush: mode === 'badtargetreview', canRetry: false,
+        canDispatch: false, migrationComplete: false
+      } });
+    }
     if (method === 'GET' && path === check + `/${old}/ref-changes`) {
       const after = new URL(request.url()).searchParams.get('after');
       const refA = JSON.stringify(['repo-1', 'refs/heads/a']);
@@ -150,7 +201,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
       return route.fulfill({ json: {
         preparationId: prep, planId: plan,
         items: Array.from({ length: records }, (_, i) =>
-          mode === 'attested' || mode === 'forged' || mode === 'badrefpage'
+          mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview'
             ? attestedEpoch(records - i - 1, mode === 'forged')
             : epoch(records - i - 1)),
         nextAfter: null,
@@ -175,7 +226,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
         records === 0 ? null : old);
       expect(path).toBe(check + '/' + (records === 0 ? original : next));
       records++;
-      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage'
+      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview'
         ? attestedEpoch(records - 1, mode === 'forged')
         : epoch(records - 1) });
     }
@@ -369,4 +420,67 @@ test('F-092 historic F-090 checkpoints have no falsely attested ref browser', as
   await expect(page.getByRole('button', {
     name: /Mostra modifiche ref sorgente|Inspect source ref changes/i
   })).toHaveCount(0);
+});
+
+test('F-093 compares saved GitHub ref names without a remote write', async ({ page }) => {
+  const service = mock(page, 'targetreview');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Mostra modifiche ref sorgente|Inspect source ref changes/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Confronta con osservazioni GitHub salvate|Review against saved GitHub observations/i
+  }).click();
+  await expect(page.getByRole('combobox', {
+    name: /Osservazione GitHub e repository|GitHub observation and repository/i
+  })).toBeVisible();
+  await page.getByRole('button', {
+    name: /Confronta nomi dei ref sorgente|Compare source ref names/i
+  }).click();
+  await expect(page.getByText(
+    /Presente nell.osservazione GitHub|Observed at GitHub/i).first()).toBeVisible();
+  await expect(page.getByText(
+    /Assente nell.osservazione GitHub|Absent at GitHub observation time/i).first())
+    .toBeVisible();
+  await page.getByRole('button', { name: /Altri confronti|More comparisons/i })
+    .click();
+  await expect(page.getByText(
+    /Ref sorgente modificato|Changed source ref/i)).toBeVisible();
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-review/'))).toHaveLength(2);
+  expect(service.requests().filter(x =>
+    x.path.endsWith('/target-ref-evidence'))).toHaveLength(1);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(1);
+  expect(service.requests().some(x =>
+    /git-push|retry-push|dispatch-confirm/i.test(x.path))).toBe(false);
+});
+
+test('F-093 rejects a forged GitHub authority flag and renders no target comparison', async ({ page }) => {
+  const service = mock(page, 'badtargetreview');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Mostra modifiche ref sorgente|Inspect source ref changes/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Confronta con osservazioni GitHub salvate|Review against saved GitHub observations/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Confronta nomi dei ref sorgente|Compare source ref names/i
+  }).click();
+  await expect(page.getByRole('alert').getByText(
+    /SourceSyncCheckpointUnsafeResponse/)).toBeVisible();
+  await expect(page.getByText(
+    /Presente nell.osservazione GitHub|Observed at GitHub/i)).toHaveCount(0);
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-review/'))).toHaveLength(1);
 });
