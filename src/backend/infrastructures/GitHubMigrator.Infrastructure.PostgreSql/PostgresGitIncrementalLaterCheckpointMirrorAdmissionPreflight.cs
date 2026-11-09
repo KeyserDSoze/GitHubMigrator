@@ -78,7 +78,31 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorAdmissionPrefligh
                     x.CheckpointId == checkpointId &&
                     x.TargetObservationId == targetObservationId &&
                     x.SourceRepositoryId == sourceRepositoryId, ct);
+            var recordedLease = await db.GitLaterCheckpointBundleLeases
+                .AsNoTracking().SingleOrDefaultAsync(x =>
+                    x.WorkpackId == workpackId &&
+                    x.PreparationId == preparationId &&
+                    x.PlanId == planId &&
+                    x.CheckpointId == checkpointId &&
+                    x.TargetObservationId == targetObservationId &&
+                    x.SourceRepositoryId == sourceRepositoryId, ct);
             if (workpack is null || bundle is null ||
+                recordedLease is null ||
+                recordedLease.State != "Recorded" ||
+                recordedLease.SourceConnectionId != before.SourceConnectionId ||
+                recordedLease.SourceSnapshotId != before.SourceSnapshotId ||
+                recordedLease.BundlePlanSha256 != before.BundlePlanSha256 ||
+                recordedLease.WorkpackEvidenceSha256 !=
+                    before.WorkpackEvidenceSha256 ||
+                recordedLease.FullRefProofSha256 !=
+                    before.SourceFullRefProofSha256 ||
+                recordedLease.TargetReceiptSha256 !=
+                    before.TargetReceiptSha256 ||
+                recordedLease.ActorId != originalBundleActorId ||
+                recordedLease.LeaseUntilUtc is not null ||
+                recordedLease.DurableEvidencePersisted ||
+                recordedLease.CanPush || recordedLease.CanRetry ||
+                recordedLease.CanDispatch || recordedLease.MigrationComplete ||
                 workpack.EvidenceSha256 != before.WorkpackEvidenceSha256 ||
                 workpack.FullRefProofSha256 !=
                     before.SourceFullRefProofSha256 ||
