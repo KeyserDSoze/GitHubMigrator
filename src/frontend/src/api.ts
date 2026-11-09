@@ -95,6 +95,21 @@ export type CheckpointHumanReviewReceipt = {
   canDispatch: false; migrationComplete: false;
 };
 
+// #109 later-F-031 server-verified immutable GitHub GET (no raw refs,
+// OIDs or credentials in browser response, no execution authority).
+export type CheckpointTargetObservation = {
+  id: string; evidenceVersion: 1;
+  preparationId: string; planId: string; checkpointId: string;
+  sourceSnapshotId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; organization: string;
+  objectFormat: 'sha1' | 'sha256'; reviewedBy: string;
+  candidateEvidenceSha256: string; humanReviewEvidenceSha256: string;
+  targetEvidenceSha256: string; observedAtUtc: string; refCount: number;
+  evidenceSha256: string;
+  canObserveTarget: false; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+};
+
 export type RepositorySyncSourceDelta = {
   sourceRepositoryId: string; targetRepositoryName: string;
   addedRefs: number; changedRefs: number; restoredRefs: number;
@@ -647,6 +662,12 @@ export const api = {
       sourceRepositoryId: string) =>
     call<CheckpointHumanReviewCandidate>(
       `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-human-review/candidate?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}`,
+      { headers: withToken(token) }),
+  readCheckpointTargetObservation: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      sourceRepositoryId: string) =>
+    call<CheckpointTargetObservation>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-ref-observations?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}`,
       { headers: withToken(token) }),
   captureSourceSyncCheckpoint: (token: string,
       preparationId: string, planId: string, snapshotId: string,
