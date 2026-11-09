@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace GitHubMigrator.Business;
 
@@ -19,6 +20,7 @@ public sealed record GitIncrementalAncestryRequest(
     string? SourcePhysicalMirrorProofSha256 = null,
     // F-097c: only for F-060-bound source mirrors; null preserves the
     // exact legacy F-094/F-096 v1/v2 payload and historical receipt hash.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? SourceCheckpointGitRefProofSha256 = null);
 
 public enum GitIncrementalAncestryStatus

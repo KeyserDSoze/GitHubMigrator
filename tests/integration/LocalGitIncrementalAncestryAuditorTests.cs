@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using GitHubMigrator.Business;
 using GitHubMigrator.Infrastructure.GitObjects;
 using Xunit;
@@ -203,6 +204,17 @@ public sealed class LocalGitIncrementalAncestryAuditorTests
             SourcePhysicalMirrorProofSha256 = mirrorProofSha,
             SourceCheckpointGitRefProofSha256 = fullRef.EvidenceSha256
         };
+        // v1/v2 JSON is byte-compatible: a new optional v3 field MUST
+        // not be emitted as null when serializing a historical request.
+        var oldJson = JsonSerializer.Serialize(sample);
+        Assert.DoesNotContain("SourceCheckpointGitRefProofSha256", oldJson);
+        Assert.Contains("SourceCheckpointGitRefProofSha256",
+            JsonSerializer.Serialize(v3));
+        var recovered = JsonSerializer.Deserialize<GitIncrementalAncestryRequest>(
+            JsonSerializer.Serialize(v3));
+        Assert.Equal(v3.SourceCheckpointGitRefProofSha256,
+            recovered!.SourceCheckpointGitRefProofSha256);
+
         var audited = await repos.Auditor().AuditAsync(v3, default);
         var time = audited.VerifiedAtUtc.AddSeconds(1);
         GitSourceCheckpointPhysicalAncestryIntegrity.Verify(
