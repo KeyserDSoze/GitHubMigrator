@@ -42,7 +42,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
         RequirePlan(plan, preparationId, planId, checkpointId,
             targetObservationId, workpackId, sourceRepositoryId,
             expectedTargetReceiptSha256);
-        var now = clock.GetUtcNow();
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
         var expires = now.Add(duration);
         var token = Guid.NewGuid();
 
@@ -153,7 +154,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
         await using var tx = await db.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted, ct);
         await LockAsync(row.SourceConnectionId, row.PlanId, ct);
-        var now = clock.GetUtcNow();
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
         var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE git_later_checkpoint_bundle_leases
             SET state = 'Released', lease_until_utc = NULL,
@@ -222,7 +224,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
             IsolationLevel.ReadCommitted, ct);
         await LockAsync(plan.SourceOnlyRequest.SourceConnectionId, planId, ct);
         await RequireLiveLockedAsync(plan, lease.ActorId, ct);
-        var now = clock.GetUtcNow();
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
         var current = await db.GitLaterCheckpointBundleLeases.AsNoTracking()
             .SingleOrDefaultAsync(x => x.WorkpackId == lease.WorkpackId, ct);
         if (current is null)
@@ -357,7 +360,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
             await db.Connections.AsNoTracking()
                 .SingleOrDefaultAsync(x => x.Id ==
                     storedPlan.DestinationConnectionId, ct);
-        var now = clock.GetUtcNow();
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
         if (storedPlan is null ||
             storedPlan.SnapshotId != plan.BaselineSnapshotId ||
             storedPlan.SourceConnectionId != req.SourceConnectionId ||
