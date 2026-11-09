@@ -1613,7 +1613,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         Assert.DoesNotContain("Quarantined", mirrorLeaseEvents);
                         var secondWorkerDenied = await Assert.ThrowsAsync<
                             GitSourceSnapshotMirrorException>(() =>
-                            coordinator.RunAsync(run.Id, plan.Id, later.Id,
+                            mirrorWorkerRunner.RunAsync(run.Id, plan.Id, later.Id,
                                 observationId, first.WorkpackId, "repo-1",
                                 targetReceipt.EvidenceSha256,
                                 candidate.RequestedBy, Guid.NewGuid(),
