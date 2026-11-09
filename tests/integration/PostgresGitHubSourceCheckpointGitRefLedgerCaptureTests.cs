@@ -300,14 +300,41 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             var token = await api.LoginAsync(
                 api.SuperadminName, ApiHarness.SuperadminPassword);
             Guid reviewerId;
+            var requesterName = "source-requester-" + Guid.NewGuid().ToString("N");
+            var secondReviewerName = "other-reviewer-" + Guid.NewGuid().ToString("N");
             await using (var scope = api.Host.Services.CreateAsyncScope())
             {
                 var users = scope.ServiceProvider.GetRequiredService<
                     Microsoft.AspNetCore.Identity.UserManager<ApplicationUser>>();
                 var user = await users.FindByNameAsync(api.SuperadminName);
                 reviewerId = Assert.IsType<ApplicationUser>(user).Id;
+                // A legitimate superadmin whose JWT subject equals the
+                // original requester must not self-approve, even if the
+                // JSON tries to spoof a different reviewer's UUID.
+                var requesterUser = new ApplicationUser {
+                    Id = candidate.RequestedBy, UserName = requesterName
+                };
+                var createdRequester = await users.CreateAsync(
+                    requesterUser, ApiHarness.SuperadminPassword);
+                Assert.True(createdRequester.Succeeded);
+                var requesterRole = await users.AddToRoleAsync(
+                    requesterUser, "superadmin");
+                Assert.True(requesterRole.Succeeded);
+                var secondReviewer = new ApplicationUser {
+                    UserName = secondReviewerName
+                };
+                var createdOther = await users.CreateAsync(
+                    secondReviewer, ApiHarness.SuperadminPassword);
+                Assert.True(createdOther.Succeeded);
+                var otherRole = await users.AddToRoleAsync(
+                    secondReviewer, "superadmin");
+                Assert.True(otherRole.Succeeded);
             }
             Assert.NotEqual(candidate.RequestedBy, reviewerId);
+            var requesterToken = await api.LoginAsync(
+                requesterName, ApiHarness.SuperadminPassword);
+            var otherReviewerToken = await api.LoginAsync(
+                secondReviewerName, ApiHarness.SuperadminPassword);
             var root = "/api/incremental-preparations/" + run.Id +
                 "/operation-plans/" + plan.Id +
                 "/source-sync-checkpoints/" + later.Id +
@@ -353,6 +380,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 Assert.Equal(System.Net.HttpStatusCode.Conflict,
                     wrongRepo.StatusCode);
             }
+            using (var selfReview = await SendAsync(HttpMethod.Post, root,
+                Request(decision, candidate.EvidenceSha256), requesterToken))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    selfReview.StatusCode);
+                Assert.Contains("CheckpointHumanReviewIndependentReviewerRequired",
+                    await selfReview.Content.ReadAsStringAsync());
+            }
 
             string receiptSha;
             Guid receiptId;
@@ -385,6 +420,15 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 Assert.Equal(receiptId, json.RootElement.GetProperty("id").GetGuid());
                 Assert.Equal(receiptSha, json.RootElement
                     .GetProperty("evidenceSha256").GetString());
+            }
+            using (var differentReviewer = await SendAsync(
+                HttpMethod.Post, root,
+                Request(decision, candidate.EvidenceSha256), otherReviewerToken))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    differentReviewer.StatusCode);
+                Assert.Contains("CheckpointHumanReviewConflict",
+                    await differentReviewer.Content.ReadAsStringAsync());
             }
             using (var conflicting = await SendAsync(HttpMethod.Post,
                 root, Request(decision ==
@@ -462,13 +506,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 requestedBy = reviewerId               // malicious impersonation
             };
             async Task<System.Net.Http.HttpResponseMessage> SendAsync(
-                System.Net.Http.HttpMethod method, string url, object? body = null)
+                System.Net.Http.HttpMethod method, string url,
+                object? body = null, string? asToken = null)
             {
                 using var request = new System.Net.Http.HttpRequestMessage(
                     method, url);
                 request.Headers.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue(
-                        "Bearer", token);
+                        "Bearer", asToken ?? token);
                 if (method == System.Net.Http.HttpMethod.Post)
                     request.Content = System.Net.Http.Json.JsonContent.Create(body);
                 return await api.Client.SendAsync(request);
