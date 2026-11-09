@@ -83,6 +83,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
             }
             if (existing.State == "Held")
                 throw Refused("LaterCheckpointMirrorLeaseBusy");
+            if (existing.State == "Verified")
+                throw Refused("LaterCheckpointMirrorLeaseAlreadyVerified");
             throw Refused("LaterCheckpointMirrorLeaseRecoveryRequired");
         }
 
