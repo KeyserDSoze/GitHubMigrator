@@ -1569,20 +1569,10 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         renewed, TimeSpan.FromSeconds(90), default);
                     Assert.Equal(worker, renewed.WorkerId);
                     var auditTypes = await verifiedDb.Database
-                        .SqlQueryRaw<string>("""
-                            SELECT type AS "Value" FROM
-                            git_later_checkpoint_mirror_lease_events
-                            WHERE mirror_id = (
-                                SELECT mirror_id FROM
-                                git_later_checkpoint_mirror_leases
-                                WHERE workpack_id = (
-                                    SELECT workpack_id FROM
-                                    git_later_checkpoint_bundle_evidence
-                                    WHERE checkpoint_id = (
-                                        SELECT checkpoint_id FROM
-                                        git_later_checkpoint_mirror_leases
-                                        ORDER BY acquired_at_utc DESC LIMIT 1)
-                                    ORDER BY recorded_at_utc DESC LIMIT 1))
+                        .SqlQuery<string>($"""
+                            SELECT type AS "Value"
+                            FROM git_later_checkpoint_mirror_lease_events
+                            WHERE mirror_id = {checkedAdmission.PhysicalMirrorId}
                             """).ToArrayAsync();
                     Assert.Contains("Acquired", auditTypes);
                     Assert.Equal(2, auditTypes.Count(t => t == "Renewed"));
