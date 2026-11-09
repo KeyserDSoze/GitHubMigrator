@@ -187,7 +187,7 @@ public sealed class PostgresVerifiedSourceGitRefReaderTests(PostgresDraftFixture
         var provisional = await Assert.ThrowsAsync<
             IncrementalGitRefReconciliationException>(() =>
             reader.ReadSealedSnapshotAsync(plan, job.Id, "repo-1", default));
-        Assert.Equal("SourceRefManifestUnavailable", provisional.Code);
+        Assert.Equal("SourceRefSnapshotUnavailable", provisional.Code);
 
         var applied = await new StagingSyncService(
             new PostgresDiscoveryRepository(db),
