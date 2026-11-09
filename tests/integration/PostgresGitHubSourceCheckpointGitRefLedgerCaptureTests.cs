@@ -618,6 +618,22 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     HttpMethod.Get, obsUrl + "?sourceRepositoryId=foreign"))
                     Assert.Equal(System.Net.HttpStatusCode.NotFound,
                         foreignRepo.StatusCode);
+                // Concurrency/restart replays use the immutable receipt
+                // and must not cause a second provider observation.
+                var parallel = await Task.WhenAll(
+                    Enumerable.Range(0, 3).Select(_ =>
+                        SendAsync(HttpMethod.Post, obsUrl, targetRequest)));
+                foreach (var same in parallel)
+                {
+                    using (same)
+                    {
+                        Assert.Equal(System.Net.HttpStatusCode.OK, same.StatusCode);
+                        using var json = JsonDocument.Parse(
+                            await same.Content.ReadAsStringAsync());
+                        Assert.Equal(observationId,
+                            json.RootElement.GetProperty("id").GetGuid());
+                    }
+                }
                 Assert.Equal(outboundBefore + 2, api.Calls.Count);
             }
 
@@ -694,6 +710,25 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     Assert.Equal(targetReceiptSha,
                         observedRows[0].EvidenceSha256);
                     Assert.Equal("ObservedReadOnly", targetEvents[0].Type);
+                    // Database triggers independently refuse any attempt to
+                    // flip a saved observation or rewrite its audit event.
+                    var rewrite = await Assert.ThrowsAsync<
+                        Npgsql.PostgresException>(() =>
+                        db.Database.ExecuteSqlInterpolatedAsync($"""
+                            UPDATE git_checkpoint_target_observations
+                            SET can_push = {true}
+                            WHERE id = {observationId}
+                            """));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                        rewrite.SqlState);
+                    var eraseAudit = await Assert.ThrowsAsync<
+                        Npgsql.PostgresException>(() =>
+                        db.Database.ExecuteSqlInterpolatedAsync($"""
+                            DELETE FROM git_checkpoint_target_observation_events
+                            WHERE observation_id = {observationId}
+                            """));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                        eraseAudit.SqlState);
                     Assert.False(observedRows[0].CanPush ||
                         observedRows[0].CanRetry || observedRows[0].CanDispatch ||
                         observedRows[0].CanObserveTarget ||
