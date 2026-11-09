@@ -734,6 +734,36 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     Assert.False(first.ReadyForExecution || first.CanPush ||
                         first.CanRetry || first.CanDispatch ||
                         first.MigrationComplete);
+                    // #112: prepare the *next* source-only F-035v2
+                    // request from verified immutable F-097b OIDs, never
+                    // journal fingerprints, baseline F-029 refs, caller path
+                    // or GitHub destination. This does not acquire a file.
+                    var currentComparison = GitMirrorRefReconciler.Compare(new(
+                        latestPlan.Id, latestPlan.ManifestSha256,
+                        fullRefs.SourceEvidenceSha256,
+                        joined.TargetEvidenceSha256,
+                        joined.ExpectedSourceRefs, joined.ExpectedTargetRefs));
+                    var bundlePreparation =
+                        GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+                            latestPlan, joined, fullRefs, currentComparison, first);
+                    Assert.Equal(1, bundlePreparation.EvidenceVersion);
+                    Assert.Equal(first.EvidenceSha256,
+                        bundlePreparation.WorkpackEvidenceSha256);
+                    Assert.Equal(targetReceipt.EvidenceSha256,
+                        bundlePreparation.TargetReceiptSha256);
+                    Assert.Equal(fullRefs.SourceManifestRootSha256,
+                        bundlePreparation.SourceManifestRootSha256);
+                    Assert.Equal(fullRefs.Refs,
+                        bundlePreparation.SourceOnlyRequest.ExpectedRefs);
+                    Assert.Equal(first.WorkpackId,
+                        bundlePreparation.SourceOnlyRequest.WorkpackId);
+                    Assert.False(bundlePreparation.CanAcquireBundle ||
+                        bundlePreparation.CanPush || bundlePreparation.CanRetry ||
+                        bundlePreparation.CanDispatch ||
+                        bundlePreparation.MigrationComplete);
+                    GitIncrementalLaterCheckpointBundleIntegrity.Verify(
+                        bundlePreparation, latestPlan, joined, fullRefs,
+                        currentComparison, first);
                     var replay = await writer.CaptureAsync(
                         run.Id, plan.Id, later.Id, observationId, "repo-1",
                         targetReceipt.EvidenceSha256, candidate.RequestedBy,
