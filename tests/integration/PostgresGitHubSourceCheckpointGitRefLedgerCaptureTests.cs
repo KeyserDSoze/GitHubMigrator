@@ -1054,6 +1054,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     [InlineData("partial")]
     [InlineData("malformed")]
     [InlineData("wrong-oid")]
+    [InlineData("expired-destination")]
+    [InlineData("switched-organization")]
     public async Task F097c4c0d_target_provider_failures_do_not_persist_F031(
         string fault)
     {
@@ -1093,6 +1095,17 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 run.Id, plan.Id, later.Id, "repo-1", reviewer,
                 GitCheckpointTargetHumanReviewStates.ApprovedForObservation,
                 candidate.EvidenceSha256, default);
+        }
+        if (fault is "expired-destination" or "switched-organization")
+        {
+            await using var db = fixture.NewContext();
+            var destination = await db.Connections.SingleAsync(
+                x => x.Id == plan.DestinationConnectionId);
+            if (fault == "expired-destination")
+                destination.ValidatedAtUtc = clock.GetUtcNow().AddMinutes(-6);
+            else
+                destination.Organization = "other-org";
+            await db.SaveChangesAsync();
         }
         var api = new ApiHarness {
             EnableCheckpointTargetObservation = true,
@@ -1134,10 +1147,15 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             });
             using var response = await api.Client.SendAsync(request);
             Assert.Equal(System.Net.HttpStatusCode.Conflict, response.StatusCode);
-            Assert.Contains("CheckpointTargetObservationProviderUnverified",
+            var nonProviderFault = fault is "expired-destination" or
+                "switched-organization";
+            Assert.Contains(nonProviderFault
+                ? "CheckpointTargetObservationPreflightUnverified"
+                : "CheckpointTargetObservationProviderUnverified",
                 await response.Content.ReadAsStringAsync());
             var calls = api.Calls.ToArray();
-            Assert.Equal(fault == "wrong-oid" ? 2 : 1, calls.Length);
+            Assert.Equal(nonProviderFault ? 0 :
+                fault == "wrong-oid" ? 2 : 1, calls.Length);
             Assert.All(calls, call =>
             {
                 Assert.Equal("GET", call.Method);
