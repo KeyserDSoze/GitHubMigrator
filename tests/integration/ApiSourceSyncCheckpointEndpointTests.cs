@@ -87,6 +87,38 @@ public sealed class ApiSourceSyncCheckpointEndpointTests(
         Assert.Equal(before, harness.Calls.Count);
     }
 
+    [Fact]
+    public async Task F093_target_review_is_superadmin_only_disabled_and_without_provider_calls()
+    {
+        var root = "/api/incremental-preparations/" + Guid.NewGuid() +
+            "/operation-plans/" + Guid.NewGuid() +
+            "/source-sync-checkpoints/" + Guid.NewGuid() +
+            "/target-ref-review/" + Guid.NewGuid() +
+            "?sourceRepositoryId=repo-1&expectedTargetEvidenceSha256=" +
+            new string('a', 64);
+        var user = await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword);
+        var admin = await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword);
+        var superadmin = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        var before = harness.Calls.Count;
+        using (var anonymous = await CallAsync(HttpMethod.Get, root, null))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using (var ordinary = await CallAsync(HttpMethod.Get, root, user))
+            Assert.Equal(HttpStatusCode.Forbidden, ordinary.StatusCode);
+        using (var forbidden = await CallAsync(HttpMethod.Get, root, admin))
+            Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+        using var disabled = await CallAsync(HttpMethod.Get,
+            root, superadmin);
+        Assert.Equal(HttpStatusCode.Conflict, disabled.StatusCode);
+        using var json = JsonDocument.Parse(
+            await disabled.Content.ReadAsStringAsync());
+        Assert.Equal("SourceSyncCheckpointDisabled",
+            json.RootElement.GetProperty("error").GetString());
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
     private async Task<HttpResponseMessage> CallAsync(
         HttpMethod method, string path, string? bearer)
     {

@@ -212,6 +212,138 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
                     seed.Run.Id, plan.Id, Guid.NewGuid(), 2, default))).Code);
     }
 
+
+    private static async Task<GitHubTargetRefEvidenceView> TargetRefEvidenceAsync(
+        AppDbContext db,
+        PostgresIncrementalOperationPlanTests.ManualClock clock,
+        IncrementalOperationPlan plan, string sourceRepositoryId,
+        string targetName, IReadOnlyList<GitHubObservedRef> refs)
+    {
+        var destination = await db.Connections.AsNoTracking()
+            .SingleAsync(x => x.Id == plan.DestinationConnectionId);
+        var observation = GitHubRefObservationIntegrity.Seal(
+            plan.Organization, targetName, clock.GetUtcNow(), refs);
+        return await new PostgresGitHubTargetRefEvidenceStore(db, clock)
+            .SaveAsync(plan, sourceRepositoryId, Guid.NewGuid(),
+                destination.ValidatedAtUtc, observation, default);
+    }
+
+    [Fact]
+    public async Task F093_compares_sealed_checkpoint_names_to_current_target_and_pages_without_any_send()
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        await using var db = fixture.NewContext();
+        var (seed, plan) = await SeedPlanAsync(db, clock, changed: 7);
+        var journal = Journal(db, clock);
+        var checkpoint = await journal.CaptureAsync(seed.Run.Id, plan.Id,
+            plan.SnapshotId, null, plan.ManifestSha256,
+            Guid.NewGuid(), default);
+        var destination = await TargetRefEvidenceAsync(db, clock, plan,
+            "repo-1", "migration-one", [
+                new("refs/heads/b-0000", new string('a', 40), "commit"),
+                new("refs/heads/b-0003", new string('b', 40), "commit"),
+                new("refs/heads/target-only", new string('c', 40), "commit")
+            ]);
+        Assert.True(destination.IsCurrent);
+        var page = await journal.ReviewTargetRefNamesAsync(
+            seed.Run.Id, plan.Id, checkpoint.Id, destination.Id,
+            "repo-1", destination.EvidenceSha256, null, 2, default);
+        Assert.Equal(checkpoint.RefChangeManifest!.EvidenceSha256,
+            page.SourceRefManifestSha256);
+        Assert.Equal(checkpoint.RefChangeAttestationSha256,
+            page.SourceRefAttestationSha256);
+        Assert.Equal(destination.EvidenceSha256, page.TargetEvidenceSha256);
+        Assert.Equal(7, page.RepositoryRefChanges);
+        Assert.Equal(2, page.Items.Count);
+        Assert.Equal("SourceAddedTargetPresentReview",
+            page.Items[0].ReviewState);
+        Assert.True(page.Items[0].TargetRefObserved);
+        Assert.Equal("SourceAddedTargetAbsentReview",
+            page.Items[1].ReviewState);
+        Assert.False(page.Items[1].TargetRefObserved);
+        GitHubCheckpointTargetRefReviewIntegrity.VerifyPage(page, 2);
+
+        var all = new List<GitHubCheckpointTargetRefReviewItem>();
+        string? after = null;
+        do
+        {
+            var chunk = await journal.ReviewTargetRefNamesAsync(
+                seed.Run.Id, plan.Id, checkpoint.Id, destination.Id,
+                "repo-1", destination.EvidenceSha256, after, 2,
+                default);
+            GitHubCheckpointTargetRefReviewIntegrity.VerifyPage(
+                chunk, 2, after);
+            all.AddRange(chunk.Items);
+            after = chunk.NextAfter;
+        } while (after is not null);
+        Assert.Equal(7, all.Count);
+        Assert.Equal(7, all.Select(x => x.SourceChange.SourceId)
+            .Distinct(StringComparer.Ordinal).Count());
+        Assert.All(all, item =>
+        {
+            Assert.Equal("Added", item.SourceChange.Kind);
+            Assert.Equal("repo-1", item.SourceChange.SourceRepositoryId);
+            Assert.False(item.ReviewState.Contains("Ready",
+                StringComparison.Ordinal));
+        });
+        Assert.True(all[3].TargetRefObserved);
+        Assert.Equal("SourceAddedTargetPresentReview", all[3].ReviewState);
+
+        await using var reopened = fixture.NewContext();
+        var replay = await Journal(reopened, clock).ReviewTargetRefNamesAsync(
+            seed.Run.Id, plan.Id, checkpoint.Id, destination.Id,
+            "repo-1", destination.EvidenceSha256, null, 2, default);
+        Assert.Equal(page.SourceRefAttestationSha256,
+            replay.SourceRefAttestationSha256);
+        Assert.Equal(page.TargetEvidenceSha256, replay.TargetEvidenceSha256);
+        Assert.Equal(page.Items.ToArray(), replay.Items.ToArray());
+        Assert.Single(await reopened.GitHubSourceSyncCheckpoints.AsNoTracking()
+            .Where(x => x.Id == checkpoint.Id).ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task F093_foreign_stale_and_forged_target_observation_fail_closed()
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        await using var db = fixture.NewContext();
+        var (seed, plan) = await SeedPlanAsync(db, clock, changed: 3);
+        var journal = Journal(db, clock);
+        var receipt = await journal.CaptureAsync(
+            seed.Run.Id, plan.Id, plan.SnapshotId, null,
+            plan.ManifestSha256, Guid.NewGuid(), default);
+        var target = await TargetRefEvidenceAsync(db, clock, plan,
+            "repo-1", "migration-one", [
+                new("refs/heads/b-0000", new string('f', 40), "commit")
+            ]);
+        var foreign = await TargetRefEvidenceAsync(db, clock, plan,
+            "repo-2", "migration-two", []);
+
+        async Task<string> Error(Guid observation, string repository,
+            string proof, string? cursor = null) =>
+            (await Assert.ThrowsAsync<GitHubSourceSyncCheckpointException>(
+                () => journal.ReviewTargetRefNamesAsync(
+                    seed.Run.Id, plan.Id, receipt.Id, observation,
+                    repository, proof, cursor, 2, default))).Code;
+        Assert.Equal("SourceSyncCheckpointTargetReviewStale",
+            await Error(foreign.Id, "repo-1", foreign.EvidenceSha256));
+        Assert.Equal("SourceSyncCheckpointTargetReviewStale",
+            await Error(target.Id, "repo-1", new string('d', 64)));
+        Assert.Equal("SourceSyncCheckpointTargetReviewInvalid",
+            await Error(target.Id, "repo-1", "invalid"));
+        Assert.Equal("SourceSyncCheckpointTargetReviewInvalid",
+            await Error(target.Id, "repo-1", target.EvidenceSha256,
+                System.Text.Json.JsonSerializer.Serialize(new[] {
+                    "repo-2", "refs/heads/b-0000" })));
+        Assert.Equal("SourceSyncCheckpointTargetObservationNotFound",
+            await Error(Guid.NewGuid(), "repo-1", target.EvidenceSha256));
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        Assert.Equal("SourceSyncCheckpointTargetReviewStale",
+            await Error(target.Id, "repo-1", target.EvidenceSha256));
+    }
+
     [Fact]
     public async Task F092_verified_ref_delta_pages_are_bounded_stable_and_source_scoped()
     {
@@ -413,6 +545,12 @@ public sealed class PostgresGitHubSourceSyncCheckpointTests(
         Assert.Equal(1, old.EvidenceVersion);
         Assert.Null(old.RefChangeManifest);
         Assert.Null(old.RefChangeAttestationSha256);
+        Assert.Equal("SourceSyncCheckpointLegacyUnattested",
+            (await Assert.ThrowsAsync<GitHubSourceSyncCheckpointException>(
+                () => journal.ReviewTargetRefNamesAsync(
+                    seed.Run.Id, plan.Id, old.Id, Guid.NewGuid(),
+                    "repo-1", new string('a', 64), null, 2,
+                    default))).Code);
         Assert.Equal("SourceSyncCheckpointLegacyUnattested",
             (await Assert.ThrowsAsync<GitHubSourceSyncCheckpointException>(
                 () => journal.ListRefChangesAsync(
