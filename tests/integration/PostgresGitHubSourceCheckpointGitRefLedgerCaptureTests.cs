@@ -1240,6 +1240,106 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     Assert.Empty(await verifiedDb.IncrementalGitRefReconciliations
                         .AsNoTracking().Where(x => x.SnapshotId ==
                             candidate.SourceSnapshotId).ToArrayAsync());
+                    // #113: FULL F-091/F-097b -> reviewed F-031 ->
+                    // sealed F-038v2 -> REAL local SHA1/SHA256 Git bare
+                    // mirror -> fsck -> UUID.bundle -> same-source lease
+                    // fencing -> independent on-disk rehash -> atomic
+                    // F-035v2 record + immutable audit (no remote writes).
+                    var offline = auditScope.ServiceProvider.GetRequiredService<
+                        GitIncrementalLaterCheckpointLocalBundleAcquisition>();
+                    var rehearsed = await offline.RehearseAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256, default);
+                    Assert.True(rehearsed.BundleBytes > 0);
+                    Assert.False(rehearsed.DurableEvidencePersisted ||
+                        rehearsed.CanPush || rehearsed.CanRetry ||
+                        rehearsed.CanDispatch || rehearsed.MigrationComplete);
+                    var verifier = new LocalGitBundleArtifactStore(
+                        physicalMirror!.BundleRoot);
+                    var committed = await coordinator.CommitAsync(
+                        lease2, rehearsed, run.Id, plan.Id, later.Id,
+                        observationId, "repo-1",
+                        targetReceipt.EvidenceSha256, verifier, default);
+                    Assert.Equal(1, committed.EvidenceVersion);
+                    Assert.Equal(first.WorkpackId, committed.WorkpackId);
+                    Assert.Equal(bundlePreparation.EvidenceSha256,
+                        committed.BundlePlanSha256);
+                    Assert.Equal(first.EvidenceSha256,
+                        committed.WorkpackEvidenceSha256);
+                    Assert.Equal(rehearsed.BundleSha256,
+                        committed.BundleSha256);
+                    Assert.Equal(rehearsed.BundleBytes,
+                        committed.BundleBytes);
+                    Assert.False(committed.ReadyForExecution ||
+                        committed.CanPush || committed.CanRetry ||
+                        committed.CanDispatch || committed.MigrationComplete);
+                    GitIncrementalLaterCheckpointBundleReceiptIntegrity.Verify(
+                        committed, bundlePreparation, rehearsed);
+                    var storedF035 = await verifiedDb
+                        .GitLaterCheckpointBundleEvidence.AsNoTracking()
+                        .SingleAsync(x => x.WorkpackId == first.WorkpackId);
+                    Assert.Equal(committed.EvidenceSha256,
+                        storedF035.EvidenceSha256);
+                    Assert.Equal(committed.BundleSha256,
+                        storedF035.BundleSha256);
+                    Assert.Equal(committed.BundleBytes,
+                        storedF035.BundleBytes);
+                    Assert.Equal(committed.SourceSnapshotId,
+                        storedF035.SourceSnapshotId);
+                    Assert.Equal(committed.TargetReceiptSha256,
+                        storedF035.TargetReceiptSha256);
+                    Assert.False(storedF035.ReadyForExecution ||
+                        storedF035.CanPush || storedF035.CanRetry ||
+                        storedF035.CanDispatch || storedF035.MigrationComplete);
+                    var bundleEvents = await verifiedDb
+                        .GitLaterCheckpointBundleEvents.AsNoTracking()
+                        .Where(x => x.WorkpackId == first.WorkpackId)
+                        .ToArrayAsync();
+                    Assert.Single(bundleEvents);
+                    Assert.Equal("Recorded", bundleEvents[0].Type);
+                    Assert.Equal(committed.EvidenceSha256,
+                        bundleEvents[0].EvidenceSha256);
+                    var recordedLease = await verifiedDb
+                        .GitLaterCheckpointBundleLeases.AsNoTracking()
+                        .SingleAsync(x => x.WorkpackId == first.WorkpackId);
+                    Assert.Equal("Recorded", recordedLease.State);
+                    Assert.Equal(lease2.Generation, recordedLease.Generation);
+                    Assert.Null(recordedLease.LeaseUntilUtc);
+                    Assert.False(await coordinator.ReleaseAsync(
+                        first.WorkpackId, lease2.LeaseToken,
+                        lease2.Generation, candidate.RequestedBy,
+                        lease2.BundlePlanSha256, default));
+                    Assert.Equal("LaterCheckpointBundleLeaseAlreadyRecorded",
+                        (await Assert.ThrowsAsync<GitSourceBundleException>(
+                            () => coordinator.ClaimAsync(run.Id, plan.Id,
+                                later.Id, observationId, first.WorkpackId,
+                                "repo-1", targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy,
+                                TimeSpan.FromMinutes(2), default))).Code);
+                    Assert.Empty(await verifiedDb.GitSourceBundleEvidence
+                        .AsNoTracking().Where(x => x.WorkpackId ==
+                            first.WorkpackId).ToArrayAsync());
+
+                    // SQL must prevent even a directly issued mutation
+                    // of either the persisted physical proof or its event.
+                    var tamperStored = await Assert.ThrowsAsync<
+                        Npgsql.PostgresException>(() =>
+                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                            UPDATE git_later_checkpoint_bundle_evidence
+                            SET can_push = {true}
+                            WHERE workpack_id = {first.WorkpackId}
+                            """));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                        tamperStored.SqlState);
+                    var removeBundleAudit = await Assert.ThrowsAsync<
+                        Npgsql.PostgresException>(() =>
+                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                            DELETE FROM git_later_checkpoint_bundle_events
+                            WHERE workpack_id = {first.WorkpackId}
+                            """));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                        removeBundleAudit.SqlState);
                 }
             }
 
