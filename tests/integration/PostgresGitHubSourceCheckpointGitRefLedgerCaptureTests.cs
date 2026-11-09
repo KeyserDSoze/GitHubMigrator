@@ -1011,11 +1011,40 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         first.WorkpackId, "repo-1",
                         targetReceipt.EvidenceSha256, reviewerId,
                         lease2.Generation, lease2.BundlePlanSha256, default));
-                    var lease3 = await coordinator.ClaimAsync(
-                        run.Id, plan.Id, later.Id, observationId,
-                        first.WorkpackId, "repo-1",
-                        targetReceipt.EvidenceSha256, candidate.RequestedBy,
-                        TimeSpan.FromMinutes(2), default);
+                    // Three independent database scopes race to claim
+                    // the recovered lease (no in-process shared lock).
+                    // Source-first PostgreSQL advisory locks must admit
+                    // EXACTLY one generation-5 claimant.
+                    var contenders = await Task.WhenAll(
+                        Enumerable.Range(0, 3).Select(async _ =>
+                        {
+                            await using var contenderScope =
+                                api.Host.Services.CreateAsyncScope();
+                            var competingStore = contenderScope.ServiceProvider
+                                .GetRequiredService<
+                                    PostgresGitIncrementalLaterCheckpointBundleLeaseStore>();
+                            try
+                            {
+                                var claim = await competingStore.ClaimAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy,
+                                    TimeSpan.FromMinutes(2), default);
+                                return (Claim: claim, Code: (string?)null);
+                            }
+                            catch (GitSourceBundleException ex)
+                            {
+                                return (Claim:
+                                    (GitIncrementalLaterCheckpointBundleLeaseClaim?)null,
+                                    Code: ex.Code);
+                            }
+                        }));
+                    Assert.Single(contenders.Where(x => x.Claim is not null));
+                    Assert.Equal(2, contenders.Count(x =>
+                        x.Code == "LaterCheckpointBundleLeaseBusy"));
+                    var lease3 = contenders.Single(x => x.Claim is not null)
+                        .Claim!;
                     Assert.Equal(5L, lease3.Generation);
                     Assert.NotEqual(lease2.LeaseToken, lease3.LeaseToken);
                     Assert.False(await coordinator.ReleaseAsync(
