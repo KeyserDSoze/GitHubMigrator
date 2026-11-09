@@ -40,6 +40,7 @@ public sealed class ApiHarness : IAsyncLifetime
     public bool EnableCheckpointTargetObservation { get; set; }
     public bool EnableLaterCheckpointAuditRead { get; set; }
     public bool EnableLaterCheckpointWorkpack { get; set; }
+    public bool EnableLaterCheckpointHistory { get; set; }
     public int TargetObjectIdLength { get; set; } = 40;
     // Fake fixed-host provider fault injection; no real outbound network.
     public string TargetObservationFault { get; set; } = "";
@@ -96,6 +97,8 @@ public sealed class ApiHarness : IAsyncLifetime
             values["GitIncrementalLaterCheckpointAudit__Enabled"] = "true";
         if (EnableLaterCheckpointWorkpack)
             values["GitIncrementalLaterCheckpointWorkpack__Enabled"] = "true";
+        if (EnableLaterCheckpointHistory)
+            values["GitIncrementalLaterCheckpointHistory__Enabled"] = "true";
         if (EnableCheckpointTargetObservation)
         {
             values["GitCheckpointTargetObservation__Enabled"] = "true";

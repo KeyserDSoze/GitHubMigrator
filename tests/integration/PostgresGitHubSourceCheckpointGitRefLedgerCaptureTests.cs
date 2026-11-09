@@ -300,6 +300,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableCheckpointTargetObservation = true,
             EnableLaterCheckpointAuditRead = true,
             EnableLaterCheckpointWorkpack = true,
+            EnableLaterCheckpointHistory = true,
             TargetObjectIdLength = oidLength
         };
         try
@@ -398,6 +399,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     await selfReview.Content.ReadAsStringAsync());
             }
 
+            Guid recordedWorkpackId = Guid.Empty;
             string receiptSha;
             Guid receiptId;
             using (var posted = await SendAsync(HttpMethod.Post, root,
@@ -722,6 +724,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         targetReceipt.EvidenceSha256, candidate.RequestedBy,
                         default);
                     Assert.Equal(2, first.EvidenceVersion);
+                    recordedWorkpackId = first.WorkpackId;
                     Assert.Equal("Blocked", first.State);
                     Assert.Equal("WriteBlocked", first.Phase);
                     Assert.Equal(targetReceipt.EvidenceSha256,
@@ -736,6 +739,71 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         targetReceipt.EvidenceSha256, candidate.RequestedBy,
                         default);
                     Assert.Equal(first, replay);
+
+                    // #111 immutable history never serializes provider refs,
+                    // OIDs, stored actor/reviewer UUIDs or write capability.
+                    var historyUrl =
+                        "/api/incremental-preparations/" + run.Id +
+                        "/operation-plans/" + plan.Id +
+                        "/source-sync-checkpoints/" + later.Id +
+                        "/later-workpacks/" + first.WorkpackId +
+                        "/history?sourceRepositoryId=repo-1" +
+                        "&targetObservationId=" + observationId +
+                        "&expectedTargetReceiptSha256=" +
+                        targetReceipt.EvidenceSha256;
+                    var historyCalls = api.Calls.Count;
+                    using (var history = await SendAsync(
+                        HttpMethod.Get, historyUrl))
+                    {
+                        Assert.Equal(System.Net.HttpStatusCode.OK,
+                            history.StatusCode);
+                        using var data = JsonDocument.Parse(
+                            await history.Content.ReadAsStringAsync());
+                        var result = data.RootElement;
+                        Assert.Equal(first.WorkpackId,
+                            result.GetProperty("workpackId").GetGuid());
+                        Assert.Equal(first.EvidenceSha256,
+                            result.GetProperty("evidenceSha256").GetString());
+                        Assert.Equal(first.TargetReceiptSha256,
+                            result.GetProperty("targetReceiptSha256").GetString());
+                        Assert.Equal("Blocked",
+                            result.GetProperty("state").GetString());
+                        Assert.Equal("WriteBlocked",
+                            result.GetProperty("phase").GetString());
+                        Assert.True(result.GetProperty("historicalOnly")
+                            .GetBoolean());
+                        foreach (var flag in new[] {
+                            "currentApprovalVerified", "readyForExecution",
+                            "canPush", "canRetry", "canDispatch",
+                            "migrationComplete"
+                        })
+                            Assert.False(result.GetProperty(flag).GetBoolean());
+                        Assert.Equal(2, result.GetProperty("sourceRefCount")
+                            .GetInt32());
+                        var jsonText = result.GetRawText();
+                        foreach (var forbidden in new[] {
+                            "refs/heads/", "refs/tags/", "objectId",
+                            "itemsJson", "receiptJson", "recordedBy",
+                            "reviewedBy", "requestedBy",
+                            candidate.RequestedBy.ToString("D"),
+                            reviewerId.ToString("D"), ApiHarness.TargetToken
+                        })
+                            Assert.DoesNotContain(forbidden, jsonText,
+                                StringComparison.OrdinalIgnoreCase);
+                    }
+                    Assert.Equal(historyCalls, api.Calls.Count);
+                    using (var wrongScope = await SendAsync(
+                        HttpMethod.Get, historyUrl.Replace(
+                            "targetObservationId=" + observationId,
+                            "targetObservationId=" + Guid.NewGuid())))
+                        Assert.Equal(System.Net.HttpStatusCode.NotFound,
+                            wrongScope.StatusCode);
+                    using (var wrongDigest = await SendAsync(
+                        HttpMethod.Get, historyUrl.Replace(
+                            targetReceipt.EvidenceSha256,
+                            new string('0', 64))))
+                        Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                            wrongDigest.StatusCode);
                     // Restart-like independent DI contexts and concurrent
                     // requests must all replay the same immutable witness;
                     // the shared source advisory lock prevents double INSERT.
@@ -869,6 +937,28 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             }
             if (observationId != Guid.Empty)
             {
+                // F-027 revocation makes new capture invalid, but the
+                // previously sealed proof remains inspectable as HISTORY,
+                // never a renewed approval.
+                await using (var revokedHistory = await SendAsync(
+                    HttpMethod.Get,
+                    "/api/incremental-preparations/" + run.Id +
+                    "/operation-plans/" + plan.Id +
+                    "/source-sync-checkpoints/" + later.Id +
+                    "/later-workpacks/" + recordedWorkpackId +
+                    "/history?sourceRepositoryId=repo-1" +
+                    "&targetObservationId=" + observationId +
+                    "&expectedTargetReceiptSha256=" + targetReceiptSha))
+                {
+                    Assert.Equal(System.Net.HttpStatusCode.OK,
+                        revokedHistory.StatusCode);
+                    using var data = JsonDocument.Parse(
+                        await revokedHistory.Content.ReadAsStringAsync());
+                    Assert.True(data.RootElement.GetProperty("historicalOnly")
+                        .GetBoolean());
+                    Assert.False(data.RootElement.GetProperty(
+                        "currentApprovalVerified").GetBoolean());
+                }
                 await using var scoped = api.Host.Services.CreateAsyncScope();
                 var writer = scoped.ServiceProvider.GetRequiredService<
                     PostgresGitIncrementalLaterCheckpointWorkpackJournal>();
