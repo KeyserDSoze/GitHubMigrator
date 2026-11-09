@@ -31,3 +31,20 @@ evidence **under the PostgreSQL source advisory lock** and verify the
 physical F-060/F-061 mirror, full object closure, F-097c.1 v3 SHA and
 target sandbox before storing a record. No success/push/retry/dispatch
 permission is introduced. Parent #96/#92 remain open.
+
+## Integration verification
+
+Real PostgreSQL 17 integration tests use the completed F-014 source
+discovery and F-090/091 checkpoint fixture, F-097b immutable ledger,
+and an independently sealed F-031 observation. SHA-1 and SHA-256
+source/target ref OIDs are both covered, including fresh readback after
+restarting the DbContext. Negative tests refuse a missing F-097 receipt,
+wrong repo, incorrect checkpoint, incorrect target SHA, mixed SHA-1/
+SHA-256 repositories, tampered F-014 source observations, and expired
+F-029 plans. The F-029 plan may expire **before** an F-031 observation;
+the fail-closed rejection then correctly reports plan staleness first.
+The suite also asserts that no F-095 ledger row is written.
+
+The preflight is intentionally not registered as an executable worker.
+The long-running F-095/F-060/F-061 physical and durable later-epoch
+integration remains open as #96.
