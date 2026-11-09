@@ -75,6 +75,7 @@ public static class GitIncrementalLaterCheckpointBundleReceiptIntegrity
             checkedFile.RecheckedAtUtc < checkedFile.AcquiredAtUtc ||
             recordedAtUtc < checkedFile.RecheckedAtUtc ||
             checkedFile.AcquiredAtUtc.Offset != TimeSpan.Zero ||
+            checkedFile.RecheckedAtUtc.Offset != TimeSpan.Zero ||
             recordedAtUtc.Offset != TimeSpan.Zero ||
             plan.SourceOnlyRequest.SourceRepositoryId is not { Length: >= 1 and <= 256 } ||
             string.IsNullOrWhiteSpace(plan.SourceOnlyRequest.SourceRepositoryId))
@@ -91,6 +92,18 @@ public static class GitIncrementalLaterCheckpointBundleReceiptIntegrity
             canonical.Any(x => x.ObjectId.Length != canonical[0].ObjectId.Length))
             throw Refused();
 
+        // PostgreSQL timestamptz stores microseconds. Canonical
+        // millisecond precision avoids after-restart SHA drift; rounding
+        // the recorded time UP preserves the verified recheck-before-save
+        // temporal ordering even when the caller has sub-ms ticks.
+        var acquiredMs = DateTimeOffset.FromUnixTimeMilliseconds(
+            checkedFile.AcquiredAtUtc.ToUnixTimeMilliseconds());
+        var recordedTicks = recordedAtUtc.ToUnixTimeMilliseconds();
+        var recordedMs = DateTimeOffset.FromUnixTimeMilliseconds(recordedTicks);
+        if (recordedMs < checkedFile.RecheckedAtUtc)
+            recordedMs = DateTimeOffset.FromUnixTimeMilliseconds(
+                checkedFile.RecheckedAtUtc.ToUnixTimeMilliseconds() + 1);
+
         var receipt = new GitIncrementalLaterCheckpointBundleReceipt(
             1, plan.PreparationId, plan.PlanId,
             plan.CheckpointId, plan.SourceSnapshotId, plan.TargetObservationId,
@@ -102,7 +115,7 @@ public static class GitIncrementalLaterCheckpointBundleReceiptIntegrity
             plan.SourceOnlyRequest.ReconciliationSha256,
             checkedFile.BundleFileName, checkedFile.BundleSha256,
             checkedFile.BundleBytes, checkedFile.RefCount,
-            checkedFile.AcquiredAtUtc, recordedAtUtc, actorId, "",
+            acquiredMs, recordedMs, actorId, "",
             false, false, false, false, false);
         return receipt with { EvidenceSha256 = Digest(receipt) };
     }
