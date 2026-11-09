@@ -29,6 +29,187 @@ public sealed class PostgresGitSourceMirrorLifecycleTests(
         db.Database.SqlQueryRaw<DateTimeOffset>(
             "SELECT clock_timestamp() AS \"Value\"").SingleAsync();
 
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task Later_F097_checkpoint_is_physically_verified_under_F061_database_lease(
+        string gitFormat)
+    {
+        using var fixtureGit = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
+        var legacy = fixtureGit.CreatePlan(gitFormat);
+        var (plan, input, full, bundle) =
+            LocalGitSourceCheckpointMirrorMaterializerTests.Fixture(legacy);
+        var workpack = GitSourceCheckpointLocalMaterializationIntegrity.Bind(
+            plan, input, full, bundle);
+        Assert.NotEqual(plan.SnapshotId, workpack.SourceSnapshotId);
+        Assert.NotEqual(
+            GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+                plan.SnapshotId, bundle.WorkpackId),
+            workpack.PhysicalMirrorId);
+
+        await using (var db = fixture.NewContext())
+        {
+            var disabled = new DurableGitSourceCheckpointMirrorMaterializer(
+                fixtureGit.Materializer(), Journal(db));
+            Assert.Equal("SourceCheckpointDurableMirrorDisabled",
+                (await Assert.ThrowsAsync<
+                    GitSourceCheckpointLocalMaterializationException>(() =>
+                        disabled.MaterializeAsync(
+                            plan, input, full, bundle, default))).Code);
+            Assert.Null(await Journal(db).GetAsync(
+                workpack.PhysicalMirrorId, default));
+
+            // A forged F-097 input is refused BEFORE acquiring a lease.
+            Assert.Equal("SourceCheckpointLocalWorkpackInvalid",
+                (await Assert.ThrowsAsync<
+                    GitSourceCheckpointLocalMaterializationException>(() =>
+                        new DurableGitSourceCheckpointMirrorMaterializer(
+                            fixtureGit.Materializer(), Journal(db), true)
+                        .MaterializeAsync(
+                            plan, input with {
+                                SourceSnapshotId = plan.SnapshotId
+                            }, full, bundle, default))).Code);
+            Assert.Null(await Journal(db).GetAsync(
+                workpack.PhysicalMirrorId, default));
+
+            var receipt = await new DurableGitSourceCheckpointMirrorMaterializer(
+                fixtureGit.Materializer(), Journal(db), true)
+                .MaterializeAsync(plan, input, full, bundle, default);
+            Assert.Equal(workpack.PhysicalMirrorId, receipt.PhysicalMirrorId);
+            Assert.Equal(input.SourceSnapshotId, receipt.SourceSnapshotId);
+            Assert.Equal(bundle.WorkpackId, receipt.WorkpackId);
+            Assert.Equal(bundle.BundleSha256, receipt.BundleSha256);
+            Assert.True(receipt.VerifiedObjectCount >= 9);
+            Assert.Equal(workpack.LocalOnlyPlan.SourceRefs,
+                fixtureGit.Refs(fixtureGit.Physical(workpack.LocalOnlyPlan)));
+            Assert.False(receipt.RemotePushInvoked);
+            Assert.False(receipt.RemoteWritesAuthorized);
+            Assert.False(receipt.MayAutomaticallyRetry);
+            Assert.False(receipt.MigrationComplete);
+            var persisted = await Journal(db).GetAsync(
+                workpack.PhysicalMirrorId, default);
+            Assert.NotNull(persisted);
+            Assert.Equal(GitSourceMirrorLifecycleStates.Verified, persisted.State);
+            Assert.Equal(1L, persisted.Generation);
+            Assert.Equal(receipt.EvidenceSha256, persisted.MirrorProofSha256);
+            Assert.Equal(receipt.ObjectSetSha256, persisted.ObjectSetSha256);
+            Assert.Null(persisted.LeasedBy);
+            Assert.Null(persisted.ExpiresAtUtc);
+            Assert.False(persisted.RemotePushInvoked);
+            Assert.False(persisted.RemoteWritesAuthorized);
+            Assert.False(persisted.MayAutomaticallyRetry);
+            Assert.False(persisted.MigrationComplete);
+            Assert.Equal(new[] { "LeaseAcquired", "Verified" },
+                (await Journal(db).EventsAsync(
+                    workpack.PhysicalMirrorId, default))
+                    .Select(e => e.Type).ToArray());
+        }
+
+        // Fresh PostgreSQL connection and F-060 verification after crash/
+        // restart. Reuse does NOT mean trusting the previous F-061 proof.
+        await using (var db = fixture.NewContext())
+        {
+            var replay = await new DurableGitSourceCheckpointMirrorMaterializer(
+                fixtureGit.Materializer(), Journal(db), true)
+                .MaterializeAsync(plan, input, full, bundle, default);
+            var status = await Journal(db).GetAsync(
+                workpack.PhysicalMirrorId, default);
+            Assert.NotNull(status);
+            Assert.Equal(GitSourceMirrorLifecycleStates.Verified, status.State);
+            Assert.Equal(2L, status.Generation);
+            Assert.Equal(replay.EvidenceSha256, status.MirrorProofSha256);
+            Assert.Equal(
+                new[] { "LeaseAcquired", "Verified",
+                    "ReverifyStarted", "Verified" },
+                (await Journal(db).EventsAsync(
+                    workpack.PhysicalMirrorId, default))
+                    .Select(e => e.Type).ToArray());
+        }
+        Assert.Single(Directory.GetDirectories(
+            fixtureGit.MirrorRoot, "*.git"));
+
+        // Corrupt the immutable source-only bundle after a successful
+        // F-061 receipt; the subsequent generation must be quarantined.
+        var bundleFile = Path.Combine(
+            fixtureGit.BundleRoot, bundle.BundleFileName);
+        var bytes = await File.ReadAllBytesAsync(bundleFile);
+        bytes[bytes.Length / 2] ^= 0x55;
+        await File.WriteAllBytesAsync(bundleFile, bytes);
+        await using (var db = fixture.NewContext())
+        {
+            var failure = await Assert.ThrowsAsync<
+                GitSourceSnapshotMirrorException>(() =>
+                    new DurableGitSourceCheckpointMirrorMaterializer(
+                        fixtureGit.Materializer(), Journal(db), true)
+                    .MaterializeAsync(plan, input, full, bundle, default));
+            Assert.Equal("SourceMirrorBundleInvalid", failure.Code);
+        }
+        await using (var db = fixture.NewContext())
+        {
+            var state = await Journal(db).GetAsync(
+                workpack.PhysicalMirrorId, default);
+            Assert.NotNull(state);
+            Assert.Equal(GitSourceMirrorLifecycleStates.RecoveryRequired,
+                state.State);
+            Assert.Equal("SourceMirrorBundleInvalid", state.FailureCode);
+            Assert.Equal(3L, state.Generation);
+            Assert.Equal("Quarantined",
+                (await Journal(db).EventsAsync(
+                    workpack.PhysicalMirrorId, default)).Last().Type);
+            Assert.Equal("SourceMirrorLifecycleQuarantined",
+                (await Assert.ThrowsAsync<GitSourceMirrorLifecycleException>(
+                    () => Journal(db).AcquireAsync(
+                        workpack.LocalOnlyPlan, Guid.NewGuid(),
+                        default))).Code);
+        }
+    }
+
+    [Fact]
+    public async Task Later_checkpoint_three_workers_reverify_only_one_F061_generation_at_a_time()
+    {
+        using var fixtureGit = new LocalGitSourceSnapshotMirrorMaterializerTests.Fixture();
+        var legacy = fixtureGit.CreatePlan("sha1");
+        var (plan, input, full, bundle) =
+            LocalGitSourceCheckpointMirrorMaterializerTests.Fixture(legacy);
+        var workpack = GitSourceCheckpointLocalMaterializationIntegrity.Bind(
+            plan, input, full, bundle);
+
+        async Task<GitSourceSnapshotMirrorProof> RunAsync()
+        {
+            await using var db = fixture.NewContext();
+            return await new DurableGitSourceCheckpointMirrorMaterializer(
+                fixtureGit.Materializer(), Journal(db), true)
+                .MaterializeAsync(plan, input, full, bundle, default);
+        }
+        var results = await Task.WhenAll(
+            Enumerable.Range(0, 3).Select(_ => RunAsync()));
+        Assert.All(results, proof =>
+        {
+            Assert.Equal(workpack.SourceSnapshotId, proof.SourceSnapshotId);
+            Assert.Equal(workpack.PhysicalMirrorId, proof.PhysicalMirrorId);
+            Assert.Equal(results[0].ObjectSetSha256,
+                proof.ObjectSetSha256);
+            Assert.False(proof.RemotePushInvoked);
+            Assert.False(proof.MigrationComplete);
+        });
+
+        await using var inspect = fixture.NewContext();
+        var status = await Journal(inspect).GetAsync(
+            workpack.PhysicalMirrorId, default);
+        Assert.NotNull(status);
+        Assert.Equal(3L, status.Generation);
+        Assert.Equal(GitSourceMirrorLifecycleStates.Verified, status.State);
+        Assert.Equal(1, await inspect.GitSourceMirrorLifecycles
+            .CountAsync(x => x.MirrorId == workpack.PhysicalMirrorId));
+        Assert.Equal(new[] {
+            "LeaseAcquired", "Verified", "ReverifyStarted", "Verified",
+            "ReverifyStarted", "Verified"
+        }, (await Journal(inspect).EventsAsync(
+            workpack.PhysicalMirrorId, default))
+            .Select(x => x.Type).ToArray());
+        Assert.Single(Directory.GetDirectories(fixtureGit.MirrorRoot, "*.git"));
+    }
+
     [Fact]
     public async Task Database_clock_bounds_admission_heartbeat_and_verified_receipt()
     {

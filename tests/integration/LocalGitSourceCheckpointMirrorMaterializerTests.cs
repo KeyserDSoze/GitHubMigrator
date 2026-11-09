@@ -9,7 +9,7 @@ namespace GitHubMigrator.Integration.Tests;
 // No GitHub API, network, F-061 lease or F-095 receipt is used.
 public sealed class LocalGitSourceCheckpointMirrorMaterializerTests
 {
-    private static (
+    internal static (
         IncrementalOperationPlan Plan,
         GitIncrementalCheckpointAuditInputs Input,
         GitHubSourceCheckpointGitRefProof FullRef,
