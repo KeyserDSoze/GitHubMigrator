@@ -191,6 +191,28 @@ builder.Services.AddScoped<IGitIncrementalLaterCheckpointMirrorPhysicalAuditor>(
         clock: sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorVerifiedJournal>();
+// #120: dedicated local-only F-060v2 importer, separated from the
+// historic baseline GitHubTrustedRemoteRead path. Both this import and
+// its worker need independent OFF-by-default feature switches.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointMirrorImportWorkerOptions(
+    Enabled: builder.Configuration.GetValue(
+        "GitIncrementalLaterCheckpointMirrorImportWorker:Enabled", false),
+    LeaseDuration: TimeSpan.FromSeconds(builder.Configuration.GetValue(
+        "GitIncrementalLaterCheckpointMirrorImportWorker:LeaseSeconds", 180)),
+    HeartbeatInterval: TimeSpan.FromMilliseconds(builder.Configuration.GetValue(
+        "GitIncrementalLaterCheckpointMirrorImportWorker:HeartbeatMilliseconds",
+        15000))));
+builder.Services.AddScoped<IGitIncrementalLaterCheckpointMirrorImporter>(sp =>
+    new GitHubMigrator.Infrastructure.GitObjects.LocalGitSourceSnapshotMirrorMaterializer(
+        builder.Configuration["GitSourceBundles:BundleRoot"] ?? "",
+        builder.Configuration[
+            "GitIncrementalLaterCheckpointMirrorVerified:MirrorRoot"] ?? "",
+        sp.GetRequiredService<IGitSourceBundleArtifactVerifier>(),
+        enabled: false,
+        clock: sp.GetRequiredService<TimeProvider>(),
+        laterCheckpointEnabled: builder.Configuration.GetValue(
+            "GitIncrementalLaterCheckpointMirrorImportWorker:LocalImportEnabled", false)));
+builder.Services.AddScoped<GitIncrementalLaterCheckpointMirrorImportWorker>();
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
