@@ -128,6 +128,29 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         }
     }
 
+    // #120: simulate a long-running local source importer whose Git
+    // operations remain cancellation-aware. A second PostgreSQL replica
+    // can revoke the exact held generation during the pending import.
+    private sealed class CancellableMirrorImporter
+        : IGitIncrementalLaterCheckpointMirrorImporter
+    {
+        private readonly TaskCompletionSource<bool> entered = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Entered => entered.Task;
+
+        public async Task<GitIncrementalLaterCheckpointMirrorOfflineAudit>
+            MaterializeLaterCheckpointAsync(
+                GitIncrementalLaterCheckpointMirrorStagingPlan stage,
+                GitIncrementalLaterCheckpointBundleReceipt durable,
+                CancellationToken ct)
+        {
+            entered.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            throw new InvalidOperationException(
+                "Cancelled importer must never return an audit");
+        }
+    }
+
     private static PostgresGitHubSourceCheckpointGitRefLedger Ledger(
         AppDbContext db, TimeProvider clock) =>
         new(db, clock, new(true),
@@ -354,19 +377,21 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     // The reviewer identity comes from JWT claims, even when the caller
     // tries to smuggle two different actor UUIDs into the JSON request.
     [Theory]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected, false, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, true, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected, false, false, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, true, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, true)]
     public async Task F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_immutable(
         int oidLength, string decision, bool verifyPhysical,
-        bool corruptPhysical, bool runWorker, bool failWorker)
+        bool corruptPhysical, bool runWorker, bool failWorker,
+        bool fenceWorker)
     {
         var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
             DateTimeOffset.UtcNow);
