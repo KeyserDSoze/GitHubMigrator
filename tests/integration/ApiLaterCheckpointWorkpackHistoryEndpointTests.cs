@@ -126,6 +126,22 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2_local_import_worker_is_default_OFF_with_no_DB_or_provider_work()
+    {
+        var originalCalls = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var worker = scope.ServiceProvider.GetRequiredService<
+            GitIncrementalLaterCheckpointMirrorImportWorker>();
+        var refused = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+            () => worker.RunAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                "repo-1", new string('a', 64), Guid.NewGuid(),
+                Guid.NewGuid(), default));
+        Assert.Equal("LaterCheckpointMirrorImportWorkerDisabled", refused.Code);
+        Assert.Equal(originalCalls, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F061v2_physical_Verified_writer_is_default_OFF_with_zero_provider_calls()
     {
         var before = harness.Calls.Count;
