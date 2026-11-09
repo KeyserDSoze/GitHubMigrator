@@ -275,6 +275,37 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
         GitIncrementalLaterCheckpointMirrorStagingIntegrity.Verify(
             staged, plan, selection, x.Source, prepared, receipt, pack);
 
+        // #114: the independent offline shape check does NOT replace the
+        // live source-locked F-091/F-097b/F-031 provenance preflight.
+        GitIncrementalLaterCheckpointMirrorStagingIntegrity
+            .VerifyOfflineCandidate(staged, receipt);
+        var physical = GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity
+            .Seal(staged, receipt, new string('c', 64), 25, now);
+        Assert.Equal(1, physical.EvidenceVersion);
+        Assert.Equal(staged.EvidenceSha256, physical.StagingEvidenceSha256);
+        Assert.Equal(staged.PhysicalMirrorId, physical.PhysicalMirrorId);
+        Assert.Equal(staged.SourceSnapshotId, physical.SourceSnapshotId);
+        Assert.False(physical.DurableEvidencePersisted || physical.CanMaterialize ||
+            physical.CanPush || physical.CanRetry || physical.CanDispatch ||
+            physical.MigrationComplete);
+        Assert.Equal(0, physical.F061LeaseGeneration);
+        GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity.Verify(
+            physical, staged, receipt);
+        foreach (var changed in new[] {
+            physical with { SourceSnapshotId = plan.SnapshotId },
+            physical with { BundleSha256 = new string('0', 64) },
+            physical with { ObjectSetSha256 = new string('0', 64) },
+            physical with { ObjectCount = 26 },
+            physical with { F061LeaseGeneration = 1 },
+            physical with { DurableEvidencePersisted = true },
+            physical with { CanPush = true },
+            physical with { EvidenceSha256 = new string('0', 64) }
+        })
+            Assert.Equal("LaterCheckpointMirrorOfflineAuditInvalid",
+                Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                    GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity
+                        .Verify(changed, staged, receipt)).Code);
+
         foreach (var altered in new[] {
             staged with { CanMaterialize = true },
             staged with { CanPush = true },
