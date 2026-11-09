@@ -298,6 +298,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableCheckpointHumanReview = true,
             EnableCheckpointTargetReadPreflight = true,
             EnableCheckpointTargetObservation = true,
+            EnableLaterCheckpointAuditRead = true,
             TargetObjectIdLength = oidLength
         };
         try
@@ -659,6 +660,44 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         .ForReadOnlyComparison(latestPlan, later, fullRefs,
                             targetReceipt);
                     Assert.Equal(2, joined.EvidenceVersion);
+
+                    // A second, independent PostgreSQL preflight verifies
+                    // the current reviewer, source chain, destination TTL,
+                    // immutable F-031 audit and newest checkpoint. It is
+                    // separately OFF-by-default, and cannot insert F-032.
+                    await using var auditScope = api.Host.Services.CreateAsyncScope();
+                    var reader = auditScope.ServiceProvider.GetRequiredService<
+                        PostgresGitIncrementalLaterCheckpointAuditPreflight>();
+                    var verified = await reader.ReadAsync(run.Id, plan.Id,
+                        later.Id, observationId, "repo-1",
+                        targetReceipt.EvidenceSha256, default);
+                    Assert.Equal(joined.EvidenceVersion, verified.EvidenceVersion);
+                    Assert.Equal(joined.TargetEvidenceSha256,
+                        verified.TargetEvidenceSha256);
+                    Assert.True(joined.ExpectedSourceRefs.SequenceEqual(
+                        verified.ExpectedSourceRefs));
+                    Assert.True(joined.ExpectedTargetRefs.SequenceEqual(
+                        verified.ExpectedTargetRefs));
+                    Assert.Equal("GitLaterCheckpointPreflightEvidenceChanged",
+                        (await Assert.ThrowsAsync<
+                            GitIncrementalCheckpointPreflightException>(() =>
+                            reader.ReadAsync(run.Id, plan.Id, later.Id,
+                                Guid.NewGuid(), "repo-1",
+                                targetReceipt.EvidenceSha256,
+                                default))).Code);
+                    Assert.Equal("GitLaterCheckpointPreflightEvidenceChanged",
+                        (await Assert.ThrowsAsync<
+                            GitIncrementalCheckpointPreflightException>(() =>
+                            reader.ReadAsync(run.Id, plan.Id, later.Id,
+                                observationId, "repo-1",
+                                new string('0', 64), default))).Code);
+                    Assert.Equal("GitLaterCheckpointPreflightEvidenceChanged",
+                        (await Assert.ThrowsAsync<
+                            GitIncrementalCheckpointPreflightException>(() =>
+                            reader.ReadAsync(run.Id, plan.Id, later.Id,
+                                observationId, "foreign-repo",
+                                targetReceipt.EvidenceSha256,
+                                default))).Code);
                     Assert.Equal(fullRefs.EvidenceSha256,
                         joined.SourceFullRefProofSha256);
                     Assert.Equal(targetReceipt.EvidenceSha256,
@@ -713,6 +752,18 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     blockedObservation.StatusCode);
                 Assert.Contains("CheckpointTargetObservationPreflightUnverified",
                     await blockedObservation.Content.ReadAsStringAsync());
+            }
+            if (observationId != Guid.Empty)
+            {
+                await using var scoped = api.Host.Services.CreateAsyncScope();
+                var reader = scoped.ServiceProvider.GetRequiredService<
+                    PostgresGitIncrementalLaterCheckpointAuditPreflight>();
+                Assert.Equal("GitLaterCheckpointPreflightApprovalUnverified",
+                    (await Assert.ThrowsAsync<
+                        GitIncrementalCheckpointPreflightException>(() =>
+                        reader.ReadAsync(run.Id, plan.Id, later.Id,
+                            observationId, "repo-1", targetReceiptSha!,
+                            default))).Code);
             }
             if (observationId != Guid.Empty)
             {

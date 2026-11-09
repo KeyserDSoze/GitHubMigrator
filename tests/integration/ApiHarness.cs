@@ -38,6 +38,7 @@ public sealed class ApiHarness : IAsyncLifetime
     public bool EnableCheckpointHumanReview { get; set; }
     public bool EnableCheckpointTargetReadPreflight { get; set; }
     public bool EnableCheckpointTargetObservation { get; set; }
+    public bool EnableLaterCheckpointAuditRead { get; set; }
     public int TargetObjectIdLength { get; set; } = 40;
     // Fake fixed-host provider fault injection; no real outbound network.
     public string TargetObservationFault { get; set; } = "";
@@ -90,6 +91,8 @@ public sealed class ApiHarness : IAsyncLifetime
             values["GitHubSourceCheckpointGitRefLedger__Enabled"] = "true";
             values["GitHubSourceSyncCheckpoints__Enabled"] = "true";
         }
+        if (EnableLaterCheckpointAuditRead)
+            values["GitIncrementalLaterCheckpointAudit__Enabled"] = "true";
         if (EnableCheckpointTargetObservation)
         {
             values["GitCheckpointTargetObservation__Enabled"] = "true";

@@ -125,6 +125,10 @@ builder.Services.AddScoped<PostgresGitCheckpointTargetReadPreflight>();
 builder.Services.AddSingleton(new GitCheckpointTargetObservationOptions(
     builder.Configuration.GetValue("GitCheckpointTargetObservation:Enabled", false)));
 builder.Services.AddScoped<PostgresGitCheckpointTargetObservationJournal>();
+// #104 read-only v2 F-091/F-097b + checkpoint F-031 admission; no writer.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointAuditOptions(
+    builder.Configuration.GetValue("GitIncrementalLaterCheckpointAudit:Enabled", false)));
+builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointAuditPreflight>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
