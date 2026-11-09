@@ -32,6 +32,31 @@ public sealed class LocalGitSourceBundleAcquirerTests
             plan.SourceOnlyRequest.SourceRepositoryId, plan.TargetReceiptSha256,
             default);
         Assert.Equal(2, gate.Calls);
+        // Receipt candidate binds the real, independently rehashed
+        // UUID.bundle, never grants F-061 or claims a database INSERT.
+        var receipt = GitIncrementalLaterCheckpointBundleReceiptIntegrity.Seal(
+            plan, result, Guid.NewGuid(), DateTimeOffset.UtcNow);
+        Assert.Equal(1, receipt.EvidenceVersion);
+        Assert.Equal(plan.EvidenceSha256, receipt.BundlePlanSha256);
+        Assert.Equal(result.BundleSha256, receipt.BundleSha256);
+        Assert.Equal(result.BundleBytes, receipt.BundleBytes);
+        Assert.Equal(result.RefCount, receipt.RefCount);
+        Assert.False(receipt.CanPush || receipt.CanRetry ||
+            receipt.CanDispatch || receipt.MigrationComplete ||
+            receipt.ReadyForExecution);
+        GitIncrementalLaterCheckpointBundleReceiptIntegrity.Verify(
+            receipt, plan, result);
+        foreach (var tampered in new[] {
+            receipt with { BundleSha256 = new string('0', 64) },
+            receipt with { BundleBytes = receipt.BundleBytes + 1 },
+            receipt with { WorkpackId = Guid.NewGuid() },
+            receipt with { CanDispatch = true },
+            receipt with { EvidenceSha256 = new string('f', 64) }
+        })
+            Assert.Equal("LaterCheckpointBundleReceiptInvalid",
+                Assert.Throws<GitSourceBundleException>(() =>
+                    GitIncrementalLaterCheckpointBundleReceiptIntegrity.Verify(
+                        tampered, plan, result)).Code);
         Assert.False(result.DurableEvidencePersisted ||
             result.CanPush || result.CanRetry ||
             result.CanDispatch || result.MigrationComplete);
