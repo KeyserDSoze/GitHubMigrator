@@ -148,6 +148,11 @@ builder.Services.AddScoped<IGitIncrementalLaterCheckpointBundleReadPreflight>(
 builder.Services.AddSingleton(new GitIncrementalLaterCheckpointLocalBundleOptions(
     builder.Configuration.GetValue("GitIncrementalLaterCheckpointLocalBundle:Enabled", false)));
 builder.Services.AddScoped<GitIncrementalLaterCheckpointLocalBundleAcquisition>();
+// #113 source-first durable lease coordination is independently default-OFF.
+// No public API, local runner dispatch, DB bundle evidence or GitHub write.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointBundleLeaseOptions(
+    builder.Configuration.GetValue("GitIncrementalLaterCheckpointBundleLease:Enabled", false)));
+builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointBundleLeaseStore>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
