@@ -385,6 +385,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableLaterCheckpointDurableBundle = true,
             EnableLaterCheckpointMirrorStaging = true,
             EnableLaterCheckpointMirrorAdmission = true,
+            EnableLaterCheckpointMirrorLease = true,
             TrustedLocalBundleSourceRoot = physicalMirror.SourceRoot,
             TrustedLocalBundleOutputRoot = physicalMirror.BundleRoot,
             TargetObjectIdLength = oidLength
@@ -1516,40 +1517,75 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         .ToArrayAsync());
                     Assert.False(checkedAdmission.DurableLeasePersisted);
                     Assert.Equal(0L, checkedAdmission.F061LeaseGeneration);
-                    // #118: test ONLY a synthetic v2 SQL lease row bound to
-                    // genuine F-091/F-097b/F-035v2 evidence. No production
-                    // claim writer or Git side-effect is enabled by this.
-                    var leaseToken = Guid.NewGuid();
+                    // #118: actual internal F-061v2 ClaimAsync uses the
+                    // latest F-091/F-097b/F-031/F-035v2 and DB-clock
+                    // source-first locks. It remains non-authorizing:
+                    // no local import, Verified or GitHub transport.
+                    var leaseStore = auditScope.ServiceProvider
+                        .GetRequiredService<
+                            PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>();
                     var worker = Guid.NewGuid();
-                    var acquired = DateTimeOffset.UtcNow;
-                    await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
-                        INSERT INTO git_later_checkpoint_mirror_leases (
-                            mirror_id, workpack_id, preparation_id, plan_id,
-                            checkpoint_id, source_snapshot_id,
-                            source_connection_id, source_repository_id,
-                            target_observation_id, staging_evidence_sha256,
-                            source_full_ref_proof_sha256, source_ref_set_sha256,
-                            workpack_evidence_sha256, bundle_evidence_sha256,
-                            bundle_sha256, target_receipt_sha256,
-                            lease_token, generation, worker_id,
-                            original_bundle_actor_id, state,
-                            acquired_at_utc, lease_until_utc, updated_at_utc)
-                        VALUES ({checkedAdmission.PhysicalMirrorId},
-                            {first.WorkpackId}, {run.Id}, {plan.Id},
-                            {later.Id}, {fullRefs.SnapshotId},
-                            {staging.SourceConnectionId}, {"repo-1"},
-                            {observationId}, {staging.EvidenceSha256},
-                            {fullRefs.EvidenceSha256},
-                            {staging.SourceRefSetSha256},
-                            {first.EvidenceSha256},
-                            {committed.EvidenceSha256},
-                            {committed.BundleSha256},
-                            {targetReceipt.EvidenceSha256},
-                            {leaseToken}, {1L}, {worker},
-                            {candidate.RequestedBy}, {"Held"},
-                            {acquired}, {acquired.AddSeconds(90)},
-                            {acquired})
-                        """);
+                    var acquiredLease = await leaseStore.ClaimAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256,
+                        candidate.RequestedBy, worker,
+                        TimeSpan.FromSeconds(90), default);
+                    Assert.Equal(checkedAdmission.PhysicalMirrorId,
+                        acquiredLease.MirrorId);
+                    Assert.Equal(first.WorkpackId, acquiredLease.WorkpackId);
+                    Assert.Equal(1, acquiredLease.Generation);
+                    Assert.Equal(worker, acquiredLease.WorkerId);
+                    Assert.False(acquiredLease.CanMaterialize ||
+                        acquiredLease.CanPush || acquiredLease.CanRetry ||
+                        acquiredLease.CanDispatch ||
+                        acquiredLease.MigrationComplete);
+                    Assert.Equal("LaterCheckpointMirrorLeaseBusy",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => leaseStore.ClaimAsync(
+                                run.Id, plan.Id, later.Id, observationId,
+                                first.WorkpackId, "repo-1",
+                                targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, Guid.NewGuid(),
+                                TimeSpan.FromSeconds(90), default))).Code);
+                    Assert.Equal("LaterCheckpointMirrorLeaseFenced",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => leaseStore.RenewAsync(
+                                acquiredLease with {
+                                    WorkerId = Guid.NewGuid()
+                                }, TimeSpan.FromSeconds(90),
+                                default))).Code);
+                    var renewed = await leaseStore.RenewAsync(
+                        acquiredLease, TimeSpan.FromSeconds(90), default);
+                    Assert.Equal(acquiredLease.Generation, renewed.Generation);
+                    Assert.Equal(acquiredLease.LeaseToken, renewed.LeaseToken);
+                    Assert.True(renewed.ExpiresAtUtc >=
+                        acquiredLease.ExpiresAtUtc);
+                    Assert.Equal("LaterCheckpointMirrorLeaseFenced",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => leaseStore.RenewAsync(acquiredLease,
+                                TimeSpan.FromSeconds(90), default))).Code);
+                    renewed = await leaseStore.RenewAsync(
+                        renewed, TimeSpan.FromSeconds(90), default);
+                    Assert.Equal(worker, renewed.WorkerId);
+                    var auditTypes = await verifiedDb.Database
+                        .SqlQueryRaw<string>("""
+                            SELECT type AS "Value" FROM
+                            git_later_checkpoint_mirror_lease_events
+                            WHERE mirror_id = (
+                                SELECT mirror_id FROM
+                                git_later_checkpoint_mirror_leases
+                                WHERE workpack_id = (
+                                    SELECT workpack_id FROM
+                                    git_later_checkpoint_bundle_evidence
+                                    WHERE checkpoint_id = (
+                                        SELECT checkpoint_id FROM
+                                        git_later_checkpoint_mirror_leases
+                                        ORDER BY acquired_at_utc DESC LIMIT 1)
+                                    ORDER BY recorded_at_utc DESC LIMIT 1))
+                            """).ToArrayAsync();
+                    Assert.Contains("Acquired", auditTypes);
+                    Assert.Equal(2, auditTypes.Count(t => t == "Renewed"));
                     Assert.Equal(Npgsql.PostgresErrorCodes.CheckViolation,
                         (await Assert.ThrowsAsync<Npgsql.PostgresException>(
                             () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
@@ -1566,14 +1602,6 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 WHERE mirror_id =
                                     {checkedAdmission.PhysicalMirrorId}
                                 """))).SqlState);
-                    await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
-                        INSERT INTO git_later_checkpoint_mirror_lease_events (
-                            mirror_id, generation, worker_id, type,
-                            staging_evidence_sha256, occurred_at_utc)
-                        VALUES ({checkedAdmission.PhysicalMirrorId},
-                            {1L}, {worker}, {"Acquired"},
-                            {staging.EvidenceSha256}, {acquired})
-                        """);
                     Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
                         (await Assert.ThrowsAsync<Npgsql.PostgresException>(
                             () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
