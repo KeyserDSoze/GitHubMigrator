@@ -1007,6 +1007,114 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         }
     }
 
+    // Provider responses cannot manufacture a current F-031 proof.
+    // This is a genuine two-epoch source, signed #108 human decision,
+    // JWT-superadmin reviewer and fixed-host wire adapter. No provider
+    // transport other than GitHub GET is ever issued.
+    [Theory]
+    [InlineData("hidden")]
+    [InlineData("denied")]
+    [InlineData("rate-limited")]
+    [InlineData("redirect")]
+    [InlineData("partial")]
+    [InlineData("malformed")]
+    [InlineData("wrong-oid")]
+    public async Task F097c4c0d_target_provider_failures_do_not_persist_F031(
+        string fault)
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        IncrementalPreparationView run;
+        IncrementalOperationPlan plan;
+        GitHubSourceSyncCheckpointReceipt later;
+        GitCheckpointTargetReReviewCandidate candidate;
+        GitCheckpointTargetHumanReviewDecision review;
+        var reviewer = Guid.NewGuid();
+        await using (var db = fixture.NewContext())
+        {
+            var seed = await SetupAsync(db, clock, 40);
+            run = seed.Preparation;
+            plan = seed.Plan;
+            await Ledger(db, clock).CaptureAsync(
+                run.Id, plan.Id, seed.Checkpoint.Id,
+                "repo-1", seed.ActorId, default);
+            var laterSnapshot = await LaterF014SnapshotAsync(
+                db, clock, plan, 40);
+            later = await new PostgresGitHubSourceSyncCheckpointJournal(
+                db, clock, new(true),
+                new PostgresIncrementalOperationPlanRepository(db, clock),
+                new PostgresStagingRepository(db, clock)).CaptureAsync(
+                    run.Id, plan.Id, laterSnapshot, seed.Checkpoint.Id,
+                    plan.ManifestSha256, seed.ActorId, default);
+            await Ledger(db, clock).CaptureAsync(
+                run.Id, plan.Id, later.Id, "repo-1",
+                seed.ActorId, default);
+            candidate = await ReReview(db, clock).ReadAsync(
+                run.Id, plan.Id, later.Id, "repo-1",
+                seed.ActorId, default);
+            var journal = new PostgresGitCheckpointTargetHumanReviewJournal(
+                db, clock, new(true), ReReview(db, clock));
+            review = await journal.RecordAuthenticatedAsync(
+                run.Id, plan.Id, later.Id, "repo-1", reviewer,
+                GitCheckpointTargetHumanReviewStates.ApprovedForObservation,
+                candidate.EvidenceSha256, default);
+        }
+        var api = new ApiHarness {
+            EnableCheckpointTargetObservation = true,
+            TargetObjectIdLength = 40,
+            TargetObservationFault = fault
+        };
+        try
+        {
+            await api.InitializeAsync();
+            var username = "fault-reviewer-" + Guid.NewGuid().ToString("N");
+            await using (var scope = api.Host.Services.CreateAsyncScope())
+            {
+                var users = scope.ServiceProvider.GetRequiredService<
+                    Microsoft.AspNetCore.Identity.UserManager<ApplicationUser>>();
+                var principal = new ApplicationUser {
+                    Id = reviewer, UserName = username,
+                    MustChangePassword = false
+                };
+                Assert.True((await users.CreateAsync(
+                    principal, ApiHarness.SuperadminPassword)).Succeeded);
+                Assert.True((await users.AddToRoleAsync(
+                    principal, "superadmin")).Succeeded);
+            }
+            var jwt = await api.LoginAsync(
+                username, ApiHarness.SuperadminPassword);
+            using var request = new System.Net.Http.HttpRequestMessage(
+                System.Net.Http.HttpMethod.Post,
+                "/api/incremental-preparations/" + run.Id +
+                "/operation-plans/" + plan.Id +
+                "/source-sync-checkpoints/" + later.Id +
+                "/target-ref-observations");
+            request.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue(
+                    "Bearer", jwt);
+            request.Content = System.Net.Http.Json.JsonContent.Create(new {
+                sourceRepositoryId = "repo-1",
+                expectedCandidateEvidenceSha256 = candidate.EvidenceSha256,
+                expectedHumanReviewEvidenceSha256 = review.EvidenceSha256
+            });
+            using var response = await api.Client.SendAsync(request);
+            Assert.Equal(System.Net.HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("CheckpointTargetObservationProviderUnverified",
+                await response.Content.ReadAsStringAsync());
+            var calls = api.Calls.ToArray();
+            Assert.Single(calls);
+            Assert.Equal("GET", calls[0].Method);
+            Assert.Equal("api.github.com", calls[0].Url.Host);
+            Assert.Equal("Bearer", calls[0].AuthScheme);
+            await using var db = fixture.NewContext();
+            Assert.Empty(await db.GitCheckpointTargetObservations.AsNoTracking()
+                .Where(x => x.CheckpointId == later.Id).ToArrayAsync());
+            Assert.Empty(await db.GitCheckpointTargetObservationEvents.AsNoTracking()
+                .Where(x => x.ObservationId == review.Id).ToArrayAsync());
+        }
+        finally { await api.DisposeAsync(); }
+    }
+
     private static PostgresGitIncrementalCheckpointMirrorPreflight Physical(
         AppDbContext db, TimeProvider clock, bool enabled = true) =>
         new(db, clock, new(enabled),
