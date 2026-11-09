@@ -293,7 +293,10 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 candidate.ObjectFormat);
         }
 
-        var api = new ApiHarness { EnableCheckpointHumanReview = true };
+        var api = new ApiHarness {
+            EnableCheckpointHumanReview = true,
+            EnableCheckpointTargetReadPreflight = true
+        };
         try
         {
             await api.InitializeAsync();
@@ -457,6 +460,62 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 Assert.Equal(System.Net.HttpStatusCode.NotFound,
                     foreign.StatusCode);
 
+            // #109 independent GET-only preflight after #108 review.
+            // Even an approved human decision grants no provider GET.
+            var readUrl = root.Replace("/target-human-review",
+                "/target-read-preflight") +
+                "?sourceRepositoryId=repo-1" +
+                "&expectedCandidateEvidenceSha256=" + candidate.EvidenceSha256 +
+                "&expectedHumanReviewEvidenceSha256=" + receiptSha;
+            using (var read = await SendAsync(HttpMethod.Get, readUrl))
+            {
+                if (decision ==
+                    GitCheckpointTargetHumanReviewStates.ApprovedForObservation)
+                {
+                    Assert.Equal(System.Net.HttpStatusCode.OK, read.StatusCode);
+                    using var json = JsonDocument.Parse(
+                        await read.Content.ReadAsStringAsync());
+                    var witness = json.RootElement;
+                    Assert.Equal(candidate.EvidenceSha256, witness
+                        .GetProperty("candidateEvidenceSha256").GetString());
+                    Assert.Equal(receiptSha, witness
+                        .GetProperty("humanReviewEvidenceSha256").GetString());
+                    Assert.Equal(later.Id, witness
+                        .GetProperty("checkpointId").GetGuid());
+                    foreach (var flag in new[] {
+                        "providerReadAuthorized", "canObserveTarget",
+                        "canPush", "canRetry", "canDispatch", "migrationComplete"
+                    })
+                        Assert.False(witness.GetProperty(flag).GetBoolean());
+                }
+                else
+                {
+                    Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                        read.StatusCode);
+                    Assert.Contains(
+                        "CheckpointTargetReadPreflightHumanApprovalRequired",
+                        await read.Content.ReadAsStringAsync());
+                }
+            }
+            if (decision ==
+                GitCheckpointTargetHumanReviewStates.ApprovedForObservation)
+            {
+                using var wrongReviewer = await SendAsync(
+                    HttpMethod.Get, readUrl, null, otherReviewerToken);
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    wrongReviewer.StatusCode);
+                Assert.Contains(
+                    "CheckpointTargetReadPreflightIndependentReviewerRequired",
+                    await wrongReviewer.Content.ReadAsStringAsync());
+                using var staleDigest = await SendAsync(
+                    HttpMethod.Get, readUrl.Replace(
+                        candidate.EvidenceSha256, new string('0', 64)));
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    staleDigest.StatusCode);
+                Assert.Contains("CheckpointTargetReadPreflightCandidateChanged",
+                    await staleDigest.Content.ReadAsStringAsync());
+            }
+
             // Revoke the historical F-027 review: future POSTs must fail,
             // but committed immutable audit history remains retrievable.
             await using (var db = fixture.NewContext())
@@ -480,6 +539,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 using var json = JsonDocument.Parse(
                     await history.Content.ReadAsStringAsync());
                 Assert.Equal(receiptId, json.RootElement.GetProperty("id").GetGuid());
+            }
+            using (var readAfterRevocation = await SendAsync(
+                HttpMethod.Get, readUrl))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    readAfterRevocation.StatusCode);
+                Assert.Contains("CheckpointTargetReadPreflightSourceUnverified",
+                    await readAfterRevocation.Content.ReadAsStringAsync());
             }
             Assert.Equal(outboundBefore, api.Calls.Count);
             await using (var db = fixture.NewContext())
