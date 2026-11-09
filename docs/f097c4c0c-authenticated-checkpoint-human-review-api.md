@@ -9,8 +9,14 @@ append-only independent-human journal: it does **not** authorize destination rea
 
 All three routes require the real `PasswordChanged` JWT policy,
 the `superadmin` role and the existing staging-sync rate limiter.
-The API is **off by default**; explicitly configure
-`GitCheckpointTargetHumanReview:Enabled=true` to enable it.
+The API is **off by default**. Full verified review requires three
+independent explicit opt-ins:
+`GitCheckpointTargetHumanReview:Enabled=true`,
+`GitCheckpointTargetReReview:Enabled=true`, and
+`GitHubSourceCheckpointGitRefLedger:Enabled=true`.
+The existing `GitHubSourceSyncCheckpoints:Enabled` prerequisite also
+remains mandatory. Enabling only the HTTP route never bypasses the
+source-evidence gates.
 
 Base path:
 `/api/incremental-preparations/{id}/operation-plans/{planId}/source-sync-checkpoints/{checkpointId}/target-human-review`
@@ -42,8 +48,10 @@ F-038, destination push, retry, dispatch or migration completion.
 
 Domain tests cover historical self-contained digest and authority tampering.
 API integration exercises 401/403 across roles, disabled-by-default
-superadmin 409 and zero outbound provider requests. The existing real
-PostgreSQL two-epoch tests validate the #107 journal. Full opt-in
+superadmin 409 and zero outbound provider requests. The real
+PostgreSQL two-epoch tests also validate authenticated-path requester
+lookup, independent reviewer enforcement and historical readback across
+restart/expiry. Full opt-in
 HTTP positive/negative review and historical audit readback coverage,
 restart/concurrency via authenticated requests and read-only
 Playwright work remain required before closing #108.

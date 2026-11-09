@@ -107,6 +107,13 @@ builder.Services.AddScoped<IncrementalOperationPlanService>();
 // review. The default is OFF and neither endpoint calls GitHub.
 builder.Services.AddSingleton(new GitCheckpointTargetHumanReviewOptions(
     builder.Configuration.GetValue("GitCheckpointTargetHumanReview:Enabled", false)));
+// Independent prerequisites remain OFF unless explicitly enabled.
+// The ledger reads only trusted F-014 source evidence, never request OIDs.
+builder.Services.AddSingleton(new GitCheckpointTargetReReviewOptions(
+    builder.Configuration.GetValue("GitCheckpointTargetReReview:Enabled", false)));
+builder.Services.AddSingleton(new GitHubSourceCheckpointGitRefLedgerOptions(
+    builder.Configuration.GetValue("GitHubSourceCheckpointGitRefLedger:Enabled", false)));
+builder.Services.AddScoped<PostgresGitHubSourceCheckpointGitRefLedger>();
 builder.Services.AddScoped<PostgresGitCheckpointTargetReReviewPrerequisites>();
 builder.Services.AddScoped<PostgresGitCheckpointTargetHumanReviewJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(

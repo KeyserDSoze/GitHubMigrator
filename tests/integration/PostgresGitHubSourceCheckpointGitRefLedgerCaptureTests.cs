@@ -318,10 +318,23 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 .AsNoTracking().Where(x => x.PlanId == plan.Id)
                 .ToArrayAsync());
 
-            receipt = await enabled.RecordAsync(
+            var presented = await enabled.ReadAuthenticatedCandidateAsync(
+                run.Id, plan.Id, later.Id, "repo-1", default);
+            Assert.Equal(candidate.EvidenceSha256, presented.EvidenceSha256);
+            Assert.Equal(requester, presented.RequestedBy);
+            Assert.Equal("CheckpointHumanReviewIndependentReviewerRequired",
+                (await Assert.ThrowsAsync<
+                    GitCheckpointTargetHumanReviewException>(() =>
+                    enabled.RecordAuthenticatedAsync(run.Id, plan.Id,
+                        later.Id, "repo-1", requester, decision,
+                        candidate.EvidenceSha256, default))).Code);
+            receipt = await enabled.RecordAuthenticatedAsync(
                 run.Id, plan.Id, later.Id, "repo-1",
-                requester, reviewer, decision,
-                candidate.EvidenceSha256, default);
+                reviewer, decision, candidate.EvidenceSha256, default);
+            Assert.Equal(receipt, await enabled.InspectScopedAsync(
+                run.Id, plan.Id, later.Id, "repo-1", default));
+            Assert.Null(await enabled.InspectScopedAsync(
+                run.Id, plan.Id, later.Id, "foreign-repo", default));
             Assert.Equal(1, receipt.EvidenceVersion);
             Assert.Equal(later.Id, receipt.CheckpointId);
             Assert.Equal(candidate.SourceSnapshotId, receipt.SourceSnapshotId);
@@ -366,6 +379,12 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 .ToArrayAsync());
             var journal = new PostgresGitCheckpointTargetHumanReviewJournal(
                 db, clock, new(true), ReReview(db, clock));
+            // Readback remains verifiable after restart without granting
+            // provider access or trusting an unscoped receipt GUID.
+            Assert.Equal(receipt, await journal.InspectScopedAsync(
+                run.Id, plan.Id, later.Id, "repo-1", default));
+            Assert.Null(await journal.InspectScopedAsync(
+                run.Id, Guid.NewGuid(), later.Id, "repo-1", default));
             Assert.Equal("CheckpointHumanReviewConflict",
                 (await Assert.ThrowsAsync<
                     GitCheckpointTargetHumanReviewException>(() =>
@@ -419,6 +438,10 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             await db.SaveChangesAsync();
 
             clock.Advance(TimeSpan.FromMinutes(6));
+            // Expired mutable validation prevents NEW approval, not
+            // immutable historical decision audit/readback.
+            Assert.Equal(receipt, await journal.InspectScopedAsync(
+                run.Id, plan.Id, later.Id, "repo-1", default));
             Assert.Equal("CheckpointHumanReviewCandidateUnverified",
                 (await Assert.ThrowsAsync<
                     GitCheckpointTargetHumanReviewException>(() =>
