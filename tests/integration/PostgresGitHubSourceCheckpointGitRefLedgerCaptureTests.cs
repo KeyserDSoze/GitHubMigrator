@@ -1310,6 +1310,20 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         first.WorkpackId, lease2.LeaseToken,
                         lease2.Generation, candidate.RequestedBy,
                         lease2.BundlePlanSha256, default));
+                    // Restart-like replay first rechecks immutable F-091,
+                    // F-031, F-038, F-035 event and actual binary SHA/bytes.
+                    // It does not reacquire a lease or run Git again.
+                    var durable = auditScope.ServiceProvider.GetRequiredService<
+                        PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
+                    var replayReceipt = await durable.CaptureAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256, candidate.RequestedBy,
+                        default);
+                    Assert.Equal(committed, replayReceipt);
+                    Assert.Single(await verifiedDb.GitLaterCheckpointBundleEvents
+                        .AsNoTracking().Where(x => x.WorkpackId ==
+                            first.WorkpackId).ToArrayAsync());
                     Assert.Equal("LaterCheckpointBundleLeaseAlreadyRecorded",
                         (await Assert.ThrowsAsync<GitSourceBundleException>(
                             () => coordinator.ClaimAsync(run.Id, plan.Id,
@@ -1408,6 +1422,34 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         "currentApprovalVerified").GetBoolean());
                 }
                 await using var scoped = api.Host.Services.CreateAsyncScope();
+                var historicalDurable = scoped.ServiceProvider
+                    .GetRequiredService<
+                        PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
+                var historicalReceipt = await historicalDurable.CaptureAsync(
+                    run.Id, plan.Id, later.Id, observationId,
+                    recordedWorkpackId, "repo-1", targetReceiptSha!,
+                    candidate.RequestedBy, default);
+                Assert.Equal(recordedWorkpackId,
+                    historicalReceipt.WorkpackId);
+                Assert.False(historicalReceipt.CanPush ||
+                    historicalReceipt.CanRetry ||
+                    historicalReceipt.CanDispatch ||
+                    historicalReceipt.MigrationComplete);
+                // Tamper with actual bytes AFTER a committed proof: SQL
+                // remains immutable, but the replay must fail closed.
+                var physicalBundle = Path.Combine(
+                    physicalMirror!.BundleRoot,
+                    recordedWorkpackId.ToString("N") + ".bundle");
+                await using (var changeFile = new FileStream(
+                    physicalBundle, FileMode.Append, FileAccess.Write,
+                    FileShare.None))
+                    changeFile.WriteByte(0);
+                Assert.Equal("BundleStoredSizeMismatch",
+                    (await Assert.ThrowsAsync<GitSourceBundleException>(
+                        () => historicalDurable.CaptureAsync(
+                            run.Id, plan.Id, later.Id, observationId,
+                            recordedWorkpackId, "repo-1", targetReceiptSha!,
+                            candidate.RequestedBy, default))).Code);
                 var bundleReader = scoped.ServiceProvider.GetRequiredService<
                     PostgresGitIncrementalLaterCheckpointBundleReadPreflight>();
                 Assert.Equal("LaterCheckpointBundleReadProvenanceUnverified",
