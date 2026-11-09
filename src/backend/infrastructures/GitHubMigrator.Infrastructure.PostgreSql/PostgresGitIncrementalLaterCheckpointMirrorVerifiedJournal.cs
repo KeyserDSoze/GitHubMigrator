@@ -71,166 +71,166 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorVerifiedJournal(
             original.LeaseUntilUtc != lease.ExpiresAtUtc)
             throw Refused("LaterCheckpointMirrorVerifiedLeaseFenced");
 
-        // Real bare-Git fsck and exact full F-097b ref/OID closure is
-        // done TWICE by the trusted physical auditor, without any SQL
-        // transaction/long-held source advisory lock. It checks local
-        // UUID.bundle bytes before AND after Git and uses safe roots.
-        GitIncrementalLaterCheckpointMirrorOfflineAudit observed;
+        // All known physical, bundle or live-approval failures after the
+        // verified lease admission quarantine only the same worker and
+        // generation. The source SQL transaction is disposed/rolled back
+        // before the catch obtains its fresh short lock.
         try
         {
-            observed = await physical.AuditAsync(stage, durable, ct);
+            // Real bare-Git fsck and exact full F-097b ref/OID closure is
+            // done TWICE by the trusted physical auditor, without any SQL
+            // transaction/long-held source advisory lock. It checks local
+            // UUID.bundle bytes before AND after Git and uses safe roots.
+            var observed = await physical.AuditAsync(stage, durable, ct);
             GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity
                 .Verify(observed, stage, durable);
+            if (observed.VerifiedAtUtc < original.AcquiredAtUtc)
+                throw Refused("LaterCheckpointMirrorVerifiedProofPreLease");
+
+            // Source or target approval could have been revoked while Git
+            // was being verified. Re-run the entire independent #117 live
+            // gate AND physical F-035v2 file read before final transaction.
+            var latest = await admission.ReadAsync(preparationId, planId,
+                lease.CheckpointId, targetObservationId, lease.WorkpackId,
+                sourceRepositoryId, expectedTargetReceiptSha256,
+                lease.BundleActorId, ct);
+            if (latest.PhysicalMirrorId != stage.PhysicalMirrorId ||
+                latest.SourceSnapshotId != stage.SourceSnapshotId ||
+                latest.StagingEvidenceSha256 != stage.EvidenceSha256 ||
+                latest.BundleEvidenceSha256 != durable.EvidenceSha256 ||
+                latest.BundleSha256 != durable.BundleSha256 ||
+                latest.SourceFullRefProofSha256 != stage.SourceFullRefProofSha256 ||
+                latest.SourceRefSetSha256 != stage.SourceRefSetSha256)
+                throw Refused("LaterCheckpointMirrorVerifiedAdmissionChanged");
+
+            // Only short DB and on-disk bundle SHA rehash work under source
+            // lock; never execute a Git subprocess within a DB transaction.
+            await using var tx = await db.Database.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, ct);
+            await leaseStore.LockAsync(stage.SourceConnectionId, planId, ct);
+            await leaseStore.RequireLiveLockedAsync(
+                latest, lease.BundleActorId, ct);
+            var now = await leaseStore.DatabaseNowAsync(ct);
+            var current = await leaseStore.ReadLeaseAsync(lease.MirrorId, ct)
+                ?? throw Refused("LaterCheckpointMirrorVerifiedLeaseMissing");
+            PostgresGitIncrementalLaterCheckpointMirrorLeaseStore
+                .RequireSameScope(current, latest, lease.BundleActorId);
+            RequireExactLease(current, lease);
+            if (current.State != "Held" ||
+                current.LeaseUntilUtc != lease.ExpiresAtUtc ||
+                current.LeaseUntilUtc <= now ||
+                now < observed.VerifiedAtUtc ||
+                now - observed.VerifiedAtUtc > MaximumPhysicalProofAge ||
+                observed.VerifiedAtUtc < current.AcquiredAtUtc)
+                throw Refused("LaterCheckpointMirrorVerifiedLeaseFenced");
+
+            // This verifier only reopens trusted UUID.bundle and rehashes
+            // its bytes, no Git. A saved SHA or prior filesystem check is
+            // not enough at the last source-locked PostgreSQL boundary.
+            var measured = await fileVerifier.VerifyAsync(
+                new GitSourceBundleView(lease.WorkpackId, planId, Guid.Empty,
+                    sourceRepositoryId, durable.SourceEvidenceSha256,
+                    durable.ReconciliationSha256, durable.BundleFileName,
+                    durable.BundleSha256, durable.BundleBytes, durable.RefCount,
+                    durable.AcquiredAtUtc, false, false), ct);
+            if (measured.WorkpackId != lease.WorkpackId ||
+                measured.BundleSha256 != durable.BundleSha256 ||
+                measured.BundleBytes != durable.BundleBytes ||
+                measured.IsCurrent || measured.ReadyForExecution)
+                throw Refused("LaterCheckpointMirrorVerifiedBundleChanged");
+
+            var proof = GitIncrementalLaterCheckpointMirrorVerifiedIntegrity.Seal(
+                stage, durable, observed, lease.WorkerId,
+                lease.LeaseToken, lease.Generation, now);
+            var existing = await db.Database.SqlQuery<long>($"""
+                SELECT count(*)::bigint AS "Value"
+                FROM git_later_checkpoint_mirror_verified_evidence
+                WHERE mirror_id = {lease.MirrorId} OR
+                    workpack_id = {lease.WorkpackId}
+                """).SingleAsync(ct);
+            if (existing != 0)
+                throw Refused("LaterCheckpointMirrorVerifiedAlreadyRecorded");
+
+            // PostgreSQL BEFORE INSERT verifies every immutable property
+            // against the Held lease + its exact unexpired generation.
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO git_later_checkpoint_mirror_verified_evidence (
+                    mirror_id, workpack_id, evidence_version,
+                    preparation_id, plan_id, source_snapshot_id,
+                    checkpoint_id, target_observation_id,
+                    worker_id, lease_token, lease_generation,
+                    staging_evidence_sha256, full_ref_proof_sha256,
+                    bundle_evidence_sha256, bundle_sha256,
+                    source_ref_set_sha256, git_object_format,
+                    object_set_sha256, object_count,
+                    physical_verified_at_utc, recorded_at_utc,
+                    evidence_sha256, durable_evidence_persisted,
+                    can_materialize, can_push, can_retry, can_dispatch,
+                    migration_complete)
+                VALUES ({proof.PhysicalMirrorId}, {proof.WorkpackId},
+                    {proof.EvidenceVersion}, {proof.PreparationId},
+                    {proof.PlanId}, {proof.SourceSnapshotId},
+                    {proof.CheckpointId}, {proof.TargetObservationId},
+                    {proof.WorkerId}, {proof.LeaseToken},
+                    {proof.LeaseGeneration}, {proof.StagingEvidenceSha256},
+                    {proof.FullRefProofSha256}, {proof.BundleEvidenceSha256},
+                    {proof.BundleSha256}, {proof.SourceRefSetSha256},
+                    {proof.GitObjectFormat}, {proof.ObjectSetSha256},
+                    {proof.ObjectCount}, {proof.PhysicalVerifiedAtUtc},
+                    {proof.RecordedAtUtc}, {proof.EvidenceSha256},
+                    {true}, {false}, {false}, {false}, {false}, {false})
+                """, ct);
+
+            // Fenced transition to a TERMINAL Verified state and the single
+            // immutable Verified event are committed with the receipt.
+            var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE git_later_checkpoint_mirror_leases
+                SET state = 'Verified', lease_until_utc = NULL,
+                    object_set_sha256 = {proof.ObjectSetSha256},
+                    object_count = {proof.ObjectCount},
+                    mirror_proof_sha256 = {proof.EvidenceSha256},
+                    verified_at_utc = {proof.PhysicalVerifiedAtUtc},
+                    has_verified_local_objects = true,
+                    updated_at_utc = {proof.RecordedAtUtc}
+                WHERE mirror_id = {lease.MirrorId}
+                    AND workpack_id = {lease.WorkpackId}
+                    AND state = 'Held'
+                    AND worker_id = {lease.WorkerId}
+                    AND lease_token = {lease.LeaseToken}
+                    AND generation = {lease.Generation}
+                    AND staging_evidence_sha256 = {lease.StagingEvidenceSha256}
+                    AND lease_until_utc = {lease.ExpiresAtUtc}
+                    AND lease_until_utc > {proof.RecordedAtUtc}
+                    AND NOT has_verified_local_objects
+                    AND NOT can_materialize
+                    AND NOT can_push AND NOT can_retry
+                    AND NOT can_dispatch AND NOT migration_complete
+                """, ct);
+            if (updated != 1)
+                throw Refused("LaterCheckpointMirrorVerifiedLeaseFenced");
+
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO git_later_checkpoint_mirror_lease_events (
+                    mirror_id, generation, worker_id, type,
+                    staging_evidence_sha256, occurred_at_utc)
+                VALUES ({lease.MirrorId}, {lease.Generation},
+                    {lease.WorkerId}, {"Verified"},
+                    {lease.StagingEvidenceSha256}, {proof.RecordedAtUtc})
+                """, ct);
+            await tx.CommitAsync(ct);
+            return proof;
         }
-        catch (GitSourceSnapshotMirrorException)
+        catch (Exception ex) when (ex is GitSourceSnapshotMirrorException or
+            GitSourceBundleException)
         {
-            // If the trusted physical Git proof fails, the owner must
-            // quarantine the still-fenced generation. No automatic Git
-            // repair, mirror overwrite, lease replacement or retry.
-            // Never mask the original physical verification failure.
             try
             {
-                await leaseStore.QuarantineAsync(
-                    lease, "PhysicalAuditFailed", CancellationToken.None);
+                await leaseStore.QuarantineAsync(lease,
+                    "VerifiedCompletionFailed", CancellationToken.None);
             }
             catch (GitSourceSnapshotMirrorException) { }
             throw;
         }
-        if (observed.VerifiedAtUtc < original.AcquiredAtUtc)
-            throw Refused("LaterCheckpointMirrorVerifiedProofPreLease");
-
-        // Source or target approval could have been revoked while Git
-        // was being verified. Re-run the entire independent #117 live
-        // gate AND physical F-035v2 file read before final transaction.
-        var latest = await admission.ReadAsync(preparationId, planId,
-            lease.CheckpointId, targetObservationId, lease.WorkpackId,
-            sourceRepositoryId, expectedTargetReceiptSha256,
-            lease.BundleActorId, ct);
-        if (latest.PhysicalMirrorId != stage.PhysicalMirrorId ||
-            latest.SourceSnapshotId != stage.SourceSnapshotId ||
-            latest.StagingEvidenceSha256 != stage.EvidenceSha256 ||
-            latest.BundleEvidenceSha256 != durable.EvidenceSha256 ||
-            latest.BundleSha256 != durable.BundleSha256 ||
-            latest.SourceFullRefProofSha256 != stage.SourceFullRefProofSha256 ||
-            latest.SourceRefSetSha256 != stage.SourceRefSetSha256)
-            throw Refused("LaterCheckpointMirrorVerifiedAdmissionChanged");
-
-        // Only short DB and on-disk bundle SHA rehash work under source
-        // lock; never execute a Git subprocess within a DB transaction.
-        await using var tx = await db.Database.BeginTransactionAsync(
-            IsolationLevel.ReadCommitted, ct);
-        await leaseStore.LockAsync(stage.SourceConnectionId, planId, ct);
-        await leaseStore.RequireLiveLockedAsync(
-            latest, lease.BundleActorId, ct);
-        var now = await leaseStore.DatabaseNowAsync(ct);
-        var current = await leaseStore.ReadLeaseAsync(lease.MirrorId, ct)
-            ?? throw Refused("LaterCheckpointMirrorVerifiedLeaseMissing");
-        PostgresGitIncrementalLaterCheckpointMirrorLeaseStore
-            .RequireSameScope(current, latest, lease.BundleActorId);
-        RequireExactLease(current, lease);
-        if (current.State != "Held" ||
-            current.LeaseUntilUtc != lease.ExpiresAtUtc ||
-            current.LeaseUntilUtc <= now ||
-            now < observed.VerifiedAtUtc ||
-            now - observed.VerifiedAtUtc > MaximumPhysicalProofAge ||
-            observed.VerifiedAtUtc < current.AcquiredAtUtc)
-            throw Refused("LaterCheckpointMirrorVerifiedLeaseFenced");
-
-        // This verifier only reopens trusted UUID.bundle and rehashes
-        // its bytes, no Git. A saved SHA or prior filesystem check is
-        // not enough at the last source-locked PostgreSQL boundary.
-        var measured = await fileVerifier.VerifyAsync(
-            new GitSourceBundleView(lease.WorkpackId, planId, Guid.Empty,
-                sourceRepositoryId, durable.SourceEvidenceSha256,
-                durable.ReconciliationSha256, durable.BundleFileName,
-                durable.BundleSha256, durable.BundleBytes, durable.RefCount,
-                durable.AcquiredAtUtc, false, false), ct);
-        if (measured.WorkpackId != lease.WorkpackId ||
-            measured.BundleSha256 != durable.BundleSha256 ||
-            measured.BundleBytes != durable.BundleBytes ||
-            measured.IsCurrent || measured.ReadyForExecution)
-            throw Refused("LaterCheckpointMirrorVerifiedBundleChanged");
-
-        var proof = GitIncrementalLaterCheckpointMirrorVerifiedIntegrity.Seal(
-            stage, durable, observed, lease.WorkerId,
-            lease.LeaseToken, lease.Generation, now);
-        var existing = await db.Database.SqlQuery<long>($"""
-            SELECT count(*)::bigint AS "Value"
-            FROM git_later_checkpoint_mirror_verified_evidence
-            WHERE mirror_id = {lease.MirrorId} OR
-                workpack_id = {lease.WorkpackId}
-            """).SingleAsync(ct);
-        if (existing != 0)
-            throw Refused("LaterCheckpointMirrorVerifiedAlreadyRecorded");
-
-        // PostgreSQL BEFORE INSERT verifies every immutable property
-        // against the Held lease + its exact unexpired generation.
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO git_later_checkpoint_mirror_verified_evidence (
-                mirror_id, workpack_id, evidence_version,
-                preparation_id, plan_id, source_snapshot_id,
-                checkpoint_id, target_observation_id,
-                worker_id, lease_token, lease_generation,
-                staging_evidence_sha256, full_ref_proof_sha256,
-                bundle_evidence_sha256, bundle_sha256,
-                source_ref_set_sha256, git_object_format,
-                object_set_sha256, object_count,
-                physical_verified_at_utc, recorded_at_utc,
-                evidence_sha256, durable_evidence_persisted,
-                can_materialize, can_push, can_retry, can_dispatch,
-                migration_complete)
-            VALUES ({proof.PhysicalMirrorId}, {proof.WorkpackId},
-                {proof.EvidenceVersion}, {proof.PreparationId},
-                {proof.PlanId}, {proof.SourceSnapshotId},
-                {proof.CheckpointId}, {proof.TargetObservationId},
-                {proof.WorkerId}, {proof.LeaseToken},
-                {proof.LeaseGeneration}, {proof.StagingEvidenceSha256},
-                {proof.FullRefProofSha256}, {proof.BundleEvidenceSha256},
-                {proof.BundleSha256}, {proof.SourceRefSetSha256},
-                {proof.GitObjectFormat}, {proof.ObjectSetSha256},
-                {proof.ObjectCount}, {proof.PhysicalVerifiedAtUtc},
-                {proof.RecordedAtUtc}, {proof.EvidenceSha256},
-                {true}, {false}, {false}, {false}, {false}, {false})
-            """, ct);
-
-        // Fenced transition to a TERMINAL Verified state and the single
-        // immutable Verified event are committed with the receipt.
-        var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
-            UPDATE git_later_checkpoint_mirror_leases
-            SET state = 'Verified', lease_until_utc = NULL,
-                object_set_sha256 = {proof.ObjectSetSha256},
-                object_count = {proof.ObjectCount},
-                mirror_proof_sha256 = {proof.EvidenceSha256},
-                verified_at_utc = {proof.PhysicalVerifiedAtUtc},
-                has_verified_local_objects = true,
-                updated_at_utc = {proof.RecordedAtUtc}
-            WHERE mirror_id = {lease.MirrorId}
-                AND workpack_id = {lease.WorkpackId}
-                AND state = 'Held'
-                AND worker_id = {lease.WorkerId}
-                AND lease_token = {lease.LeaseToken}
-                AND generation = {lease.Generation}
-                AND staging_evidence_sha256 = {lease.StagingEvidenceSha256}
-                AND lease_until_utc = {lease.ExpiresAtUtc}
-                AND lease_until_utc > {proof.RecordedAtUtc}
-                AND NOT has_verified_local_objects
-                AND NOT can_materialize
-                AND NOT can_push AND NOT can_retry
-                AND NOT can_dispatch AND NOT migration_complete
-            """, ct);
-        if (updated != 1)
-            throw Refused("LaterCheckpointMirrorVerifiedLeaseFenced");
-
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO git_later_checkpoint_mirror_lease_events (
-                mirror_id, generation, worker_id, type,
-                staging_evidence_sha256, occurred_at_utc)
-            VALUES ({lease.MirrorId}, {lease.Generation},
-                {lease.WorkerId}, {"Verified"},
-                {lease.StagingEvidenceSha256}, {proof.RecordedAtUtc})
-            """, ct);
-        await tx.CommitAsync(ct);
-        return proof;
     }
 
     private static void RequireStage(
