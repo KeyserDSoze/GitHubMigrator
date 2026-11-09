@@ -44,19 +44,59 @@ OIDs, credentials, secrets, object paths, Git URLs or outbound HTTP.
 An approval does **not** authorize GitHub provider GET, F-031, F-032,
 F-038, destination push, retry, dispatch or migration completion.
 
-## Test scope and remaining work
+## Read-only operator inspection
 
-Domain tests cover historical self-contained digest and authority tampering.
-API integration exercises 401/403 across roles, disabled-by-default
-superadmin 409, opt-in malformed/unknown-checkpoint 400/404/409,
-and zero outbound provider requests. The real
-PostgreSQL two-epoch tests also validate authenticated-path requester
-lookup, independent reviewer enforcement and historical readback across
-restart/expiry. Full opt-in
-HTTP positive/negative review and historical audit readback coverage,
-restart/concurrency via authenticated requests and read-only
-Playwright work remain required before closing #108.
+The source-checkpoint history displays a collapsed, superadmin-only
+`SourceCheckpointHumanReview` widget for each source repository in
+an F-091 v2 later checkpoint (not a baseline checkpoint). The panel
+performs **GET only**, on explicit user interaction:
+
+1. Try the exact scoped immutable decision/audit readback.
+2. If there is no decision, preview the current verified candidate
+   using `GET /candidate`; a superseded/revoked candidate remains blocked.
+3. Check that all five authority flags are `false`, SHA-256s have valid
+   lowercase shape, the checkpoint/snapshot/plan/repository mapping
+   matches what is displayed, and the two reviewer/requester IDs are
+   different for a historical decision. A server payload inventing
+   execution/observation authority is rejected before display.
+
+The web UI offers **no** decision POST, provider GET, credential
+entry, Git URL, remote write, or execution/retry action. It is an
+inspection aid only. The independently authenticated approval action
+is intentionally kept in the separate backend API.
+
+## Tested boundaries
+
+- SHA-1 and SHA-256 domain/integrity tests reject decision tampering,
+  forged authority bits and changed reviewer/candidate SHA.
+- PostgreSQL tests create two real immutable F-014/F-091/F-097b
+  source epochs. The second, not the stale F-029 baseline, is the
+  only candidate. The authenticated HTTP test logs in as a real
+  superadmin (JWT), previews the candidate, rejects stale SHA and
+  foreign repository, submits approval for SHA-1 or rejection for
+  SHA-256, proves claimant spoofing has no effect, replays exactly,
+  refuses a conflicting decision, verifies scoped historical GET
+  after F-027 revocation, and confirms no F-031/F-032 inserts or
+  outbound GitHub transport.
+- Existing real PostgreSQL journal tests cover four
+  SHA-1/SHA-256 approval/rejection combinations, restart and
+  concurrent replay, immutability of both row and event, expired
+  validations, old-review revocation and verified historical
+  readback. HTTP negative tests cover 401/403 roles, default
+  disabled 409 and opt-in missing/invalid checkpoint 400/404/409.
+- Playwright tests verify GET-only audit inspection, candidate-only
+  fallback and rejection of a response claiming forbidden authority.
+  The frontend is not the trust boundary; the PostgreSQL journal
+  verifies the evidence and event.
+
+## What remains outside this issue
 
 Parent #105 still requires separate checkpoint-bound provider-read
-authorization and actual fresh F-031 target observation. #104/#103/
-#100/#96/#92 remain open. Only sole `main`; no feature branches or PRs.
+authorization and an actual fresh, immutable F-031 target observation
+for a later checkpoint, under independent source/review revalidation.
+Only after that can #104/#103 use current F-032/F-038/F-035 workpacks
+and #100/#96/#92 integrate physical mirror ancestry.
+
+All writes in this issue target the PostgreSQL decision journal only;
+all five destination authority flags stay false. Changes are directly
+on sole `main`, with no feature branches or PRs.
