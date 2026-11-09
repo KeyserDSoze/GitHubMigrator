@@ -1,0 +1,55 @@
+# F-097c.4c.0a — Verify later checkpoint target re-review prerequisites
+
+Child [#106](https://github.com/KeyserDSoze/GitHubMigrator/issues/106)
+of [#105](https://github.com/KeyserDSoze/GitHubMigrator/issues/105).
+Checkpoint-specific F-031 capture and full source-locked workpack
+#104/#103/#100 remain **unfinished**.
+
+## Why this is separate from legacy F-031
+
+F-029 has a deliberate safety requirement: when a newer F-025 source
+snapshot arrives, the original F-029 plan becomes `IsCurrent=false`.
+The original F-031 target evidence writer refuses to seal any new
+observation using that historical plan. Real two-epoch SHA-1 and
+SHA-256 PostgreSQL tests proved this. Changing the flag would allow a
+stale reviewed mapping to authorize destination operations.
+
+## Internal, non-executable candidate verifier
+
+`PostgresGitCheckpointTargetReReviewPrerequisites.ReadAsync` is
+off by default. It **never calls a GitHub provider**, reads credentials,
+writes F-031, or queues any work. The caller supplies only the
+identifiers of an independently persisted F-029 review and latest
+F-091 checkpoint, source repository and operator. The service replays
+the complete stored F-097b source Git ref/OID evidence chain and
+verifies the source-selected checkpoint BEFORE acquiring a write
+transaction.
+
+Inside the existing *source-first* PostgreSQL advisory lock, the
+service rechecks the last completed source staging sync, latest
+F-091 checkpoint, immutable F-097 full-ref proof identity, original
+F-029 manifest and its single reviewed source-to-GitHub mapping,
+historical human F-027 approval event, unchanged source and
+destination validated connection identities, and destination
+validation age (at most five minutes). It does not pretend the
+historical F-029 is current. Any missing, superseded, foreign,
+unreviewed, expired or tampered evidence is refused.
+
+`GitCheckpointTargetReReviewIntegrity.Seal` makes a deterministic,
+versioned SHA-256 digest of source snapshot/checkpoint/F-097 full
+ref root, baseline F-029 review/mapping, original reviewer and
+candidate operator. The record deliberately contains NO credentials,
+network URLs or target Git OIDs. All five capabilities
+(`CanObserveTarget`, `CanPush`, `CanRetry`, `CanDispatch`,
+`MigrationComplete`) are **false**, always. It is NOT an
+authorization to make an external request.
+
+## Next boundaries
+
+A *new independent checkpoint-scoped human review/approval*, followed
+by a fresh, credential-scoped read-only GitHub GET, and a distinct
+immutable **checkpoint-specific F-031 observation** still must be
+designed, persisted and verified under the source lock in #105.
+Only then can #104 and #103 create a later-checkpoint F-032/F-038
+and F-035 source-only bundle without violating historical F-029
+integrity. No remote GitHub push or migration-complete authority.
