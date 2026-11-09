@@ -390,6 +390,33 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         """));
             Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
                 mutation.SqlState);
+            // The audit event is independently immutable as well:
+            // an attacker must not be able to rewrite a rejection
+            // as a purported human approval.
+            var eventMutation = await Assert.ThrowsAsync<
+                Npgsql.PostgresException>(() =>
+                    db.Database.ExecuteSqlInterpolatedAsync($"""
+                        UPDATE git_checkpoint_target_human_review_events
+                        SET type = {"ApprovedForObservation"}
+                        WHERE decision_id = {receipt.Id}
+                        """));
+            Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                eventMutation.SqlState);
+
+            // Revoking the old F-027 approval invalidates the source
+            // prerequisite even when an earlier human decision exists.
+            var oldReview = await db.IncrementalReviews.SingleAsync(
+                x => x.PreparationId == run.Id);
+            oldReview.State = IncrementalReviewStates.Revoked;
+            await db.SaveChangesAsync();
+            Assert.Equal("CheckpointHumanReviewCandidateUnverified",
+                (await Assert.ThrowsAsync<
+                    GitCheckpointTargetHumanReviewException>(() =>
+                    journal.RecordAsync(run.Id, plan.Id, later.Id,
+                        "repo-1", requester, reviewer, decision,
+                        candidate.EvidenceSha256, default))).Code);
+            oldReview.State = IncrementalReviewStates.ApprovedForPlanning;
+            await db.SaveChangesAsync();
 
             clock.Advance(TimeSpan.FromMinutes(6));
             Assert.Equal("CheckpointHumanReviewCandidateUnverified",
