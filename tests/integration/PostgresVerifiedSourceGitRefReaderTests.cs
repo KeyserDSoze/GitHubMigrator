@@ -184,8 +184,10 @@ public sealed class PostgresVerifiedSourceGitRefReaderTests(PostgresDraftFixture
 
         // Before the worker seals and publishes the source manifest,
         // a historical checkpoint may not consume provisional ref pages.
-        await Assert.ThrowsAsync<DiscoveryRefManifestException>(() =>
+        var provisional = await Assert.ThrowsAsync<
+            IncrementalGitRefReconciliationException>(() =>
             reader.ReadSealedSnapshotAsync(plan, job.Id, "repo-1", default));
+        Assert.Equal("SourceRefManifestUnavailable", provisional.Code);
 
         var applied = await new StagingSyncService(
             new PostgresDiscoveryRepository(db),
