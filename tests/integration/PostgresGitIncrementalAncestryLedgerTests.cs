@@ -164,6 +164,44 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
     }
 
     [Fact]
+    public async Task F095_six_concurrent_replicas_admit_exactly_one_receipt_and_event()
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        PostgresIncrementalOperationPlanTests.Seed seed;
+        IncrementalOperationPlan plan;
+        GitHubSourceSyncCheckpointReceipt checkpoint;
+        GitHubTargetRefEvidenceView target;
+        await using (var setup = fixture.NewContext())
+            (seed, plan, checkpoint, target) = await SetupAsync(setup, clock);
+
+        var sandboxId = Guid.NewGuid();
+        var contexts = Enumerable.Range(0, 6)
+            .Select(_ => fixture.NewContext()).ToArray();
+        try
+        {
+            var all = await Task.WhenAll(contexts.Select(db =>
+                CaptureAsync(Ledger(db, clock), seed, plan, checkpoint,
+                    target, sandboxId, Guid.NewGuid())));
+            Assert.Single(all.Select(x => x.Id).Distinct());
+            Assert.Single(all.Select(x => x.Receipt.EvidenceSha256).Distinct());
+            Assert.All(all, x => Assert.False(x.CanPush ||
+                x.CanRetry || x.CanDispatch || x.MigrationComplete));
+
+            await using var verify = fixture.NewContext();
+            Assert.Equal(1, await verify.GitIncrementalAncestryLedgers
+                .AsNoTracking().CountAsync(x => x.PlanId == plan.Id));
+            Assert.Equal(1, await verify.GitIncrementalAncestryLedgerEvents
+                .AsNoTracking().CountAsync(x => x.LedgerId == all[0].Id));
+        }
+        finally
+        {
+            foreach (var db in contexts)
+                await db.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task F095_same_target_proof_with_new_physical_audit_refuses_conflicting_replay()
     {
         var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
