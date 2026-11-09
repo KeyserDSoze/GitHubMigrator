@@ -62,8 +62,8 @@ public static class GitIncrementalCheckpointWorkpackSchema
                     ALTER TABLE git_checkpoint_source_workpack_proofs
                     ADD CONSTRAINT ck_f097c4c1_source_only CHECK (
                         length(source_repository_id) BETWEEN 1 AND 256
-                        AND full_ref_proof_sha256 ~ '^[0-9a-f]{64}$'
-                        AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND full_ref_proof_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND length(receipt_json) BETWEEN 100 AND 8192
                         AND NOT can_push AND NOT can_retry
                         AND NOT can_dispatch AND NOT migration_complete);
@@ -74,7 +74,7 @@ public static class GitIncrementalCheckpointWorkpackSchema
                     ALTER TABLE git_checkpoint_source_workpack_events
                     ADD CONSTRAINT ck_f097c4c1_event CHECK (
                         type='Recorded' AND
-                        evidence_sha256 ~ '^[0-9a-f]{64}$');
+                        evidence_sha256 ~ '^[0-9a-f]{{64}}$');
                 END IF;
             END $f097c4c1$;
 
