@@ -1247,18 +1247,52 @@ public sealed class ApiEndpointIntegrationTests(ApiHarness harness) : IClassFixt
         using var summariesResponse = await harness.Client.SendAsync(summariesGet);
         Assert.Equal(HttpStatusCode.OK, summariesResponse.StatusCode);
         using var summaryList = JsonDocument.Parse(await summariesResponse.Content.ReadAsStringAsync());
-        var currentSummary = summaryList.RootElement.EnumerateArray()
-            .Single(x => x.GetProperty("id").GetGuid() == jobId);
-        Assert.Equal(1, currentSummary.GetProperty("refCount").GetInt32());
-        Assert.True(currentSummary.GetProperty("refsExternalized").GetBoolean());
-        Assert.True(currentSummary.GetProperty("identitiesExternalized").GetBoolean());
-        Assert.Equal(1, currentSummary.GetProperty("identityCount").GetInt32());
-        Assert.True(currentSummary.GetProperty("membershipsExternalized").GetBoolean());
-        Assert.Equal(0, currentSummary.GetProperty("membershipCount").GetInt32());
-        Assert.True(currentSummary.GetProperty("groupsExternalized").GetBoolean());
-        Assert.Equal(0, currentSummary.GetProperty("groupCount").GetInt32());
-        Assert.True(currentSummary.GetProperty("aclsExternalized").GetBoolean());
-        Assert.Equal(0, currentSummary.GetProperty("aclEntryCount").GetInt32());
+        // The list is intentionally capped at 25 most recent discoveries;
+        // parallel integration runs can add more recent snapshots. Do not
+        // mistake a missing first-page entry for missing durable evidence.
+        var summaries = summaryList.RootElement.EnumerateArray().ToArray();
+        Assert.InRange(summaries.Length, 1, 25);
+        Assert.All(summaries, item =>
+        {
+            Assert.NotEqual(Guid.Empty, item.GetProperty("id").GetGuid());
+            Assert.True(item.TryGetProperty("refCount", out _));
+            Assert.True(item.TryGetProperty("aclEntryCount", out _));
+        });
+        var matching = summaries
+            .Where(x => x.GetProperty("id").GetGuid() == jobId).ToArray();
+        Assert.InRange(matching.Length, 0, 1);
+        if (matching.Length == 1)
+            AssertDiscoverySummary(matching[0], listProjection: true);
+        else
+        {
+            // The authenticated direct lookup is not subject to the list
+            // window; it independently verifies this exact snapshot.
+            using var exactGet = new HttpRequestMessage(HttpMethod.Get,
+                $"/api/discoveries/{jobId}");
+            exactGet.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", admin);
+            using var exactResponse = await harness.Client.SendAsync(exactGet);
+            Assert.Equal(HttpStatusCode.OK, exactResponse.StatusCode);
+            using var exact = JsonDocument.Parse(
+                await exactResponse.Content.ReadAsStringAsync());
+            Assert.Equal(jobId, exact.RootElement.GetProperty("id").GetGuid());
+            AssertDiscoverySummary(exact.RootElement, listProjection: false);
+        }
+
+        static void AssertDiscoverySummary(JsonElement item, bool listProjection)
+        {
+            Assert.Equal(1, item.GetProperty("refCount").GetInt32());
+            Assert.True(item.GetProperty("refsExternalized").GetBoolean());
+            Assert.True(item.GetProperty("identitiesExternalized").GetBoolean());
+            Assert.Equal(1, item.GetProperty("identityCount").GetInt32());
+            Assert.True(item.GetProperty("membershipsExternalized").GetBoolean());
+            Assert.Equal(0, item.GetProperty("membershipCount").GetInt32());
+            Assert.True(item.GetProperty("groupsExternalized").GetBoolean());
+            Assert.Equal(0, item.GetProperty("groupCount").GetInt32());
+            Assert.True(item.GetProperty("aclsExternalized").GetBoolean());
+            Assert.Equal(0, item.GetProperty(
+                listProjection ? "aclEntryCount" : "aclCount").GetInt32());
+        }
 
         // Admin-only source membership pages cannot be read before success
         // and an empty externalized Graph set must not invent membership grants.
