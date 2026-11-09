@@ -4,9 +4,10 @@ using Microsoft.EntityFrameworkCore;
 
 namespace GitHubMigrator.Infrastructure.PostgreSql;
 
-// #113: sole-main v2 local bundle coordination. Nothing in this class
-// writes a bundle file, a remote GitHub ref, or a durable F-035v2 receipt.
-// The held lease is a fencing handle, NEVER execution permission.
+// #113: sole-main v2 local bundle coordination. This store writes
+// ONLY local F-035v2 PostgreSQL evidence after independently verifying
+// trusted Git bundle bytes under a fenced source-locked transaction.
+// It never writes a remote GitHub ref. A lease is NOT execution authority.
 public sealed record GitIncrementalLaterCheckpointBundleLeaseOptions(bool Enabled);
 
 public sealed record GitIncrementalLaterCheckpointBundleLeaseClaim(
