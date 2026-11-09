@@ -48,13 +48,13 @@ public sealed class PostgresGitIncrementalLaterCheckpointDurableBundleJournal(
         }
         catch
         {
-            // A failed or cancelled export may leave UUID.bundle on disk;
-            // it is NOT F-035v2 evidence. Only the same live lease may
-            // release itself. A crashed or expired lease remains quarantined
-            // until explicit audited recovery (never silently adopted).
+            // A failed or cancelled export may leave UUID.bundle on disk.
+            // NEVER auto-release an orphan for silent re-adoption. Mark the
+            // exact held generation RecoveryRequired and require explicit
+            // independent reviewer recovery (not execution permission).
             try
             {
-                await leaseStore.ReleaseAsync(workpackId, lease.LeaseToken,
+                await leaseStore.QuarantineAsync(workpackId, lease.LeaseToken,
                     lease.Generation, actorId, lease.BundlePlanSha256,
                     CancellationToken.None);
             }
