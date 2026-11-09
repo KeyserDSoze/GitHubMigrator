@@ -217,6 +217,104 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
     [Theory]
     [InlineData(40)]
     [InlineData(64)]
+    public void F060v2_staging_binds_durable_checkpoint_bundle_without_legacy_F029_currency(
+        int oidLength)
+    {
+        var x = Fixture(oidLength);
+        var plan = x.Plan with { IsCurrent = false };
+        var selection = x.Selection with {
+            EvidenceVersion = 2, TargetEvidenceSha256 = new string('f', 64)
+        };
+        var compared = GitMirrorRefReconciler.Compare(new(
+            plan.Id, plan.ManifestSha256, x.Source.SourceEvidenceSha256,
+            selection.TargetEvidenceSha256,
+            selection.ExpectedSourceRefs, selection.ExpectedTargetRefs));
+        var pack = GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+            plan, selection, x.Source, compared,
+            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var prepared = GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+            plan, selection, x.Source, compared, pack);
+        var now = DateTimeOffset.UtcNow;
+        var file = new GitIncrementalLaterCheckpointLocalBundleResult(
+            pack.WorkpackId, selection.SourceCheckpointId,
+            selection.SourceSnapshotId, prepared.EvidenceSha256,
+            x.Source.EvidenceSha256, selection.TargetEvidenceSha256,
+            pack.WorkpackId.ToString("N") + ".bundle",
+            new string('a', 64), 8192, x.Source.Refs.Count,
+            now.AddSeconds(-2), now.AddSeconds(-1), false,
+            false, false, false, false);
+        var receipt = GitIncrementalLaterCheckpointBundleReceiptIntegrity.Seal(
+            prepared, file, pack.RecordedBy, now);
+        var staged = GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
+            plan, selection, x.Source, prepared, receipt);
+        Assert.Equal(1, staged.EvidenceVersion);
+        Assert.Equal(0, staged.F061LeaseGeneration);
+        Assert.Equal(selection.SourceSnapshotId, staged.SourceSnapshotId);
+        Assert.NotEqual(plan.SnapshotId, staged.SourceSnapshotId);
+        Assert.Equal(GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+            selection.SourceSnapshotId, pack.WorkpackId),
+            staged.PhysicalMirrorId);
+        Assert.NotEqual(GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+            plan.SnapshotId, pack.WorkpackId), staged.PhysicalMirrorId);
+        Assert.Equal(receipt.EvidenceSha256, staged.BundleEvidenceSha256);
+        Assert.Equal(receipt.BundleSha256, staged.BundleSha256);
+        Assert.Equal(receipt.BundleBytes, staged.BundleBytes);
+        Assert.Equal(pack.EvidenceSha256, staged.WorkpackEvidenceSha256);
+        Assert.Equal(selection.TargetEvidenceSha256, staged.TargetReceiptSha256);
+        Assert.Equal(x.Source.Refs, staged.SourceRefs);
+        Assert.Equal(GitSourceSnapshotMirrorIntegrity.SourceRefsSha(x.Source.Refs),
+            staged.SourceRefSetSha256);
+        Assert.Equal(oidLength == 40 ? "sha1" : "sha256",
+            staged.GitObjectFormat);
+        Assert.False(staged.CanMaterialize || staged.CanPush ||
+            staged.CanRetry || staged.CanDispatch ||
+            staged.MigrationComplete);
+        Assert.Equal(staged.EvidenceSha256,
+            GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
+                plan, selection, x.Source, prepared, receipt).EvidenceSha256);
+        GitIncrementalLaterCheckpointMirrorStagingIntegrity.Verify(
+            staged, plan, selection, x.Source, prepared, receipt);
+
+        foreach (var altered in new[] {
+            staged with { CanMaterialize = true },
+            staged with { CanPush = true },
+            staged with { F061LeaseGeneration = 1 },
+            staged with { PhysicalMirrorId = Guid.NewGuid() },
+            staged with { SourceSnapshotId = plan.SnapshotId },
+            staged with { BundleEvidenceSha256 = new string('0', 64) },
+            staged with { TargetObservationId = Guid.NewGuid() },
+            staged with { EvidenceSha256 = new string('0', 64) },
+            staged with { SourceRefs = [
+                x.Source.Refs[0] with { ObjectId = new string('0', oidLength) },
+                x.Source.Refs[1]
+            ] }
+        })
+            Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+                Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                    GitIncrementalLaterCheckpointMirrorStagingIntegrity.Verify(
+                        altered, plan, selection, x.Source,
+                        prepared, receipt)).Code);
+
+        Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
+                    plan with { IsCurrent = true }, selection,
+                    x.Source, prepared, receipt)).Code);
+        Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
+                    plan, selection, x.Source, prepared,
+                    receipt with { BundleSha256 = new string('f', 64) })).Code);
+        Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
+                    plan, selection with { TargetObservationId = Guid.NewGuid() },
+                    x.Source, prepared, receipt)).Code);
+    }
+
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
     public void F035v2_preparation_is_bounded_to_128_canonical_Git_refs(
         int oidLength)
     {
