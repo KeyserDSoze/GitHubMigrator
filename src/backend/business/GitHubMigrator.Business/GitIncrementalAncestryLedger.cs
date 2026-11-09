@@ -93,6 +93,9 @@ public static class GitIncrementalAncestryLedgerIntegrity
             checkpoint.Proof.SourceConnectionId != plan.SourceConnectionId ||
             source.SnapshotId != plan.SnapshotId ||
             source.SourceConnectionId != plan.SourceConnectionId ||
+            // A legacy inline or partial inventory is not an F-014
+            // complete immutable ref manifest. Fail closed for v1.
+            !Sha(source.RefManifestRootSha256) ||
             source.SourceEvidenceSha256 != sealedSource.SourceEvidenceSha256 ||
             match.Length != 1 ||
             target.PlanId != plan.Id ||

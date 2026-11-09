@@ -96,7 +96,7 @@ public sealed class GitIncrementalAncestryLedgerIntegrityTests
             Guid.NewGuid(), now,
             false, false, false, false, refs, attestation, 2);
         var source = VerifiedSourceGitRefIntegrity.Seal(
-            snapshot, sourceId, "repo-1", null,
+            snapshot, sourceId, "repo-1", B,
             [new(Ref, GitOid)]);
         var observation = GitHubRefObservationIntegrity.Seal(
             "gh-org", "target-1", now,
