@@ -63,6 +63,14 @@ public sealed class GitSourceSnapshotMirrorIntegrityTests
         Assert.False(proof.MayAutomaticallyRetry);
         Assert.False(proof.MigrationComplete);
         Assert.Equal(proof.EvidenceSha256,
+            GitSourceSnapshotMirrorIntegrity.MirrorEvidenceSha(
+                plan.SourceSnapshotId, plan.SourceMirrorId,
+                plan.SourceBundle.WorkpackId,
+                plan.SourceBundle.BundleSha256,
+                plan.SourceBundle.SourceEvidenceSha256,
+                GitSourceSnapshotMirrorIntegrity.SourceRefsSha(plan.SourceRefs),
+                plan.SourceRefs.Count, Sha('f'), 18));
+        Assert.Equal(proof.EvidenceSha256,
             GitSourceSnapshotMirrorIntegrity.Seal(
                 plan, Sha('f'), 18,
                 DateTimeOffset.UtcNow.AddSeconds(5)).EvidenceSha256);

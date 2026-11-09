@@ -58,6 +58,43 @@ public sealed class LocalGitIncrementalAncestryAuditorTests
         Assert.NotEqual(proof.EvidenceSha256, proofChanged.EvidenceSha256);
     }
 
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task F096_reads_only_the_workpack_physical_mirror_not_logical_snapshot(
+        string format)
+    {
+        using var repos = new Fixture();
+        var legacy = repos.Setup(format);
+        var physicalId = Guid.NewGuid();
+        var physicalPath = Path.Combine(repos.SourceRoot,
+            physicalId.ToString("N") + ".git");
+        Directory.Move(repos.Source, physicalPath);
+        var bound = legacy with {
+            SourcePhysicalMirrorId = physicalId,
+            SourcePhysicalMirrorProofSha256 = new string('d', 64)
+        };
+        var audited = await repos.Auditor().AuditAsync(bound, default);
+        GitIncrementalAncestryIntegrity.VerifyReceipt(audited);
+        Assert.Equal(physicalId, audited.Request.SourcePhysicalMirrorId);
+        Assert.Equal(format, audited.GitObjectFormat);
+        Assert.Contains(audited.Items, x =>
+            x.Status == GitIncrementalAncestryStatus.FastForwardCandidateBlocked);
+        Assert.False(audited.RemoteTransportInvoked);
+        Assert.False(audited.CanPush);
+        Assert.NotEqual(legacy.SourceSnapshotId, physicalId);
+
+        var missing = await Assert.ThrowsAsync<GitIncrementalAncestryException>(
+            () => repos.Auditor().AuditAsync(bound with {
+                SourcePhysicalMirrorId = Guid.NewGuid()
+            }, default));
+        Assert.Equal("GitAncestryLocalEvidenceRejected", missing.Code);
+        // F-094 v1 cannot reuse this F-060 directory by logical snapshot ID.
+        var legacyError = await Assert.ThrowsAsync<GitIncrementalAncestryException>(
+            () => repos.Auditor().AuditAsync(legacy, default));
+        Assert.Equal("GitAncestryLocalEvidenceRejected", legacyError.Code);
+    }
+
     [Fact]
     public async Task Altered_local_ref_or_object_format_refuses_a_receipt()
     {
