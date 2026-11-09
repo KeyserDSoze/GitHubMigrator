@@ -52,6 +52,16 @@ public sealed class GitIncrementalSourceMirrorBindingTests
     }
 
     [Fact]
+    public void F096_null_plan_remains_a_typed_refusal_after_F097c_extension()
+    {
+        var f = Fixture();
+        var failure = Assert.Throws<GitIncrementalAncestryLedgerException>(() =>
+            GitIncrementalSourceMirrorBindingIntegrity.VerifyContext(
+                null!, f.Source, f.Mirror, f.Now, true));
+        Assert.Equal("GitAncestryLedgerMirrorEvidenceInvalid", failure.Code);
+    }
+
+    [Fact]
     public void F096_verified_F060_workpack_proof_is_bound_to_physical_F094_object_set()
     {
         var f = Fixture();
