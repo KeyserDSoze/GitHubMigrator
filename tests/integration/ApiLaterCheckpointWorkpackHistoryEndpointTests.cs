@@ -126,6 +126,61 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2_physical_Verified_writer_is_default_OFF_with_zero_provider_calls()
+    {
+        var before = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var journal = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointMirrorVerifiedJournal>();
+        var rejected = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+            () => journal.CompleteAsync(null!, Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), "repo-1",
+                new string('a', 64), default));
+        Assert.Equal("LaterCheckpointMirrorVerifiedDisabled", rejected.Code);
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
+    public async Task F061v2_Verified_schema_is_immutable_and_separate_from_legacy_F061()
+    {
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var v2 = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_verified_evidence'::regclass
+                AND confrelid =
+                'git_later_checkpoint_mirror_leases'::regclass
+                AND contype = 'f'
+            """).SingleAsync();
+        var legacy = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_verified_evidence'::regclass
+                AND confrelid =
+                'git_source_mirror_lifecycles'::regclass
+                AND contype = 'f'
+            """).SingleAsync();
+        var checks = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_verified_evidence'::regclass
+                AND conname = 'ck_later_f061v2_verified_safe'
+            """).SingleAsync();
+        var guard = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_trigger
+            WHERE tgrelid =
+                'git_later_checkpoint_mirror_verified_evidence'::regclass
+                AND tgname = 'trg_later_f061v2_verified_guard'
+                AND NOT tgisinternal
+            """).SingleAsync();
+        Assert.Equal(1, v2);
+        Assert.Equal(0, legacy);
+        Assert.Equal(1, checks);
+        Assert.Equal(1, guard);
+    }
+
+    [Fact]
     public async Task F061v2_claim_is_independently_disabled_by_default_without_provider_io()
     {
         var prior = harness.Calls.Count;
