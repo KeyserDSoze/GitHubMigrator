@@ -166,3 +166,67 @@ physical ancestry remain #115/#100/#96.
 
 Do not close #118 before the real test suite and CI are green 4/4, and
 do not claim production readiness from a passing lease test.
+
+
+## #119: physically re-audited, source-locked F-061v2 Verified journal
+
+New `GitIncrementalLaterCheckpointMirrorVerifiedReceipt` is a
+versioned, domain-separated SHA-256 physical source proof binding the
+exact later F-091/F-097b mirror, F-038v2 workpack/F-035v2 binary,
+full ref/OID SHA, physical object closure SHA/count, worker, token,
+generation and verification/recording timestamps. Its
+`DurableEvidencePersisted=true` differs deliberately from the
+non-authorizing F-060v2 and #117 offline witnesses. All
+`CanMaterialize/CanPush/CanRetry/CanDispatch/MigrationComplete`
+fields remain **false**, including in the SQL row and its constraints.
+
+`PostgresGitIncrementalLaterCheckpointMirrorVerifiedJournal` is an
+**independently default-OFF, internal only** writer:
+`GitIncrementalLaterCheckpointMirrorVerified:Enabled=false`.
+Its trusted physical reader also defaults OFF and receives only
+deployment-configured `GitSourceBundles:BundleRoot` and
+`GitIncrementalLaterCheckpointMirrorVerified:MirrorRoot`, never
+client-provided Git paths. It does not auto-import or register a worker.
+
+`CompleteAsync` reads current sealed F-091/F-097b/F-031/F-038v2/F-035v2
+stage and actual UUID.bundle first, independently checks the worker's
+fenced `Held` lease, and invokes the trusted local Git auditor
+**outside PostgreSQL transactions**. The auditor rehashes the bundle
+before and after double local bare-Git fsck/full object closure and
+exact branch/tag ref/OID comparison. A caller cannot pass a
+self-signed digest or fabricated offline receipt to complete the lease.
+
+The journal rereads current approval and file provenance after fsck,
+then enters a brief **source-first -> plan-second** SQL advisory
+transaction. Under lock it independently checks newest source snapshot,
+checkpoint, full F-097b proof, reviewer, F-031 validation TTL,
+F-038v2/F-035v2 and finished F-035v2 lease, and requires the precise
+worker, generation, token and **latest deadline** before recording.
+It rehashes the actual UUID.bundle while locked (no Git subprocess)
+and requires the physical fsck timestamp to follow lease acquisition
+and be no older than two minutes according to the database clock.
+The SQL receipt INSERT, `Held -> Verified` CAS, and unique immutable
+`Verified` event commit atomically in one transaction.
+
+The new `git_later_checkpoint_mirror_verified_evidence` table has
+an immutable BEFORE INSERT/UPDATE/DELETE trigger that additionally
+requires every scoped digest/ID/worker/token/generation to match the
+live **Held** F-061v2 row and the physical proof to have occurred
+after lease acquisition and before its deadline. Non-authorizing
+flags and SHA/graph count limits are enforced by PostgreSQL. It is
+isolated from historical baseline F-061 and F-029.
+
+A real local failure in the physical fsck/bundle audit triggers
+`QuarantineAsync`: one worker-generation-fenced, source-locked
+`RecoveryRequired` transition plus one append-only
+`Quarantined` event; no partial `Verified` proof or automatic
+orphan adoption/overwrite. Replay of a terminal Verified or
+quarantined lease is refused.
+
+The original F-060v2 local importer **remains separately gated**
+and is not yet called by any F-061 worker/heartbeat coordinator.
+Tests invoke it explicitly in sandbox-only SHA-1/SHA-256 scenarios
+to exercise the new Verified writer. An explicit heartbeat across
+physical import, operator-reviewed quarantine recovery, and F-095v3
+physically bound ancestry are separate remaining work under #115
+and #96. No remote GitHub destination operation was added.
