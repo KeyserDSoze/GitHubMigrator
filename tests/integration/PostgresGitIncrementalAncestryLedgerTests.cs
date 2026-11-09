@@ -43,7 +43,7 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
             new PostgresIncrementalOperationPlanRepository(db, clock),
             Checkpoints(db, clock),
             reader ?? new TestedSourceReader(),
-            physical ?? new StubOfflineAuditor());
+            physical ?? new StubOfflineAuditor(clock));
 
     private static PostgresGitHubSourceSyncCheckpointJournal Checkpoints(
         AppDbContext db,
@@ -470,7 +470,8 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
         }
     }
 
-    private sealed class StubOfflineAuditor : ILocalGitIncrementalAncestryAuditor
+    private sealed class StubOfflineAuditor(TimeProvider clock)
+        : ILocalGitIncrementalAncestryAuditor
     {
         public Task<GitIncrementalAncestryReceipt> AuditAsync(
             GitIncrementalAncestryRequest request, CancellationToken ct)
@@ -484,7 +485,7 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
             return Task.FromResult(GitIncrementalAncestryIntegrity.Seal(
                 request, "sha1",
                 new string('d', 64), new string('e', 64),
-                2, 2, [item], DateTimeOffset.UtcNow));
+                2, 2, [item], clock.GetUtcNow()));
         }
     }
 }
