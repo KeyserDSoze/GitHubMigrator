@@ -65,6 +65,22 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F035v2_lease_coordinator_is_independently_disabled_by_default()
+    {
+        var calls = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var store = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointBundleLeaseStore>();
+        var denied = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            store.ClaimAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), "repo-1",
+                new string('a', 64), Guid.NewGuid(), TimeSpan.FromMinutes(2),
+                default));
+        Assert.Equal("LaterCheckpointBundleLeaseDisabled", denied.Code);
+        Assert.Equal(calls, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F035v2_source_bundle_read_is_independently_disabled_by_default()
     {
         var outboundBefore = harness.Calls.Count;

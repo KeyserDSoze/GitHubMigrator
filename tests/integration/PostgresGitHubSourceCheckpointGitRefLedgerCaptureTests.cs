@@ -302,6 +302,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableLaterCheckpointWorkpack = true,
             EnableLaterCheckpointHistory = true,
             EnableLaterCheckpointBundleRead = true,
+            EnableLaterCheckpointBundleLease = true,
             TargetObjectIdLength = oidLength
         };
         try
@@ -796,6 +797,72 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 later.Id, Guid.Empty, first.WorkpackId,
                                 "repo-1", targetReceipt.EvidenceSha256,
                                 default))).Code);
+
+                    // #113: database lease claims are short transactions,
+                    // serialised by source+plan locks. A competing scope
+                    // cannot take the same F-038v2 workpack, and an
+                    // old token cannot release the next generation.
+                    var coordinator = auditScope.ServiceProvider
+                        .GetRequiredService<
+                            PostgresGitIncrementalLaterCheckpointBundleLeaseStore>();
+                    var lease1 = await coordinator.ClaimAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256,
+                        candidate.RequestedBy, TimeSpan.FromMinutes(2),
+                        default);
+                    Assert.Equal(1L, lease1.Generation);
+                    Assert.False(lease1.CanAcquireBundle || lease1.CanPush ||
+                        lease1.CanRetry || lease1.CanDispatch ||
+                        lease1.MigrationComplete);
+                    await using (var parallelScope =
+                        api.Host.Services.CreateAsyncScope())
+                    {
+                        var competing = parallelScope.ServiceProvider
+                            .GetRequiredService<
+                                PostgresGitIncrementalLaterCheckpointBundleLeaseStore>();
+                        Assert.Equal("LaterCheckpointBundleLeaseBusy",
+                            (await Assert.ThrowsAsync<GitSourceBundleException>(
+                                () => competing.ClaimAsync(run.Id, plan.Id,
+                                    later.Id, observationId, first.WorkpackId,
+                                    "repo-1", targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy,
+                                    TimeSpan.FromMinutes(2), default))).Code);
+                    }
+                    Assert.False(await coordinator.ReleaseAsync(
+                        first.WorkpackId, Guid.NewGuid(), lease1.Generation,
+                        candidate.RequestedBy, lease1.BundlePlanSha256,
+                        default));
+                    Assert.True(await coordinator.ReleaseAsync(
+                        first.WorkpackId, lease1.LeaseToken,
+                        lease1.Generation, candidate.RequestedBy,
+                        lease1.BundlePlanSha256, default));
+                    var lease2 = await coordinator.ClaimAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256,
+                        candidate.RequestedBy, TimeSpan.FromMinutes(2),
+                        default);
+                    Assert.Equal(2L, lease2.Generation);
+                    Assert.NotEqual(lease1.LeaseToken, lease2.LeaseToken);
+                    Assert.False(await coordinator.ReleaseAsync(
+                        first.WorkpackId, lease1.LeaseToken,
+                        lease1.Generation, candidate.RequestedBy,
+                        lease1.BundlePlanSha256, default));
+                    var leaseEvents = await verifiedDb
+                        .GitLaterCheckpointBundleLeaseEvents.AsNoTracking()
+                        .Where(x => x.WorkpackId == first.WorkpackId)
+                        .OrderBy(x => x.Id).ToArrayAsync();
+                    Assert.Equal(new[] { "Acquired", "Released", "Acquired" },
+                        leaseEvents.Select(x => x.Type));
+                    Assert.Equal(new long[] { 1, 1, 2 },
+                        leaseEvents.Select(x => x.Generation));
+                    Assert.All(leaseEvents, ev =>
+                        Assert.Equal(bundlePreparation.EvidenceSha256,
+                            ev.BundlePlanSha256));
+                    Assert.Empty(await verifiedDb.GitLaterCheckpointBundleEvidence
+                        .AsNoTracking().Where(x => x.WorkpackId ==
+                            first.WorkpackId).ToArrayAsync());
 
                     var replay = await writer.CaptureAsync(
                         run.Id, plan.Id, later.Id, observationId, "repo-1",
