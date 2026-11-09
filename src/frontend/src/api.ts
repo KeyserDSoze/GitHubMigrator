@@ -102,7 +102,7 @@ export type CheckpointTargetObservation = {
   preparationId: string; planId: string; checkpointId: string;
   sourceSnapshotId: string; sourceRepositoryId: string;
   targetRepositoryName: string; organization: string;
-  objectFormat: 'sha1' | 'sha256'; reviewedBy: string;
+  objectFormat: 'sha1' | 'sha256';
   candidateEvidenceSha256: string; humanReviewEvidenceSha256: string;
   targetEvidenceSha256: string; observedAtUtc: string; refCount: number;
   evidenceSha256: string;
