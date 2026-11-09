@@ -156,19 +156,33 @@ public sealed class PostgresGitCheckpointTargetObservationJournal(
         var human = await db.GitCheckpointTargetHumanReviews.AsNoTracking()
             .SingleOrDefaultAsync(x => x.CheckpointId == checkpointId &&
                 x.SourceRepositoryId == sourceRepositoryId, ct);
-        var humanEvents = human is null
+        GitCheckpointTargetHumanReviewEventRecord[] humanEvents =
+            human is null
             ? [] : await db.GitCheckpointTargetHumanReviewEvents.AsNoTracking()
                 .Where(x => x.DecisionId == human.Id)
                 .Take(2).ToArrayAsync(ct);
         var connection = await db.Connections.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == before.DestinationConnectionId, ct);
+        var planView = await new PostgresIncrementalOperationPlanRepository(
+            db, clock).GetAsync(preparationId, planId, ct);
+        var mappingIsExact = await db.IncrementalOperationSteps.AsNoTracking()
+            .AnyAsync(x => x.PlanId == planId &&
+                x.Kind == "ReviewTargetName" &&
+                x.SourceRepositoryId == sourceRepositoryId &&
+                x.TargetRepositoryName == before.TargetRepositoryName, ct);
         var now = clock.GetUtcNow();
 
-        if (plan.IsCurrent || plan.ReadyForExecution ||
+        if (planView is null || planView.IsCurrent ||
+            planView.ReadyForExecution || !mappingIsExact ||
+            plan.ManifestSha256 != planView.ManifestSha256 ||
+            oldReview is null ||
+            plan.ReviewSha256 != oldReview.DryRunSha256 ||
+            plan.SourceConnectionId != planView.SourceConnectionId ||
+            plan.PreparationId != preparationId ||
             plan.DestinationConnectionId != before.DestinationConnectionId ||
             !string.Equals(plan.Organization, before.Organization,
                 StringComparison.OrdinalIgnoreCase) ||
-            !sync != before.SourceSnapshotId ||
+            sync != before.SourceSnapshotId ||
             newest is null || newest.Id != checkpointId ||
             newest.SnapshotId != before.SourceSnapshotId ||
             newest.CanPush || newest.CanRetry ||
