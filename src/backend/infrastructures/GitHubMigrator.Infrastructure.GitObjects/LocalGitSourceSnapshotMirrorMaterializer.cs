@@ -12,7 +12,8 @@ namespace GitHubMigrator.Infrastructure.GitObjects;
 public sealed class LocalGitSourceSnapshotMirrorMaterializer(
     string bundleRoot, string mirrorRoot,
     IGitSourceBundleArtifactVerifier bundles,
-    bool enabled = false, TimeProvider? clock = null)
+    bool enabled = false, TimeProvider? clock = null,
+    bool laterCheckpointEnabled = false)
     : IGitSourceSnapshotMirrorMaterializer
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
@@ -25,7 +26,61 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
         if (!enabled)
             throw new GitSourceSnapshotMirrorException("SourceMirrorDisabled");
         GitSourceSnapshotMirrorIntegrity.RequirePlan(plan);
-        var verifiedBundle = plan.SourceBundle!;
+        var bundle = plan.SourceBundle!;
+        var checkedGraph = await ImportVerifiedAsync(
+            plan.SourceMirrorId, plan.SourceRefs, bundle.BundleFileName,
+            token => VerifyBundleAsync(bundles, bundle, token), ct);
+        return GitSourceSnapshotMirrorIntegrity.Seal(
+            plan, checkedGraph.Digest, checkedGraph.Count, _clock.GetUtcNow());
+    }
+
+    // #116: separate offline F-060v2 import, still NOT an F-061 admitted
+    // or source-locked operation. The proof stays non-authorizing; an
+    // F-061 lease/Verified DB writer must be implemented independently.
+    // In particular, never build a fake IsCurrent F-029 legacy bundle.
+    public async Task<GitIncrementalLaterCheckpointMirrorOfflineAudit>
+        MaterializeLaterCheckpointAsync(
+            GitIncrementalLaterCheckpointMirrorStagingPlan stage,
+            GitIncrementalLaterCheckpointBundleReceipt durable,
+            CancellationToken ct)
+    {
+        if (!laterCheckpointEnabled)
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorMaterializationDisabled");
+        GitIncrementalLaterCheckpointMirrorStagingIntegrity
+            .VerifyOfflineCandidate(stage, durable);
+
+        var store = new LocalGitBundleArtifactStore(bundleRoot);
+        async Task VerifyLaterBundleAsync(CancellationToken token)
+        {
+            // Strict original F-035v2 UUID.bundle SHA and length; no
+            // synthetic `GitSourceBundleView(IsCurrent: true)`.
+            var proof = await store.InspectExistingAsync(stage.WorkpackId, token);
+            if (proof.Sha256 != stage.BundleSha256 ||
+                proof.Bytes != stage.BundleBytes)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorBundleChanged");
+        }
+
+        var measured = await ImportVerifiedAsync(stage.PhysicalMirrorId,
+            stage.SourceRefs, durable.BundleFileName, VerifyLaterBundleAsync, ct);
+        var result = GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity
+            .Seal(stage, durable, measured.Digest, measured.Count,
+                _clock.GetUtcNow());
+        GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity
+            .Verify(result, stage, durable);
+        return result;
+    }
+
+    // Single hardened local-only import engine for both legacy F-060
+    // (independently checked IsCurrent) and the separately opted-in v2
+    // offline sandbox. Both verify the bundle before/after import and
+    // the exact source OIDs, fsck and closed object graph on promotion.
+    private async Task<(int Count, string Digest)> ImportVerifiedAsync(
+        Guid mirrorId, IReadOnlyList<GitMirrorRef> expectedRefs,
+        string bundleFileName, Func<CancellationToken, Task> verifyBundle,
+        CancellationToken ct)
+    {
         var source = new LocalGitBundleArtifactStore(bundleRoot);
         var root = source.Root; // Rechecks absolute root and symlink ancestry.
         var targetRoot = CheckMirrorRoot(mirrorRoot);
@@ -33,9 +88,9 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
             throw new GitSourceSnapshotMirrorException("SourceMirrorRootsOverlap");
 
         var final = Path.Combine(targetRoot,
-            plan.SourceMirrorId.ToString("N") + ".git");
+            mirrorId.ToString("N") + ".git");
         var temp = Path.Combine(targetRoot,
-            plan.SourceMirrorId.ToString("N") + "." +
+            mirrorId.ToString("N") + "." +
             Guid.NewGuid().ToString("N") + ".tmp");
         await ProcessGate.WaitAsync(ct);
         try
@@ -44,7 +99,7 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
             // processes sharing the same POSIX-lock capable volume.
             await using var crossProcess = await AcquireRootLockAsync(
                 targetRoot, ct);
-            await VerifyBundleAsync(bundles, verifiedBundle, ct);
+            await verifyBundle(ct);
 
             (int Count, string Digest) measured;
             if (Directory.Exists(final) || File.Exists(final))
@@ -52,20 +107,20 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
                 if (!Directory.Exists(final))
                     throw new GitSourceSnapshotMirrorException(
                         "SourceMirrorExistingEntryInvalid");
-                measured = await VerifySourceAsync(
-                    targetRoot, plan, ct);
+                measured = await LocalGitObjectClosureAuditor.VerifyOneAsync(
+                    targetRoot, mirrorId, expectedRefs, ct);
             }
             else
             {
                 try
                 {
                     Directory.CreateDirectory(temp);
-                    var format = plan.SourceRefs[0].ObjectId.Length == 40 ?
+                    var format = expectedRefs[0].ObjectId.Length == 40 ?
                         "sha1" : "sha256";
                     await GitAsync(temp, ct,
                         "init", "--bare", "--quiet",
                         "--object-format=" + format);
-                    var path = Path.Combine(root, verifiedBundle.BundleFileName);
+                    var path = Path.Combine(root, bundleFileName);
 
                     // Never reuse ambient Git config or a remote URI.
                     // Only locally verified bundle bytes supply objects.
@@ -76,8 +131,8 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
                         "refs/heads/*:refs/heads/*",
                         "refs/tags/*:refs/tags/*");
                     measured = await VerifyOneAsync(
-                        targetRoot, temp, plan.SourceRefs, ct);
-                    await VerifyBundleAsync(bundles, verifiedBundle, ct);
+                        targetRoot, temp, expectedRefs, ct);
+                    await verifyBundle(ct);
 
                     // Atomic same-volume promotion; never overwrite an
                     // existing or possibly corrupted proof directory.
@@ -85,8 +140,8 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
                         throw new GitSourceSnapshotMirrorException(
                             "SourceMirrorExistingEntryInvalid");
                     Directory.Move(temp, final);
-                    var promoted = await VerifySourceAsync(
-                        targetRoot, plan, ct);
+                    var promoted = await LocalGitObjectClosureAuditor.VerifyOneAsync(
+                        targetRoot, mirrorId, expectedRefs, ct);
                     if (measured != promoted)
                         throw new GitSourceSnapshotMirrorException(
                             "SourceMirrorChangedDuringPromotion");
@@ -105,9 +160,8 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
                     }
                 }
             }
-            await VerifyBundleAsync(bundles, verifiedBundle, ct);
-            return GitSourceSnapshotMirrorIntegrity.Seal(
-                plan, measured.Digest, measured.Count, _clock.GetUtcNow());
+            await verifyBundle(ct);
+            return measured;
         }
         catch (GitSourceBundleException)
         {
@@ -132,7 +186,6 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
             ProcessGate.Release();
         }
     }
-
     // F-061: explicit operator-only orphan cleanup, NOT a scheduled GC.
     // No persisted final .git is ever removed or overwritten, including
     // an unrecognized bare repository from an interrupted rename.
@@ -195,11 +248,6 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
         }
         finally { ProcessGate.Release(); }
     }
-
-    private static async Task<(int Count, string Digest)> VerifySourceAsync(
-        string root, GitHubTrustedRemoteReadPlan plan, CancellationToken ct) =>
-        await LocalGitObjectClosureAuditor.VerifyOneAsync(
-            root, plan.SourceMirrorId, plan.SourceRefs, ct);
 
     private static async Task<(int Count, string Digest)> VerifyOneAsync(
         string root, string temp,
