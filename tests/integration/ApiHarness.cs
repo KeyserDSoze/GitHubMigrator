@@ -50,6 +50,8 @@ public sealed class ApiHarness : IAsyncLifetime
     public bool EnableLaterCheckpointMirrorLease { get; set; }
     public bool EnableLaterCheckpointMirrorVerified { get; set; }
     public string? TrustedLocalVerifiedMirrorRoot { get; set; }
+    public bool EnableLaterCheckpointMirrorImportWorker { get; set; }
+    public int LaterCheckpointMirrorHeartbeatMilliseconds { get; set; } = 250;
     public string? TrustedLocalBundleSourceRoot { get; set; }
     public string? TrustedLocalBundleOutputRoot { get; set; }
     public int TargetObjectIdLength { get; set; } = 40;
@@ -132,6 +134,15 @@ public sealed class ApiHarness : IAsyncLifetime
         if (TrustedLocalVerifiedMirrorRoot is not null)
             values["GitIncrementalLaterCheckpointMirrorVerified__MirrorRoot"] =
                 TrustedLocalVerifiedMirrorRoot;
+        if (EnableLaterCheckpointMirrorImportWorker)
+        {
+            values["GitIncrementalLaterCheckpointMirrorImportWorker__Enabled"] = "true";
+            values["GitIncrementalLaterCheckpointMirrorImportWorker__LocalImportEnabled"] = "true";
+            values["GitIncrementalLaterCheckpointMirrorImportWorker__LeaseSeconds"] = "180";
+            values["GitIncrementalLaterCheckpointMirrorImportWorker__HeartbeatMilliseconds"] =
+                LaterCheckpointMirrorHeartbeatMilliseconds.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture);
+        }
         if (TrustedLocalBundleSourceRoot is not null &&
             TrustedLocalBundleOutputRoot is not null)
         {
