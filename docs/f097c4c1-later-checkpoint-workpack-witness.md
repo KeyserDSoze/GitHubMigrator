@@ -86,3 +86,41 @@ real second epochs. No F-032/F-038 row is produced; all execution flags
 stay false. Source-locking, F-031 audit revalidation, safe append-only
 F-032/F-038 storage, replay and real PostgreSQL positive tests are the
 next #104 work; #103/#100/#96/#92 remain open.
+
+## Independently verified PostgreSQL v2 reader (2026-11-09)
+
+Implemented on main in [b68a21c](https://github.com/KeyserDSoze/GitHubMigrator/commit/b68a21c6a6797edbff6a9a2c40a708e2635bbeb3)
+and [693749c](https://github.com/KeyserDSoze/GitHubMigrator/commit/693749c95f0f7d6da332c8337d724b1cc3ffa3be).
+The new internal `PostgresGitIncrementalLaterCheckpointAuditPreflight`
+requires an **independent, default-OFF** setting
+`GitIncrementalLaterCheckpointAudit:Enabled=true`.
+The separate #109 checkpoint-target observation and read-preflight
+switches and current source checkpoint/ledger switches remain required.
+It is deliberately **not** exposed as an HTTP mutation or worker.
+
+Given only scoped immutable IDs and an expected **full F-031 receipt**
+SHA-256, the reader independently loads verified F-091/F-097b and
+checkpoint F-031 data from PostgreSQL. It revalidates the existing
+independent human reviewer and original F-027 mapping through #109's
+source-locked gate, requires a latest later source epoch, bounds the
+saved target observation age to under five minutes and enforces matching
+SHA-1/SHA-256 object formats. Finally it takes the source lock before
+the plan lock, re-reads current mutable source/target/review/validation
+state and returns only non-authorizing version-2 comparison inputs.
+
+A new gate witness is **not** compared to the historical F-031 receipt's
+original time-sensitive preflight digest: that digest intentionally
+changes on a fresh validation. Instead the saved observation's original
+SHA-256 seal/audit and its candidate/reviewer identities are verified,
+and the independent newly checked live gate must match those identities.
+A failed, revoked, superseded, foreign, stale or tampered read closes
+without F-032/F-038 rows. The legacy F-029/current-v1 reader and writer
+are untouched. **No F-032/F-038/F-035 writer is enabled by this feature.**
+
+The new actual SHA-1/SHA-256 two-epoch PostgreSQL/JWT integration checks
+positive v2 comparison, wrong target UUID/digest/repository, later
+review revocation and continued absence of F-032/F-038 rows. A future
+separately authorized writer must reverify all evidence while holding
+its own source-first advisory lock, then use distinct, compatible v2
+foreign keys and append-only target provenance: it MUST NOT point a
+checkpoint F-031 ID at historical `incremental_target_ref_evidence`.
