@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
 using GitHubMigrator.Infrastructure.PostgreSql;
@@ -32,6 +33,74 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
+
+    // Actual local Git mirror with object IDs bound to F-097b. Only
+    // the test provisions this trusted root; no HTTP path or token.
+    private sealed class CheckpointLocalMirror : IDisposable
+    {
+        private readonly string root = Path.Combine(Path.GetTempPath(),
+            "f035v2-checkpoint-" + Guid.NewGuid().ToString("N"));
+        public string SourceRoot => Path.Combine(root, "sources");
+        public string BundleRoot => Path.Combine(root, "bundles");
+        public IReadOnlyList<GitMirrorRef> Refs { get; }
+
+        public CheckpointLocalMirror(Guid sourceId, int oidLength)
+        {
+            Directory.CreateDirectory(SourceRoot);
+            Directory.CreateDirectory(BundleRoot);
+            var work = Path.Combine(root, "working");
+            if (oidLength == 64)
+                Git("init", "--quiet", "--object-format=sha256", work);
+            else
+                Git("init", "--quiet", work);
+            Git("-C", work, "config", "user.email",
+                "checkpoint-integration@example.invalid");
+            Git("-C", work, "config", "user.name", "Checkpoint Test");
+            File.WriteAllText(Path.Combine(work, "README.md"),
+                "source-only checkpoint binary bundle\n");
+            Git("-C", work, "add", "README.md");
+            Git("-C", work, "commit", "--quiet", "-m", "checkpoint-epoch");
+            Git("-C", work, "branch", "-M", "main");
+            Git("-C", work, "tag", "v1");
+            var bare = LocalGitSourceBundleAcquirer.LocalMirrorDirectory(
+                SourceRoot, sourceId, "repo-1");
+            Directory.CreateDirectory(Path.GetDirectoryName(bare)!);
+            Git("clone", "--bare", "--quiet", work, bare);
+            Refs = [
+                new GitMirrorRef("refs/heads/main",
+                    Git("--git-dir=" + bare, "rev-parse", "refs/heads/main")),
+                new GitMirrorRef("refs/tags/v1",
+                    Git("--git-dir=" + bare, "rev-parse", "refs/tags/v1"))
+            ];
+            Assert.All(Refs, gitRef =>
+                Assert.Equal(oidLength, gitRef.ObjectId.Length));
+        }
+
+        private static string Git(params string[] args)
+        {
+            using var p = new Process();
+            p.StartInfo.FileName = "/usr/bin/git";
+            p.StartInfo.RedirectStandardOutput = true;
+            p.StartInfo.RedirectStandardError = true;
+            p.StartInfo.UseShellExecute = false;
+            foreach (var arg in args) p.StartInfo.ArgumentList.Add(arg);
+            Assert.True(p.Start());
+            var output = p.StandardOutput.ReadToEnd();
+            var error = p.StandardError.ReadToEnd();
+            Assert.True(p.WaitForExit(30_000), "Local Git fixture timed out");
+            Assert.True(p.ExitCode == 0, error);
+            return output.Trim();
+        }
+
+        public void Dispose()
+        {
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+
 
     private static PostgresGitHubSourceCheckpointGitRefLedger Ledger(
         AppDbContext db, TimeProvider clock) =>
@@ -179,7 +248,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     // a relabelled baseline or a fingerprint-only F-025 staging delta.
     private static async Task<Guid> LaterF014SnapshotAsync(
         AppDbContext db, PostgresIncrementalOperationPlanTests.ManualClock clock,
-        IncrementalOperationPlan plan, int oidLength)
+        IncrementalOperationPlan plan, int oidLength,
+        IReadOnlyList<GitMirrorRef>? physicalSourceRefs = null)
     {
         var jobs = new PostgresMigrationJobRepository(db, clock);
         var job = await jobs.EnqueueDiscoveryAsync(
@@ -189,12 +259,15 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             TimeSpan.FromMinutes(3), default))!;
         Assert.Equal(job.Id, lease.Id);
         var observedAt = clock.GetUtcNow().AddMinutes(2);
-        var refs = new[] {
-            new RepositoryRef("repo-1", "refs/heads/main",
-                new string('c', oidLength)),
-            new RepositoryRef("repo-1", "refs/tags/v1",
-                new string('b', oidLength))
-        };
+        var refs = physicalSourceRefs is null
+            ? new[] {
+                new RepositoryRef("repo-1", "refs/heads/main",
+                    new string('c', oidLength)),
+                new RepositoryRef("repo-1", "refs/tags/v1",
+                    new string('b', oidLength))
+            }
+            : physicalSourceRefs.Select(x => new RepositoryRef(
+                "repo-1", x.Name, x.ObjectId)).ToArray();
         var inventory = new DiscoveryInventory
         {
             Id = job.Id, ConnectionId = plan.SourceConnectionId,
@@ -263,6 +336,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     {
         var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
             DateTimeOffset.UtcNow);
+        CheckpointLocalMirror? physicalMirror = null;
         IncrementalPreparationView run;
         IncrementalOperationPlan plan;
         GitHubSourceSyncCheckpointReceipt later;
@@ -272,11 +346,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             var setup = await SetupAsync(db, clock, oidLength);
             run = setup.Preparation;
             plan = setup.Plan;
+            physicalMirror = new CheckpointLocalMirror(
+                plan.SourceConnectionId, oidLength);
             await Ledger(db, clock).CaptureAsync(
                 run.Id, plan.Id, setup.Checkpoint.Id,
                 "repo-1", setup.ActorId, default);
             var laterSnapshot = await LaterF014SnapshotAsync(
-                db, clock, plan, oidLength);
+                db, clock, plan, oidLength, physicalMirror.Refs);
             later = await new PostgresGitHubSourceSyncCheckpointJournal(
                 db, clock, new(true),
                 new PostgresIncrementalOperationPlanRepository(db, clock),
@@ -304,6 +380,10 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableLaterCheckpointHistory = true,
             EnableLaterCheckpointBundleRead = true,
             EnableLaterCheckpointBundleLease = true,
+            EnableLaterCheckpointLocalBundle = true,
+            EnableLaterCheckpointDurableBundle = true,
+            TrustedLocalBundleSourceRoot = physicalMirror.SourceRoot,
+            TrustedLocalBundleOutputRoot = physicalMirror.BundleRoot,
             TargetObjectIdLength = oidLength
         };
         try
@@ -1344,7 +1424,11 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 return await api.Client.SendAsync(request);
             }
         }
-        finally { await api.DisposeAsync(); }
+        finally
+        {
+            await api.DisposeAsync();
+            physicalMirror?.Dispose();
+        }
     }
 
     [Theory]
