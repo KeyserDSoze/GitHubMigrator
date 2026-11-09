@@ -1430,7 +1430,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     // F-029 IsCurrent remains false for the later epoch.
                     var staging = GitIncrementalLaterCheckpointMirrorStagingIntegrity
                         .Prepare(latestPlan, joined, fullRefs,
-                            bundlePreparation, committed);
+                            bundlePreparation, committed, first);
                     Assert.Equal(1, staging.EvidenceVersion);
                     Assert.Equal(0L, staging.F061LeaseGeneration);
                     Assert.Equal(later.Id, staging.CheckpointId);
@@ -1460,13 +1460,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         staging.MigrationComplete);
                     GitIncrementalLaterCheckpointMirrorStagingIntegrity.Verify(
                         staging, latestPlan, joined, fullRefs,
-                        bundlePreparation, committed);
+                        bundlePreparation, committed, first);
                     Assert.Equal("LaterCheckpointMirrorStagingInvalid",
                         Assert.Throws<GitSourceSnapshotMirrorException>(() =>
                             GitIncrementalLaterCheckpointMirrorStagingIntegrity
                                 .Verify(staging with { F061LeaseGeneration = 1 },
                                     latestPlan, joined, fullRefs,
-                                    bundlePreparation, committed)).Code);
+                                    bundlePreparation, committed, first)).Code);
                     Assert.Equal("LaterCheckpointMirrorStagingInvalid",
                         Assert.Throws<GitSourceSnapshotMirrorException>(() =>
                             GitIncrementalLaterCheckpointMirrorStagingIntegrity
@@ -1474,7 +1474,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     bundlePreparation,
                                     committed with {
                                         TargetReceiptSha256 = new string('0', 64)
-                                    })).Code);
+                                    }, first)).Code);
 
                     var storedF035 = await verifiedDb
                         .GitLaterCheckpointBundleEvidence.AsNoTracking()

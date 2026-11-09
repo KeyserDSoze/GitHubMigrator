@@ -246,7 +246,7 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
         var receipt = GitIncrementalLaterCheckpointBundleReceiptIntegrity.Seal(
             prepared, file, pack.RecordedBy, now);
         var staged = GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
-            plan, selection, x.Source, prepared, receipt);
+            plan, selection, x.Source, prepared, receipt, pack);
         Assert.Equal(1, staged.EvidenceVersion);
         Assert.Equal(0, staged.F061LeaseGeneration);
         Assert.Equal(selection.SourceSnapshotId, staged.SourceSnapshotId);
@@ -271,9 +271,9 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
             staged.MigrationComplete);
         Assert.Equal(staged.EvidenceSha256,
             GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
-                plan, selection, x.Source, prepared, receipt).EvidenceSha256);
+                plan, selection, x.Source, prepared, receipt, pack).EvidenceSha256);
         GitIncrementalLaterCheckpointMirrorStagingIntegrity.Verify(
-            staged, plan, selection, x.Source, prepared, receipt);
+            staged, plan, selection, x.Source, prepared, receipt, pack);
 
         foreach (var altered in new[] {
             staged with { CanMaterialize = true },
@@ -299,17 +299,17 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
             Assert.Throws<GitSourceSnapshotMirrorException>(() =>
                 GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
                     plan with { IsCurrent = true }, selection,
-                    x.Source, prepared, receipt)).Code);
+                    x.Source, prepared, receipt, pack)).Code);
         Assert.Equal("LaterCheckpointMirrorStagingInvalid",
             Assert.Throws<GitSourceSnapshotMirrorException>(() =>
                 GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
                     plan, selection, x.Source, prepared,
-                    receipt with { BundleSha256 = new string('f', 64) })).Code);
+                    receipt with { BundleSha256 = new string('f', 64) }, pack)).Code);
         Assert.Equal("LaterCheckpointMirrorStagingInvalid",
             Assert.Throws<GitSourceSnapshotMirrorException>(() =>
                 GitIncrementalLaterCheckpointMirrorStagingIntegrity.Prepare(
                     plan, selection with { TargetObservationId = Guid.NewGuid() },
-                    x.Source, prepared, receipt)).Code);
+                    x.Source, prepared, receipt, pack)).Code);
     }
 
     [Theory]
