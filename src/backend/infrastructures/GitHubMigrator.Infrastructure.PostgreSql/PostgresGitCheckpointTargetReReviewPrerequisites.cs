@@ -133,7 +133,7 @@ public sealed class PostgresGitCheckpointTargetReReviewPrerequisites(
             prepared.SnapshotId != plan.SnapshotId ||
             prepared.SourceConnectionId != plan.SourceConnectionId ||
             prepared.DestinationConnectionId != plan.DestinationConnectionId ||
-            prepared.EvidenceSha256 != plan.PreparationSha256 ||
+            prepared.EvidenceSha256 != plan.PreparationEvidenceSha256 ||
             prepared.EnqueuedBy != requestedBy ||
             review.State != IncrementalReviewStates.ApprovedForPlanning ||
             review.ReviewerId is not Guid reviewerId ||
@@ -142,7 +142,7 @@ public sealed class PostgresGitCheckpointTargetReReviewPrerequisites(
             review.EvidenceSha256 != prepared.EvidenceSha256 ||
             review.DryRunSha256 != plan.ReviewSha256 ||
             review.SensitiveItemCount > 0 && !review.SensitiveAcknowledged ||
-            priorTarget.EvidenceSha256 != plan.PreflightSha256 ||
+            priorTarget.EvidenceSha256 != plan.PreflightEvidenceSha256 ||
             priorTarget.ReviewSha256 != plan.ReviewSha256 ||
             priorTarget.Organization != plan.Organization)
             throw Refused("CheckpointTargetReReviewHistoricalReviewInvalid");
