@@ -383,6 +383,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableLaterCheckpointBundleLease = true,
             EnableLaterCheckpointLocalBundle = true,
             EnableLaterCheckpointDurableBundle = true,
+            EnableLaterCheckpointMirrorStaging = true,
             TrustedLocalBundleSourceRoot = physicalMirror.SourceRoot,
             TrustedLocalBundleOutputRoot = physicalMirror.BundleRoot,
             TargetObjectIdLength = oidLength
@@ -1461,6 +1462,31 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     GitIncrementalLaterCheckpointMirrorStagingIntegrity.Verify(
                         staging, latestPlan, joined, fullRefs,
                         bundlePreparation, committed, first);
+                    // Separate default-OFF PostgreSQL reader: live human
+                    // approval and independently verified F-038v2 plus
+                    // the committed F-035v2 with actual byte SHA readback.
+                    var mirrorReader = auditScope.ServiceProvider
+                        .GetRequiredService<
+                            PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight>();
+                    var readStaging = await mirrorReader.ReadAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256,
+                        candidate.RequestedBy, default);
+                    Assert.Equal(staging.EvidenceSha256, readStaging.EvidenceSha256);
+                    Assert.Equal(staging.PhysicalMirrorId,
+                        readStaging.PhysicalMirrorId);
+                    Assert.Equal(fullRefs.Refs, readStaging.SourceRefs);
+                    Assert.False(readStaging.CanMaterialize ||
+                        readStaging.CanPush || readStaging.CanRetry ||
+                        readStaging.CanDispatch || readStaging.MigrationComplete);
+                    Assert.Equal("LaterCheckpointMirrorStagingProvenanceUnverified",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => mirrorReader.ReadAsync(run.Id, plan.Id,
+                                later.Id, observationId, first.WorkpackId,
+                                "repo-1", new string('0', 64),
+                                candidate.RequestedBy, default))).Code);
+
                     Assert.Equal("LaterCheckpointMirrorStagingInvalid",
                         Assert.Throws<GitSourceSnapshotMirrorException>(() =>
                             GitIncrementalLaterCheckpointMirrorStagingIntegrity
