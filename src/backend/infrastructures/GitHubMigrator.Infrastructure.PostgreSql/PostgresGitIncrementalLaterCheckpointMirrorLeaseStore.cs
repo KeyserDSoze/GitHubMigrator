@@ -194,7 +194,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
 
     // A complete read of the lease is intentionally NOT a trusted
     // statement of ownership: Claim/Renew always recheck under SQL locks.
-    private sealed class LeaseRow
+    internal sealed class LeaseRow
     {
         public Guid MirrorId { get; set; }
         public Guid WorkpackId { get; set; }
@@ -221,7 +221,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
         public DateTimeOffset? LeaseUntilUtc { get; set; }
     }
 
-    private Task<LeaseRow?> ReadLeaseAsync(Guid id, CancellationToken ct) =>
+    internal Task<LeaseRow?> ReadLeaseAsync(Guid id, CancellationToken ct) =>
         db.Database.SqlQuery<LeaseRow>($"""
             SELECT mirror_id AS "MirrorId", workpack_id AS "WorkpackId",
                 preparation_id AS "PreparationId", plan_id AS "PlanId",
@@ -246,7 +246,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
             WHERE mirror_id = {id}
             """).SingleOrDefaultAsync(ct);
 
-    private async Task RequireLiveLockedAsync(
+    internal async Task RequireLiveLockedAsync(
         GitIncrementalLaterCheckpointMirrorAdmissionCandidate p,
         Guid actor, CancellationToken ct)
     {
@@ -368,7 +368,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
             throw Refused("LaterCheckpointMirrorLeaseContextChanged");
     }
 
-    private static void RequireSameScope(LeaseRow row,
+    internal static void RequireSameScope(LeaseRow row,
         GitIncrementalLaterCheckpointMirrorAdmissionCandidate p, Guid actor)
     {
         if (row.MirrorId != p.PhysicalMirrorId ||
@@ -415,7 +415,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
             workerId, bundleActorId, p.StagingEvidenceSha256, expires,
             false, false, false, false, false);
 
-    private async Task LockAsync(
+    internal async Task LockAsync(
         Guid sourceConnectionId, Guid planId, CancellationToken ct)
     {
         await db.Database.ExecuteSqlInterpolatedAsync(
@@ -426,7 +426,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
 
     // All lease deadline/fencing decisions use PostgreSQL clock authority
     // (never a caller, host or injected TimeProvider).
-    private Task<DateTimeOffset> DatabaseNowAsync(CancellationToken ct) =>
+    internal Task<DateTimeOffset> DatabaseNowAsync(CancellationToken ct) =>
         db.Database.SqlQuery<DateTimeOffset>(
             $"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
 
