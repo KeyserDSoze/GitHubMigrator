@@ -1102,10 +1102,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             Assert.Contains("CheckpointTargetObservationProviderUnverified",
                 await response.Content.ReadAsStringAsync());
             var calls = api.Calls.ToArray();
-            Assert.Single(calls);
-            Assert.Equal("GET", calls[0].Method);
-            Assert.Equal("api.github.com", calls[0].Url.Host);
-            Assert.Equal("Bearer", calls[0].AuthScheme);
+            Assert.Equal(fault == "wrong-oid" ? 2 : 1, calls.Length);
+            Assert.All(calls, call =>
+            {
+                Assert.Equal("GET", call.Method);
+                Assert.Equal("api.github.com", call.Url.Host);
+                Assert.Equal("Bearer", call.AuthScheme);
+            });
             await using var db = fixture.NewContext();
             Assert.Empty(await db.GitCheckpointTargetObservations.AsNoTracking()
                 .Where(x => x.CheckpointId == later.Id).ToArrayAsync());
