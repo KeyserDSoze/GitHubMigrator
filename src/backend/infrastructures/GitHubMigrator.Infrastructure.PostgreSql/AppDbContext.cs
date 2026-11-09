@@ -37,6 +37,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         => Set<GitHubSourceSyncCheckpointRecord>();
     public DbSet<GitHubSourceSyncCheckpointEventRecord> GitHubSourceSyncCheckpointEvents
         => Set<GitHubSourceSyncCheckpointEventRecord>();
+    public DbSet<GitHubSourceCheckpointGitRefLedgerRecord> GitHubSourceCheckpointGitRefLedgers
+        => Set<GitHubSourceCheckpointGitRefLedgerRecord>();
+    public DbSet<GitHubSourceCheckpointGitRefLedgerEventRecord> GitHubSourceCheckpointGitRefLedgerEvents
+        => Set<GitHubSourceCheckpointGitRefLedgerEventRecord>();
     public DbSet<StagingSnapshotSyncRecord> StagingSnapshotSyncs => Set<StagingSnapshotSyncRecord>();
     public DbSet<StagingAssetChangeRecord> StagingAssetChanges => Set<StagingAssetChangeRecord>();
     public DbSet<IncrementalPreparationRecord> IncrementalPreparations =>
@@ -340,6 +344,46 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ActorId).HasColumnName("actor_id");
             entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
             entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+        });
+        // F-097b SQL triggers and constraints are bootstrapped after F-090.
+        builder.Entity<GitHubSourceCheckpointGitRefLedgerRecord>(entity =>
+        {
+            entity.ToTable("github_checkpoint_source_ref_proofs");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.SnapshotId).HasColumnName("snapshot_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id").HasMaxLength(256);
+            entity.Property(x => x.SourceManifestRootSha256).HasColumnName("source_manifest_root_sha256").HasMaxLength(64);
+            entity.Property(x => x.ProofJson).HasColumnName("proof_json");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.CanPush).HasColumnName("can_push");
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasIndex(x => new { x.CheckpointId, x.SourceRepositoryId }).IsUnique()
+                .HasDatabaseName("ux_f097_checkpoint_source_repo");
+            entity.HasOne<GitHubSourceSyncCheckpointRecord>().WithMany()
+                .HasForeignKey(x => x.CheckpointId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<GitHubSourceCheckpointGitRefLedgerEventRecord>(entity =>
+        {
+            entity.ToTable("github_checkpoint_source_ref_proof_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.LedgerId).HasColumnName("ledger_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(16);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitHubSourceCheckpointGitRefLedgerRecord>().WithMany()
+                .HasForeignKey(x => x.LedgerId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.LedgerId).IsUnique();
         });
         builder.Entity<StagingSnapshotSyncRecord>(entity =>
         {
