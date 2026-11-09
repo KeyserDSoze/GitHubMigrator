@@ -50,6 +50,21 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F035v2_local_bundle_rehearsal_is_independently_disabled_by_default()
+    {
+        var before = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var runner = scope.ServiceProvider.GetRequiredService<
+            GitIncrementalLaterCheckpointLocalBundleAcquisition>();
+        var denied = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            runner.RehearseAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                "repo-1", new string('a', 64), default));
+        Assert.Equal("LaterCheckpointLocalBundleDisabled", denied.Code);
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F035v2_source_bundle_read_is_independently_disabled_by_default()
     {
         var outboundBefore = harness.Calls.Count;
