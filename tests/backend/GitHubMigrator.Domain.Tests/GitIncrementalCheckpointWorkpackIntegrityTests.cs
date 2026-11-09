@@ -199,7 +199,7 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
         Assert.Equal("LaterCheckpointBundleEvidenceInvalid",
             Assert.Throws<GitSourceBundleException>(() =>
                 GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
-                    plan, selected with { ObjectFormat =
+                    plan, selected with { GitObjectFormat =
                         oidLength == 40 ? "sha256" : "sha1" },
                     fixture.Source, compared, workpack)).Code);
         Assert.Equal("LaterCheckpointBundleEvidenceInvalid",

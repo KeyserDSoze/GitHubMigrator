@@ -54,7 +54,7 @@ public static class GitIncrementalLaterCheckpointBundleIntegrity
         { throw Refused(); }
         if (refs.Count is < 1 or > MaxBundleRefs ||
             !refs.SequenceEqual(source.Refs) ||
-            selection.ObjectFormat != (refs[0].ObjectId.Length == 40
+            selection.GitObjectFormat != (refs[0].ObjectId.Length == 40
                 ? "sha1" : "sha256") ||
             refs.Any(x => x.ObjectId.Length != refs[0].ObjectId.Length) ||
             plan.SourceConnectionId != selection.SourceConnectionId ||
