@@ -9,6 +9,7 @@ namespace GitHubMigrator.Infrastructure.GitObjects;
 public sealed class LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
     string bundleRoot, string mirrorRoot, bool enabled = false,
     TimeProvider? clock = null)
+    : IGitIncrementalLaterCheckpointMirrorPhysicalAuditor
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
