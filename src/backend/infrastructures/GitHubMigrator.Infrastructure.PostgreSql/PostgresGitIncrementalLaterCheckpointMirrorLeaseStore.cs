@@ -194,6 +194,73 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
         return lease with { ExpiresAtUtc = expires };
     }
 
+    // #119: quarantine a physically damaged or interrupted local mirror
+    // without adopting its filesystem bytes. Only the exact still-owned
+    // worker generation + original deadline can enter RecoveryRequired.
+    // The transaction is short and does not execute Git or call providers.
+    public async Task<bool> QuarantineAsync(
+        GitIncrementalLaterCheckpointMirrorLeaseClaim lease,
+        string failureCode, CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("LaterCheckpointMirrorLeaseDisabled");
+        RequireHandle(lease, MinimumLease);
+        if (string.IsNullOrWhiteSpace(failureCode) ||
+            failureCode.Length > 64 ||
+            failureCode[0] is not (>= 'A' and <= 'Z'
+                or >= 'a' and <= 'z') ||
+            failureCode.Any(c => c is not (
+                >= 'A' and <= 'Z' or >= 'a' and <= 'z' or
+                >= '0' and <= '9' or '_')))
+            throw Refused("LaterCheckpointMirrorLeaseFailureCodeInvalid");
+        var previous = await ReadLeaseAsync(lease.MirrorId, ct);
+        if (previous is null)
+            return false;
+        if (previous.WorkpackId != lease.WorkpackId ||
+            previous.SourceSnapshotId != lease.SourceSnapshotId ||
+            previous.CheckpointId != lease.CheckpointId ||
+            previous.StagingEvidenceSha256 !=
+                lease.StagingEvidenceSha256 ||
+            previous.LeaseToken != lease.LeaseToken ||
+            previous.Generation != lease.Generation ||
+            previous.WorkerId != lease.WorkerId ||
+            previous.OriginalBundleActorId != lease.BundleActorId)
+            throw Refused("LaterCheckpointMirrorLeaseFenced");
+
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted, ct);
+        await LockAsync(previous.SourceConnectionId, previous.PlanId, ct);
+        var now = await DatabaseNowAsync(ct);
+        var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE git_later_checkpoint_mirror_leases
+            SET state = 'RecoveryRequired', lease_until_utc = NULL,
+                failure_code = {failureCode}, updated_at_utc = {now}
+            WHERE mirror_id = {lease.MirrorId}
+                AND workpack_id = {lease.WorkpackId}
+                AND source_snapshot_id = {lease.SourceSnapshotId}
+                AND checkpoint_id = {lease.CheckpointId}
+                AND state = 'Held'
+                AND lease_token = {lease.LeaseToken}
+                AND generation = {lease.Generation}
+                AND worker_id = {lease.WorkerId}
+                AND original_bundle_actor_id = {lease.BundleActorId}
+                AND staging_evidence_sha256 = {lease.StagingEvidenceSha256}
+                AND lease_until_utc = {lease.ExpiresAtUtc}
+                AND NOT has_verified_local_objects
+                AND NOT can_materialize AND NOT can_push
+                AND NOT can_retry AND NOT can_dispatch
+                AND NOT migration_complete
+            """, ct);
+        if (changed == 1)
+        {
+            await AppendEventAsync(lease.MirrorId, lease.Generation,
+                lease.WorkerId, "Quarantined",
+                lease.StagingEvidenceSha256, now, ct);
+        }
+        await tx.CommitAsync(ct);
+        return changed == 1;
+    }
+
     // A complete read of the lease is intentionally NOT a trusted
     // statement of ownership: Claim/Renew always recheck under SQL locks.
     internal sealed class LeaseRow
