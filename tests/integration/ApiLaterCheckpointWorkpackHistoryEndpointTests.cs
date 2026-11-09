@@ -57,7 +57,7 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                 enabled.SuperadminName, ApiHarness.SuperadminPassword);
             var calls = enabled.Calls.Count;
             using (var invalid = await Send(enabled.Client, HttpMethod.Get,
-                Root() + "&expectedTargetReceiptSha256=bad", token))
+                Root().Replace(new string('a', 64), "bad"), token))
             {
                 Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
                 Assert.Contains("LaterCheckpointHistoryInvalidRequest",
