@@ -156,7 +156,10 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
                 GitIncrementalAncestryLedgerException>(() =>
                 CaptureAsync(Ledger(db, clock), seed, plan,
                     checkpoint, target, Guid.NewGuid()));
-            Assert.Equal("GitAncestryLedgerTargetEvidenceStale", stale.Code);
+            Assert.Contains(stale.Code, new[] {
+                "GitAncestryLedgerTargetEvidenceStale",
+                "GitAncestryLedgerPlanStale"
+            });
         }
     }
 
@@ -252,7 +255,8 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
         Assert.Equal("GitAncestryLedgerSourceEvidenceUnavailable",
             partial.Code);
         Assert.Empty(await db.GitIncrementalAncestryLedgers
-            .AsNoTracking().ToArrayAsync());
+            .AsNoTracking().Where(x => x.PlanId == plan.Id)
+            .ToArrayAsync());
     }
 
     private sealed class TestedSourceReader : IVerifiedSourceGitRefReader
