@@ -103,7 +103,7 @@ public sealed class GitIncrementalAncestryLedgerIntegrityTests
             [new(Ref, GitOid, "commit")]);
         var target = new GitHubTargetRefEvidenceView(
             targetId, planId, "repo-1", "target-1", "gh-org",
-            manifest, observation.EvidenceSha256, now,
+            manifest, observation.EvidenceSha256, observation.ObservedAtUtc,
             1, true, false);
         var request = new GitIncrementalAncestryRequest(
             snapshot, Guid.NewGuid(), checkpointId, attestation,
