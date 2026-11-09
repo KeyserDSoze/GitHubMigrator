@@ -20,7 +20,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
     AppDbContext db, TimeProvider clock,
     GitIncrementalLaterCheckpointBundleLeaseOptions options,
     IGitIncrementalLaterCheckpointBundleReadPreflight preflight,
-    IGitSourceBundleAcquirer trustedGitAcquirer)
+    IGitSourceBundleAcquirer trustedGitAcquirer,
+    IGitSourceBundleOrphanQuarantine orphanQuarantine)
 {
     public static readonly TimeSpan MaxLease = TimeSpan.FromMinutes(3);
     public static readonly TimeSpan MinLease = TimeSpan.FromSeconds(30);
@@ -264,6 +265,15 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
             await db.GitLaterCheckpointBundleEvidence.AsNoTracking()
                 .AnyAsync(x => x.WorkpackId == workpackId, ct))
             throw Refused("LaterCheckpointBundleRecoveryBlocked");
+
+        // A short atomic local rename under the SOURCE -> PLAN SQL
+        // transaction locks is safe: no Git subprocess or remote I/O.
+        // Release the DB quarantine ONLY AFTER any non-durable physical
+        // UUID.bundle has been moved outside the canonical namespace.
+        // If the DB transaction rolls back, the file remains safely
+        // quarantined and no new claim can be admitted.
+        await orphanQuarantine.QuarantineOrphanAsync(workpackId, ct);
+
         var next = checked(row.Generation + 1);
         var token = Guid.NewGuid();
         var now = DateTimeOffset.FromUnixTimeMilliseconds(

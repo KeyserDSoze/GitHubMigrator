@@ -8,7 +8,8 @@ namespace GitHubMigrator.Infrastructure.GitObjects;
 // accepts an arbitrary path. All inputs are server-derived workpack IDs.
 public sealed class LocalGitBundleArtifactStore(
     string bundleRoot, long maxStorageBytes = 4L * 1024 * 1024 * 1024,
-    TimeProvider? clock = null) : IGitSourceBundleArtifactVerifier
+    TimeProvider? clock = null)
+    : IGitSourceBundleArtifactVerifier, IGitSourceBundleOrphanQuarantine
 {
     public const long DefaultMaxStorageBytes = 4L * 1024 * 1024 * 1024;
     public const int MaxCleanupFiles = 100;
@@ -58,6 +59,37 @@ public sealed class LocalGitBundleArtifactStore(
             throw new GitSourceBundleException("BundleStoredSizeMismatch");
         var digest = await HashAsync(path, size, ct);
         return (digest, size);
+    }
+
+    // Only an independently reviewed SQL RecoveryRequired lease may call
+    // this method. Move an orphan out of UUID.bundle under a POSIX file
+    // lock; no arbitrary paths, Git process, overwrite or deletion.
+    public async Task<bool> QuarantineOrphanAsync(Guid workpackId, CancellationToken ct)
+    {
+        if (workpackId == Guid.Empty)
+            throw new GitSourceBundleException("BundleQuarantineHandleInvalid");
+        await using var volumeLock = await LockWritesAsync(ct);
+        var final = Path.Combine(Root, workpackId.ToString("N") + ".bundle");
+        if (!File.Exists(final))
+        {
+            if (Directory.Exists(final) ||
+                new FileInfo(final).LinkTarget is not null)
+                throw new GitSourceBundleException("LocalBundleSymlinkBlocked");
+            return false;
+        }
+        AssertNotSymlink(final);
+        var quarantined = Path.Combine(Root,
+            workpackId.ToString("N") + "." +
+            Guid.NewGuid().ToString("N") + ".quarantine");
+        try
+        {
+            File.Move(final, quarantined);
+            return true;
+        }
+        catch (IOException)
+        { throw new GitSourceBundleException("BundleQuarantineIoFailure"); }
+        catch (UnauthorizedAccessException)
+        { throw new GitSourceBundleException("BundleQuarantineIoFailure"); }
     }
 
     // Serialize writers across processes sharing a POSIX-lock-capable volume.

@@ -47,6 +47,13 @@ public interface IGitSourceBundleAcquirer
         GitSourceBundleRequest request, CancellationToken ct);
 }
 
+// Trusted, local-only atomic rename of a non-durable orphan outside the
+// canonical UUID.bundle namespace. Never deletes bytes or accepts paths.
+public interface IGitSourceBundleOrphanQuarantine
+{
+    Task<bool> QuarantineOrphanAsync(Guid workpackId, CancellationToken ct);
+}
+
 public interface IGitSourceBundleEvidenceStore
 {
     Task<GitSourceBundleView> SaveAsync(

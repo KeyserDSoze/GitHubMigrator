@@ -216,6 +216,9 @@ builder.Services.AddScoped<IGitSourceBundleArtifactVerifier>(_ =>
         maxStorageBytes: builder.Configuration.GetValue<long>(
             "GitSourceBundles:MaxStorageBytes",
             GitHubMigrator.Infrastructure.GitObjects.LocalGitBundleArtifactStore.DefaultMaxStorageBytes)));
+builder.Services.AddScoped<IGitSourceBundleOrphanQuarantine>(sp =>
+    (IGitSourceBundleOrphanQuarantine)
+    sp.GetRequiredService<IGitSourceBundleArtifactVerifier>());
 builder.Services.AddScoped<IGitHubImportReadinessStore, PostgresGitHubImportReadinessStore>();
 builder.Services.AddScoped<GitHubImportReadinessService>();
 builder.Services.AddScoped<IGitHubImportIntentStore, PostgresGitHubImportIntentStore>();
