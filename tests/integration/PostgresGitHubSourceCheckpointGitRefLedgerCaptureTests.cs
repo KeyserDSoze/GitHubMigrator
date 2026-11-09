@@ -299,6 +299,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableCheckpointTargetReadPreflight = true,
             EnableCheckpointTargetObservation = true,
             EnableLaterCheckpointAuditRead = true,
+            EnableLaterCheckpointWorkpack = true,
             TargetObjectIdLength = oidLength
         };
         try
@@ -710,6 +711,89 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     Assert.Empty(await verifiedDb.IncrementalGitRefReconciliations
                         .AsNoTracking().Where(x => x.SnapshotId ==
                             candidate.SourceSnapshotId).ToArrayAsync());
+
+                    // #104: a wholly separate, default-OFF source-locked
+                    // F-032v2/F-038v2 persistence path. It must NEVER
+                    // reach the production dispatch or legacy F-031 FK.
+                    var writer = auditScope.ServiceProvider.GetRequiredService<
+                        PostgresGitIncrementalLaterCheckpointWorkpackJournal>();
+                    var first = await writer.CaptureAsync(
+                        run.Id, plan.Id, later.Id, observationId, "repo-1",
+                        targetReceipt.EvidenceSha256, candidate.RequestedBy,
+                        default);
+                    Assert.Equal(2, first.EvidenceVersion);
+                    Assert.Equal("Blocked", first.State);
+                    Assert.Equal("WriteBlocked", first.Phase);
+                    Assert.Equal(targetReceipt.EvidenceSha256,
+                        first.TargetReceiptSha256);
+                    Assert.Equal(fullRefs.EvidenceSha256,
+                        first.SourceFullRefProofSha256);
+                    Assert.False(first.ReadyForExecution || first.CanPush ||
+                        first.CanRetry || first.CanDispatch ||
+                        first.MigrationComplete);
+                    var replay = await writer.CaptureAsync(
+                        run.Id, plan.Id, later.Id, observationId, "repo-1",
+                        targetReceipt.EvidenceSha256, candidate.RequestedBy,
+                        default);
+                    Assert.Equal(first, replay);
+                    Assert.Equal("LaterCheckpointWorkpackContextChanged",
+                        (await Assert.ThrowsAsync<
+                            GitIncrementalCheckpointWorkpackException>(() =>
+                            writer.CaptureAsync(run.Id, plan.Id, later.Id,
+                                observationId, "repo-1",
+                                targetReceipt.EvidenceSha256, Guid.NewGuid(),
+                                default))).Code);
+                    Assert.Equal("LaterCheckpointWorkpackPreflightUnverified",
+                        (await Assert.ThrowsAsync<
+                            GitIncrementalCheckpointWorkpackException>(() =>
+                            writer.CaptureAsync(run.Id, plan.Id, later.Id,
+                                observationId, "repo-1", new string('0', 64),
+                                candidate.RequestedBy, default))).Code);
+
+                    var recon = await verifiedDb.GitLaterCheckpointReconciliations
+                        .AsNoTracking().SingleAsync(x => x.Id ==
+                            first.ReconciliationId);
+                    var pack = await verifiedDb.GitLaterCheckpointWorkpacks
+                        .AsNoTracking().SingleAsync(x => x.Id == first.WorkpackId);
+                    var events = await verifiedDb.GitLaterCheckpointWorkpackEvents
+                        .AsNoTracking().Where(x => x.WorkpackId == first.WorkpackId)
+                        .ToArrayAsync();
+                    Assert.Single(events);
+                    Assert.Equal(first.EvidenceSha256, pack.EvidenceSha256);
+                    Assert.Equal(first.CheckpointTargetObservationId,
+                        recon.TargetObservationId);
+                    Assert.Equal(first.CheckpointTargetObservationId,
+                        pack.TargetObservationId);
+                    Assert.Equal("Blocked", pack.State);
+                    Assert.Equal("WriteBlocked", pack.Phase);
+                    Assert.False(recon.ReadyForExecution ||
+                        pack.ReadyForExecution || pack.CanPush ||
+                        pack.CanRetry || pack.CanDispatch ||
+                        pack.MigrationComplete);
+
+                    // Both SQL layers independently forbid mutation, even
+                    // with no API/worker involved or an existing EF table.
+                    var update = await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                        () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                            UPDATE git_later_checkpoint_workpacks
+                            SET can_push = {true}
+                            WHERE id = {first.WorkpackId}
+                            """));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                        update.SqlState);
+                    var erase = await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                        () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                            DELETE FROM git_later_checkpoint_reconciliations
+                            WHERE id = {first.ReconciliationId}
+                            """));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                        erase.SqlState);
+                    Assert.Empty(await verifiedDb.GitIncrementalCheckpointWorkpacks
+                        .AsNoTracking().Where(x => x.CheckpointId == later.Id)
+                        .ToArrayAsync());
+                    Assert.Empty(await verifiedDb.IncrementalGitRefReconciliations
+                        .AsNoTracking().Where(x => x.SnapshotId ==
+                            candidate.SourceSnapshotId).ToArrayAsync());
                 }
             }
 
@@ -756,6 +840,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             if (observationId != Guid.Empty)
             {
                 await using var scoped = api.Host.Services.CreateAsyncScope();
+                var writer = scoped.ServiceProvider.GetRequiredService<
+                    PostgresGitIncrementalLaterCheckpointWorkpackJournal>();
+                Assert.Equal("LaterCheckpointWorkpackPreflightUnverified",
+                    (await Assert.ThrowsAsync<
+                        GitIncrementalCheckpointWorkpackException>(() =>
+                        writer.CaptureAsync(run.Id, plan.Id, later.Id,
+                            observationId, "repo-1", targetReceiptSha!,
+                            candidate.RequestedBy, default))).Code);
                 var reader = scoped.ServiceProvider.GetRequiredService<
                     PostgresGitIncrementalLaterCheckpointAuditPreflight>();
                 Assert.Equal("GitLaterCheckpointPreflightApprovalUnverified",
