@@ -44,10 +44,14 @@ to a verified F-091 source checkpoint, an F-032/F-014 original source ref/OID
 proof and a previously sealed F-031 GitHub observation. PostgreSQL records
 one immutable receipt plus its append-only event atomically, rejects stale
 observations and forbids write/retry/dispatch/migration-success flags.
-The ledger and physical auditor remain **off by default**. This first step
-supports only F-029 baseline snapshots with sealed F-014 ref manifests;
-no production GitHub destination update is implemented.
-See [F-095 durable ancestry ledger](docs/f095-durable-offline-git-ancestry-ledger.md).
+**F-096** now requires an independently verified, workpack-specific F-060/F-061
+local bare mirror for new durable ancestry audits: the original F-060
+SHA-256, ref/OID set, lifecycle event and local object closure must match.
+Legacy F-094/F-095 receipts retain their original content hashes.
+The ledger and physical auditor remain **off by default**. Only F-029
+baseline snapshots with sealed F-014 ref manifests are supported;
+there is still no automatic GitHub destination update. See
+[F-095/F-096 ancestry ledger](docs/f095-durable-offline-git-ancestry-ledger.md).
 
 ## Quick start
 

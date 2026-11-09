@@ -55,3 +55,14 @@ IDs and cryptographically validate their mapping into an F-094 request
 inside a database transaction, provide a durable result ledger and an
 authenticated diagnostic API, and independently compare a fresh live
 GitHub target immediately before any authorized remote operation.
+
+## F-096 workpack physical binding
+
+A new optional pair, `SourcePhysicalMirrorId` and
+`SourcePhysicalMirrorProofSha256`, makes the local F-094 auditor use
+the actual F-060 workpack-scoped bare repository. Providing only one
+field, an empty/foreign physical UUID, or an invalid digest fails closed.
+Both fields enter a **new version-2** local ancestry SHA; all historical
+v1 receipt hashes remain unchanged. The F-095 production recorder now
+requires a successful F-035/F-061 verification and this v2 receipt.
+This does not authorize GitHub writes.

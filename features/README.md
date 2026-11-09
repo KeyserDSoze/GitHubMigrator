@@ -41,6 +41,7 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-093 | Verified source checkpoint vs saved GitHub ref-name review | Source F-091/F-092 checkpoint joined to current F-031 target observation, SHA-bound paged GET, Source sync UI and safety tests; no object equality, live send or write authorization |
 | F-094 | Read-only local Git ancestry and object integrity proof | Disabled-by-default SHA-1/SHA-256 bare-repository graph inspection, F-056 fsck/closure reused, versioned SHA-256 receipt, physical Git integration tests; not yet bound to API/worker or remote writes |
 | F-095 | Durable, read-only ancestry evidence ledger | Versioned F-094 proof bound to F-091 checkpoint + F-014 source ref manifest + F-031 target evidence; immutable PostgreSQL receipt/event and replay tests, disabled by default, baseline only |
+| F-096 | Durable ancestry ledger bound to F-060 physical mirror | Workpack-specific GUID path and SHA-256 v2 ancestry seal, F-035 bundle/F-061 lifecycle and source object-set integrity checks, PostgreSQL gate/restart, real Git SHA-1/SHA-256 tests; disabled by default, baseline only |
 | F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
 | F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |

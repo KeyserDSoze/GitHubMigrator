@@ -78,7 +78,27 @@ join; the physical SHA-1/SHA-256 subprocess and graph scenarios are
 independently covered by the F-094
 \`LocalGitIncrementalAncestryAuditorTests\`.
 
-**Next step (F-096):** bridge the real F-060 workpack-specific mirror
-identity and verified F-014 manifest into this F-095 ledger and extend
-immutable full-ref manifests to later F-090 incremental snapshots,
-then expose only an authenticated diagnostic read API.
+**F-096 implemented:** new F-095 captures now require a verified
+workpack-specific F-060/F-061 mirror (production default). The ledger
+derives the mirror ID from `GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId`,
+recomputes the original F-060 SHA-256 from the F-035 bundle row,
+verified F-014 ref set and persisted F-061 object digest/count,
+and checks the latest `Verified` lifecycle event and lease state.
+The F-094 physical auditor must read the derived `<physicalMirrorId>.git`
+rather than the logical `<snapshotId>.git`, then match the same complete
+object-set digest before and after fsck. Both mirror ID and F-060 proof
+are covered by the new version-2 F-094 ancestry SHA. The ledger checks
+this again under the PostgreSQL source lock before recording.
+
+The pre-F-096 v1 receipts remain verifiable and retain their original
+hash format. Production DI always requires the new mirror bridge;
+legacy unbound capture exists only in isolated historical regression
+tests. F-096 is still an internal, off-by-default read-only capability.
+An F-060 object-set proof is NOT a live GitHub remote attestation.
+No additional GitHub transport or write authority was introduced.
+
+**Remaining for F-097:** produce complete immutable F-014-style ref/OID
+evidence for every later F-090/F-091 incremental snapshot, rather than
+using only its per-ref delta fingerprint. Audit records are not
+substitutes for live F-031 freshness or an execution permission. A
+versioned production schema-migration rollout is also still required.
