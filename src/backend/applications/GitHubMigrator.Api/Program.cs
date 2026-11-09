@@ -153,6 +153,11 @@ builder.Services.AddScoped<GitIncrementalLaterCheckpointLocalBundleAcquisition>(
 builder.Services.AddSingleton(new GitIncrementalLaterCheckpointBundleLeaseOptions(
     builder.Configuration.GetValue("GitIncrementalLaterCheckpointBundleLease:Enabled", false)));
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointBundleLeaseStore>();
+// #113 final local artifact writer is a third, separately OFF feature.
+// No route, worker, import admission or destination GitHub authority.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointDurableBundleOptions(
+    builder.Configuration.GetValue("GitIncrementalLaterCheckpointDurableBundle:Enabled", false)));
+builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
