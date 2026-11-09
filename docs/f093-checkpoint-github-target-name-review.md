@@ -33,3 +33,28 @@ are verified for every page, so end-to-end operation cost is not yet
 O(page-size) despite the bounded SQL page. Independent fresh target
 observation and full Git history closure remain prerequisites of any
 future remote synchronization executor.
+
+## Operator workflow
+
+In **Source sync**, open an attested (version 2) checkpoint, choose
+**Inspect source ref changes**, then expand **Review against saved GitHub
+observations**. The operator can choose only F-031 observations marked
+current, bound to the same operation plan and repository mapping, and
+recorded no earlier than the source staging commit. The UI shows
+name presence/absence and the source change's safety classification.
+The server independently revalidates all these conditions.
+
+The API route is:
+
+```http
+GET /api/incremental-preparations/{preparationId}/operation-plans/{planId}/source-sync-checkpoints/{checkpointId}/target-ref-review/{observationId}?sourceRepositoryId={sourceRepositoryId}&expectedTargetEvidenceSha256={sha256}&take=50&after={optionalCanonicalSourceId}
+```
+
+It requires a password-changed superadmin and inherits the staging-sync
+rate limiter. Its response has `canPush=false`, `canRetry=false`,
+`canDispatch=false` and `migrationComplete=false`.
+
+This API does not imply that a previously saved F-031 observation still
+describes live GitHub state beyond its short current-observation window.
+New observations must be independently acquired through the existing
+read-only GitHub target-ref evidence workflow.

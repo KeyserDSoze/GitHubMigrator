@@ -38,6 +38,7 @@ All items start with acceptance criteria and automated tests (TDD: red → green
 | F-090 | Durable source-only incremental staging checkpoints | Explicit PostgreSQL checkpoint chain, exactly-once audit and historical paging; no GitHub write authority |
 | F-091 | SHA-256 per-ref source journal attestation | Versioned F-090 compatible receipts bound to F-025 fingerprint manifest; restart and integrity verification |
 | F-092 | Read-only ref change inspection for verified checkpoints | Superadmin-only PostgreSQL keyset pages + React inspection + xUnit/PostgreSQL/Playwright tests; no destination execution |
+| F-093 | Verified source checkpoint vs saved GitHub ref-name review | Source F-091/F-092 checkpoint joined to current F-031 target observation, SHA-bound paged GET, Source sync UI and safety tests; no object equality, live send or write authorization |
 | F-007 | Convert TFVC history with explicit fidelity report | Planned / research |
 | F-008 | Durable migration workers, resumable stages, audit reports | Planned |
 | F-009 | Read Azure Pipelines, inventory tasks, generate disabled Actions proposal and AI checklist | **Preview MVP implemented**; true conversion/publish pending |

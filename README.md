@@ -23,11 +23,13 @@ Destination adapters (GitHub Enterprise Cloud / Server / future)
 - Azure: Static Web Apps, App Service container, Container Registry, PostgreSQL Flexible Server, Blob Storage, Key Vault, Application Insights and Foundry.
 - Tests: xUnit and Playwright. Feature specs in `features/`, decisions in `ADR/`.
 
-## Verified source-only sync checkpoints (F-090–F-092)
+## Verified source sync checkpoints and GitHub review (F-090–F-093)
 
 The Source sync workbench captures explicitly reviewed immutable source snapshots. New F-091 receipts preserve the original F-090 digest while binding a versioned SHA-256 of every changed source Git ref in the F-025 journal. **F-092** adds a superadmin-only, read-only API and React preview that page through recorded branch/tag changes using an exact PostgreSQL keyset cursor, with their previous/current fingerprints and reviewed target mapping. Historical count-only F-090 receipts remain readable, but cannot impersonate F-091 attested per-ref history. No feature in this section dispatches a GitHub push.
 
-See [F-091 fingerprint attestation](docs/github-source-ref-fingerprint-manifest-f091.md) and [F-092 bounded ref delta pages](docs/github-checkpoint-ref-delta-pages-f092.md). Full SHA verification is rerun on each F-092 page, so end-to-end page cost still scales with checkpoint size until a persisted verified cursor is added.
+**F-093** adds a superadmin-only, GET-only cross-observation review: select a current, previously verified F-031 GitHub target observation from the Source sync panel and compare its recorded ref names with an F-091 source checkpoint. The comparison distinguishes names present/absent at observation time, while source changes remain classified independently. No equality of Git object IDs, ancestry, safe push or actual migration completion is inferred.
+
+See [F-091 fingerprint attestation](docs/github-source-ref-fingerprint-manifest-f091.md), [F-092 bounded ref delta pages](docs/github-checkpoint-ref-delta-pages-f092.md), and [F-093 source/GitHub name-only review](docs/f093-checkpoint-github-target-name-review.md). Full SHA verification is rerun on each page, so end-to-end page cost still scales with checkpoint and target observation sizes until a persisted verified cursor is added.
 
 ## Quick start
 
