@@ -295,7 +295,9 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
 
         var api = new ApiHarness {
             EnableCheckpointHumanReview = true,
-            EnableCheckpointTargetReadPreflight = true
+            EnableCheckpointTargetReadPreflight = true,
+            EnableCheckpointTargetObservation = true,
+            TargetObjectIdLength = oidLength
         };
         try
         {
@@ -516,6 +518,106 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     await staleDigest.Content.ReadAsStringAsync());
             }
 
+            // #109: a distinct, explicitly opted-in, reviewer-authenticated
+            // fixed-host GET, with an immutable checkpoint-scoped F-031
+            // receipt + audit. No write request is ever issued to GitHub.
+            var obsUrl = root.Replace("/target-human-review",
+                "/target-ref-observations");
+            var targetRequest = new {
+                sourceRepositoryId = "repo-1",
+                expectedCandidateEvidenceSha256 = candidate.EvidenceSha256,
+                expectedHumanReviewEvidenceSha256 = receiptSha,
+                // Deliberately untrusted JSON; API only accepts scoped hashes.
+                reviewerId = candidate.RequestedBy,
+                targetUrl = "https://other.invalid/malicious",
+                token = ApiHarness.TargetToken
+            };
+            Guid observationId = Guid.Empty;
+            string? targetReceiptSha = null;
+            using (var collected = await SendAsync(
+                HttpMethod.Post, obsUrl, targetRequest))
+            {
+                if (decision ==
+                    GitCheckpointTargetHumanReviewStates.ApprovedForObservation)
+                {
+                    Assert.Equal(System.Net.HttpStatusCode.OK,
+                        collected.StatusCode);
+                    var text = await collected.Content.ReadAsStringAsync();
+                    Assert.DoesNotContain(ApiHarness.TargetToken, text);
+                    Assert.DoesNotContain("other.invalid", text);
+                    Assert.DoesNotContain("refs/heads/main", text);
+                    using var json = JsonDocument.Parse(text);
+                    var observed = json.RootElement;
+                    observationId = observed.GetProperty("id").GetGuid();
+                    targetReceiptSha = observed.GetProperty("evidenceSha256").GetString();
+                    Assert.Equal(64, targetReceiptSha!.Length);
+                    Assert.Equal(oidLength == 40 ? "sha1" : "sha256",
+                        observed.GetProperty("objectFormat").GetString());
+                    Assert.Equal(later.Id,
+                        observed.GetProperty("checkpointId").GetGuid());
+                    Assert.Equal(candidate.SourceSnapshotId,
+                        observed.GetProperty("sourceSnapshotId").GetGuid());
+                    Assert.Equal(2, observed.GetProperty("refCount").GetInt32());
+                    foreach (var flag in new[] { "canObserveTarget",
+                        "canPush", "canRetry", "canDispatch", "migrationComplete" })
+                        Assert.False(observed.GetProperty(flag).GetBoolean());
+                }
+                else
+                {
+                    Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                        collected.StatusCode);
+                    Assert.Contains("CheckpointTargetObservationPreflightUnverified",
+                        await collected.Content.ReadAsStringAsync());
+                }
+            }
+            var outboundAfterFirst = api.Calls.ToArray();
+            Assert.Equal(decision ==
+                GitCheckpointTargetHumanReviewStates.ApprovedForObservation
+                ? 2 : 0, outboundAfterFirst.Length - outboundBefore);
+            foreach (var call in outboundAfterFirst.Skip(outboundBefore))
+            {
+                Assert.Equal("GET", call.Method);
+                Assert.Equal("https", call.Url.Scheme);
+                Assert.Equal("api.github.com", call.Url.Host);
+                Assert.Equal("Bearer", call.AuthScheme);
+                Assert.StartsWith("/repos/gh-org/migration-one/git/matching-refs/",
+                    call.Url.AbsolutePath);
+            }
+            if (observationId != Guid.Empty)
+            {
+                using (var replay = await SendAsync(
+                    HttpMethod.Post, obsUrl, targetRequest))
+                {
+                    Assert.Equal(System.Net.HttpStatusCode.OK, replay.StatusCode);
+                    using var json = JsonDocument.Parse(
+                        await replay.Content.ReadAsStringAsync());
+                    Assert.Equal(observationId,
+                        json.RootElement.GetProperty("id").GetGuid());
+                    Assert.Equal(targetReceiptSha,
+                        json.RootElement.GetProperty("evidenceSha256").GetString());
+                }
+                using (var history = await SendAsync(
+                    HttpMethod.Get, obsUrl + "?sourceRepositoryId=repo-1"))
+                {
+                    Assert.Equal(System.Net.HttpStatusCode.OK, history.StatusCode);
+                    using var json = JsonDocument.Parse(
+                        await history.Content.ReadAsStringAsync());
+                    Assert.Equal(observationId,
+                        json.RootElement.GetProperty("id").GetGuid());
+                }
+                using (var foreignReviewer = await SendAsync(
+                    HttpMethod.Post, obsUrl, targetRequest, otherReviewerToken))
+                {
+                    Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                        foreignReviewer.StatusCode);
+                }
+                using (var foreignRepo = await SendAsync(
+                    HttpMethod.Get, obsUrl + "?sourceRepositoryId=foreign"))
+                    Assert.Equal(System.Net.HttpStatusCode.NotFound,
+                        foreignRepo.StatusCode);
+                Assert.Equal(outboundBefore + 2, api.Calls.Count);
+            }
+
             // Revoke the historical F-027 review: future POSTs must fail,
             // but committed immutable audit history remains retrievable.
             await using (var db = fixture.NewContext())
@@ -548,7 +650,26 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 Assert.Contains("CheckpointTargetReadPreflightSourceUnverified",
                     await readAfterRevocation.Content.ReadAsStringAsync());
             }
-            Assert.Equal(outboundBefore, api.Calls.Count);
+            using (var blockedObservation = await SendAsync(
+                HttpMethod.Post, obsUrl, targetRequest))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    blockedObservation.StatusCode);
+                Assert.Contains("CheckpointTargetObservationPreflightUnverified",
+                    await blockedObservation.Content.ReadAsStringAsync());
+            }
+            if (observationId != Guid.Empty)
+            {
+                using var history = await SendAsync(
+                    HttpMethod.Get, obsUrl + "?sourceRepositoryId=repo-1");
+                Assert.Equal(System.Net.HttpStatusCode.OK, history.StatusCode);
+                using var json = JsonDocument.Parse(
+                    await history.Content.ReadAsStringAsync());
+                Assert.Equal(targetReceiptSha,
+                    json.RootElement.GetProperty("evidenceSha256").GetString());
+            }
+            Assert.Equal(outboundBefore + (observationId != Guid.Empty ? 2 : 0),
+                api.Calls.Count);
             await using (var db = fixture.NewContext())
             {
                 Assert.Single(await db.GitCheckpointTargetHumanReviews
@@ -557,6 +678,29 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 Assert.Single(await db.GitCheckpointTargetHumanReviewEvents
                     .AsNoTracking().Where(x => x.DecisionId == receiptId)
                     .ToArrayAsync());
+                var observedRows = await db.GitCheckpointTargetObservations
+                    .AsNoTracking().Where(x => x.CheckpointId == later.Id)
+                    .ToArrayAsync();
+                var targetEvents = await db.GitCheckpointTargetObservationEvents
+                    .AsNoTracking().Where(x => x.ObservationId == observationId)
+                    .ToArrayAsync();
+                if (observationId != Guid.Empty)
+                {
+                    Assert.Single(observedRows);
+                    Assert.Single(targetEvents);
+                    Assert.Equal(targetReceiptSha,
+                        observedRows[0].EvidenceSha256);
+                    Assert.Equal("ObservedReadOnly", targetEvents[0].Type);
+                    Assert.False(observedRows[0].CanPush ||
+                        observedRows[0].CanRetry || observedRows[0].CanDispatch ||
+                        observedRows[0].CanObserveTarget ||
+                        observedRows[0].MigrationComplete);
+                }
+                else
+                {
+                    Assert.Empty(observedRows);
+                    Assert.Empty(targetEvents);
+                }
                 Assert.Empty(await db.GitHubTargetRefEvidence.AsNoTracking()
                     .Where(x => x.PlanId == plan.Id).ToArrayAsync());
                 Assert.Empty(await db.IncrementalGitRefReconciliations
