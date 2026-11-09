@@ -738,6 +738,7 @@ await GitIncrementalCheckpointWorkpackSchema.InitializeAsync(app.Services);
 await GitCheckpointTargetHumanReviewSchema.InitializeAsync(app.Services);
 await GitCheckpointTargetObservationSchema.InitializeAsync(app.Services);
 await GitIncrementalLaterCheckpointWorkpackSchema.InitializeAsync(app.Services);
+await GitIncrementalLaterCheckpointBundleEvidenceSchema.InitializeAsync(app.Services);
 await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);

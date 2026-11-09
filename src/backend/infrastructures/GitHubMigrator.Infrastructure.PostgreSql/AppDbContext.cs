@@ -49,6 +49,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<GitLaterCheckpointReconciliationRecord>();
     public DbSet<GitLaterCheckpointWorkpackRecord> GitLaterCheckpointWorkpacks =>
         Set<GitLaterCheckpointWorkpackRecord>();
+    public DbSet<GitLaterCheckpointBundleEvidenceRecord> GitLaterCheckpointBundleEvidence =>
+        Set<GitLaterCheckpointBundleEvidenceRecord>();
+    public DbSet<GitLaterCheckpointBundleEvidenceEventRecord> GitLaterCheckpointBundleEvents =>
+        Set<GitLaterCheckpointBundleEvidenceEventRecord>();
     public DbSet<GitLaterCheckpointWorkpackEventRecord> GitLaterCheckpointWorkpackEvents =>
         Set<GitLaterCheckpointWorkpackEventRecord>();
     public DbSet<GitIncrementalCheckpointWorkpackRecord> GitIncrementalCheckpointWorkpacks =>
@@ -454,6 +458,65 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.DecisionId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => x.DecisionId).IsUnique();
+        });
+        builder.Entity<GitLaterCheckpointBundleEvidenceRecord>(entity =>
+        {
+            entity.ToTable("git_later_checkpoint_bundle_evidence");
+            entity.HasKey(x => x.WorkpackId);
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.SourceSnapshotId).HasColumnName("source_snapshot_id");
+            entity.Property(x => x.TargetObservationId).HasColumnName("target_observation_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id");
+            entity.Property(x => x.WorkpackEvidenceSha256).HasColumnName("workpack_evidence_sha256");
+            entity.Property(x => x.BundlePlanSha256).HasColumnName("bundle_plan_sha256");
+            entity.Property(x => x.FullRefProofSha256).HasColumnName("full_ref_proof_sha256");
+            entity.Property(x => x.SourceEvidenceSha256).HasColumnName("source_evidence_sha256");
+            entity.Property(x => x.SourceManifestRootSha256).HasColumnName("source_manifest_root_sha256");
+            entity.Property(x => x.TargetReceiptSha256).HasColumnName("target_receipt_sha256");
+            entity.Property(x => x.ReconciliationSha256).HasColumnName("reconciliation_sha256");
+            entity.Property(x => x.BundleFileName).HasColumnName("bundle_file_name");
+            entity.Property(x => x.BundleSha256).HasColumnName("bundle_sha256");
+            entity.Property(x => x.BundleBytes).HasColumnName("bundle_bytes");
+            entity.Property(x => x.RefCount).HasColumnName("ref_count");
+            entity.Property(x => x.AcquiredAtUtc).HasColumnName("acquired_at_utc");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.Property(x => x.CanPush).HasColumnName("can_push");
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasOne<GitLaterCheckpointWorkpackRecord>().WithMany()
+                .HasForeignKey(x => x.WorkpackId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubSourceSyncCheckpointRecord>().WithMany()
+                .HasForeignKey(x => x.CheckpointId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<StagingSnapshotSyncRecord>().WithMany()
+                .HasForeignKey(x => x.SourceSnapshotId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitCheckpointTargetObservationRecord>().WithMany()
+                .HasForeignKey(x => x.TargetObservationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.BundleFileName).IsUnique();
+        });
+        builder.Entity<GitLaterCheckpointBundleEvidenceEventRecord>(entity =>
+        {
+            entity.ToTable("git_later_checkpoint_bundle_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.Type).HasColumnName("type");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitLaterCheckpointBundleEvidenceRecord>().WithOne()
+                .HasForeignKey<GitLaterCheckpointBundleEvidenceEventRecord>(x => x.WorkpackId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<GitLaterCheckpointReconciliationRecord>(entity =>
         {
