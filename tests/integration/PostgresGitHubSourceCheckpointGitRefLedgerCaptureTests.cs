@@ -2,6 +2,7 @@ using System.Text.Json;
 using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
 using GitHubMigrator.Infrastructure.PostgreSql;
+using GitHubMigrator.Infrastructure.GitObjects;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -863,6 +864,67 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     Assert.Empty(await verifiedDb.GitLaterCheckpointBundleEvidence
                         .AsNoTracking().Where(x => x.WorkpackId ==
                             first.WorkpackId).ToArrayAsync());
+
+                    // #113: even with a valid current lease, a forged
+                    // result without actual on-disk bundle bytes cannot
+                    // become durable F-035v2 SQL evidence. The trusted
+                    // filesystem verifier fails BEFORE Git or any INSERT.
+                    var emptyBundleRoot = Path.Combine(Path.GetTempPath(),
+                        "f035v2-missing-" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(emptyBundleRoot);
+                    try
+                    {
+                        var checkedAt = DateTimeOffset.UtcNow;
+                        var fakeFile = new
+                            GitIncrementalLaterCheckpointLocalBundleResult(
+                                first.WorkpackId, later.Id,
+                                bundlePreparation.SourceSnapshotId,
+                                bundlePreparation.EvidenceSha256,
+                                bundlePreparation.SourceFullRefProofSha256,
+                                targetReceipt.EvidenceSha256,
+                                first.WorkpackId.ToString("N") + ".bundle",
+                                new string('a', 64), 123, fullRefs.Refs.Count,
+                                checkedAt.AddSeconds(-1), checkedAt,
+                                false, false, false, false, false);
+                        var absent = await Assert.ThrowsAsync<
+                            GitSourceBundleException>(() =>
+                            coordinator.CommitAsync(lease2, fakeFile,
+                                run.Id, plan.Id, later.Id,
+                                observationId, "repo-1",
+                                targetReceipt.EvidenceSha256,
+                                new LocalGitBundleArtifactStore(emptyBundleRoot),
+                                default));
+                        Assert.Equal("BundleStoredFileMissing", absent.Code);
+                        Assert.Empty(await verifiedDb.GitLaterCheckpointBundleEvidence
+                            .AsNoTracking().Where(x => x.WorkpackId ==
+                                first.WorkpackId).ToArrayAsync());
+                        Assert.Empty(await verifiedDb.GitLaterCheckpointBundleEvents
+                            .AsNoTracking().Where(x => x.WorkpackId ==
+                                first.WorkpackId).ToArrayAsync());
+                    }
+                    finally
+                    {
+                        Directory.Delete(emptyBundleRoot, recursive: true);
+                    }
+                    // The immutable lease audit itself must reject UPDATE
+                    // independently of any application-side guard.
+                    var changeAudit = await Assert.ThrowsAsync<
+                        Npgsql.PostgresException>(() =>
+                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                            DELETE FROM git_later_checkpoint_bundle_lease_events
+                            WHERE workpack_id = {first.WorkpackId}
+                            """));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                        changeAudit.SqlState);
+                    var enableRemote = await Assert.ThrowsAsync<
+                        Npgsql.PostgresException>(() =>
+                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                            UPDATE git_later_checkpoint_bundle_leases
+                            SET can_push = {true}
+                            WHERE workpack_id = {first.WorkpackId}
+                            """));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.CheckViolation,
+                        enableRemote.SqlState);
 
                     var replay = await writer.CaptureAsync(
                         run.Id, plan.Id, later.Id, observationId, "repo-1",
