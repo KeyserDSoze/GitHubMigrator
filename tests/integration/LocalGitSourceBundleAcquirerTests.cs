@@ -11,6 +11,32 @@ namespace GitHubMigrator.Integration.Tests;
 // Azure/GitHub PAT, target writes, mock "Git output" or HTTP is involved.
 public sealed class LocalGitSourceBundleAcquirerTests
 {
+    [Fact]
+    public async Task F035v2_orphan_quarantine_never_follows_symlinks_or_dangling_links()
+    {
+        using var root = new LocalFixture();
+        var store = new LocalGitBundleArtifactStore(root.BundleRoot);
+        var named = Path.Combine(root.BundleRoot,
+            root.WorkpackId.ToString("N") + ".bundle");
+        var other = Path.Combine(root.Temp, "outside-bundle");
+        await File.WriteAllTextAsync(other, "not part of F035v2 evidence");
+        File.CreateSymbolicLink(named, other);
+        Assert.Equal("LocalBundleSymlinkBlocked",
+            (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                store.QuarantineOrphanAsync(root.WorkpackId, default))).Code);
+        Assert.Equal("not part of F035v2 evidence",
+            await File.ReadAllTextAsync(other));
+        Assert.Empty(Directory.GetFiles(root.BundleRoot, "*.quarantine"));
+        File.Delete(named);
+        var missingTarget = Path.Combine(root.Temp, "never-created");
+        File.CreateSymbolicLink(named, missingTarget);
+        Assert.Equal("LocalBundleSymlinkBlocked",
+            (await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+                store.QuarantineOrphanAsync(root.WorkpackId, default))).Code);
+        Assert.False(File.Exists(missingTarget));
+        Assert.Empty(Directory.GetFiles(root.BundleRoot, "*.quarantine"));
+    }
+
     [Theory]
     [InlineData(40)]
     [InlineData(64)]
