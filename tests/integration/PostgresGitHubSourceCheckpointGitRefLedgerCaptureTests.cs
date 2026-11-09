@@ -736,6 +736,23 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         targetReceipt.EvidenceSha256, candidate.RequestedBy,
                         default);
                     Assert.Equal(first, replay);
+                    // Restart-like independent DI contexts and concurrent
+                    // requests must all replay the same immutable witness;
+                    // the shared source advisory lock prevents double INSERT.
+                    var concurrent = await Task.WhenAll(
+                        Enumerable.Range(0, 3).Select(async _ =>
+                        {
+                            await using var parallelScope =
+                                api.Host.Services.CreateAsyncScope();
+                            var independentWriter = parallelScope.ServiceProvider
+                                .GetRequiredService<
+                                    PostgresGitIncrementalLaterCheckpointWorkpackJournal>();
+                            return await independentWriter.CaptureAsync(
+                                run.Id, plan.Id, later.Id, observationId,
+                                "repo-1", targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, default);
+                        }));
+                    Assert.All(concurrent, saved => Assert.Equal(first, saved));
                     Assert.Equal("LaterCheckpointWorkpackContextChanged",
                         (await Assert.ThrowsAsync<
                             GitIncrementalCheckpointWorkpackException>(() =>
