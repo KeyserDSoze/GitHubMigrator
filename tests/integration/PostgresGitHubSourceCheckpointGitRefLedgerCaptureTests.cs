@@ -109,7 +109,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     // delay only the sandbox fixture; the real importer still performs
     // actual immutable bundle import + Git OID/fsck/closed-graph checks.
     private sealed class DelayedVerifiedImporter(
-        IGitIncrementalLaterCheckpointMirrorImporter inner)
+        IGitIncrementalLaterCheckpointMirrorImporter inner,
+        bool failAfterDelay = false)
         : IGitIncrementalLaterCheckpointMirrorImporter
     {
         public async Task<GitIncrementalLaterCheckpointMirrorOfflineAudit>
@@ -119,6 +120,9 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 CancellationToken ct)
         {
             await Task.Delay(TimeSpan.FromSeconds(3), ct);
+            if (failAfterDelay)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorWorkerInjectedImportFailure");
             return await inner.MaterializeLaterCheckpointAsync(
                 stage, durable, ct);
         }
@@ -350,17 +354,19 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     // The reviewer identity comes from JWT claims, even when the caller
     // tries to smuggle two different actor UUIDs into the JSON request.
     [Theory]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, true, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected, false, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, true, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true)]
     public async Task F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_immutable(
         int oidLength, string decision, bool verifyPhysical,
-        bool corruptPhysical, bool runWorker)
+        bool corruptPhysical, bool runWorker, bool failWorker)
     {
         var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
             DateTimeOffset.UtcNow);
@@ -1563,8 +1569,54 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 new DelayedVerifiedImporter(
                                     auditScope.ServiceProvider
                                         .GetRequiredService<
-                                            IGitIncrementalLaterCheckpointMirrorImporter>()));
+                                            IGitIncrementalLaterCheckpointMirrorImporter>(),
+                                    failWorker));
                         var activeWorker = Guid.NewGuid();
+                        if (failWorker)
+                        {
+                            // Deliberately interrupted import after
+                            // several live heartbeats: verify the exact
+                            // owner becomes RecoveryRequired and NO
+                            // physical Verified proof is ever persisted.
+                            var thrown = await Assert.ThrowsAsync<
+                                GitSourceSnapshotMirrorException>(() =>
+                                mirrorWorkerRunner.RunAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, activeWorker,
+                                    default));
+                            Assert.Equal(
+                                "LaterCheckpointMirrorWorkerInjectedImportFailure",
+                                thrown.Code);
+                            var recovery = await verifiedDb.Database
+                                .SqlQuery<string>($"""
+                                    SELECT state AS "Value"
+                                    FROM git_later_checkpoint_mirror_leases
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """).SingleAsync();
+                            Assert.Equal("RecoveryRequired", recovery);
+                            var evidenceCount = await verifiedDb.Database
+                                .SqlQuery<long>($"""
+                                    SELECT count(*)::bigint AS "Value"
+                                    FROM git_later_checkpoint_mirror_verified_evidence
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """).SingleAsync();
+                            Assert.Equal(0L, evidenceCount);
+                            var interruptedEvents = await verifiedDb.Database
+                                .SqlQuery<string>($"""
+                                    SELECT type AS "Value"
+                                    FROM git_later_checkpoint_mirror_lease_events
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """).ToArrayAsync();
+                            Assert.Contains("Acquired", interruptedEvents);
+                            Assert.Contains("Renewed", interruptedEvents);
+                            Assert.Equal(1, interruptedEvents.Count(x =>
+                                x == "Quarantined"));
+                            Assert.DoesNotContain("Verified", interruptedEvents);
+                        }
+                        else
+                        {
                         var actual = await mirrorWorkerRunner.RunAsync(
                             run.Id, plan.Id, later.Id, observationId,
                             first.WorkpackId, "repo-1",
@@ -1624,6 +1676,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                             .AsNoTracking().Where(x =>
                                 x.MirrorId == actual.PhysicalMirrorId)
                             .ToArrayAsync());
+                        }
                     }
                     else
                     {
