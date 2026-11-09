@@ -237,7 +237,6 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
         sourceSnapshotId: next, sourceRepositoryId: 'repo-1',
         targetRepositoryName: 'migration-one', organization: 'gh-org',
         objectFormat: 'sha1',
-        reviewedBy: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
         candidateEvidenceSha256: sha('e'),
         humanReviewEvidenceSha256: sha('f'),
         targetEvidenceSha256: sha('a'), evidenceSha256: sha('b'),
