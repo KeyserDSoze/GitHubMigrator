@@ -73,8 +73,19 @@ public static class GitIncrementalLaterCheckpointMirrorLeaseSchema
                 type varchar(24) NOT NULL,
                 staging_evidence_sha256 varchar(64) NOT NULL,
                 occurred_at_utc timestamptz NOT NULL,
-                UNIQUE(mirror_id, generation, type)
+                -- Repeated bounded Renewed events are individually
+                -- immutable: only transition events must be unique.
+                CONSTRAINT ck_f061v2_event_nonempty CHECK (
+                    staging_evidence_sha256 <> '')
             );
+            ALTER TABLE git_later_checkpoint_mirror_lease_events
+                DROP CONSTRAINT IF EXISTS
+                git_later_checkpoint_mirror_lease_events_mirror_id_generation_type_key;
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                ux_later_f061v2_terminal_event
+                ON git_later_checkpoint_mirror_lease_events(
+                    mirror_id, generation, type)
+                WHERE type IN ('Acquired','Quarantined','Verified');
             DO $later_f061v2_checks$
             BEGIN
                 IF NOT EXISTS (
