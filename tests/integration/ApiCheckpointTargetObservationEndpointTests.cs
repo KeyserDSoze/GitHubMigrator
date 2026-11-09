@@ -1,4 +1,7 @@
 using System.Net;
+using GitHubMigrator.Business;
+using GitHubMigrator.Infrastructure.PostgreSql;
+using Microsoft.Extensions.DependencyInjection;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -41,6 +44,26 @@ public sealed class ApiCheckpointTargetObservationEndpointTests(
                 }
             }
         }
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
+    public async Task F097c4c2_historical_F031_receipt_read_never_enables_a_provider_GET()
+    {
+        var before = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var journal = scope.ServiceProvider.GetRequiredService<
+            PostgresGitCheckpointTargetObservationJournal>();
+        var prep = Guid.NewGuid();
+        var plan = Guid.NewGuid();
+        var checkpoint = Guid.NewGuid();
+        Assert.Null(await journal.ReadHistoricalAsync(
+            prep, plan, checkpoint, "repo-1", default));
+        Assert.Equal("CheckpointTargetObservationDisabled",
+            (await Assert.ThrowsAsync<
+                GitCheckpointTargetObservationException>(() =>
+                journal.ReadScopedAsync(prep, plan, checkpoint,
+                    "repo-1", default))).Code);
         Assert.Equal(before, harness.Calls.Count);
     }
 
