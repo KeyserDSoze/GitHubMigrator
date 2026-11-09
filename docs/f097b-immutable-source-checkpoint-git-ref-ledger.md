@@ -40,9 +40,11 @@ supports 1–128 refs per selected repository, homogeneous SHA-1 or SHA-256.
 Real PostgreSQL regression tests validate additive/idempotent schema
 bootstrap, disabled mode, fail-closed legacy source admission, write-deny
 CHECK constraints, immutability triggers and restart readback of the
-SQL ledger and Recorded event. A positive complete-source **trusted
-capture** integration fixture is not yet implemented and must be
-verified before issue #94 is closed.
+SQL ledger and Recorded event. A positive end-to-end integration fixture now exercises F-008/F-014 source
+discovery, F-013 staging, F-026/029 planning, F-090/091 checkpoint,
+F-097b concurrent capture, read-after-restart, one Recorded event,
+different-actor replay rejection and F-014 tamper refusal.
+The fixture still requires final CI verification before issue #94 is closed.
 
 Larger pages, complete real F-014→F-090→F-097 integration and
 F-095 physical-bound source history remain tracked in #94/#92 until verified.
