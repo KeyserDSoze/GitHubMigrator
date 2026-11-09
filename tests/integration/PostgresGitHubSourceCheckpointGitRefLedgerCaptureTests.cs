@@ -215,6 +215,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             var read = await preflight.ReadAsync(
                 preparation.Id, plan.Id, checkpoint.Id, target.Id,
                 "repo-1", target.EvidenceSha256, default);
+            Assert.Equal(1, read.EvidenceVersion);
             Assert.Equal(checkpoint.Id, read.SourceCheckpointId);
             Assert.Equal(sourceJob, read.SourceSnapshotId);
             Assert.Equal(proof.EvidenceSha256, read.SourceFullRefProofSha256);

@@ -3,7 +3,7 @@ namespace GitHubMigrator.Business;
 // F-097c.2 is an INTERNAL, read-only staging contract for a FUTURE
 // F-095 v3 audit. It is not a GitHub remote read or execution permit.
 public sealed record GitIncrementalCheckpointAuditInputs(
-    Guid PreparationId, Guid PlanId, Guid SourceConnectionId,
+    int EvidenceVersion, Guid PreparationId, Guid PlanId, Guid SourceConnectionId,
     Guid SourceSnapshotId, Guid SourceCheckpointId,
     string SourceCheckpointAttestationSha256,
     string SourceFullRefProofSha256, Guid TargetObservationId,
@@ -130,7 +130,7 @@ public static class GitIncrementalCheckpointAuditPreflightIntegrity
             throw Refused();
 
         return new(
-            plan.PreparationId, plan.Id, plan.SourceConnectionId,
+            1, plan.PreparationId, plan.Id, plan.SourceConnectionId,
             fullRefs.SnapshotId, checkpoint.Id,
             checkpoint.RefChangeAttestationSha256!,
             fullRefs.EvidenceSha256, target.Id, target.EvidenceSha256,

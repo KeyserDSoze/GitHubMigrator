@@ -20,8 +20,9 @@ must be canonical, contain 1–128 refs each, and have homogeneous SHA-1
 or SHA-256 object IDs. Global F-013 ACL completeness is **not** treated
 as Git ref completeness.
 
-`GitIncrementalCheckpointAuditInputs` contains only independently
-verified refs, SHA handles and four fixed `false` execution flags. It
+`GitIncrementalCheckpointAuditInputs` is explicitly versioned (v1) and
+contains only independently verified refs, SHA handles and four fixed
+`false` execution flags. It
 is read-only evidence **for a future physical audit**, not a reusable
 F-094 request or an F-095 receipt.
 
