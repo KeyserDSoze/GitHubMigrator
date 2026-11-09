@@ -36,6 +36,7 @@ public sealed class ApiHarness : IAsyncLifetime
     // Opt in only for dedicated API authorization tests. The default
     // fixture must continue exercising the production default OFF.
     public bool EnableCheckpointHumanReview { get; set; }
+    public bool EnableCheckpointTargetReadPreflight { get; set; }
 
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
@@ -72,6 +73,14 @@ public sealed class ApiHarness : IAsyncLifetime
         };
         if (EnableCheckpointHumanReview)
         {
+            values["GitCheckpointTargetHumanReview__Enabled"] = "true";
+            values["GitCheckpointTargetReReview__Enabled"] = "true";
+            values["GitHubSourceCheckpointGitRefLedger__Enabled"] = "true";
+            values["GitHubSourceSyncCheckpoints__Enabled"] = "true";
+        }
+        if (EnableCheckpointTargetReadPreflight)
+        {
+            values["GitCheckpointTargetReadPreflight__Enabled"] = "true";
             values["GitCheckpointTargetHumanReview__Enabled"] = "true";
             values["GitCheckpointTargetReReview__Enabled"] = "true";
             values["GitHubSourceCheckpointGitRefLedger__Enabled"] = "true";
