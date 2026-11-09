@@ -343,6 +343,51 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
                     GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity
                         .Verify(changed, staged, receipt)).Code);
 
+        // #119: the durable Verified receipt is domain-separated from
+        // self-sealed offline/SQL read witnesses. The PostgreSQL journal
+        // must independently run actual Git fsck before using this seal.
+        var verifiedWorker = Guid.NewGuid();
+        var verifiedLease = Guid.NewGuid();
+        var verified = GitIncrementalLaterCheckpointMirrorVerifiedIntegrity.Seal(
+            staged, receipt, physical, verifiedWorker,
+            verifiedLease, 1, now.AddSeconds(1));
+        Assert.True(verified.DurableEvidencePersisted);
+        Assert.Equal(staged.PhysicalMirrorId, verified.PhysicalMirrorId);
+        Assert.Equal(staged.SourceSnapshotId, verified.SourceSnapshotId);
+        Assert.Equal(physical.ObjectSetSha256, verified.ObjectSetSha256);
+        Assert.Equal(physical.ObjectCount, verified.ObjectCount);
+        Assert.Equal(verifiedWorker, verified.WorkerId);
+        Assert.Equal(verifiedLease, verified.LeaseToken);
+        Assert.Equal(1, verified.LeaseGeneration);
+        Assert.False(verified.CanMaterialize || verified.CanPush ||
+            verified.CanRetry || verified.CanDispatch ||
+            verified.MigrationComplete);
+        GitIncrementalLaterCheckpointMirrorVerifiedIntegrity.Verify(
+            verified, staged, receipt, physical);
+        foreach (var alteredProof in new[] {
+            verified with { WorkerId = Guid.NewGuid() },
+            verified with { LeaseToken = Guid.NewGuid() },
+            verified with { LeaseGeneration = 2 },
+            verified with { ObjectSetSha256 = new string('0',64) },
+            verified with { ObjectCount = verified.ObjectCount + 1 },
+            verified with { FullRefProofSha256 = new string('f',64) },
+            verified with { SourceSnapshotId = plan.SnapshotId },
+            verified with { BundleSha256 = new string('0',64) },
+            verified with { DurableEvidencePersisted = false },
+            verified with { CanMaterialize = true },
+            verified with { CanPush = true },
+            verified with { EvidenceSha256 = new string('f',64) }
+        })
+            Assert.Equal("LaterCheckpointMirrorVerifiedInvalid",
+                Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                    GitIncrementalLaterCheckpointMirrorVerifiedIntegrity.Verify(
+                        alteredProof, staged, receipt, physical)).Code);
+        Assert.Equal("LaterCheckpointMirrorVerifiedInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorVerifiedIntegrity.Seal(
+                    staged, receipt, physical, verifiedWorker,
+                    verifiedLease, 0, now.AddSeconds(1))).Code);
+
         foreach (var altered in new[] {
             staged with { CanMaterialize = true },
             staged with { CanPush = true },
