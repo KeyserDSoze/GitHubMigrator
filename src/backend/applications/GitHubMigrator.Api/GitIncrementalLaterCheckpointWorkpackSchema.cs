@@ -133,6 +133,68 @@ public static class GitIncrementalLaterCheckpointWorkpackSchema
                 END IF;
             END $v2_checks$;
 
+            -- Existing EF EnsureCreated tables from an earlier bootstrap
+            -- may predate the mapped scope FKs. Install them idempotently.
+            DO $v2_scope_foreign_keys$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
+                    conrelid='git_later_checkpoint_reconciliations'::regclass
+                    AND conname='fk_later_f032_preparation_id_scope') THEN
+                    ALTER TABLE git_later_checkpoint_reconciliations
+                    ADD CONSTRAINT fk_later_f032_preparation_id_scope FOREIGN KEY (preparation_id)
+                    REFERENCES incremental_preparations(id) ON DELETE RESTRICT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
+                    conrelid='git_later_checkpoint_reconciliations'::regclass
+                    AND conname='fk_later_f032_plan_id_scope') THEN
+                    ALTER TABLE git_later_checkpoint_reconciliations
+                    ADD CONSTRAINT fk_later_f032_plan_id_scope FOREIGN KEY (plan_id)
+                    REFERENCES incremental_operation_plans(id) ON DELETE RESTRICT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
+                    conrelid='git_later_checkpoint_reconciliations'::regclass
+                    AND conname='fk_later_f032_checkpoint_id_scope') THEN
+                    ALTER TABLE git_later_checkpoint_reconciliations
+                    ADD CONSTRAINT fk_later_f032_checkpoint_id_scope FOREIGN KEY (checkpoint_id)
+                    REFERENCES github_source_sync_checkpoints(id) ON DELETE RESTRICT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
+                    conrelid='git_later_checkpoint_reconciliations'::regclass
+                    AND conname='fk_later_f032_source_snapshot_id_scope') THEN
+                    ALTER TABLE git_later_checkpoint_reconciliations
+                    ADD CONSTRAINT fk_later_f032_source_snapshot_id_scope FOREIGN KEY (source_snapshot_id)
+                    REFERENCES staging_snapshot_syncs(snapshot_id) ON DELETE RESTRICT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
+                    conrelid='git_later_checkpoint_workpacks'::regclass
+                    AND conname='fk_later_f038_preparation_id_scope') THEN
+                    ALTER TABLE git_later_checkpoint_workpacks
+                    ADD CONSTRAINT fk_later_f038_preparation_id_scope FOREIGN KEY (preparation_id)
+                    REFERENCES incremental_preparations(id) ON DELETE RESTRICT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
+                    conrelid='git_later_checkpoint_workpacks'::regclass
+                    AND conname='fk_later_f038_plan_id_scope') THEN
+                    ALTER TABLE git_later_checkpoint_workpacks
+                    ADD CONSTRAINT fk_later_f038_plan_id_scope FOREIGN KEY (plan_id)
+                    REFERENCES incremental_operation_plans(id) ON DELETE RESTRICT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
+                    conrelid='git_later_checkpoint_workpacks'::regclass
+                    AND conname='fk_later_f038_checkpoint_id_scope') THEN
+                    ALTER TABLE git_later_checkpoint_workpacks
+                    ADD CONSTRAINT fk_later_f038_checkpoint_id_scope FOREIGN KEY (checkpoint_id)
+                    REFERENCES github_source_sync_checkpoints(id) ON DELETE RESTRICT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
+                    conrelid='git_later_checkpoint_workpacks'::regclass
+                    AND conname='fk_later_f038_source_snapshot_id_scope') THEN
+                    ALTER TABLE git_later_checkpoint_workpacks
+                    ADD CONSTRAINT fk_later_f038_source_snapshot_id_scope FOREIGN KEY (source_snapshot_id)
+                    REFERENCES staging_snapshot_syncs(snapshot_id) ON DELETE RESTRICT;
+                END IF;
+            END $v2_scope_foreign_keys$;
+
             CREATE OR REPLACE FUNCTION git_later_checkpoint_reject_mutation()
             RETURNS trigger LANGUAGE plpgsql AS $immutable$
             BEGIN
