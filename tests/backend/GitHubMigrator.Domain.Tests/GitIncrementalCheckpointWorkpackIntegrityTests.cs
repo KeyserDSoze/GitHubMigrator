@@ -237,11 +237,11 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
                 plan.Id, plan.ManifestSha256, source.SourceEvidenceSha256,
                 selected.TargetEvidenceSha256,
                 selected.ExpectedSourceRefs, selected.ExpectedTargetRefs));
-            var workpack = GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
-                plan, selected, source, compared,
-                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
             if (count == 128)
             {
+                var workpack = GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+                    plan, selected, source, compared,
+                    Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
                 var planForBundle = GitIncrementalLaterCheckpointBundleIntegrity
                     .Prepare(plan, selected, source, compared, workpack);
                 Assert.Equal(128, planForBundle.SourceOnlyRequest.ExpectedRefs.Count);
@@ -249,10 +249,13 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
             }
             else
             {
-                Assert.Equal("LaterCheckpointBundleEvidenceInvalid",
-                    Assert.Throws<GitSourceBundleException>(() =>
-                        GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
-                            plan, selected, source, compared, workpack)).Code);
+                // The 128-ref limit is enforced already by F-032v2:
+                // F-035v2 cannot receive an accepted 129-ref workpack.
+                Assert.Equal("LaterCheckpointWorkpackEvidenceInvalid",
+                    Assert.Throws<GitIncrementalCheckpointWorkpackException>(() =>
+                        GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+                            plan, selected, source, compared,
+                            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid())).Code);
             }
         }
     }
