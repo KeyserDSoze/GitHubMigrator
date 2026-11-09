@@ -540,8 +540,11 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 if (decision ==
                     GitCheckpointTargetHumanReviewStates.ApprovedForObservation)
                 {
-                    Assert.Equal(System.Net.HttpStatusCode.OK,
-                        collected.StatusCode);
+                    Assert.True(
+                        collected.StatusCode == System.Net.HttpStatusCode.OK,
+                        "Checkpoint F-031 failed closed: HTTP " +
+                        (int)collected.StatusCode + " " +
+                        await collected.Content.ReadAsStringAsync());
                     var text = await collected.Content.ReadAsStringAsync();
                     Assert.DoesNotContain(ApiHarness.TargetToken, text);
                     Assert.DoesNotContain("other.invalid", text);
