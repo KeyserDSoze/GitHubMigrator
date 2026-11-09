@@ -162,6 +162,13 @@ builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointBundleHistory>()
 builder.Services.AddSingleton(new GitIncrementalLaterCheckpointMirrorStagingOptions(
     builder.Configuration.GetValue("GitIncrementalLaterCheckpointMirrorStaging:Enabled", false)));
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight>();
+// #117 independently default-OFF: source-first SQL reviewed read witness.
+// This creates NO F-061 lease, no Git subprocess and no HTTP endpoint.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointMirrorAdmissionOptions(
+    builder.Configuration.GetValue(
+        "GitIncrementalLaterCheckpointMirrorAdmission:Enabled", false)));
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>();
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
