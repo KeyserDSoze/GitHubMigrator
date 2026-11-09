@@ -1486,6 +1486,18 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 later.Id, observationId, first.WorkpackId,
                                 "repo-1", new string('0', 64),
                                 candidate.RequestedBy, default))).Code);
+                    Assert.Equal("LaterCheckpointMirrorStagingProvenanceUnverified",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => mirrorReader.ReadAsync(run.Id, plan.Id,
+                                later.Id, observationId, first.WorkpackId,
+                                "repo-1", targetReceipt.EvidenceSha256,
+                                Guid.NewGuid(), default))).Code);
+                    Assert.Equal("LaterCheckpointMirrorStagingProvenanceUnverified",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => mirrorReader.ReadAsync(run.Id, plan.Id,
+                                later.Id, observationId, first.WorkpackId,
+                                "foreign-repo", targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, default))).Code);
 
                     Assert.Equal("LaterCheckpointMirrorStagingInvalid",
                         Assert.Throws<GitSourceSnapshotMirrorException>(() =>
@@ -1683,6 +1695,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         bundleReader.ReadAsync(run.Id, plan.Id, later.Id,
                             observationId, recordedWorkpackId, "repo-1",
                             targetReceiptSha!, default))).Code);
+                var mirrorReader = scoped.ServiceProvider.GetRequiredService<
+                    PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight>();
+                Assert.Equal("LaterCheckpointMirrorStagingProvenanceUnverified",
+                    (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                        () => mirrorReader.ReadAsync(run.Id, plan.Id,
+                            later.Id, observationId, recordedWorkpackId,
+                            "repo-1", targetReceiptSha!, candidate.RequestedBy,
+                            default))).Code);
                 var writer = scoped.ServiceProvider.GetRequiredService<
                     PostgresGitIncrementalLaterCheckpointWorkpackJournal>();
                 Assert.Equal("LaterCheckpointWorkpackPreflightUnverified",
