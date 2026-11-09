@@ -100,6 +100,171 @@ public sealed class LocalGitIncrementalAncestryAuditorTests
         Assert.Equal("GitAncestryLocalEvidenceRejected", legacyError.Code);
     }
 
+    // F-097c.1: a real F-094 local SHA-1/SHA-256 audit must bind the
+    // complete F-097 chain to the physical GUID mirror and object closure.
+    // This intentionally does not claim a persisted F-095 later-epoch row.
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task F097c_v3_later_epoch_full_refs_bind_to_real_F060_mirror(
+        string format)
+    {
+        using var repos = new Fixture();
+        var legacy = repos.Setup(format);
+        var sourceId = Guid.NewGuid();
+        var preparationId = Guid.NewGuid();
+        var planId = Guid.NewGuid();
+        var baselineId = Guid.NewGuid();
+        var manifestSha = new string('c', 64);
+        var now = DateTimeOffset.UtcNow;
+
+        var plan = new IncrementalOperationPlan(
+            planId, preparationId, baselineId, sourceId,
+            Guid.NewGuid(), "gh-org", new string('a', 64),
+            new string('b', 64), new string('d', 64),
+            manifestSha, now, Guid.NewGuid(),
+            1, 6, 1, 0, true, false, [], [
+                new IncrementalOperationStep(1, null, "repo-1",
+                    "target", "ReviewTargetName", "Blocked", "Blocked", 0)
+            ]);
+
+        GitHubSourceSyncCheckpointReceipt Checkpoint(
+            Guid snapshot, GitHubSourceSyncCheckpointReceipt? previous)
+        {
+            var count = previous is null ? 0 : 1;
+            var epoch = new GitHubSourceSyncCheckpointProof(
+                preparationId, planId, sourceId, snapshot, baselineId,
+                previous?.Id, previous?.EvidenceSha256, manifestSha,
+                now.AddMinutes(-1), now, false, previous is null,
+                0, count, 0, 0, count, 0,
+                [new GitHubSourceRefDelta("repo-1", "target",
+                    0, count, 0, 0)]);
+            var digest = GitHubSourceSyncCheckpointIntegrity.Digest(epoch);
+            var refManifest = new GitHubSourceRefChangeManifest(
+                sourceId, snapshot, 0, count, 0, 0, new string('e', 64));
+            var id = Guid.NewGuid();
+            return new GitHubSourceSyncCheckpointReceipt(
+                id, epoch, digest, Guid.NewGuid(), now,
+                false, false, false, false, refManifest,
+                GitHubSourceSyncCheckpointIntegrity.RefAttestationDigest(
+                    id, digest, refManifest), 2);
+        }
+
+        var baseline = Checkpoint(baselineId, null);
+        var verifiedBaseline = VerifiedSourceGitRefIntegrity.Seal(
+            baselineId, sourceId, "repo-1", new string('b', 64),
+            legacy.ExpectedSourceRefs);
+        var prior = GitHubSourceCheckpointGitRefProofIntegrity.Seal(
+            baseline, verifiedBaseline);
+        var checkpoint = Checkpoint(legacy.SourceSnapshotId, baseline);
+        var source = VerifiedSourceGitRefIntegrity.Seal(
+            checkpoint.Proof.SnapshotId, sourceId, "repo-1",
+            new string('b', 64), legacy.ExpectedSourceRefs);
+        var fullRef = GitHubSourceCheckpointGitRefProofIntegrity.Seal(
+            checkpoint, source, prior);
+        Assert.Equal(prior.EvidenceSha256, fullRef.PreviousFullRefProofSha256);
+
+        // Relocate the real bare source so F-094 can only read the F-060
+        // physical mirror ID, not the F-090 logical snapshot path.
+        var workpack = Guid.NewGuid();
+        var mirrorId = GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+            checkpoint.Proof.SnapshotId, workpack);
+        var mirrorPath = Path.Combine(repos.SourceRoot,
+            mirrorId.ToString("N") + ".git");
+        Directory.Move(repos.Source, mirrorPath);
+        var sample = legacy with {
+            SourceCheckpointId = checkpoint.Id,
+            SourceCheckpointAttestationSha256 =
+                checkpoint.RefChangeAttestationSha256!,
+            SourcePhysicalMirrorId = mirrorId,
+            SourcePhysicalMirrorProofSha256 = new string('d', 64)
+        };
+        var physical = await repos.Auditor().AuditAsync(sample, default);
+        Assert.Equal(format, physical.GitObjectFormat);
+
+        var refSetSha = GitSourceSnapshotMirrorIntegrity.SourceRefsSha(
+            source.Refs);
+        var bundleSha = new string('a', 64);
+        var mirrorProofSha = GitSourceSnapshotMirrorIntegrity.MirrorEvidenceSha(
+            source.SnapshotId, mirrorId, workpack, bundleSha,
+            source.SourceEvidenceSha256, refSetSha, source.Refs.Count,
+            physical.SourceObjectSetSha256,
+            physical.SourceReachableObjectCount);
+        var mirror = new GitIncrementalSourceMirrorBinding(
+            mirrorId, source.SnapshotId, workpack, plan.Id, Guid.NewGuid(),
+            "repo-1", source.SourceEvidenceSha256, bundleSha,
+            source.Refs.Count, refSetSha, physical.SourceObjectSetSha256,
+            physical.SourceReachableObjectCount, mirrorProofSha,
+            physical.VerifiedAtUtc.AddSeconds(-1),
+            GitSourceMirrorLifecycleStates.Verified,
+            false, false, false, false);
+
+        var v3 = sample with {
+            SourcePhysicalMirrorProofSha256 = mirrorProofSha,
+            SourceCheckpointGitRefProofSha256 = fullRef.EvidenceSha256
+        };
+        var audited = await repos.Auditor().AuditAsync(v3, default);
+        var time = audited.VerifiedAtUtc.AddSeconds(1);
+        GitSourceCheckpointPhysicalAncestryIntegrity.Verify(
+            plan, checkpoint, source, fullRef, prior,
+            mirror, audited, time, requireFresh: true);
+        Assert.Equal(format, audited.GitObjectFormat);
+        Assert.False(audited.RemoteTransportInvoked);
+        Assert.False(audited.CanPush);
+        Assert.False(audited.CanRetry);
+        Assert.False(audited.MigrationComplete);
+        Assert.NotEqual(physical.EvidenceSha256, audited.EvidenceSha256);
+        Assert.Equal(audited.EvidenceSha256,
+            (await repos.Auditor().AuditAsync(v3, default)).EvidenceSha256);
+
+        // Mutations of any one of the trusted checkpoints, chain,
+        // physical mirror root/identity or receipt digest must fail closed.
+        foreach (var altered in new[] {
+            audited with { Request = v3 with {
+                SourceCheckpointGitRefProofSha256 = new string('f', 64) } },
+            audited with { Request = v3 with {
+                SourcePhysicalMirrorProofSha256 = new string('f', 64) } },
+            audited with { Request = v3 with {
+                SourceCheckpointId = Guid.NewGuid() } },
+            audited with { SourceObjectSetSha256 = new string('f', 64) }
+        })
+            Assert.Throws<GitIncrementalAncestryLedgerException>(() =>
+                GitSourceCheckpointPhysicalAncestryIntegrity.Verify(
+                    plan, checkpoint, source, fullRef, prior,
+                    mirror, altered, time, true));
+
+        Assert.Throws<GitIncrementalAncestryLedgerException>(() =>
+            GitSourceCheckpointPhysicalAncestryIntegrity.Verify(
+                plan, checkpoint, source, fullRef with {
+                    EvidenceSha256 = new string('f', 64) }, prior,
+                mirror, audited, time, true));
+        Assert.Throws<GitIncrementalAncestryLedgerException>(() =>
+            GitSourceCheckpointPhysicalAncestryIntegrity.Verify(
+                plan, checkpoint, source, fullRef, null,
+                mirror, audited, time, true));
+        Assert.Throws<GitIncrementalAncestryLedgerException>(() =>
+            GitSourceCheckpointPhysicalAncestryIntegrity.Verify(
+                plan, checkpoint, source, fullRef, prior,
+                mirror with { WorkpackId = Guid.NewGuid() },
+                audited, time, true));
+        Assert.Throws<GitIncrementalAncestryLedgerException>(() =>
+            GitSourceCheckpointPhysicalAncestryIntegrity.Verify(
+                plan, checkpoint, source, fullRef, prior,
+                mirror, audited, time.AddMinutes(3), true));
+        Assert.Equal("GitAncestryEvidenceInvalid",
+            (await Assert.ThrowsAsync<GitIncrementalAncestryException>(() =>
+                repos.Auditor().AuditAsync(v3 with {
+                    SourcePhysicalMirrorId = null,
+                    SourcePhysicalMirrorProofSha256 = null
+                }, default))).Code);
+        // Same source object set under a different declared F-097 SHA
+        // produces a DIFFERENT versioned receipt hash, not an alias.
+        var different = await repos.Auditor().AuditAsync(
+            v3 with { SourceCheckpointGitRefProofSha256 = new string('f', 64) },
+            default);
+        Assert.NotEqual(audited.EvidenceSha256, different.EvidenceSha256);
+    }
+
     [Fact]
     public async Task Altered_local_ref_or_object_format_refuses_a_receipt()
     {
