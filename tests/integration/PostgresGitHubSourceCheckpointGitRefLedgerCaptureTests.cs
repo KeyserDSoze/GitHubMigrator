@@ -983,6 +983,57 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         .AsNoTracking().Where(x => x.WorkpackId ==
                             first.WorkpackId).ToArrayAsync());
 
+                    // A replica crashing past expiry is quarantined by
+                    // the next claim, not silently replaced. Force the
+                    // persisted lease into the past with SQL constraints.
+                    await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                        UPDATE git_later_checkpoint_bundle_leases
+                        SET acquired_at_utc = now() - interval '4 minutes',
+                            lease_until_utc = now() - interval '1 minute',
+                            updated_at_utc = now()
+                        WHERE workpack_id = {first.WorkpackId}
+                            AND generation = {lease2.Generation}
+                            AND lease_token = {lease2.LeaseToken}
+                        """);
+                    Assert.Equal("LaterCheckpointBundleLeaseRecoveryRequired",
+                        (await Assert.ThrowsAsync<GitSourceBundleException>(
+                            () => coordinator.ClaimAsync(run.Id, plan.Id,
+                                later.Id, observationId, first.WorkpackId,
+                                "repo-1", targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, TimeSpan.FromMinutes(2),
+                                default))).Code);
+                    Assert.False(await coordinator.ReleaseAsync(
+                        first.WorkpackId, lease2.LeaseToken,
+                        lease2.Generation, candidate.RequestedBy,
+                        lease2.BundlePlanSha256, default));
+                    Assert.True(await coordinator.RecoverAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256, reviewerId,
+                        lease2.Generation, lease2.BundlePlanSha256, default));
+                    var lease3 = await coordinator.ClaimAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256, candidate.RequestedBy,
+                        TimeSpan.FromMinutes(2), default);
+                    Assert.Equal(5L, lease3.Generation);
+                    Assert.NotEqual(lease2.LeaseToken, lease3.LeaseToken);
+                    Assert.False(await coordinator.ReleaseAsync(
+                        first.WorkpackId, lease2.LeaseToken,
+                        lease2.Generation, candidate.RequestedBy,
+                        lease2.BundlePlanSha256, default));
+                    var leaseEventsAfterExpiry = await verifiedDb
+                        .GitLaterCheckpointBundleLeaseEvents.AsNoTracking()
+                        .Where(x => x.WorkpackId == first.WorkpackId)
+                        .OrderBy(x => x.Id).ToArrayAsync();
+                    Assert.Equal(new[] {
+                        "Acquired", "Quarantined", "Recovered",
+                        "Acquired", "Quarantined", "Recovered", "Acquired"
+                    }, leaseEventsAfterExpiry.Select(x => x.Type));
+                    Assert.Equal(new long[] { 1, 1, 2, 3, 3, 4, 5 },
+                        leaseEventsAfterExpiry.Select(x => x.Generation));
+                    Assert.Equal(reviewerId, leaseEventsAfterExpiry[5].ActorId);
+
                     // #113: even with a valid current lease, a forged
                     // result without actual on-disk bundle bytes cannot
                     // become durable F-035v2 SQL evidence. The trusted
@@ -1006,7 +1057,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 false, false, false, false, false);
                         var absent = await Assert.ThrowsAsync<
                             GitSourceBundleException>(() =>
-                            coordinator.CommitAsync(lease2, fakeFile,
+                            coordinator.CommitAsync(lease3, fakeFile,
                                 run.Id, plan.Id, later.Id,
                                 observationId, "repo-1",
                                 targetReceipt.EvidenceSha256,
@@ -1296,7 +1347,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     var verifier = new LocalGitBundleArtifactStore(
                         physicalMirror!.BundleRoot);
                     var committed = await coordinator.CommitAsync(
-                        lease2, rehearsed, run.Id, plan.Id, later.Id,
+                        lease3, rehearsed, run.Id, plan.Id, later.Id,
                         observationId, "repo-1",
                         targetReceipt.EvidenceSha256, verifier, default);
                     Assert.Equal(1, committed.EvidenceVersion);
@@ -1342,12 +1393,12 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         .GitLaterCheckpointBundleLeases.AsNoTracking()
                         .SingleAsync(x => x.WorkpackId == first.WorkpackId);
                     Assert.Equal("Recorded", recordedLease.State);
-                    Assert.Equal(lease2.Generation, recordedLease.Generation);
+                    Assert.Equal(lease3.Generation, recordedLease.Generation);
                     Assert.Null(recordedLease.LeaseUntilUtc);
                     Assert.False(await coordinator.ReleaseAsync(
-                        first.WorkpackId, lease2.LeaseToken,
-                        lease2.Generation, candidate.RequestedBy,
-                        lease2.BundlePlanSha256, default));
+                        first.WorkpackId, lease3.LeaseToken,
+                        lease3.Generation, candidate.RequestedBy,
+                        lease3.BundlePlanSha256, default));
                     // Restart-like replay first rechecks immutable F-091,
                     // F-031, F-038, F-035 event and actual binary SHA/bytes.
                     // It does not reacquire a lease or run Git again.
