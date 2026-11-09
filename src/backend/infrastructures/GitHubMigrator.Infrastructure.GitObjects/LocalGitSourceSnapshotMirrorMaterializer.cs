@@ -14,7 +14,8 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
     IGitSourceBundleArtifactVerifier bundles,
     bool enabled = false, TimeProvider? clock = null,
     bool laterCheckpointEnabled = false)
-    : IGitSourceSnapshotMirrorMaterializer
+    : IGitSourceSnapshotMirrorMaterializer,
+      IGitIncrementalLaterCheckpointMirrorImporter
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private static readonly SemaphoreSlim ProcessGate = new(1, 1);
