@@ -49,6 +49,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         Set<GitLaterCheckpointReconciliationRecord>();
     public DbSet<GitLaterCheckpointWorkpackRecord> GitLaterCheckpointWorkpacks =>
         Set<GitLaterCheckpointWorkpackRecord>();
+    public DbSet<GitLaterCheckpointBundleLeaseRecord> GitLaterCheckpointBundleLeases =>
+        Set<GitLaterCheckpointBundleLeaseRecord>();
+    public DbSet<GitLaterCheckpointBundleLeaseEventRecord> GitLaterCheckpointBundleLeaseEvents =>
+        Set<GitLaterCheckpointBundleLeaseEventRecord>();
     public DbSet<GitLaterCheckpointBundleEvidenceRecord> GitLaterCheckpointBundleEvidence =>
         Set<GitLaterCheckpointBundleEvidenceRecord>();
     public DbSet<GitLaterCheckpointBundleEvidenceEventRecord> GitLaterCheckpointBundleEvents =>
@@ -458,6 +462,66 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasForeignKey(x => x.DecisionId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => x.DecisionId).IsUnique();
+        });
+        builder.Entity<GitLaterCheckpointBundleLeaseRecord>(entity =>
+        {
+            entity.ToTable("git_later_checkpoint_bundle_leases");
+            entity.HasKey(x => x.WorkpackId);
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.SourceSnapshotId).HasColumnName("source_snapshot_id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.TargetObservationId).HasColumnName("target_observation_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id");
+            entity.Property(x => x.BundlePlanSha256).HasColumnName("bundle_plan_sha256");
+            entity.Property(x => x.WorkpackEvidenceSha256).HasColumnName("workpack_evidence_sha256");
+            entity.Property(x => x.FullRefProofSha256).HasColumnName("full_ref_proof_sha256");
+            entity.Property(x => x.TargetReceiptSha256).HasColumnName("target_receipt_sha256");
+            entity.Property(x => x.LeaseToken).HasColumnName("lease_token");
+            entity.Property(x => x.Generation).HasColumnName("generation");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.State).HasColumnName("state");
+            entity.Property(x => x.AcquiredAtUtc).HasColumnName("acquired_at_utc");
+            entity.Property(x => x.LeaseUntilUtc).HasColumnName("lease_until_utc");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.DurableEvidencePersisted).HasColumnName("durable_evidence_persisted");
+            entity.Property(x => x.CanPush).HasColumnName("can_push");
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasOne<GitLaterCheckpointWorkpackRecord>().WithMany()
+                .HasForeignKey(x => x.WorkpackId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubSourceSyncCheckpointRecord>().WithMany()
+                .HasForeignKey(x => x.CheckpointId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<StagingSnapshotSyncRecord>().WithMany()
+                .HasForeignKey(x => x.SourceSnapshotId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ConnectionRecord>().WithMany()
+                .HasForeignKey(x => x.SourceConnectionId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitCheckpointTargetObservationRecord>().WithMany()
+                .HasForeignKey(x => x.TargetObservationId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.LeaseToken).IsUnique();
+        });
+        builder.Entity<GitLaterCheckpointBundleLeaseEventRecord>(entity =>
+        {
+            entity.ToTable("git_later_checkpoint_bundle_lease_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.Generation).HasColumnName("generation");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.Type).HasColumnName("type");
+            entity.Property(x => x.BundlePlanSha256).HasColumnName("bundle_plan_sha256");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitLaterCheckpointBundleLeaseRecord>().WithMany()
+                .HasForeignKey(x => x.WorkpackId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.WorkpackId, x.Generation, x.Type }).IsUnique();
         });
         builder.Entity<GitLaterCheckpointBundleEvidenceRecord>(entity =>
         {
