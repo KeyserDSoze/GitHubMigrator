@@ -129,6 +129,94 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
     [Theory]
     [InlineData(40)]
     [InlineData(64)]
+    public void F035v2_offline_bundle_plan_binds_later_full_ref_OIDs_and_never_authorizes_acquisition(
+        int oidLength)
+    {
+        var fixture = Fixture(oidLength);
+        var plan = fixture.Plan with { IsCurrent = false };
+        var selected = fixture.Selection with {
+            EvidenceVersion = 2, TargetEvidenceSha256 = new string('f', 64)
+        };
+        var compared = GitMirrorRefReconciler.Compare(new(
+            plan.Id, plan.ManifestSha256, fixture.Source.SourceEvidenceSha256,
+            selected.TargetEvidenceSha256, selected.ExpectedSourceRefs,
+            selected.ExpectedTargetRefs));
+        var workpack = GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+            plan, selected, fixture.Source, compared,
+            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var read = GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+            plan, selected, fixture.Source, compared, workpack);
+        var again = GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+            plan, selected, fixture.Source, compared, workpack);
+        Assert.Equal(read.EvidenceSha256, again.EvidenceSha256);
+        Assert.Equal(read.SourceOnlyRequest.WorkpackId, workpack.WorkpackId);
+        Assert.Equal(read.SourceOnlyRequest.SourceConnectionId,
+            fixture.Source.SourceConnectionId);
+        Assert.Equal(read.SourceOnlyRequest.SourceRepositoryId,
+            fixture.Source.SourceRepositoryId);
+        Assert.Equal(read.SourceOnlyRequest.SourceEvidenceSha256,
+            fixture.Source.SourceEvidenceSha256);
+        Assert.Equal(read.SourceOnlyRequest.ReconciliationSha256,
+            workpack.ReconciliationSha256);
+        Assert.Equal(fixture.Source.Refs, read.SourceOnlyRequest.ExpectedRefs);
+        Assert.Equal(workpack.EvidenceSha256, read.WorkpackEvidenceSha256);
+        Assert.Equal(workpack.TargetReceiptSha256, read.TargetReceiptSha256);
+        Assert.Equal(fixture.Source.SourceManifestRootSha256,
+            read.SourceManifestRootSha256);
+        Assert.False(read.CanAcquireBundle || read.CanPush ||
+            read.CanRetry || read.CanDispatch || read.MigrationComplete);
+        Assert.Equal(64, read.EvidenceSha256.Length);
+        GitIncrementalLaterCheckpointBundleIntegrity.Verify(
+            read, plan, selected, fixture.Source, compared, workpack);
+
+        foreach (var forged in new[] {
+            read with { CanAcquireBundle = true },
+            read with { CanPush = true },
+            read with { EvidenceSha256 = new string('0', 64) },
+            read with { SourceSnapshotId = plan.SnapshotId },
+            read with { TargetObservationId = Guid.NewGuid() },
+            read with { TargetReceiptSha256 = new string('0', 64) },
+            read with { WorkpackEvidenceSha256 = new string('0', 64) },
+            read with { SourceOnlyRequest = read.SourceOnlyRequest with {
+                WorkpackId = Guid.NewGuid() } },
+            read with { SourceOnlyRequest = read.SourceOnlyRequest with {
+                ExpectedRefs = new[] {
+                    new GitMirrorRef("refs/heads/main", new string('0', oidLength)),
+                    fixture.Source.Refs[1]
+                } } }
+        })
+            Assert.Equal("LaterCheckpointBundleEvidenceInvalid",
+                Assert.Throws<GitSourceBundleException>(() =>
+                    GitIncrementalLaterCheckpointBundleIntegrity.Verify(
+                        forged, plan, selected, fixture.Source,
+                        compared, workpack)).Code);
+
+        Assert.Equal("LaterCheckpointBundleEvidenceInvalid",
+            Assert.Throws<GitSourceBundleException>(() =>
+                GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+                    plan with { IsCurrent = true }, selected,
+                    fixture.Source, compared, workpack)).Code);
+        Assert.Equal("LaterCheckpointBundleEvidenceInvalid",
+            Assert.Throws<GitSourceBundleException>(() =>
+                GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+                    plan, selected with { ObjectFormat =
+                        oidLength == 40 ? "sha256" : "sha1" },
+                    fixture.Source, compared, workpack)).Code);
+        Assert.Equal("LaterCheckpointBundleEvidenceInvalid",
+            Assert.Throws<GitSourceBundleException>(() =>
+                GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+                    plan, selected with { SourceRepositoryId = "foreign" },
+                    fixture.Source, compared, workpack)).Code);
+        Assert.Equal("LaterCheckpointBundleEvidenceInvalid",
+            Assert.Throws<GitSourceBundleException>(() =>
+                GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+                    plan, selected with { TargetObservationId = Guid.NewGuid() },
+                    fixture.Source, compared, workpack)).Code);
+    }
+
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
     public void Witness_is_versioned_deterministic_and_never_grants_push(int oidLength)
     {
         var x = Fixture(oidLength);
