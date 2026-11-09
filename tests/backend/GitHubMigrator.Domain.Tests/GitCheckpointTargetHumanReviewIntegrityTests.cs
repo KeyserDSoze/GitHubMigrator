@@ -45,6 +45,7 @@ public sealed class GitCheckpointTargetHumanReviewIntegrityTests
         Assert.False(first.CanObserveTarget || first.CanPush ||
             first.CanRetry || first.CanDispatch || first.MigrationComplete);
         GitCheckpointTargetHumanReviewIntegrity.Verify(first, candidate);
+        GitCheckpointTargetHumanReviewIntegrity.VerifyStored(first);
 
         var rejected = GitCheckpointTargetHumanReviewIntegrity.Seal(
             candidate, id, reviewer, GitCheckpointTargetHumanReviewStates.Rejected,
@@ -63,6 +64,18 @@ public sealed class GitCheckpointTargetHumanReviewIntegrityTests
                 Assert.Throws<GitCheckpointTargetHumanReviewException>(() =>
                     GitCheckpointTargetHumanReviewIntegrity.Verify(
                         bad, candidate)).Code);
+        foreach (var bad in new[] {
+            first with { SourceRepositoryId = "different-repo" },
+            first with { TargetRepositoryName = "different-target" },
+            first with { ReviewedBy = candidate.RequestedBy },
+            first with { ReviewedAtUtc = time.AddMinutes(1) },
+            first with { Decision = GitCheckpointTargetHumanReviewStates.Rejected },
+            first with { CanObserveTarget = true },
+            first with { EvidenceSha256 = new string('a', 64) }
+        })
+            Assert.Equal("CheckpointHumanReviewEvidenceInvalid",
+                Assert.Throws<GitCheckpointTargetHumanReviewException>(() =>
+                    GitCheckpointTargetHumanReviewIntegrity.VerifyStored(bad)).Code);
 
         Assert.Equal("CheckpointHumanReviewEvidenceInvalid",
             Assert.Throws<GitCheckpointTargetHumanReviewException>(() =>

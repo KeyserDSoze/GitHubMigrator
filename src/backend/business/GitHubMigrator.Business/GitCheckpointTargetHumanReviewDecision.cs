@@ -93,15 +93,64 @@ public static class GitCheckpointTargetHumanReviewIntegrity
             false, false, false, false, false);
     }
 
+    // Historical readback can prove the receipt's own SHA-256 seal even
+    // after this checkpoint has been superseded. It is NEVER an authority
+    // to reobserve the provider or to revive F-029 currency.
+    public static void VerifyStored(
+        GitCheckpointTargetHumanReviewDecision recorded)
+    {
+        if (recorded is null || recorded.EvidenceVersion != 1 ||
+            recorded.Id == Guid.Empty || recorded.PreparationId == Guid.Empty ||
+            recorded.PlanId == Guid.Empty || recorded.CheckpointId == Guid.Empty ||
+            recorded.SourceSnapshotId == Guid.Empty ||
+            recorded.DestinationConnectionId == Guid.Empty ||
+            recorded.RequestedBy == Guid.Empty || recorded.ReviewedBy == Guid.Empty ||
+            recorded.RequestedBy == recorded.ReviewedBy ||
+            recorded.SourceRepositoryId is not { Length: >= 1 and <= 256 } ||
+            string.IsNullOrWhiteSpace(recorded.SourceRepositoryId) ||
+            recorded.TargetRepositoryName is not { Length: >= 1 and <= 100 } ||
+            string.IsNullOrWhiteSpace(recorded.TargetRepositoryName) ||
+            !Sha(recorded.CandidateEvidenceSha256) ||
+            !Sha(recorded.EvidenceSha256) ||
+            recorded.Decision is not (
+                GitCheckpointTargetHumanReviewStates.ApprovedForObservation or
+                GitCheckpointTargetHumanReviewStates.Rejected) ||
+            recorded.ReviewedAtUtc == default ||
+            recorded.ReviewedAtUtc.Offset != TimeSpan.Zero ||
+            recorded.CanObserveTarget || recorded.CanPush ||
+            recorded.CanRetry || recorded.CanDispatch ||
+            recorded.MigrationComplete)
+            throw Invalid();
+
+        var fields = new object?[] {
+            "f097c4c0b-human-reviewed-later-target-mapping-v1",
+            recorded.Id.ToString("D"),
+            recorded.PreparationId.ToString("D"),
+            recorded.PlanId.ToString("D"),
+            recorded.CheckpointId.ToString("D"),
+            recorded.SourceSnapshotId.ToString("D"),
+            recorded.DestinationConnectionId.ToString("D"),
+            recorded.SourceRepositoryId, recorded.TargetRepositoryName,
+            recorded.CandidateEvidenceSha256,
+            recorded.RequestedBy.ToString("D"),
+            recorded.ReviewedBy.ToString("D"), recorded.Decision,
+            recorded.ReviewedAtUtc.ToUnixTimeMilliseconds(),
+            false, false, false, false, false
+        };
+        var expected = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(fields))))
+            .ToLowerInvariant();
+        if (!string.Equals(recorded.EvidenceSha256, expected,
+            StringComparison.Ordinal))
+            throw Invalid();
+    }
+
     public static void Verify(
         GitCheckpointTargetHumanReviewDecision recorded,
         GitCheckpointTargetReReviewCandidate candidate)
     {
-        if (recorded is null || recorded.EvidenceVersion != 1 ||
-            recorded.CanObserveTarget || recorded.CanPush ||
-            recorded.CanRetry || recorded.CanDispatch ||
-            recorded.MigrationComplete ||
-            recorded != Seal(candidate, recorded.Id, recorded.ReviewedBy,
+        VerifyStored(recorded);
+        if (recorded != Seal(candidate, recorded.Id, recorded.ReviewedBy,
                 recorded.Decision, recorded.ReviewedAtUtc))
             throw Invalid();
     }

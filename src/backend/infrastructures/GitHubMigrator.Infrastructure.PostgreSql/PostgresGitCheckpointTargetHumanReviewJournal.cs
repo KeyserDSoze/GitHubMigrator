@@ -224,6 +224,117 @@ public sealed class PostgresGitCheckpointTargetHumanReviewJournal(
         return sealedDecision;
     }
 
+    // Identity-to-requester binding is resolved from the persisted
+    // preparation; the API must NEVER accept a requester/reviewer UUID
+    // supplied in JSON, query strings or route segments.
+    public async Task<GitCheckpointTargetReReviewCandidate>
+        ReadAuthenticatedCandidateAsync(
+            Guid preparationId, Guid planId, Guid checkpointId,
+            string sourceRepositoryId, CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("CheckpointHumanReviewDisabled");
+        if (preparationId == Guid.Empty || planId == Guid.Empty ||
+            checkpointId == Guid.Empty ||
+            sourceRepositoryId is not { Length: >= 1 and <= 256 } ||
+            string.IsNullOrWhiteSpace(sourceRepositoryId))
+            throw Refused("CheckpointHumanReviewInvalidRequest");
+        var preparation = await db.IncrementalPreparations.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == preparationId, ct);
+        var planExists = await db.IncrementalOperationPlans.AsNoTracking()
+            .AnyAsync(x => x.Id == planId &&
+                x.PreparationId == preparationId, ct);
+        if (preparation is null || preparation.EnqueuedBy == Guid.Empty ||
+            !planExists)
+            throw Refused("CheckpointHumanReviewCandidateUnverified");
+        try
+        {
+            return await prerequisites.ReadAsync(
+                preparationId, planId, checkpointId,
+                sourceRepositoryId, preparation.EnqueuedBy, ct);
+        }
+        catch (GitCheckpointTargetReReviewException)
+        { throw Refused("CheckpointHumanReviewCandidateUnverified"); }
+    }
+
+    public async Task<GitCheckpointTargetHumanReviewDecision>
+        RecordAuthenticatedAsync(
+            Guid preparationId, Guid planId, Guid checkpointId,
+            string sourceRepositoryId, Guid authenticatedReviewerId,
+            string decision, string expectedCandidateEvidenceSha256,
+            CancellationToken ct)
+    {
+        if (authenticatedReviewerId == Guid.Empty)
+            throw Refused("CheckpointHumanReviewInvalidRequest");
+        var candidate = await ReadAuthenticatedCandidateAsync(
+            preparationId, planId, checkpointId, sourceRepositoryId, ct);
+        if (candidate.RequestedBy == authenticatedReviewerId)
+            throw Refused("CheckpointHumanReviewIndependentReviewerRequired");
+        // RecordAsync re-reads verified proof and mutable state under a
+        // source-first advisory lock, including digest concurrency.
+        return await RecordAsync(preparationId, planId, checkpointId,
+            sourceRepositoryId, candidate.RequestedBy,
+            authenticatedReviewerId, decision,
+            expectedCandidateEvidenceSha256, ct);
+    }
+
+    // Inspect immutable historical evidence, including its event, without
+    // treating an earlier checkpoint as CURRENT. Restricted by the API to
+    // authenticated superadmins; the GUID alone never selects a receipt.
+    public async Task<GitCheckpointTargetHumanReviewDecision?>
+        InspectScopedAsync(
+            Guid preparationId, Guid planId, Guid checkpointId,
+            string sourceRepositoryId, CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("CheckpointHumanReviewDisabled");
+        if (preparationId == Guid.Empty || planId == Guid.Empty ||
+            checkpointId == Guid.Empty ||
+            sourceRepositoryId is not { Length: >= 1 and <= 256 } ||
+            string.IsNullOrWhiteSpace(sourceRepositoryId))
+            throw Refused("CheckpointHumanReviewInvalidRequest");
+        var row = await db.GitCheckpointTargetHumanReviews.AsNoTracking()
+            .SingleOrDefaultAsync(x =>
+                x.PreparationId == preparationId &&
+                x.PlanId == planId &&
+                x.CheckpointId == checkpointId &&
+                x.SourceRepositoryId == sourceRepositoryId, ct);
+        if (row is null) return null;
+
+        GitCheckpointTargetHumanReviewDecision stored;
+        try
+        {
+            stored = JsonSerializer.Deserialize<
+                GitCheckpointTargetHumanReviewDecision>(row.ReceiptJson)
+                ?? throw new JsonException();
+            GitCheckpointTargetHumanReviewIntegrity.VerifyStored(stored);
+        }
+        catch (JsonException)
+        { throw Refused("CheckpointHumanReviewHistoryCorrupt"); }
+        catch (GitCheckpointTargetHumanReviewException)
+        { throw Refused("CheckpointHumanReviewHistoryCorrupt"); }
+
+        if (stored.Id != row.Id ||
+            stored.PreparationId != row.PreparationId ||
+            stored.PlanId != row.PlanId ||
+            stored.CheckpointId != row.CheckpointId ||
+            stored.SourceSnapshotId != row.SourceSnapshotId ||
+            stored.SourceRepositoryId != row.SourceRepositoryId ||
+            stored.TargetRepositoryName != row.TargetRepositoryName ||
+            stored.DestinationConnectionId != row.DestinationConnectionId ||
+            stored.CandidateEvidenceSha256 != row.CandidateEvidenceSha256 ||
+            stored.RequestedBy != row.RequestedBy ||
+            stored.ReviewedBy != row.ReviewedBy ||
+            stored.Decision != row.Decision ||
+            stored.ReviewedAtUtc != row.ReviewedAtUtc ||
+            stored.EvidenceSha256 != row.EvidenceSha256 ||
+            row.CanObserveTarget || row.CanPush || row.CanRetry ||
+            row.CanDispatch || row.MigrationComplete)
+            throw Refused("CheckpointHumanReviewHistoryCorrupt");
+        await VerifyEventAsync(stored, ct);
+        return stored;
+    }
+
     private async Task VerifyEventAsync(
         GitCheckpointTargetHumanReviewDecision saved, CancellationToken ct)
     {

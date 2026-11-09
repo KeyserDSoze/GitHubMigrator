@@ -103,6 +103,12 @@ builder.Services.AddScoped<IncrementalTargetPreflightService>();
 builder.Services.AddScoped<IIncrementalOperationPlanRepository,
     PostgresIncrementalOperationPlanRepository>();
 builder.Services.AddScoped<IncrementalOperationPlanService>();
+// F-097c.4c.0c: authenticated superadmin-only checkpoint human
+// review. The default is OFF and neither endpoint calls GitHub.
+builder.Services.AddSingleton(new GitCheckpointTargetHumanReviewOptions(
+    builder.Configuration.GetValue("GitCheckpointTargetHumanReview:Enabled", false)));
+builder.Services.AddScoped<PostgresGitCheckpointTargetReReviewPrerequisites>();
+builder.Services.AddScoped<PostgresGitCheckpointTargetHumanReviewJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
@@ -782,6 +788,7 @@ app.MapGitHubIndependentRecoveryEndpoints();
 app.MapGitHubRemoteRecoveryWorkbenchEndpoints();
 app.MapGitHubMultiRepositorySyncPulseEndpoints();
 app.MapGitHubSourceSyncCheckpointEndpoints();
+app.MapGitCheckpointTargetHumanReviewEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
