@@ -129,6 +129,11 @@ builder.Services.AddScoped<PostgresGitCheckpointTargetObservationJournal>();
 builder.Services.AddSingleton(new GitIncrementalLaterCheckpointAuditOptions(
     builder.Configuration.GetValue("GitIncrementalLaterCheckpointAudit:Enabled", false)));
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointAuditPreflight>();
+// #104: independent default-OFF source-locked v2 writeblocked records.
+// No API endpoint, background dispatch, GitHub GET/write or F-035.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointWorkpackOptions(
+    builder.Configuration.GetValue("GitIncrementalLaterCheckpointWorkpack:Enabled", false)));
+builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointWorkpackJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
