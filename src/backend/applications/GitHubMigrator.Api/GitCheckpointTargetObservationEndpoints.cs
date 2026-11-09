@@ -63,7 +63,7 @@ public static class GitCheckpointTargetObservationEndpoints
             proof.Id, proof.EvidenceVersion, proof.PreparationId,
             proof.PlanId, proof.CheckpointId, proof.SourceSnapshotId,
             proof.SourceRepositoryId, proof.TargetRepositoryName,
-            proof.Organization, proof.ObjectFormat, proof.ReviewedBy,
+            proof.Organization, proof.ObjectFormat,
             proof.CandidateEvidenceSha256, proof.HumanReviewEvidenceSha256,
             proof.TargetEvidenceSha256, proof.ObservedAtUtc, proof.RefCount,
             proof.EvidenceSha256,
