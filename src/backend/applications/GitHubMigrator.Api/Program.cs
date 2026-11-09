@@ -689,6 +689,7 @@ await GitHubRemotePostSendRecoverySchema.InitializeAsync(app.Services);
 await GitHubRemoteTypedRecoveryBaselineSchema.InitializeAsync(app.Services);
 await GitHubSourceSyncCheckpointSchema.InitializeAsync(app.Services);
 await GitHubSourceCheckpointGitRefLedgerSchema.InitializeAsync(app.Services);
+await GitIncrementalCheckpointWorkpackSchema.InitializeAsync(app.Services);
 await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);

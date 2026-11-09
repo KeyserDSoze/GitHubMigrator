@@ -37,6 +37,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         => Set<GitHubSourceSyncCheckpointRecord>();
     public DbSet<GitHubSourceSyncCheckpointEventRecord> GitHubSourceSyncCheckpointEvents
         => Set<GitHubSourceSyncCheckpointEventRecord>();
+    public DbSet<GitIncrementalCheckpointWorkpackRecord> GitIncrementalCheckpointWorkpacks =>
+        Set<GitIncrementalCheckpointWorkpackRecord>();
+    public DbSet<GitIncrementalCheckpointWorkpackEventRecord> GitIncrementalCheckpointWorkpackEvents =>
+        Set<GitIncrementalCheckpointWorkpackEventRecord>();
     public DbSet<GitHubSourceCheckpointGitRefLedgerRecord> GitHubSourceCheckpointGitRefLedgers
         => Set<GitHubSourceCheckpointGitRefLedgerRecord>();
     public DbSet<GitHubSourceCheckpointGitRefLedgerEventRecord> GitHubSourceCheckpointGitRefLedgerEvents
@@ -346,6 +350,47 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
         });
         // F-097b SQL triggers and constraints are bootstrapped after F-090.
+        builder.Entity<GitIncrementalCheckpointWorkpackRecord>(entity =>
+        {
+            entity.ToTable("git_checkpoint_source_workpack_proofs");
+            entity.HasKey(x => x.WorkpackId);
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.ReconciliationId).HasColumnName("reconciliation_id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.SourceSnapshotId).HasColumnName("source_snapshot_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id");
+            entity.Property(x => x.TargetObservationId).HasColumnName("target_observation_id");
+            entity.Property(x => x.FullRefProofSha256).HasColumnName("full_ref_proof_sha256");
+            entity.Property(x => x.ReceiptJson).HasColumnName("receipt_json");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.CanPush).HasColumnName("can_push");
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasIndex(x => new { x.CheckpointId, x.SourceRepositoryId,
+                x.TargetObservationId }).IsUnique();
+            entity.HasIndex(x => x.ReconciliationId).IsUnique();
+            entity.HasOne<GitTransferWorkpackRecord>().WithOne()
+                .HasForeignKey<GitIncrementalCheckpointWorkpackRecord>(x => x.WorkpackId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<GitIncrementalCheckpointWorkpackEventRecord>(entity =>
+        {
+            entity.ToTable("git_checkpoint_source_workpack_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.WorkpackId).HasColumnName("workpack_id");
+            entity.Property(x => x.Type).HasColumnName("type");
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitIncrementalCheckpointWorkpackRecord>().WithMany()
+                .HasForeignKey(x => x.WorkpackId).OnDelete(DeleteBehavior.Restrict);
+        });
         builder.Entity<GitHubSourceCheckpointGitRefLedgerRecord>(entity =>
         {
             entity.ToTable("github_checkpoint_source_ref_proofs");
