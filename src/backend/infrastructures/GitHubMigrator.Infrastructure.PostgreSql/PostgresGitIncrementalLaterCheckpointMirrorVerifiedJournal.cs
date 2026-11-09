@@ -75,9 +75,27 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorVerifiedJournal(
         // done TWICE by the trusted physical auditor, without any SQL
         // transaction/long-held source advisory lock. It checks local
         // UUID.bundle bytes before AND after Git and uses safe roots.
-        var observed = await physical.AuditAsync(stage, durable, ct);
-        GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity
-            .Verify(observed, stage, durable);
+        GitIncrementalLaterCheckpointMirrorOfflineAudit observed;
+        try
+        {
+            observed = await physical.AuditAsync(stage, durable, ct);
+            GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity
+                .Verify(observed, stage, durable);
+        }
+        catch (GitSourceSnapshotMirrorException)
+        {
+            // If the trusted physical Git proof fails, the owner must
+            // quarantine the still-fenced generation. No automatic Git
+            // repair, mirror overwrite, lease replacement or retry.
+            // Never mask the original physical verification failure.
+            try
+            {
+                await leaseStore.QuarantineAsync(
+                    lease, "PhysicalAuditFailed", CancellationToken.None);
+            }
+            catch (GitSourceSnapshotMirrorException) { }
+            throw;
+        }
         if (observed.VerifiedAtUtc < original.AcquiredAtUtc)
             throw Refused("LaterCheckpointMirrorVerifiedProofPreLease");
 
