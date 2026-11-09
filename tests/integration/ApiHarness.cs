@@ -39,6 +39,8 @@ public sealed class ApiHarness : IAsyncLifetime
     public bool EnableCheckpointTargetReadPreflight { get; set; }
     public bool EnableCheckpointTargetObservation { get; set; }
     public int TargetObjectIdLength { get; set; } = 40;
+    // Fake fixed-host provider fault injection; no real outbound network.
+    public string TargetObservationFault { get; set; } = "";
 
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
@@ -276,13 +278,33 @@ public sealed class ApiHarness : IAsyncLifetime
         if (path == "/orgs/gh-org")
             return Json("""{"login":"gh-org","members_can_create_private_repositories":true}""");
         if (path == "/repos/gh-org/migration-one/git/matching-refs/heads")
-            return Json(JsonSerializer.Serialize(new[] {
+        {
+            if (TargetObservationFault == "hidden")
+                return new(HttpStatusCode.NotFound);
+            if (TargetObservationFault == "denied")
+                return new(HttpStatusCode.Forbidden);
+            if (TargetObservationFault == "rate-limited")
+                return new(HttpStatusCode.TooManyRequests);
+            if (TargetObservationFault == "redirect")
+                return new(HttpStatusCode.Redirect) {
+                    Headers = { Location = new Uri("https://outside.invalid/secret") }
+                };
+            if (TargetObservationFault == "malformed")
+                return Json("""{"unexpected":"response"}""");
+            var result = Json(JsonSerializer.Serialize(new[] {
                 new { @ref = "refs/heads/main",
                     @object = new {
-                        sha = new string('c', TargetObjectIdLength),
+                        sha = new string('c', TargetObservationFault == "wrong-oid"
+                            ? (TargetObjectIdLength == 40 ? 64 : 40)
+                            : TargetObjectIdLength),
                         type = "commit"
                     } }
             }));
+            if (TargetObservationFault == "partial")
+                result.Headers.TryAddWithoutValidation(
+                    "Link", "<https://api.github.com/next>; rel=\"next\"");
+            return result;
+        }
         if (path == "/repos/gh-org/migration-one/git/matching-refs/tags")
             return Json(JsonSerializer.Serialize(new[] {
                 new { @ref = "refs/tags/v1",
