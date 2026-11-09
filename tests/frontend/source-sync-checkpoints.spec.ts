@@ -100,7 +100,7 @@ function attestedEpoch(index: number, forged = false) {
   };
 }
 
-function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' | 'badrefpage' | 'targetreview' | 'badtargetreview' | 'humanhistory' | 'humancandidate' | 'humanrejected' | 'humanunsafe' | 'targetaudit' | 'targetauditunsafe' | 'targetauditmissing' = 'normal') {
+function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' | 'badrefpage' | 'targetreview' | 'badtargetreview' | 'humanhistory' | 'humancandidate' | 'humanrejected' | 'humanunsafe' | 'targetaudit' | 'targetauditunsafe' | 'targetauditmissing' | 'laterhistory' | 'laterhistoryunsafe' | 'laterhistorymissing' = 'normal') {
   const requests: Array<{ path: string; method: string; body: any }> = [];
   let records = 0;
   void page.route('**/api/incremental-preparations/**', async (route: Route) => {
@@ -223,6 +223,37 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
           mode === 'humanrejected' ? 'Rejected' : 'ApprovedForObservation'
       } });
     }
+    // F-032v2/F-038v2 historical readback is GET-only. The UUID and
+    // checkpoint target SHA are server-issued handles, never OID input.
+    const laterWorkpackId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    if (method === 'GET' && path ===
+        check + `/${last}/later-workpacks/${laterWorkpackId}/history`) {
+      const params = new URL(request.url()).searchParams;
+      expect(params.get('sourceRepositoryId')).toBe('repo-1');
+      expect(params.get('targetObservationId'))
+        .toBe('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+      expect(params.get('expectedTargetReceiptSha256')).toBe(sha('b'));
+      if (mode === 'laterhistorymissing')
+        return route.fulfill({ status: 404,
+          json: { error: 'LaterCheckpointHistoryNotFound' } });
+      return route.fulfill({ json: {
+        evidenceVersion: 2, preparationId: prep, planId: plan,
+        checkpointId: last, sourceSnapshotId: next,
+        targetObservationId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        reconciliationId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        workpackId: laterWorkpackId, evidenceSha256: sha('a'),
+        reconciliationSha256: sha('c'), sourceFullRefProofSha256: sha('d'),
+        targetReceiptSha256: sha('b'), recordedAtUtc: stamp,
+        sourceRefCount: 2, targetRefCount: 1,
+        matchingCount: 1, createCandidateCount: 1,
+        divergedCount: 0, targetOnlyCount: 0,
+        state: 'Blocked',
+        phase: mode === 'laterhistoryunsafe' ? 'Ready' : 'WriteBlocked',
+        historicalOnly: true, currentApprovalVerified: false,
+        readyForExecution: false, canPush: false, canRetry: false,
+        canDispatch: false, migrationComplete: false
+      } });
+    }
     const targetAuditRoot = check + `/${last}/target-ref-observations`;
     if (method === 'GET' && path === targetAuditRoot) {
       expect(new URL(request.url()).searchParams.get('sourceRepositoryId'))
@@ -253,7 +284,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
       return route.fulfill({ json: {
         preparationId: prep, planId: plan,
         items: Array.from({ length: records }, (_, i) =>
-          mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || (mode.startsWith('human') || mode.startsWith('targetaudit'))
+          mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || (mode.startsWith('human') || mode.startsWith('targetaudit') || mode.startsWith('laterhistory'))
             ? attestedEpoch(records - i - 1, mode === 'forged')
             : epoch(records - i - 1)),
         nextAfter: null,
@@ -278,7 +309,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
         records === 0 ? null : old);
       expect(path).toBe(check + '/' + (records === 0 ? original : next));
       records++;
-      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || (mode.startsWith('human') || mode.startsWith('targetaudit'))
+      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || (mode.startsWith('human') || mode.startsWith('targetaudit') || mode.startsWith('laterhistory'))
         ? attestedEpoch(records - 1, mode === 'forged')
         : epoch(records - 1) });
     }
@@ -648,4 +679,73 @@ test('F-097c.4c.0d refuses forged F-031 authority in read-only checkpoint UI', a
   expect(service.requests().filter(x =>
     x.path.includes('/target-ref-observations')).every(x =>
     x.method === 'GET')).toBe(true);
+});
+
+test('F-097c.4c.2 reads only redacted, permanently blocked workpack history by UUID', async ({ page }) => {
+  const service = mock(page, 'laterhistory');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await page.getByRole('button', {
+    name: /Mostra osservazione GitHub salvata|Inspect saved checkpoint GitHub observation/i
+  }).first().click();
+  await expect(page.getByText(
+    /Osservazione GitHub del checkpoint verificata|Verified checkpoint GitHub observation/i
+  )).toBeVisible();
+  await page.getByRole('textbox', {
+    name: /UUID workpack checkpoint|Checkpoint workpack UUID/i
+  }).fill('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+  await page.getByRole('button', {
+    name: /Verifica workpack bloccato del checkpoint|Inspect blocked checkpoint workpack/i
+  }).click();
+  await expect(page.getByText(
+    /Workpack del checkpoint bloccato verificato|Verified blocked checkpoint workpack/i
+  )).toBeVisible();
+  await expect(page.getByText(/Blocked \/ WriteBlocked/)).toBeVisible();
+  const history = service.requests().filter(x =>
+    x.path.includes('/later-workpacks/'));
+  expect(history).toHaveLength(1);
+  expect(history[0].method).toBe('GET');
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+  expect(service.requests().some(x =>
+    /git-push|retry-push|dispatch|bundle-acquire/i.test(x.path))).toBe(false);
+});
+
+test('F-097c.4c.2 refuses a forged executable workpack without any POST', async ({ page }) => {
+  const service = mock(page, 'laterhistoryunsafe');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await page.getByRole('button', {
+    name: /Mostra osservazione GitHub salvata|Inspect saved checkpoint GitHub observation/i
+  }).first().click();
+  await page.getByRole('textbox', {
+    name: /UUID workpack checkpoint|Checkpoint workpack UUID/i
+  }).fill('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+  await page.getByRole('button', {
+    name: /Verifica workpack bloccato del checkpoint|Inspect blocked checkpoint workpack/i
+  }).click();
+  await expect(page.getByRole('alert').getByText(
+    /LaterCheckpointHistoryUnsafeResponse/
+  )).toBeVisible();
+  await expect(page.getByText(
+    /Workpack del checkpoint bloccato verificato|Verified blocked checkpoint workpack/i
+  )).toHaveCount(0);
+  const history = service.requests().filter(x =>
+    x.path.includes('/later-workpacks/'));
+  expect(history).toHaveLength(1);
+  expect(history[0].method).toBe('GET');
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
 });
