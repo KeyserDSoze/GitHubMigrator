@@ -359,3 +359,54 @@ before F-035v2 INSERT, then verify exactly one physical quarantine
 during independently reviewed recovery, audit generations and final
 durable regenerated bundle. #113 closure requires green CI for this
 latest slice.
+
+## #100 F-060v2 later-checkpoint physical mirror staging (2026-11-09)
+
+The legacy F-060 local importer and F-061 PostgreSQL lifecycle **only**
+understand the **current original F-029** baseline and its legacy F-035
+bundle; neither can safely receive a later F-091/F-097b source epoch
+whose baseline `IncrementalOperationPlan.IsCurrent=false`. It is unsafe
+to set the legacy bundle `IsCurrent=true` or rebind its F-038 key.
+
+The new **versioned, source-only, non-authorizing**
+`GitIncrementalLaterCheckpointMirrorStagingPlan` instead binds:
+
+- the original F-029 repository mapping and intentionally stale baseline
+  snapshot, with the **new** F-091/F-097b source snapshot and checkpoint;
+- original **complete** F-097b canonical branch/tag Git ref names **and
+  actual SHA-1 or SHA-256 object OIDs**, 1–128 refs, homogenous format;
+- the independently reviewed current checkpoint F-031 exact observation,
+  full F-032v2 reconciliation and immutable `Blocked/WriteBlocked`
+  F-038v2 workpack, with recomputed domain-separated seal;
+- the persisted and independently verified F-035v2 bundle receipt,
+  actual binary file SHA-256, length and matching workpack UUID;
+- a deterministic **F-060 physical mirror UUID derived from the later
+  source snapshot and F-038v2 workpack**, never the baseline snapshot.
+
+The staging SHA-256 hashes the version/domain, every identifier/digest,
+the full ordered source ref/OID list, bundle SHA+size and all authority
+flags. `F061LeaseGeneration=0`; `CanMaterialize=false`, `CanPush=false`,
+`CanRetry=false`, `CanDispatch=false` and `MigrationComplete=false`.
+This is deliberately **not** an `IGitSourceSnapshotMirrorMaterializer`
+request and **not an F-061 lease token**. It produces no source Git
+repository and cannot authorize remote GitHub writes.
+
+The independent, default-OFF
+`PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight`
+(`GitIncrementalLaterCheckpointMirrorStaging:Enabled=false`) reads the
+live source/target/human gate from existing source-scoped preflight,
+F-035v2 durable historical history with **on-disk bundle rehash**, original
+immutable F-038v2 receipt and latest F-097b source OIDs, then repeats
+the live gate after assembling the staging plan. Missing, superseded,
+revoked or mismatched evidence fails closed. This is an internal
+read-side comparison, **not source-locked F-061 admission**; no Git
+subprocess, HTTP endpoint, job, destination API or import write is created.
+
+Synthetic SHA1/SHA256 domain regression tests cover deterministic mirror
+identity, no baseline substitution, OID/ref forgery, wrong F-031,
+digest/workpack tamper and execution flags. Real two-epoch PostgreSQL 17
+and local Git SHA1/SHA256 integration verifies that a committed F-035v2
+receipt generates the same source-only staging proof with the correct
+later snapshot. The actual **offline F-060v2 import, F-061 generation
+lease + Verified event and recovery** remain open in #100; F-095 v3
+ancestry remains in #96 and completion in #92. No GitHub push is enabled.
