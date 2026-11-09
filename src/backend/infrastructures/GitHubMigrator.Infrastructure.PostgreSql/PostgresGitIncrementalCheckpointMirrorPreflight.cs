@@ -182,6 +182,8 @@ public sealed class PostgresGitIncrementalCheckpointMirrorPreflight(
             reconciliation.TargetObservationId != target.View.Id ||
             reconciliation.ManifestSha256 != plan.ManifestSha256 ||
             reconciliation.SourceEvidenceSha256 != source.SourceEvidenceSha256 ||
+            reconciliation.SourceManifestRootSha256 !=
+                source.RefManifestRootSha256 ||
             reconciliation.TargetEvidenceSha256 != target.View.EvidenceSha256 ||
             reconciliation.ReconciliationSha256 != compared.ReconciliationSha256 ||
             reconciliation.SourceRefCount != compared.SourceRefCount ||
