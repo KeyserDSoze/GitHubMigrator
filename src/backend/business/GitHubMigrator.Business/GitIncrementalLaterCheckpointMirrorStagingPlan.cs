@@ -38,7 +38,10 @@ public static class GitIncrementalLaterCheckpointMirrorStagingIntegrity
         GitIncrementalLaterCheckpointBundleReceipt durable)
     {
         if (plan is null || selection is null || source is null ||
-            prepared is null || durable is null)
+            prepared is null || durable is null ||
+            source.Refs is null ||
+            selection.ExpectedSourceRefs is null ||
+            selection.ExpectedTargetRefs is null)
             throw Refused();
         try
         {
