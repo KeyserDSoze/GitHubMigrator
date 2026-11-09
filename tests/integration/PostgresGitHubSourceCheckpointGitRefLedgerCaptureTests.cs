@@ -40,7 +40,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         IncrementalOperationPlan Plan,
         GitHubSourceSyncCheckpointReceipt Checkpoint,
         Guid SourceJobId, Guid ActorId)> SetupAsync(
-        AppDbContext db, PostgresIncrementalOperationPlanTests.ManualClock clock)
+        AppDbContext db, PostgresIncrementalOperationPlanTests.ManualClock clock,
+        int oidLength = 40)
     {
         // An older staging sync exists on this source. The newly completed
         // durable discovery must become the exact F-029 *baseline* epoch.
@@ -56,8 +57,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         Assert.Equal(job.Id, lease.Id);
         var observedAt = clock.GetUtcNow().AddMinutes(1);
         var refs = new[] {
-            new RepositoryRef("repo-1", "refs/heads/main", new string('a', 40)),
-            new RepositoryRef("repo-1", "refs/tags/v1", new string('b', 40))
+            new RepositoryRef("repo-1", "refs/heads/main", new string('a', oidLength)),
+            new RepositoryRef("repo-1", "refs/tags/v1", new string('b', oidLength))
         };
         var inventory = new DiscoveryInventory
         {
@@ -148,6 +149,132 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         Assert.Equal(2, checkpoint.EvidenceVersion);
         Assert.False(checkpoint.Proof.SourceInventoryComplete);
         return (run, plan, checkpoint, job.Id, older.OperatorId);
+    }
+
+    private static PostgresGitIncrementalCheckpointAuditPreflight Preflight(
+        AppDbContext db, TimeProvider clock, bool enabled = true) =>
+        new(db, clock, new(enabled),
+            new PostgresIncrementalOperationPlanRepository(db, clock),
+            new PostgresGitHubSourceSyncCheckpointJournal(
+                db, clock, new(true),
+                new PostgresIncrementalOperationPlanRepository(db, clock),
+                new PostgresStagingRepository(db, clock)),
+            Ledger(db, clock));
+
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
+    public async Task F097c2_exact_F014_F091_F097_F031_preflight_is_read_only_and_restart_safe(
+        int oidLength)
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        IncrementalPreparationView preparation;
+        IncrementalOperationPlan plan;
+        GitHubSourceSyncCheckpointReceipt checkpoint;
+        Guid actor;
+        Guid sourceJob;
+        GitHubTargetRefEvidenceView target;
+        GitHubSourceCheckpointGitRefProof proof;
+        await using (var db = fixture.NewContext())
+        {
+            (preparation, plan, checkpoint, sourceJob, actor) =
+                await SetupAsync(db, clock, oidLength);
+            var ledger = Ledger(db, clock);
+
+            clock.Advance(TimeSpan.FromSeconds(2));
+            var observation = GitHubRefObservationIntegrity.Seal(
+                plan.Organization, "migration-one", clock.GetUtcNow(),
+                [new("refs/heads/main", new string('a', oidLength), "commit")]);
+            var destination = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == plan.DestinationConnectionId);
+            target = await new PostgresGitHubTargetRefEvidenceStore(db, clock)
+                .SaveAsync(plan, "repo-1", actor,
+                    destination.ValidatedAtUtc, observation, default);
+            Assert.True(target.IsCurrent);
+
+            var preflight = Preflight(db, clock);
+            Assert.Equal("GitCheckpointAuditPreflightDisabled",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointPreflightException>(() =>
+                    Preflight(db, clock, false).ReadAsync(
+                        preparation.Id, plan.Id, checkpoint.Id, target.Id,
+                        "repo-1", target.EvidenceSha256, default))).Code);
+            Assert.Equal("GitCheckpointAuditPreflightSourceProofMissing",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointPreflightException>(() =>
+                    preflight.ReadAsync(preparation.Id, plan.Id,
+                        checkpoint.Id, target.Id, "repo-1",
+                        target.EvidenceSha256, default))).Code);
+
+            proof = await ledger.CaptureAsync(preparation.Id, plan.Id,
+                checkpoint.Id, "repo-1", actor, default);
+            var read = await preflight.ReadAsync(
+                preparation.Id, plan.Id, checkpoint.Id, target.Id,
+                "repo-1", target.EvidenceSha256, default);
+            Assert.Equal(checkpoint.Id, read.SourceCheckpointId);
+            Assert.Equal(sourceJob, read.SourceSnapshotId);
+            Assert.Equal(proof.EvidenceSha256, read.SourceFullRefProofSha256);
+            Assert.Equal(target.EvidenceSha256, read.TargetEvidenceSha256);
+            Assert.Equal(oidLength == 40 ? "sha1" : "sha256",
+                read.GitObjectFormat);
+            Assert.Equal(proof.Refs.ToArray(), read.ExpectedSourceRefs.ToArray());
+            Assert.Single(read.ExpectedTargetRefs);
+            Assert.Equal(0, await db.GitIncrementalAncestryLedgers
+                .AsNoTracking().CountAsync(x => x.CheckpointId == checkpoint.Id));
+            Assert.False(read.CanPush);
+            Assert.False(read.CanRetry);
+            Assert.False(read.CanDispatch);
+            Assert.False(read.MigrationComplete);
+        }
+
+        await using (var restarted = fixture.NewContext())
+        {
+            var preflight = Preflight(restarted, clock);
+            var read = await preflight.ReadAsync(
+                preparation.Id, plan.Id, checkpoint.Id, target.Id,
+                "repo-1", target.EvidenceSha256, default);
+            Assert.Equal(proof.EvidenceSha256, read.SourceFullRefProofSha256);
+            Assert.Equal("GitCheckpointAuditPreflightTargetStale",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointPreflightException>(() =>
+                    preflight.ReadAsync(preparation.Id, plan.Id, checkpoint.Id,
+                        target.Id, "repo-1", new string('f', 64),
+                        default))).Code);
+            Assert.Equal("GitCheckpointAuditPreflightSourceProofMissing",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointPreflightException>(() =>
+                    preflight.ReadAsync(preparation.Id, plan.Id, checkpoint.Id,
+                        target.Id, "repo-2", target.EvidenceSha256,
+                        default))).Code);
+            Assert.Equal("GitCheckpointAuditPreflightCheckpointNotFound",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointPreflightException>(() =>
+                    preflight.ReadAsync(preparation.Id, plan.Id, Guid.NewGuid(),
+                        target.Id, "repo-1", target.EvidenceSha256,
+                        default))).Code);
+
+            // A new independently sealed F-031 target snapshot in the
+            // WRONG Git object format is not a valid F-094 workpack.
+            clock.Advance(TimeSpan.FromSeconds(2));
+            var mismatched = GitHubRefObservationIntegrity.Seal(
+                plan.Organization, "migration-one", clock.GetUtcNow(),
+                [new("refs/heads/main",
+                    new string('d', oidLength == 40 ? 64 : 40), "commit")]);
+            var dest = await restarted.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == plan.DestinationConnectionId);
+            var alteredTarget = await new PostgresGitHubTargetRefEvidenceStore(
+                restarted, clock).SaveAsync(
+                    plan, "repo-1", actor, dest.ValidatedAtUtc,
+                    mismatched, default);
+            Assert.True(alteredTarget.IsCurrent);
+            Assert.Equal("GitCheckpointAuditPreflightEvidenceInvalid",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointPreflightException>(() =>
+                    preflight.ReadAsync(preparation.Id, plan.Id, checkpoint.Id,
+                        alteredTarget.Id, "repo-1",
+                        alteredTarget.EvidenceSha256, default))).Code);
+        }
     }
 
     [Fact]
