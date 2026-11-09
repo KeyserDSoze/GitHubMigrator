@@ -16,7 +16,10 @@ public sealed record GitIncrementalAncestryRequest(
     // F-096 binds F-094 to the F-060 physical, workpack-scoped mirror.
     // Two optional fields stay null for historical F-094 v1 receipts.
     Guid? SourcePhysicalMirrorId = null,
-    string? SourcePhysicalMirrorProofSha256 = null);
+    string? SourcePhysicalMirrorProofSha256 = null,
+    // F-097c: only for F-060-bound source mirrors; null preserves the
+    // exact legacy F-094/F-096 v1/v2 payload and historical receipt hash.
+    string? SourceCheckpointGitRefProofSha256 = null);
 
 public enum GitIncrementalAncestryStatus
 {
@@ -84,6 +87,9 @@ public static class GitIncrementalAncestryIntegrity
                 (r.SourcePhysicalMirrorProofSha256 is null) ||
             (r.SourcePhysicalMirrorProofSha256 is not null &&
                 !Sha(r.SourcePhysicalMirrorProofSha256)) ||
+            (r.SourceCheckpointGitRefProofSha256 is not null &&
+                (r.SourcePhysicalMirrorId is null ||
+                 !Sha(r.SourceCheckpointGitRefProofSha256))) ||
             !Sha(r.SourceCheckpointAttestationSha256) ||
             !Sha(r.TargetObservationSha256) ||
             r.ExpectedSourceRefs is null || r.ExpectedTargetRefs is null ||
@@ -180,9 +186,11 @@ public static class GitIncrementalAncestryIntegrity
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Append(new object?[] {
-            request.SourcePhysicalMirrorId is null
-                ? "f094-offline-git-ancestry-v1"
-                : "f096-offline-git-ancestry-mirror-bound-v2",
+            request.SourceCheckpointGitRefProofSha256 is not null
+                ? "f097c-offline-git-ancestry-checkpoint-mirror-bound-v3"
+                : request.SourcePhysicalMirrorId is null
+                    ? "f094-offline-git-ancestry-v1"
+                    : "f096-offline-git-ancestry-mirror-bound-v2",
             request.SourceSnapshotId.ToString("D"),
             request.TargetSandboxId.ToString("D"),
             request.SourceCheckpointId.ToString("D"),
@@ -196,6 +204,9 @@ public static class GitIncrementalAncestryIntegrity
         if (request.SourcePhysicalMirrorId is Guid mirrorId)
             Append(new object?[] { "f060-verified-source-mirror",
                 mirrorId.ToString("D"), request.SourcePhysicalMirrorProofSha256 });
+        if (request.SourceCheckpointGitRefProofSha256 is string fullRefProof)
+            Append(new object?[] { "f097-immutable-full-ref-oid-proof",
+                fullRefProof });
         foreach (var reference in source)
             Append(new object?[] { "source", reference.Name, reference.ObjectId });
         foreach (var reference in target)

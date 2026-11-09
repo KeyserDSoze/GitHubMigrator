@@ -21,13 +21,24 @@ public static class GitIncrementalSourceMirrorBindingIntegrity
     public static void VerifyContext(
         IncrementalOperationPlan plan, VerifiedSourceGitRefs source,
         GitIncrementalSourceMirrorBinding bridge,
+        DateTimeOffset currentTimeUtc, bool requireFresh) =>
+        VerifySnapshotContext(plan, source, bridge, plan.SnapshotId,
+            currentTimeUtc, requireFresh);
+
+    // F-097c permits a later independently verified F-091 epoch without
+    // changing the baseline-only legacy F-096 call contract.
+    public static void VerifySnapshotContext(
+        IncrementalOperationPlan plan, VerifiedSourceGitRefs source,
+        GitIncrementalSourceMirrorBinding bridge, Guid expectedSnapshotId,
         DateTimeOffset currentTimeUtc, bool requireFresh)
     {
         if (plan is null || source is null || bridge is null ||
+            expectedSnapshotId == Guid.Empty ||
+            source.SnapshotId != expectedSnapshotId ||
             bridge.MirrorId == Guid.Empty || bridge.WorkpackId == Guid.Empty ||
             bridge.MirrorId != GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
                 bridge.SnapshotId, bridge.WorkpackId) ||
-            bridge.SnapshotId != plan.SnapshotId ||
+            bridge.SnapshotId != expectedSnapshotId ||
             bridge.PlanId != plan.Id ||
             bridge.ReconciliationId == Guid.Empty ||
             bridge.SourceRepositoryId != source.SourceRepositoryId ||
