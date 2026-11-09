@@ -765,6 +765,8 @@ await GitCheckpointTargetObservationSchema.InitializeAsync(app.Services);
 await GitIncrementalLaterCheckpointWorkpackSchema.InitializeAsync(app.Services);
 await GitIncrementalLaterCheckpointBundleEvidenceSchema.InitializeAsync(app.Services);
 await GitIncrementalLaterCheckpointBundleLeaseSchema.InitializeAsync(app.Services);
+// #118 installs constraint-only F-061v2 tables; does not enable workers.
+await GitIncrementalLaterCheckpointMirrorLeaseSchema.InitializeAsync(app.Services);
 await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
