@@ -36,3 +36,23 @@ call GitHub or authorize push/retry/dispatch/migration complete.
 An actual source-locked later checkpoint workpack/bundle acquisition
 and F-061 recovery flow remains in #100; the durable F-095 ancestry v3
 writer stays in #96. Parent #92 stays open.
+
+## Verified local SHA-1/SHA-256 integration
+
+The actual local Git test suite constructs two cryptographically sealed
+F-091/F-097 checkpoint epochs, requires the **later** source snapshot
+(not the immutable F-029 baseline), and uses SHA-1 and SHA-256 bare
+Git repositories containing real branches, annotated tags and merged
+history. It independently imports a UUID.bundle into a UUID.git mirror,
+verifies exact OIDs and the reachable Git object closure, and proves
+same-mirror, non-mutating recovery across worker instances.
+
+Negative tests reject changed source/ref OIDs, wrong checkpoint, wrong
+source repository, target ref evidence, object format, missing review
+mapping, untrusted/incorrect bundle SHA and ref count, any attempted
+push authority and corrupt on-disk bundle replay. The local adapter is
+off by default. It never contacts GitHub or emits F-061/F-095 receipts.
+
+Verified on [GitHub Actions run 42609602996](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/42609602996)
+with all four jobs passing. The **full F-061 lifecycle from a later
+PostgreSQL checkpoint** is still #100 and is not implied by this work.
