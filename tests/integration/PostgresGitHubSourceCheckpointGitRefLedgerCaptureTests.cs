@@ -1516,6 +1516,72 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         .ToArrayAsync());
                     Assert.False(checkedAdmission.DurableLeasePersisted);
                     Assert.Equal(0L, checkedAdmission.F061LeaseGeneration);
+                    // #118: test ONLY a synthetic v2 SQL lease row bound to
+                    // genuine F-091/F-097b/F-035v2 evidence. No production
+                    // claim writer or Git side-effect is enabled by this.
+                    var leaseToken = Guid.NewGuid();
+                    var worker = Guid.NewGuid();
+                    var acquired = DateTimeOffset.UtcNow;
+                    await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                        INSERT INTO git_later_checkpoint_mirror_leases (
+                            mirror_id, workpack_id, preparation_id, plan_id,
+                            checkpoint_id, source_snapshot_id,
+                            source_connection_id, source_repository_id,
+                            target_observation_id, staging_evidence_sha256,
+                            source_full_ref_proof_sha256, source_ref_set_sha256,
+                            workpack_evidence_sha256, bundle_evidence_sha256,
+                            bundle_sha256, target_receipt_sha256,
+                            lease_token, generation, worker_id,
+                            original_bundle_actor_id, state,
+                            acquired_at_utc, lease_until_utc, updated_at_utc)
+                        VALUES ({checkedAdmission.PhysicalMirrorId},
+                            {first.WorkpackId}, {run.Id}, {plan.Id},
+                            {later.Id}, {fullRefs.SnapshotId},
+                            {staging.SourceConnectionId}, {"repo-1"},
+                            {observationId}, {staging.EvidenceSha256},
+                            {fullRefs.EvidenceSha256},
+                            {staging.SourceRefSetSha256},
+                            {first.EvidenceSha256},
+                            {committed.EvidenceSha256},
+                            {committed.BundleSha256},
+                            {targetReceipt.EvidenceSha256},
+                            {leaseToken}, {1L}, {worker},
+                            {candidate.RequestedBy}, {"Held"},
+                            {acquired}, {acquired.AddSeconds(90)},
+                            {acquired})
+                        """);
+                    Assert.Equal(Npgsql.PostgresErrorCodes.CheckViolation,
+                        (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                            () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                UPDATE git_later_checkpoint_mirror_leases
+                                SET can_push = {true}
+                                WHERE mirror_id =
+                                    {checkedAdmission.PhysicalMirrorId}
+                                """))).SqlState);
+                    Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                        (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                            () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                UPDATE git_later_checkpoint_mirror_leases
+                                SET bundle_sha256 = {new string('f', 64)}
+                                WHERE mirror_id =
+                                    {checkedAdmission.PhysicalMirrorId}
+                                """))).SqlState);
+                    await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                        INSERT INTO git_later_checkpoint_mirror_lease_events (
+                            mirror_id, generation, worker_id, type,
+                            staging_evidence_sha256, occurred_at_utc)
+                        VALUES ({checkedAdmission.PhysicalMirrorId},
+                            {1L}, {worker}, {"Acquired"},
+                            {staging.EvidenceSha256}, {acquired})
+                        """);
+                    Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                        (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                            () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                UPDATE git_later_checkpoint_mirror_lease_events
+                                SET type = {"Verified"}
+                                WHERE mirror_id =
+                                    {checkedAdmission.PhysicalMirrorId}
+                                """))).SqlState);
                     Assert.Equal("LaterCheckpointMirrorStagingProvenanceUnverified",
                         (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
                             () => admission.ReadAsync(
