@@ -138,6 +138,10 @@ builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointWorkpackJournal>
 builder.Services.AddSingleton(new GitIncrementalLaterCheckpointHistoryOptions(
     builder.Configuration.GetValue("GitIncrementalLaterCheckpointHistory:Enabled", false)));
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointWorkpackHistory>();
+// #112: internal F-035v2 evidence read only; no local acquisition permission.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointBundleReadOptions(
+    builder.Configuration.GetValue("GitIncrementalLaterCheckpointBundleRead:Enabled", false)));
+builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointBundleReadPreflight>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
