@@ -120,6 +120,11 @@ builder.Services.AddScoped<PostgresGitCheckpointTargetHumanReviewJournal>();
 builder.Services.AddSingleton(new GitCheckpointTargetReadPreflightOptions(
     builder.Configuration.GetValue("GitCheckpointTargetReadPreflight:Enabled", false)));
 builder.Services.AddScoped<PostgresGitCheckpointTargetReadPreflight>();
+// #109 explicit second switch. Never enabled by the human decision
+// or read-preflight switch; GET transport and immutable F-031 stay OFF.
+builder.Services.AddSingleton(new GitCheckpointTargetObservationOptions(
+    builder.Configuration.GetValue("GitCheckpointTargetObservation:Enabled", false)));
+builder.Services.AddScoped<PostgresGitCheckpointTargetObservationJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
@@ -708,6 +713,7 @@ await GitHubSourceSyncCheckpointSchema.InitializeAsync(app.Services);
 await GitHubSourceCheckpointGitRefLedgerSchema.InitializeAsync(app.Services);
 await GitIncrementalCheckpointWorkpackSchema.InitializeAsync(app.Services);
 await GitCheckpointTargetHumanReviewSchema.InitializeAsync(app.Services);
+await GitCheckpointTargetObservationSchema.InitializeAsync(app.Services);
 await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
@@ -801,6 +807,7 @@ app.MapGitHubMultiRepositorySyncPulseEndpoints();
 app.MapGitHubSourceSyncCheckpointEndpoints();
 app.MapGitCheckpointTargetHumanReviewEndpoints();
 app.MapGitCheckpointTargetReadPreflightEndpoints();
+app.MapGitCheckpointTargetObservationEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
