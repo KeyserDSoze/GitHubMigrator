@@ -278,24 +278,26 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         alteredTarget.Id, "repo-1",
                         alteredTarget.EvidenceSha256, default))).Code);
 
-            // An expired F-031 observation must not be promoted back to
-            // current just because the F-097 source proof is immutable.
-            clock.Advance(TimeSpan.FromMinutes(6));
-            Assert.Equal("GitCheckpointAuditPreflightTargetStale",
-                (await Assert.ThrowsAsync<
-                    GitIncrementalCheckpointPreflightException>(() =>
-                    preflight.ReadAsync(preparation.Id, plan.Id, checkpoint.Id,
-                        alteredTarget.Id, "repo-1",
-                        alteredTarget.EvidenceSha256, default))).Code);
-
             // A tampered durable F-014 source row invalidates the
             // previously recorded F-097b hash even after a restart.
+            // Check this BEFORE advancing the plan's freshness deadline.
             await restarted.Database.ExecuteSqlInterpolatedAsync($"""
                 UPDATE discovery_ref_observations
                 SET fingerprint = {"tampered"}
                 WHERE job_id = {sourceJob}
                 """);
             Assert.Equal("GitCheckpointAuditPreflightSourceCorrupt",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointPreflightException>(() =>
+                    preflight.ReadAsync(preparation.Id, plan.Id, checkpoint.Id,
+                        alteredTarget.Id, "repo-1",
+                        alteredTarget.EvidenceSha256, default))).Code);
+
+            // The F-029 plan expires no later than the F-031 observation:
+            // after six minutes it is correct to reject the stale PLAN
+            // before even considering the older target or source proof.
+            clock.Advance(TimeSpan.FromMinutes(6));
+            Assert.Equal("GitCheckpointAuditPreflightPlanNotCurrent",
                 (await Assert.ThrowsAsync<
                     GitIncrementalCheckpointPreflightException>(() =>
                     preflight.ReadAsync(preparation.Id, plan.Id, checkpoint.Id,
