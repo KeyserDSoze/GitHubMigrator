@@ -81,8 +81,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerTests(
         Assert.Empty(await db.GitHubSourceCheckpointGitRefLedgers
             .AsNoTracking().Where(x => x.CheckpointId == checkpoint.Id)
             .ToArrayAsync());
+        // Parallel integration fixtures may have valid events for their
+        // own checkpoint IDs; only this refused scope must remain empty.
         Assert.Empty(await db.GitHubSourceCheckpointGitRefLedgerEvents
-            .AsNoTracking().ToArrayAsync());
+            .AsNoTracking()
+            .Where(e => db.GitHubSourceCheckpointGitRefLedgers.Any(
+                row => row.Id == e.LedgerId &&
+                    row.CheckpointId == checkpoint.Id))
+            .ToArrayAsync());
     }
 
     [Fact]
