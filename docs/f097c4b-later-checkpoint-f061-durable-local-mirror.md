@@ -29,3 +29,29 @@ create a F-035/F-038 later-epoch source bundle or revalidate mutable
 checkpoint selection under a source-first PostgreSQL lock at admission;
 that next persistent ingestion step remains in **#100**. Thus this
 component is not yet a complete operational incremental migration flow.
+
+## Real PostgreSQL integration results
+
+The PostgreSQL 17 fixture runs with actual local Git bare repositories
+and immutable bundle imports for SHA-1 and SHA-256. A F-097 full-ref
+checkpoint **after the baseline** is bound to the source bundle and
+the existing F-061 lease generation protocol. Checks include:
+
+- Disabled admission rejects before any F-061 record is created.
+- Forged source snapshot is rejected before acquiring a lease.
+- Physical F-060 import verifies all real Git refs, merge/tag histories
+  and reachable objects; F-061 stores one `Verified` event and releases
+  lease ownership, with four execution flags false.
+- Re-reading from a new DbContext reacquires the lease as generation 2,
+  re-fscks the same immutable physical mirror and appends another
+  `Verified` event without rewriting the bare repo.
+- A corrupted immutable F-035 bundle re-verification fails and sets
+  generation 3 to `RecoveryRequired` with a `Quarantined` event.
+- Three separate DbContexts/worker instances serialize the F-061 lease,
+  each verifying the same source object set under a distinct generation,
+  with one persistent source mirror and no remote writes.
+
+All four jobs passed on [GitHub Actions 42613748548](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/42613748548).
+This integration deliberately starts from separately verified F-097b
+and F-035 evidence. **Source-scoped transactional creation** of the
+later checkpoint's F-032/F-038/F-035 records remains in #100.
