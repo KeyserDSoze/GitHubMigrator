@@ -24,11 +24,18 @@ split into independently verifiable workpacks in a follow-up.
 | MatchingObjectId | Same literal full Git object SHA | No remote authority |
 | CreateCandidateBlocked | Source-only ref | Must prove target absent and recheck permissions |
 | FastForwardCandidateBlocked | Target commit is ancestor of source commit in the local source graph | Still blocked for remote push |
-| TargetAheadPreserved | Source commit is ancestor of target in locally available graph | No rewind |
-| DivergedBlocked | Both commits available, neither ancestor | No force push |
-| HistoryUnavailableBlocked | The target object is not available in the source mirror | No guess or blind retry |
+| TargetAheadPreserved | Source tip is proven to be an ancestor of target tip in the sealed source or destination local graph | No rewind |
+| DivergedBlocked | Both commits available in the source graph, neither ancestor | No force push |
+| HistoryUnavailableBlocked | Neither local mirror provides sufficient cross-tip ancestry proof | No guess or blind retry |
 | TagChangeBlocked | Same tag name, different object SHA | No automatic tag replacement |
 | TargetOnlyPreserved | Target ref absent from source proof | No deletion |
+
+For a destination-only newer commit, the auditor verifies the source
+tip exists as a commit in the target mirror and checks target-side
+ancestry before reporting `TargetAheadPreserved`. If both tips are
+unavailable in the opposing mirrors, it conservatively reports
+`HistoryUnavailableBlocked` rather than guessing divergence. These
+checks are covered for SHA-1 and SHA-256 physical Git repositories.
 
 This receipt is a local observation, not a claim that a remote GitHub
 repository has identical objects at the time of reading. It does not

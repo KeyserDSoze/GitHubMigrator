@@ -80,7 +80,18 @@ public sealed class LocalGitIncrementalAncestryAuditor(
                     status = GitIncrementalAncestryStatus.TagChangeBlocked;
                 else if (!await LocalGitObjectClosureAuditor.HasCommitAsync(
                     source, dst, ct))
-                    status = GitIncrementalAncestryStatus.HistoryUnavailableBlocked;
+                {
+                    // A genuine target-ahead commit can exist only in the
+                    // independently closed destination mirror. Never infer
+                    // that it is divergent or ahead from a missing source
+                    // object alone: require a real target-side ancestry proof.
+                    status = await LocalGitObjectClosureAuditor.HasCommitAsync(
+                        target, src, ct) &&
+                        await LocalGitObjectClosureAuditor.IsAncestorAsync(
+                            target, src, dst, ct)
+                        ? GitIncrementalAncestryStatus.TargetAheadPreserved
+                        : GitIncrementalAncestryStatus.HistoryUnavailableBlocked;
+                }
                 else if (await LocalGitObjectClosureAuditor.IsAncestorAsync(
                     source, dst, src, ct))
                     status = GitIncrementalAncestryStatus.FastForwardCandidateBlocked;

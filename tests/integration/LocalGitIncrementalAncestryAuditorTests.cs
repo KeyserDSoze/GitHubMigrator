@@ -39,8 +39,13 @@ public sealed class LocalGitIncrementalAncestryAuditorTests
             kinds["refs/heads/ahead"]);
         Assert.Equal(GitIncrementalAncestryStatus.DivergedBlocked,
             kinds["refs/heads/diverge"]);
-        Assert.Equal(GitIncrementalAncestryStatus.HistoryUnavailableBlocked,
+        // The destination-only new commit descends from the source tip,
+        // even though that commit does not exist in the source mirror.
+        Assert.Equal(GitIncrementalAncestryStatus.TargetAheadPreserved,
             kinds["refs/heads/unknown"]);
+        // Neither local mirror has both tips: do not guess ancestry.
+        Assert.Equal(GitIncrementalAncestryStatus.HistoryUnavailableBlocked,
+            kinds["refs/heads/unavailable"]);
         Assert.Equal(GitIncrementalAncestryStatus.CreateCandidateBlocked,
             kinds["refs/heads/source-only"]);
         Assert.Equal(GitIncrementalAncestryStatus.TargetOnlyPreserved,
@@ -232,6 +237,13 @@ public sealed class LocalGitIncrementalAncestryAuditorTests
                 "-c", "user.email=f094@example.invalid",
                 "commit-tree", parentTree,
                 "-p", second, "-m", "new target-only commit").Trim();
+            // Created after the clones: each new commit is absent from
+            // the opposing mirror, although both descend from second.
+            var newSource = Git("--git-dir=" + Source,
+                "-c", "user.name=F094 Fixture",
+                "-c", "user.email=f094@example.invalid",
+                "commit-tree", parentTree,
+                "-p", second, "-m", "new source-only commit").Trim();
 
             void Put(string repository, string name, string oid) =>
                 Git("--git-dir=" + repository, "update-ref", name, oid);
@@ -255,6 +267,8 @@ public sealed class LocalGitIncrementalAncestryAuditorTests
             Put(Target, "refs/heads/diverge", right);
             Put(Source, "refs/heads/unknown", second);
             Put(Target, "refs/heads/unknown", newTarget);
+            Put(Source, "refs/heads/unavailable", newSource);
+            Put(Target, "refs/heads/unavailable", newTarget);
             Put(Source, "refs/heads/source-only", third);
             Put(Target, "refs/heads/target-only", right);
             Put(Source, "refs/tags/release", tags[1]);
