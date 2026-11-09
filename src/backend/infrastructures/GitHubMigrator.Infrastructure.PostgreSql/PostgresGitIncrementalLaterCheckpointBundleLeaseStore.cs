@@ -18,7 +18,8 @@ public sealed record GitIncrementalLaterCheckpointBundleLeaseClaim(
 public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
     AppDbContext db, TimeProvider clock,
     GitIncrementalLaterCheckpointBundleLeaseOptions options,
-    IGitIncrementalLaterCheckpointBundleReadPreflight preflight)
+    IGitIncrementalLaterCheckpointBundleReadPreflight preflight,
+    IGitSourceBundleAcquirer trustedGitAcquirer)
 {
     public static readonly TimeSpan MaxLease = TimeSpan.FromMinutes(3);
     public static readonly TimeSpan MinLease = TimeSpan.FromSeconds(30);
@@ -220,6 +221,28 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
             checkedFile.MigrationComplete)
             throw Refused("LaterCheckpointBundleCommitPlanChanged");
 
+        // A caller-provided record and a checksum of arbitrary bytes
+        // are insufficient. Reopen the existing file and independently
+        // run trusted Git fsck, full-ref/OID matching and git bundle
+        // verify/list-heads against ONLY F-097b refs. No SQL transaction
+        // is held while any Git process executes.
+        var source = plan.SourceOnlyRequest;
+        var read = new GitSourceBundleView(
+            lease.WorkpackId, planId, Guid.Empty,
+            sourceRepositoryId, source.SourceEvidenceSha256,
+            source.ReconciliationSha256, checkedFile.BundleFileName,
+            checkedFile.BundleSha256, checkedFile.BundleBytes,
+            checkedFile.RefCount, checkedFile.AcquiredAtUtc, false, false);
+        await fileVerifier.VerifyAsync(read, ct);
+        var gitVerified = await trustedGitAcquirer.AcquireAsync(source, ct);
+        if (gitVerified.WorkpackId != lease.WorkpackId ||
+            gitVerified.BundleFileName != checkedFile.BundleFileName ||
+            gitVerified.BundleSha256 != checkedFile.BundleSha256 ||
+            gitVerified.BundleBytes != checkedFile.BundleBytes ||
+            gitVerified.RefCount != checkedFile.RefCount ||
+            gitVerified.SourceEvidenceSha256 != source.SourceEvidenceSha256)
+            throw Refused("LaterCheckpointBundleCommitGitVerificationFailed");
+
         await using var tx = await db.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted, ct);
         await LockAsync(plan.SourceOnlyRequest.SourceConnectionId, planId, ct);
@@ -243,13 +266,6 @@ public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
         // Rehash actual on-disk bytes under the final short database lock.
         // This is NOT a Git subprocess. Never trust the old in-memory
         // artifact SHA, client path, or a prior completed rehearsal.
-        var source = plan.SourceOnlyRequest;
-        var read = new GitSourceBundleView(
-            lease.WorkpackId, planId, Guid.Empty,
-            sourceRepositoryId, source.SourceEvidenceSha256,
-            source.ReconciliationSha256, checkedFile.BundleFileName,
-            checkedFile.BundleSha256, checkedFile.BundleBytes,
-            checkedFile.RefCount, checkedFile.AcquiredAtUtc, false, false);
         var verified = await fileVerifier.VerifyAsync(read, ct);
         if (verified.WorkpackId != lease.WorkpackId ||
             verified.BundleSha256 != checkedFile.BundleSha256 ||
