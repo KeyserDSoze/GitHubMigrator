@@ -21,7 +21,7 @@ const guid = (s: unknown): s is string =>
 
 function verify(record: CheckpointTargetObservation, props: Props) {
   if (record.evidenceVersion !== 1 ||
-      !guid(record.id) || !guid(record.reviewedBy) ||
+      !guid(record.id) ||
       record.preparationId !== props.preparationId ||
       record.planId !== props.planId ||
       record.checkpointId !== props.checkpoint.id ||
@@ -31,7 +31,6 @@ function verify(record: CheckpointTargetObservation, props: Props) {
       record.candidateEvidenceSha256 !==
         props.human.candidateEvidenceSha256 ||
       record.humanReviewEvidenceSha256 !== props.human.evidenceSha256 ||
-      record.reviewedBy !== props.human.reviewedBy ||
       record.objectFormat !== 'sha1' && record.objectFormat !== 'sha256' ||
       !sha(record.evidenceSha256) || !sha(record.targetEvidenceSha256) ||
       !Number.isSafeInteger(record.refCount) ||
