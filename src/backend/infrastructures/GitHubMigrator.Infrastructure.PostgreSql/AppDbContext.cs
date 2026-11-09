@@ -481,6 +481,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
             entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
             entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<GitCheckpointTargetObservationRecord>().WithMany()
+                .HasForeignKey(x => x.TargetObservationId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.CheckpointId, x.SourceRepositoryId,
+                x.TargetObservationId }).IsUnique();
         });
         builder.Entity<GitLaterCheckpointWorkpackRecord>(entity =>
         {
@@ -508,6 +513,14 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.CanRetry).HasColumnName("can_retry");
             entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
             entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasOne<GitLaterCheckpointReconciliationRecord>().WithOne()
+                .HasForeignKey<GitLaterCheckpointWorkpackRecord>(x => x.ReconciliationId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitCheckpointTargetObservationRecord>().WithMany()
+                .HasForeignKey(x => x.TargetObservationId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => new { x.CheckpointId, x.SourceRepositoryId,
+                x.TargetObservationId }).IsUnique();
         });
         builder.Entity<GitLaterCheckpointWorkpackEventRecord>(entity =>
         {
@@ -519,6 +532,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.Type).HasColumnName("type");
             entity.Property(x => x.EvidenceSha256).HasColumnName("evidence_sha256");
             entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.HasOne<GitLaterCheckpointWorkpackRecord>().WithOne()
+                .HasForeignKey<GitLaterCheckpointWorkpackEventRecord>(x => x.WorkpackId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<GitIncrementalCheckpointWorkpackRecord>(entity =>
         {
