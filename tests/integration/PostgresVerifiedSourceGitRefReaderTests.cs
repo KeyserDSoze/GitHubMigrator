@@ -215,7 +215,7 @@ public sealed class PostgresVerifiedSourceGitRefReaderTests(PostgresDraftFixture
             (await reader.ReadSealedSnapshotAsync(
                 plan, job.Id, "repo-1", default)).SourceEvidenceSha256);
 
-        Assert.Throws<IncrementalGitRefReconciliationException>(() =>
+        await Assert.ThrowsAsync<IncrementalGitRefReconciliationException>(() =>
             reader.ReadSealedSnapshotAsync(plan, job.Id, "foreign", default));
         await Assert.ThrowsAsync<IncrementalGitRefReconciliationException>(() =>
             reader.ReadSealedSnapshotAsync(
