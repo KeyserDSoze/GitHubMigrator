@@ -275,6 +275,14 @@ public sealed class PostgresGitIncrementalCheckpointWorkpackJournal(
                 x.Type == "Recorded" &&
                 x.EvidenceSha256 == proof.EvidenceSha256 &&
                 x.ActorId == proof.RecordedBy, ct);
+        GitMirrorRefComparison[] persistedItems;
+        try
+        {
+            persistedItems = JsonSerializer.Deserialize<GitMirrorRefComparison[]>(
+                rec.ItemsJson) ?? throw new JsonException();
+        }
+        catch (JsonException)
+        { throw Refused("CheckpointWorkpackChildCorrupt"); }
         if (events != 1 ||
             rec.PlanId != proof.PlanId ||
             rec.SnapshotId != proof.SourceSnapshotId ||
@@ -293,7 +301,7 @@ public sealed class PostgresGitIncrementalCheckpointWorkpackJournal(
             rec.CreateCandidateCount != comparison.CreateCandidateCount ||
             rec.DivergedCount != comparison.DivergedCount ||
             rec.TargetOnlyCount != comparison.TargetOnlyCount ||
-            rec.ItemsJson != JsonSerializer.Serialize(comparison.Items) ||
+            !persistedItems.SequenceEqual(comparison.Items) ||
             pack.ReconciliationId != proof.ReconciliationId ||
             pack.PlanId != proof.PlanId ||
             pack.SourceRepositoryId != proof.SourceRepositoryId ||
