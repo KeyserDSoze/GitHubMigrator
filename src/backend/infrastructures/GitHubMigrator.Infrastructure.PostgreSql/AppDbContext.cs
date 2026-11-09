@@ -481,6 +481,18 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
             entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
             entity.Property(x => x.ReadyForExecution).HasColumnName("ready_for_execution");
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubSourceSyncCheckpointRecord>().WithMany()
+                .HasForeignKey(x => x.CheckpointId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<StagingSnapshotSyncRecord>().WithMany()
+                .HasForeignKey(x => x.SourceSnapshotId)
+                .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<GitCheckpointTargetObservationRecord>().WithMany()
                 .HasForeignKey(x => x.TargetObservationId)
                 .OnDelete(DeleteBehavior.Restrict);
@@ -513,6 +525,18 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.CanRetry).HasColumnName("can_retry");
             entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
             entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+            entity.HasOne<IncrementalPreparationRecord>().WithMany()
+                .HasForeignKey(x => x.PreparationId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<IncrementalOperationPlanRecord>().WithMany()
+                .HasForeignKey(x => x.PlanId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<GitHubSourceSyncCheckpointRecord>().WithMany()
+                .HasForeignKey(x => x.CheckpointId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<StagingSnapshotSyncRecord>().WithMany()
+                .HasForeignKey(x => x.SourceSnapshotId)
+                .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<GitLaterCheckpointReconciliationRecord>().WithOne()
                 .HasForeignKey<GitLaterCheckpointWorkpackRecord>(x => x.ReconciliationId)
                 .OnDelete(DeleteBehavior.Restrict);
