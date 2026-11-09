@@ -18,7 +18,11 @@ public sealed class GitIncrementalAncestryLedgerException(string code)
     public string Code { get; } = code;
 }
 
-public sealed record GitIncrementalAncestryLedgerOptions(bool Enabled);
+// New production recordings require a verified F-060 mirror identity.
+// Historical F-095 v1 records remain readable. Disabling the bridge is
+// reserved for legacy integration tests, never exposed via app config.
+public sealed record GitIncrementalAncestryLedgerOptions(
+    bool Enabled, bool RequireBoundSourceMirror = true);
 
 public interface IGitIncrementalAncestryLedger
 {
@@ -26,7 +30,8 @@ public interface IGitIncrementalAncestryLedger
         Guid preparationId, Guid planId, Guid checkpointId,
         Guid targetObservationId, string sourceRepositoryId,
         string expectedTargetEvidenceSha256,
-        Guid targetSandboxId, Guid actorId, CancellationToken ct);
+        Guid targetSandboxId, Guid actorId, CancellationToken ct,
+        Guid? sourceWorkpackId = null);
 
     Task<GitIncrementalAncestryLedgerEntry?> GetAsync(
         Guid preparationId, Guid planId, Guid ledgerId,

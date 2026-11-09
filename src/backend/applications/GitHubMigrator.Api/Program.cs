@@ -110,7 +110,8 @@ builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
 // F-095: read-only internal persistence, completely disabled by default.
 // Physical bare repositories are deployment-owned, never request paths.
 builder.Services.AddSingleton(new GitIncrementalAncestryLedgerOptions(
-    builder.Configuration.GetValue("GitIncrementalAncestryLedger:Enabled", false)));
+    builder.Configuration.GetValue("GitIncrementalAncestryLedger:Enabled", false),
+    RequireBoundSourceMirror: true));
 builder.Services.AddScoped<ILocalGitIncrementalAncestryAuditor>(sp =>
     new GitHubMigrator.Infrastructure.GitObjects.LocalGitIncrementalAncestryAuditor(
         builder.Configuration["GitIncrementalAncestryLedger:SourceRoot"] ?? "",

@@ -35,7 +35,7 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
         bool enabled = true,
         IVerifiedSourceGitRefReader? reader = null,
         ILocalGitIncrementalAncestryAuditor? physical = null) =>
-        new(db, clock, new(enabled),
+        new(db, clock, new(enabled, RequireBoundSourceMirror: false),
             new PostgresIncrementalOperationPlanRepository(db, clock),
             Checkpoints(db, clock),
             reader ?? new TestedSourceReader(),
