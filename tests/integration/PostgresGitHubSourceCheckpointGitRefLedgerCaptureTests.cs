@@ -249,6 +249,234 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 new PostgresStagingRepository(db, clock)),
             Ledger(db, clock));
 
+    // Two genuine F-014/F-091/F-097b epochs traverse the production API,
+    // JWT role gate and persisted human journal (not a synthetic receipt).
+    // The reviewer identity comes from JWT claims, even when the caller
+    // tries to smuggle two different actor UUIDs into the JSON request.
+    [Theory]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected)]
+    public async Task F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_immutable(
+        int oidLength, string decision)
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        IncrementalPreparationView run;
+        IncrementalOperationPlan plan;
+        GitHubSourceSyncCheckpointReceipt later;
+        GitCheckpointTargetReReviewCandidate candidate;
+        await using (var db = fixture.NewContext())
+        {
+            var setup = await SetupAsync(db, clock, oidLength);
+            run = setup.Preparation;
+            plan = setup.Plan;
+            await Ledger(db, clock).CaptureAsync(
+                run.Id, plan.Id, setup.Checkpoint.Id,
+                "repo-1", setup.ActorId, default);
+            var laterSnapshot = await LaterF014SnapshotAsync(
+                db, clock, plan, oidLength);
+            later = await new PostgresGitHubSourceSyncCheckpointJournal(
+                db, clock, new(true),
+                new PostgresIncrementalOperationPlanRepository(db, clock),
+                new PostgresStagingRepository(db, clock)).CaptureAsync(
+                    run.Id, plan.Id, laterSnapshot, setup.Checkpoint.Id,
+                    plan.ManifestSha256, setup.ActorId, default);
+            await Ledger(db, clock).CaptureAsync(
+                run.Id, plan.Id, later.Id, "repo-1",
+                setup.ActorId, default);
+            candidate = await ReReview(db, clock).ReadAsync(
+                run.Id, plan.Id, later.Id, "repo-1",
+                setup.ActorId, default);
+            Assert.NotEqual(candidate.BaselineSnapshotId,
+                candidate.SourceSnapshotId);
+            Assert.Equal(oidLength == 40 ? "sha1" : "sha256",
+                candidate.ObjectFormat);
+        }
+
+        var api = new ApiHarness { EnableCheckpointHumanReview = true };
+        try
+        {
+            await api.InitializeAsync();
+            var token = await api.LoginAsync(
+                api.SuperadminName, ApiHarness.SuperadminPassword);
+            Guid reviewerId;
+            await using (var scope = api.Host.Services.CreateAsyncScope())
+            {
+                var users = scope.ServiceProvider.GetRequiredService<
+                    Microsoft.AspNetCore.Identity.UserManager<ApplicationUser>>();
+                var user = await users.FindByNameAsync(api.SuperadminName);
+                reviewerId = Assert.IsType<ApplicationUser>(user).Id;
+            }
+            Assert.NotEqual(candidate.RequestedBy, reviewerId);
+            var root = "/api/incremental-preparations/" + run.Id +
+                "/operation-plans/" + plan.Id +
+                "/source-sync-checkpoints/" + later.Id +
+                "/target-human-review";
+            var query = "?sourceRepositoryId=repo-1";
+            var outboundBefore = api.Calls.Count;
+
+            using (var peek = await SendAsync(HttpMethod.Get,
+                root + "/candidate" + query))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.OK, peek.StatusCode);
+                using var json = JsonDocument.Parse(
+                    await peek.Content.ReadAsStringAsync());
+                Assert.Equal(candidate.EvidenceSha256, json.RootElement
+                    .GetProperty("evidenceSha256").GetString());
+                Assert.Equal(candidate.SourceSnapshotId, json.RootElement
+                    .GetProperty("sourceSnapshotId").GetGuid());
+                Assert.False(json.RootElement.GetProperty(
+                    "canObserveTarget").GetBoolean());
+                Assert.False(json.RootElement.GetProperty(
+                    "canPush").GetBoolean());
+                Assert.DoesNotContain("refs/heads/", json.RootElement.GetRawText());
+            }
+
+            // Stale optimistic handle and a mismatched scope cannot
+            // overwrite or append a new checkpoint-specific decision.
+            using (var changed = await SendAsync(HttpMethod.Post, root,
+                Request(decision, new string('0', 64))))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    changed.StatusCode);
+                Assert.Contains("CheckpointHumanReviewCandidateChanged",
+                    await changed.Content.ReadAsStringAsync());
+            }
+            using (var wrongRepo = await SendAsync(HttpMethod.Post, root,
+                new {
+                    sourceRepositoryId = "repo-foreign",
+                    decision,
+                    expectedCandidateEvidenceSha256 = candidate.EvidenceSha256,
+                    reviewedBy = candidate.RequestedBy
+                }))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    wrongRepo.StatusCode);
+            }
+
+            string receiptSha;
+            Guid receiptId;
+            using (var posted = await SendAsync(HttpMethod.Post, root,
+                Request(decision, candidate.EvidenceSha256)))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.OK, posted.StatusCode);
+                using var json = JsonDocument.Parse(
+                    await posted.Content.ReadAsStringAsync());
+                var body = json.RootElement;
+                receiptSha = body.GetProperty("evidenceSha256").GetString()!;
+                receiptId = body.GetProperty("id").GetGuid();
+                Assert.Equal(decision, body.GetProperty("decision").GetString());
+                Assert.Equal(candidate.RequestedBy, body.GetProperty("requestedBy").GetGuid());
+                Assert.Equal(reviewerId, body.GetProperty("reviewedBy").GetGuid());
+                Assert.NotEqual(Guid.Empty, receiptId);
+                foreach (var flag in new[] {
+                    "canObserveTarget", "canPush", "canRetry",
+                    "canDispatch", "migrationComplete"
+                })
+                    Assert.False(body.GetProperty(flag).GetBoolean());
+            }
+
+            using (var replay = await SendAsync(HttpMethod.Post, root,
+                Request(decision, candidate.EvidenceSha256)))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.OK, replay.StatusCode);
+                using var json = JsonDocument.Parse(
+                    await replay.Content.ReadAsStringAsync());
+                Assert.Equal(receiptId, json.RootElement.GetProperty("id").GetGuid());
+                Assert.Equal(receiptSha, json.RootElement
+                    .GetProperty("evidenceSha256").GetString());
+            }
+            using (var conflicting = await SendAsync(HttpMethod.Post,
+                root, Request(decision ==
+                    GitCheckpointTargetHumanReviewStates.Rejected
+                    ? GitCheckpointTargetHumanReviewStates.ApprovedForObservation
+                    : GitCheckpointTargetHumanReviewStates.Rejected,
+                    candidate.EvidenceSha256)))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    conflicting.StatusCode);
+                Assert.Contains("CheckpointHumanReviewConflict",
+                    await conflicting.Content.ReadAsStringAsync());
+            }
+            using (var history = await SendAsync(HttpMethod.Get, root + query))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.OK, history.StatusCode);
+                using var json = JsonDocument.Parse(
+                    await history.Content.ReadAsStringAsync());
+                Assert.Equal(receiptId, json.RootElement.GetProperty("id").GetGuid());
+                Assert.Equal(receiptSha, json.RootElement
+                    .GetProperty("evidenceSha256").GetString());
+            }
+            using (var foreign = await SendAsync(HttpMethod.Get,
+                root + "?sourceRepositoryId=repo-foreign"))
+                Assert.Equal(System.Net.HttpStatusCode.NotFound,
+                    foreign.StatusCode);
+
+            // Revoke the historical F-027 review: future POSTs must fail,
+            // but committed immutable audit history remains retrievable.
+            await using (var db = fixture.NewContext())
+            {
+                var oldReview = await db.IncrementalReviews.SingleAsync(
+                    x => x.PreparationId == run.Id);
+                oldReview.State = IncrementalReviewStates.Revoked;
+                await db.SaveChangesAsync();
+            }
+            using (var revoked = await SendAsync(HttpMethod.Post,
+                root, Request(decision, candidate.EvidenceSha256)))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                    revoked.StatusCode);
+                Assert.Contains("CheckpointHumanReviewCandidateUnverified",
+                    await revoked.Content.ReadAsStringAsync());
+            }
+            using (var history = await SendAsync(HttpMethod.Get, root + query))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.OK, history.StatusCode);
+                using var json = JsonDocument.Parse(
+                    await history.Content.ReadAsStringAsync());
+                Assert.Equal(receiptId, json.RootElement.GetProperty("id").GetGuid());
+            }
+            Assert.Equal(outboundBefore, api.Calls.Count);
+            await using (var db = fixture.NewContext())
+            {
+                Assert.Single(await db.GitCheckpointTargetHumanReviews
+                    .AsNoTracking().Where(x => x.CheckpointId == later.Id)
+                    .ToArrayAsync());
+                Assert.Single(await db.GitCheckpointTargetHumanReviewEvents
+                    .AsNoTracking().Where(x => x.DecisionId == receiptId)
+                    .ToArrayAsync());
+                Assert.Empty(await db.GitHubTargetRefEvidence.AsNoTracking()
+                    .Where(x => x.PlanId == plan.Id).ToArrayAsync());
+                Assert.Empty(await db.IncrementalGitRefReconciliations
+                    .AsNoTracking().Where(x => x.SnapshotId ==
+                        candidate.SourceSnapshotId).ToArrayAsync());
+                Assert.False((await new PostgresIncrementalOperationPlanRepository(
+                    db, clock).GetAsync(run.Id, plan.Id, default))!.IsCurrent);
+            }
+
+            object Request(string requestedDecision, string expected) => new {
+                sourceRepositoryId = "repo-1",
+                decision = requestedDecision,
+                expectedCandidateEvidenceSha256 = expected,
+                reviewedBy = candidate.RequestedBy, // malicious impersonation
+                requestedBy = reviewerId               // malicious impersonation
+            };
+            async Task<System.Net.Http.HttpResponseMessage> SendAsync(
+                System.Net.Http.HttpMethod method, string url, object? body = null)
+            {
+                using var request = new System.Net.Http.HttpRequestMessage(
+                    method, url);
+                request.Headers.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue(
+                        "Bearer", token);
+                if (method == System.Net.Http.HttpMethod.Post)
+                    request.Content = System.Net.Http.Json.JsonContent.Create(body);
+                return await api.Client.SendAsync(request);
+            }
+        }
+        finally { await api.DisposeAsync(); }
+    }
+
     [Theory]
     [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation)]
     [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation)]
