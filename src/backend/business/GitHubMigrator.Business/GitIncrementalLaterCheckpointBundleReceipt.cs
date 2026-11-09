@@ -133,6 +133,47 @@ public static class GitIncrementalLaterCheckpointBundleReceiptIntegrity
             throw Refused();
     }
 
+    // Historical, domain-separated receipt integrity. No live review,
+    // lease or migration authority is asserted by this hash alone.
+    // The database reader MUST also verify original F-091/F-097b/F-031,
+    // one F-038v2 and one F-035v2 event, plus on-disk bundle bytes.
+    public static void VerifyHistorical(
+        GitIncrementalLaterCheckpointBundleReceipt proof)
+    {
+        if (proof is null || proof.EvidenceVersion != 1 ||
+            proof.PreparationId == Guid.Empty ||
+            proof.PlanId == Guid.Empty ||
+            proof.CheckpointId == Guid.Empty ||
+            proof.SourceSnapshotId == Guid.Empty ||
+            proof.TargetObservationId == Guid.Empty ||
+            proof.WorkpackId == Guid.Empty ||
+            proof.RecordedBy == Guid.Empty ||
+            proof.SourceRepositoryId is not { Length: >= 1 and <= 256 } ||
+            string.IsNullOrWhiteSpace(proof.SourceRepositoryId) ||
+            proof.BundleFileName != proof.WorkpackId.ToString("N") + ".bundle" ||
+            proof.BundleBytes is < 1 or > 536_870_912 ||
+            proof.RefCount is < 1 or > 128 ||
+            !GitSourceBundleStorageCheck.ValidSha(proof.WorkpackEvidenceSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(proof.BundlePlanSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(proof.FullRefProofSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(proof.SourceEvidenceSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(proof.SourceManifestRootSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(proof.TargetReceiptSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(proof.ReconciliationSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(proof.BundleSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(proof.EvidenceSha256) ||
+            proof.AcquiredAtUtc == default ||
+            proof.RecordedAtUtc < proof.AcquiredAtUtc ||
+            proof.AcquiredAtUtc.Offset != TimeSpan.Zero ||
+            proof.RecordedAtUtc.Offset != TimeSpan.Zero ||
+            proof.AcquiredAtUtc.UtcTicks % TimeSpan.TicksPerMillisecond != 0 ||
+            proof.RecordedAtUtc.UtcTicks % TimeSpan.TicksPerMillisecond != 0 ||
+            proof.ReadyForExecution || proof.CanPush || proof.CanRetry ||
+            proof.CanDispatch || proof.MigrationComplete ||
+            Digest(proof) != proof.EvidenceSha256)
+            throw Refused();
+    }
+
     private static string Digest(GitIncrementalLaterCheckpointBundleReceipt p)
     {
         var fields = new object?[] {
