@@ -43,6 +43,10 @@ public sealed class ApiHarness : IAsyncLifetime
     public bool EnableLaterCheckpointHistory { get; set; }
     public bool EnableLaterCheckpointBundleRead { get; set; }
     public bool EnableLaterCheckpointBundleLease { get; set; }
+    public bool EnableLaterCheckpointLocalBundle { get; set; }
+    public bool EnableLaterCheckpointDurableBundle { get; set; }
+    public string? TrustedLocalBundleSourceRoot { get; set; }
+    public string? TrustedLocalBundleOutputRoot { get; set; }
     public int TargetObjectIdLength { get; set; } = 40;
     // Fake fixed-host provider fault injection; no real outbound network.
     public string TargetObservationFault { get; set; } = "";
@@ -105,6 +109,17 @@ public sealed class ApiHarness : IAsyncLifetime
             values["GitIncrementalLaterCheckpointBundleRead__Enabled"] = "true";
         if (EnableLaterCheckpointBundleLease)
             values["GitIncrementalLaterCheckpointBundleLease__Enabled"] = "true";
+        if (EnableLaterCheckpointLocalBundle)
+            values["GitIncrementalLaterCheckpointLocalBundle__Enabled"] = "true";
+        if (EnableLaterCheckpointDurableBundle)
+            values["GitIncrementalLaterCheckpointDurableBundle__Enabled"] = "true";
+        if (TrustedLocalBundleSourceRoot is not null &&
+            TrustedLocalBundleOutputRoot is not null)
+        {
+            values["GitSourceBundles__Enabled"] = "true";
+            values["GitSourceBundles__SourceRoot"] = TrustedLocalBundleSourceRoot;
+            values["GitSourceBundles__BundleRoot"] = TrustedLocalBundleOutputRoot;
+        }
         if (EnableCheckpointTargetObservation)
         {
             values["GitCheckpointTargetObservation__Enabled"] = "true";
