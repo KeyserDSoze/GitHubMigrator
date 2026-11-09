@@ -37,6 +37,18 @@ A separate, **disabled-by-default local-only audit** now checks physical Git com
 
 This is **not yet wired to an externally actionable source-sync endpoint or GitHub remote push**. Offline fast-forward candidates stay blocked until the independently verified GitHub destination, live object closure, policy, authorization and replay fences can be enforced. See [F-094 design, limits and real Git tests](docs/f094-local-incremental-git-ancestry-audit.md).
 
+## F-095 durable local-only ancestry evidence
+
+The internal F-095 ledger binds an offline F-094 Git object ancestry receipt
+to a verified F-091 source checkpoint, an F-032/F-014 original source ref/OID
+proof and a previously sealed F-031 GitHub observation. PostgreSQL records
+one immutable receipt plus its append-only event atomically, rejects stale
+observations and forbids write/retry/dispatch/migration-success flags.
+The ledger and physical auditor remain **off by default**. This first step
+supports only F-029 baseline snapshots with sealed F-014 ref manifests;
+no production GitHub destination update is implemented.
+See [F-095 durable ancestry ledger](docs/f095-durable-offline-git-ancestry-ledger.md).
+
 ## Quick start
 
 Requirements: Docker Desktop / Docker Engine with Compose v2.
