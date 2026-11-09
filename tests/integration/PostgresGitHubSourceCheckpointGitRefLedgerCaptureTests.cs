@@ -384,6 +384,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableLaterCheckpointLocalBundle = true,
             EnableLaterCheckpointDurableBundle = true,
             EnableLaterCheckpointMirrorStaging = true,
+            EnableLaterCheckpointMirrorAdmission = true,
             TrustedLocalBundleSourceRoot = physicalMirror.SourceRoot,
             TrustedLocalBundleOutputRoot = physicalMirror.BundleRoot,
             TargetObjectIdLength = oidLength
@@ -1480,6 +1481,42 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     Assert.False(readStaging.CanMaterialize ||
                         readStaging.CanPush || readStaging.CanRetry ||
                         readStaging.CanDispatch || readStaging.MigrationComplete);
+                    // #117: same REAL later-epoch PostgreSQL source and
+                    // full F-097b/F-031/F-038v2/F-035v2 are rechecked,
+                    // including exact immutable SQL rows under source-first
+                    // advisory lock. Still no lease, Git or target writes.
+                    var admission = auditScope.ServiceProvider
+                        .GetRequiredService<
+                            PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>();
+                    var checkedAdmission = await admission.ReadAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256,
+                        candidate.RequestedBy, default);
+                    Assert.Equal(readStaging.EvidenceSha256,
+                        checkedAdmission.StagingEvidenceSha256);
+                    Assert.Equal(readStaging.PhysicalMirrorId,
+                        checkedAdmission.PhysicalMirrorId);
+                    Assert.Equal(fullRefs.SnapshotId,
+                        checkedAdmission.SourceSnapshotId);
+                    Assert.Equal(committed.BundleSha256,
+                        checkedAdmission.BundleSha256);
+                    Assert.False(checkedAdmission.DurableLeasePersisted ||
+                        checkedAdmission.CanMaterialize ||
+                        checkedAdmission.CanPush ||
+                        checkedAdmission.CanRetry ||
+                        checkedAdmission.CanDispatch ||
+                        checkedAdmission.MigrationComplete);
+                    Assert.Equal(0, checkedAdmission.F061LeaseGeneration);
+                    GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Verify(
+                        checkedAdmission, readStaging, committed);
+                    Assert.Equal("LaterCheckpointMirrorAdmissionInvalidScope",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => admission.ReadAsync(
+                                run.Id, plan.Id, later.Id, observationId,
+                                first.WorkpackId, "repo-1", "invalid",
+                                candidate.RequestedBy, default))).Code);
+
                     Assert.Equal("LaterCheckpointMirrorStagingProvenanceUnverified",
                         (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
                             () => mirrorReader.ReadAsync(run.Id, plan.Id,
