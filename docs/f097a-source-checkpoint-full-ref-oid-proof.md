@@ -22,3 +22,20 @@ The proof is deterministic and re-verifiable with the **original verified inputs
 Unit tests cover SHA-1/SHA-256 complete baseline/incremental chains, deterministic canonicalization, exact predecessor matching, legacy/partial/missing source proofs, mixed formats, limits, tampering and non-executable flags. The CI result must be checked before closing #93.
 
 Parent #92 remains open for real source-side ingestion, PostgreSQL immutable manifests and replay/concurrency proofs, lease fences, durable joins and F-095 physical mirror binding of later checkpoint epochs.
+
+## F-097b work in progress — sealed snapshot-scoped source reader (#94)
+
+The internal `PostgresVerifiedSourceGitRefReader.ReadSealedSnapshotAsync`
+takes a **checkpoint-selected snapshot UUID**, not the original F-029 baseline.
+Unlike the legacy F-032 reader, it requires a completed durable F-014 externalized
+source ref manifest, fully covered F-013 staging, an exact selected Git repository
+in the reviewed F-029 mapping, no more than 128 canonical refs and consistent
+SHA-1 or SHA-256 object IDs. It reads the immutable F-014 chunks rather than
+mutable staging catalog rows. Cross-repository source ID mismatches or tampered
+chunk content fail closed.
+
+This is **not** the PostgreSQL F-097 receipt ledger yet. The method is deliberately
+internal, must be called only after verifying the exact F-091 checkpoint and has
+no HTTP endpoint or write authority. Parent #92 and child #94 remain open for
+atomic immutable checkpoint/ref receipt capture, verified restart readback,
+concurrency/replay and F-095 mirror ancestry integration.

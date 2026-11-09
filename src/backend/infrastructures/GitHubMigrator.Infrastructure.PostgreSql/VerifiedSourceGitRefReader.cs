@@ -13,18 +13,44 @@ public sealed class PostgresVerifiedSourceGitRefReader(
     AppDbContext db, IDiscoveryRefManifestStore manifests)
     : IVerifiedSourceGitRefReader
 {
-    public async Task<VerifiedSourceGitRefs> ReadAsync(
+    // Historical F-032 baseline reads retain their existing behaviour.
+    public Task<VerifiedSourceGitRefs> ReadAsync(
         IncrementalOperationPlan plan, string sourceRepositoryId,
+        CancellationToken ct) =>
+        ReadCoreAsync(plan, plan.SnapshotId, sourceRepositoryId,
+            requireCompleteSealedEpoch: false, ct);
+
+    // F-097b: exact epoch is supplied ONLY by an already-verified F-091
+    // checkpoint; unlike legacy F-032, a later snapshot MUST be F-014
+    // externalized, completed and fully covered. This remains internal;
+    // no HTTP route or destination write uses this method.
+    public Task<VerifiedSourceGitRefs> ReadSealedSnapshotAsync(
+        IncrementalOperationPlan plan, Guid checkpointSnapshotId,
+        string sourceRepositoryId, CancellationToken ct)
+    {
+        if (plan is null || checkpointSnapshotId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(sourceRepositoryId) ||
+            !plan.Steps.Any(x => x.Kind == "ReviewTargetName" &&
+                x.SourceRepositoryId == sourceRepositoryId))
+            throw new IncrementalGitRefReconciliationException(
+                "SourceRefCheckpointSelectionInvalid");
+        return ReadCoreAsync(plan, checkpointSnapshotId, sourceRepositoryId,
+            requireCompleteSealedEpoch: true, ct);
+    }
+
+    private async Task<VerifiedSourceGitRefs> ReadCoreAsync(
+        IncrementalOperationPlan plan, Guid snapshotId,
+        string sourceRepositoryId, bool requireCompleteSealedEpoch,
         CancellationToken ct)
     {
         var inventory = await new PostgresDiscoveryRepository(db)
-            .GetWithoutRefsAsync(plan.SnapshotId, ct);
+            .GetWithoutRefsAsync(snapshotId, ct);
         var sync = await db.StagingSnapshotSyncs.AsNoTracking()
-            .SingleOrDefaultAsync(x => x.SnapshotId == plan.SnapshotId, ct);
+            .SingleOrDefaultAsync(x => x.SnapshotId == snapshotId, ct);
         if (inventory is null || sync is null ||
             inventory.ConnectionId != plan.SourceConnectionId ||
             sync.SourceConnectionId != plan.SourceConnectionId ||
-            inventory.Id != plan.SnapshotId ||
+            inventory.Id != snapshotId ||
             inventory.SourceProvider != "azure-devops-services" ||
             sync.JournalVersion != 1 ||
             !inventory.Snapshot.Projects
@@ -33,6 +59,13 @@ public sealed class PostgresVerifiedSourceGitRefReader(
                     x.VersionControl == VersionControlKind.Git))
             throw new IncrementalGitRefReconciliationException("SourceRefSnapshotUnavailable");
 
+        if (requireCompleteSealedEpoch &&
+            (!inventory.RefsExternalized ||
+             !sync.SourceInventoryComplete ||
+             inventory.Completeness != DiscoveryCompleteness.Complete))
+            throw new IncrementalGitRefReconciliationException(
+                "SourceRefCheckpointCoverageUnverified");
+
         var selected = new List<GitMirrorRef>();
         string? root = null;
         if (inventory.RefsExternalized)
@@ -40,7 +73,7 @@ public sealed class PostgresVerifiedSourceGitRefReader(
             if (inventory.Refs.Count != 0 ||
                 inventory.RefCount is < 0 or > StagingAssetNormalizer.MaxAssetsPerSnapshot)
                 throw new IncrementalGitRefReconciliationException("SourceRefManifestMismatch");
-            var manifest = await manifests.GetAsync(plan.SnapshotId, ct);
+            var manifest = await manifests.GetAsync(snapshotId, ct);
             if (manifest is null || manifest.SourceConnectionId != plan.SourceConnectionId ||
                 manifest.AssetCount != inventory.RefCount ||
                 manifest.ChunkSize != PostgresDiscoveryRefManifestStore.ChunkSize)
@@ -52,7 +85,7 @@ public sealed class PostgresVerifiedSourceGitRefReader(
             var cursor = -1;
             while (expectedIndex < manifest.ChunkCount)
             {
-                var page = await manifests.ListChunksAsync(plan.SnapshotId,
+                var page = await manifests.ListChunksAsync(snapshotId,
                     cursor, 50, ct);
                 if (page.Items.Count == 0)
                     throw new IncrementalGitRefReconciliationException("SourceRefManifestMismatch");
@@ -61,7 +94,7 @@ public sealed class PostgresVerifiedSourceGitRefReader(
                     if (descriptor.Index != expectedIndex++)
                         throw new IncrementalGitRefReconciliationException("SourceRefManifestMismatch");
                     var block = await manifests.ReadChunkAsync(
-                        plan.SnapshotId, descriptor.Index, ct)
+                        snapshotId, descriptor.Index, ct)
                         ?? throw new IncrementalGitRefReconciliationException("SourceRefManifestMismatch");
                     if (block.Chunk != descriptor ||
                         block.Items.Count != descriptor.AssetCount)
@@ -88,7 +121,9 @@ public sealed class PostgresVerifiedSourceGitRefReader(
                                 canonical.SourceId != asset.SourceId)
                                 throw new JsonException();
                             selected.Add(new GitMirrorRef(name, oid));
-                            if (selected.Count > GitMirrorRefReconciler.MaxRefsPerSide)
+                            if (selected.Count > (requireCompleteSealedEpoch
+                                ? GitHubSourceCheckpointGitRefProofIntegrity.MaxRefs
+                                : GitMirrorRefReconciler.MaxRefsPerSide))
                                 throw new IncrementalGitRefReconciliationException("SourceRefSelectionLimit");
                         }
                         catch (Exception ex) when (ex is JsonException or
@@ -125,7 +160,7 @@ public sealed class PostgresVerifiedSourceGitRefReader(
                 SELECT jsonb_build_array(r ->> 'name', r ->> 'objectId')::text AS "Value"
                 FROM migration_discoveries d
                 CROSS JOIN LATERAL jsonb_array_elements(d.inventory -> 'refs') r
-                WHERE d.id = {plan.SnapshotId}
+                WHERE d.id = {snapshotId}
                   AND d.connection_id = {plan.SourceConnectionId}
                   AND r ->> 'repositoryId' = {sourceRepositoryId}
                 ORDER BY r ->> 'name'
@@ -152,7 +187,13 @@ public sealed class PostgresVerifiedSourceGitRefReader(
                 }
             }
         }
-        return VerifiedSourceGitRefIntegrity.Seal(plan.SnapshotId,
+        if (requireCompleteSealedEpoch &&
+            (selected.Count == 0 ||
+             selected.Any(x => x.ObjectId.Length != selected[0].ObjectId.Length)))
+            throw new IncrementalGitRefReconciliationException(
+                "SourceRefCheckpointObjectFormatInvalid");
+
+        return VerifiedSourceGitRefIntegrity.Seal(snapshotId,
             plan.SourceConnectionId, sourceRepositoryId, root, selected);
     }
 }

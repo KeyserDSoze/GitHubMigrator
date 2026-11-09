@@ -129,6 +129,143 @@ public sealed class PostgresVerifiedSourceGitRefReaderTests(PostgresDraftFixture
         Assert.Equal("SourceRefCoverageUnverified", failure.Code);
     }
 
+
+    [Fact]
+    public async Task F097_later_complete_F014_snapshot_is_not_the_F029_baseline_or_mutable_catalog()
+    {
+        await using var db = fixture.NewContext();
+        var clock = new FixedClock(DateTimeOffset.UtcNow);
+        var connection = Guid.NewGuid();
+        var jobs = new PostgresMigrationJobRepository(db, clock);
+        var job = await jobs.EnqueueDiscoveryAsync(
+            connection, Guid.NewGuid(), Guid.NewGuid(), default);
+        var lease = (await jobs.ClaimForSourceAsync(
+            connection, Guid.NewGuid(), TimeSpan.FromMinutes(3), default))!;
+        Assert.Equal(job.Id, lease.Id);
+
+        var now = clock.GetUtcNow();
+        var refs = new[] {
+            new RepositoryRef("repo-1", "refs/heads/main", new string('a', 40)),
+            new RepositoryRef("repo-1", "refs/tags/v1", new string('b', 40))
+        };
+        var inventory = new DiscoveryInventory {
+            Id = job.Id, ConnectionId = connection,
+            SourceProvider = "azure-devops-services",
+            Organization = "az-org", CollectedAtUtc = now,
+            Snapshot = new DiscoverySnapshot {
+                SnapshotId = job.Id, SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                CollectedAt = now,
+                Projects = [new SourceProject("project", "Project", [
+                    new SourceRepository("repo-1", "project", "One",
+                        VersionControlKind.Git)
+                ])],
+                Identities = [], AccessGrants = []
+            },
+            Refs = [], RefsExternalized = true, RefCount = refs.Length,
+            Issues = [], Completeness = DiscoveryCompleteness.Complete,
+            IdentitiesComplete = true, PermissionsComplete = true,
+            SecurityCoverage = new DiscoveryCoverage(true, true, true, false)
+        };
+        await new PostgresDiscoveryRepository(db).SaveAsync(inventory, default);
+        Assert.True(await jobs.CheckpointSnapshotAsync(lease, job.Id, default));
+        var pages = new PostgresDiscoveryPageCheckpointStore(db, clock);
+        await pages.SaveAsync(new(lease.Id, lease.LeaseToken, lease.Attempt),
+            new DiscoveryPageCheckpoint(job.Id, "refs:repo-1", 0,
+                new string('f', 64), JsonSerializer.Serialize(new {
+                    value = refs.Select(x => new { name = x.Name, objectId = x.ObjectId })
+                }), null, now), default);
+        var manifests = new PostgresDiscoveryRefManifestStore(db, clock);
+        await manifests.PrepareAsync(lease, refs.Length, default);
+        var reader = new PostgresVerifiedSourceGitRefReader(db, manifests);
+        var plan = FakePlan(Guid.NewGuid(), connection) with {
+            Steps = [new IncrementalOperationStep(1, null, "repo-1",
+                "target", "ReviewTargetName", "Blocked", "Blocked", 0)]
+        };
+
+        // Before the worker seals and publishes the source manifest,
+        // a historical checkpoint may not consume provisional ref pages.
+        await Assert.ThrowsAsync<DiscoveryRefManifestException>(() =>
+            reader.ReadSealedSnapshotAsync(plan, job.Id, "repo-1", default));
+
+        var applied = await new StagingSyncService(
+            new PostgresDiscoveryRepository(db),
+            new PostgresStagingRepository(db, clock, manifests))
+            .SyncUsingRefManifestAsync(
+                lease with { SnapshotId = lease.Id }, default);
+        Assert.True(await jobs.CompleteAsync(lease, applied, default));
+        Assert.True((await db.StagingSnapshotSyncs.AsNoTracking()
+            .SingleAsync(x => x.SnapshotId == job.Id)).SourceInventoryComplete);
+
+        var proof = await reader.ReadSealedSnapshotAsync(
+            plan, job.Id, "repo-1", default);
+        Assert.Equal(job.Id, proof.SnapshotId);
+        Assert.NotEqual(plan.SnapshotId, proof.SnapshotId);
+        Assert.Equal(2, proof.Refs.Count);
+        Assert.Equal(new string('a', 40), proof.Refs[0].ObjectId);
+        Assert.NotNull(proof.RefManifestRootSha256);
+
+        // A mutable staging change never alters the historic immutable refs.
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE staging_assets SET payload_json = {"{}"}::jsonb
+            WHERE source_connection_id = {connection} AND asset_type = {"ref"}
+            """);
+        Assert.Equal(proof.SourceEvidenceSha256,
+            (await reader.ReadSealedSnapshotAsync(
+                plan, job.Id, "repo-1", default)).SourceEvidenceSha256);
+
+        Assert.Throws<IncrementalGitRefReconciliationException>(() =>
+            reader.ReadSealedSnapshotAsync(plan, job.Id, "foreign", default));
+        await Assert.ThrowsAsync<IncrementalGitRefReconciliationException>(() =>
+            reader.ReadSealedSnapshotAsync(
+                plan, Guid.NewGuid(), "repo-1", default));
+
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE discovery_ref_observations SET fingerprint = {"tampered"}
+            WHERE job_id = {job.Id}
+            """);
+        await Assert.ThrowsAsync<DiscoveryRefManifestException>(() =>
+            reader.ReadSealedSnapshotAsync(plan, job.Id, "repo-1", default));
+    }
+
+    [Fact]
+    public async Task F097_partial_inline_ref_snapshot_never_passes_full_epoch_reader()
+    {
+        await using var db = fixture.NewContext();
+        var now = DateTimeOffset.UtcNow;
+        var clock = new FixedClock(now);
+        var connection = Guid.NewGuid();
+        var snapshot = Guid.NewGuid();
+        var inventory = new DiscoveryInventory {
+            Id = snapshot, ConnectionId = connection,
+            SourceProvider = "azure-devops-services", Organization = "az-org",
+            CollectedAtUtc = now,
+            Snapshot = new DiscoverySnapshot {
+                SnapshotId = snapshot, SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                CollectedAt = now, Projects = [new SourceProject("project", "Project", [
+                    new SourceRepository("repo-1", "project", "One", VersionControlKind.Git)
+                ])], Identities = [], AccessGrants = []
+            },
+            Refs = [new RepositoryRef(
+                "repo-1", "refs/heads/main", new string('a', 40))],
+            Issues = [], Completeness = DiscoveryCompleteness.Partial,
+            IdentitiesComplete = false, PermissionsComplete = false
+        };
+        await new PostgresDiscoveryRepository(db).SaveAsync(inventory, default);
+        var normalized = StagingAssetNormalizer.Normalize(inventory);
+        await new PostgresStagingRepository(db, clock).ApplyAsync(
+            inventory, normalized.Assets, normalized.CompleteTypes, default);
+        var plan = FakePlan(Guid.NewGuid(), connection) with {
+            Steps = [new IncrementalOperationStep(1, null, "repo-1",
+                "target", "ReviewTargetName", "Blocked", "Blocked", 0)]
+        };
+        var reader = new PostgresVerifiedSourceGitRefReader(db,
+            new PostgresDiscoveryRefManifestStore(db, clock));
+        var error = await Assert.ThrowsAsync<IncrementalGitRefReconciliationException>(
+            () => reader.ReadSealedSnapshotAsync(
+                plan, snapshot, "repo-1", default));
+        Assert.Equal("SourceRefCheckpointCoverageUnverified", error.Code);
+    }
+
     private static IncrementalOperationPlan FakePlan(Guid snapshot, Guid connection) =>
         new(Guid.NewGuid(), Guid.NewGuid(), snapshot, connection, Guid.NewGuid(),
             "gh-org", new string('a', 64), new string('b', 64),
