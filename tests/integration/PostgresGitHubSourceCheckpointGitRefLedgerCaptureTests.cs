@@ -1565,8 +1565,17 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
                             () => leaseStore.RenewAsync(acquiredLease,
                                 TimeSpan.FromSeconds(90), default))).Code);
-                    renewed = await leaseStore.RenewAsync(
-                        renewed, TimeSpan.FromSeconds(90), default);
+                    // Cross-context restart/replay: lease owner identity
+                    // and last deadline must survive a new DbContext.
+                    await using (var restarted = api.Host.Services
+                        .CreateAsyncScope())
+                    {
+                        var rehydrated = restarted.ServiceProvider
+                            .GetRequiredService<
+                                PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>();
+                        renewed = await rehydrated.RenewAsync(
+                            renewed, TimeSpan.FromSeconds(90), default);
+                    }
                     Assert.Equal(worker, renewed.WorkerId);
                     // Independent DbContext/connection competitors must
                     // serialize on the source-first PostgreSQL locks.
