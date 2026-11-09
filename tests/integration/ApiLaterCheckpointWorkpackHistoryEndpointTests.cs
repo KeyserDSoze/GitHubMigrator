@@ -65,6 +65,22 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F035v2_durable_file_writer_is_independently_disabled_by_default()
+    {
+        var before = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var writer = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
+        var denied = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            writer.CaptureAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                "repo-1", new string('a', 64),
+                Guid.NewGuid(), default));
+        Assert.Equal("LaterCheckpointDurableBundleDisabled", denied.Code);
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F035v2_lease_coordinator_is_independently_disabled_by_default()
     {
         var calls = harness.Calls.Count;
