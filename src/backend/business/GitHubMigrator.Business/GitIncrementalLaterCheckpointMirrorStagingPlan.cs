@@ -35,10 +35,12 @@ public static class GitIncrementalLaterCheckpointMirrorStagingIntegrity
         IncrementalOperationPlan plan, GitIncrementalCheckpointAuditInputs selection,
         GitHubSourceCheckpointGitRefProof source,
         GitIncrementalLaterCheckpointBundlePlan prepared,
-        GitIncrementalLaterCheckpointBundleReceipt durable)
+        GitIncrementalLaterCheckpointBundleReceipt durable,
+        GitIncrementalLaterCheckpointWorkpackProof sealedWorkpack)
     {
         if (plan is null || selection is null || source is null ||
             prepared is null || durable is null ||
+            sealedWorkpack is null ||
             source.Refs is null ||
             selection.ExpectedSourceRefs is null ||
             selection.ExpectedTargetRefs is null)
@@ -61,6 +63,22 @@ public static class GitIncrementalLaterCheckpointMirrorStagingIntegrity
                 selection.ExpectedTargetRefs));
         }
         catch (GitMirrorRefReconciliationException) { throw Refused(); }
+
+        // Self-sealed SHA strings are not enough: bind the complete
+        // immutable F-038v2 workpack and independently recompute the
+        // original F-032v2 reconciliation, full F-035v2 bundle-plan
+        // digest and all real F-097b source object IDs.
+        try
+        {
+            GitIncrementalLaterCheckpointWorkpackIntegrity.Verify(
+                sealedWorkpack, plan, selection, source, comparison);
+            GitIncrementalLaterCheckpointBundleIntegrity.Verify(
+                prepared, plan, selection, source, comparison, sealedWorkpack);
+        }
+        catch (Exception ex) when (ex is
+            GitIncrementalCheckpointWorkpackException or
+            GitSourceBundleException)
+        { throw Refused(); }
 
         var request = prepared.SourceOnlyRequest;
         if (plan.IsCurrent || plan.ReadyForExecution ||
@@ -107,6 +125,7 @@ public static class GitIncrementalLaterCheckpointMirrorStagingIntegrity
             prepared.PreparationId != plan.PreparationId ||
             prepared.PlanId != plan.Id ||
             prepared.BaselineSnapshotId != plan.SnapshotId ||
+            prepared.WorkpackEvidenceSha256 != sealedWorkpack.EvidenceSha256 ||
             prepared.SourceSnapshotId != selection.SourceSnapshotId ||
             prepared.CheckpointId != selection.SourceCheckpointId ||
             prepared.TargetObservationId != selection.TargetObservationId ||
@@ -170,7 +189,8 @@ public static class GitIncrementalLaterCheckpointMirrorStagingIntegrity
         IncrementalOperationPlan plan, GitIncrementalCheckpointAuditInputs selection,
         GitHubSourceCheckpointGitRefProof source,
         GitIncrementalLaterCheckpointBundlePlan prepared,
-        GitIncrementalLaterCheckpointBundleReceipt durable)
+        GitIncrementalLaterCheckpointBundleReceipt durable,
+        GitIncrementalLaterCheckpointWorkpackProof sealedWorkpack)
     {
         if (observed is null || observed.SourceRefs is null ||
             observed.F061LeaseGeneration != 0 ||
@@ -178,7 +198,8 @@ public static class GitIncrementalLaterCheckpointMirrorStagingIntegrity
             observed.CanRetry || observed.CanDispatch ||
             observed.MigrationComplete)
             throw Refused();
-        var expected = Prepare(plan, selection, source, prepared, durable);
+        var expected = Prepare(plan, selection, source, prepared,
+            durable, sealedWorkpack);
         if (observed with { SourceRefs = expected.SourceRefs } != expected ||
             !observed.SourceRefs.SequenceEqual(expected.SourceRefs))
             throw Refused();
