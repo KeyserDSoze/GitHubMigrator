@@ -914,9 +914,45 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         first.WorkpackId, Guid.NewGuid(), lease1.Generation,
                         candidate.RequestedBy, lease1.BundlePlanSha256,
                         default));
-                    Assert.True(await coordinator.ReleaseAsync(
+                    // #113: an incomplete or cancelled binary export is
+                    // QUARANTINED, not silently available for reuse. Only
+                    // the independently approved F-031 human reviewer can
+                    // explicitly recover it with current source proof.
+                    Assert.True(await coordinator.QuarantineAsync(
                         first.WorkpackId, lease1.LeaseToken,
                         lease1.Generation, candidate.RequestedBy,
+                        lease1.BundlePlanSha256, default));
+                    Assert.False(await coordinator.QuarantineAsync(
+                        first.WorkpackId, lease1.LeaseToken,
+                        lease1.Generation, candidate.RequestedBy,
+                        lease1.BundlePlanSha256, default));
+                    Assert.False(await coordinator.ReleaseAsync(
+                        first.WorkpackId, lease1.LeaseToken,
+                        lease1.Generation, candidate.RequestedBy,
+                        lease1.BundlePlanSha256, default));
+                    Assert.Equal("LaterCheckpointBundleLeaseRecoveryRequired",
+                        (await Assert.ThrowsAsync<GitSourceBundleException>(
+                            () => coordinator.ClaimAsync(run.Id, plan.Id,
+                                later.Id, observationId, first.WorkpackId,
+                                "repo-1", targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy,
+                                TimeSpan.FromMinutes(2), default))).Code);
+                    Assert.Equal("LaterCheckpointBundleRecoveryReviewerRequired",
+                        (await Assert.ThrowsAsync<GitSourceBundleException>(
+                            () => coordinator.RecoverAsync(run.Id, plan.Id,
+                                later.Id, observationId, first.WorkpackId,
+                                "repo-1", targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, 1,
+                                lease1.BundlePlanSha256, default))).Code);
+                    Assert.True(await coordinator.RecoverAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256, reviewerId, 1,
+                        lease1.BundlePlanSha256, default));
+                    Assert.False(await coordinator.RecoverAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256, reviewerId, 1,
                         lease1.BundlePlanSha256, default));
                     var lease2 = await coordinator.ClaimAsync(
                         run.Id, plan.Id, later.Id, observationId,
@@ -924,7 +960,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         targetReceipt.EvidenceSha256,
                         candidate.RequestedBy, TimeSpan.FromMinutes(2),
                         default);
-                    Assert.Equal(2L, lease2.Generation);
+                    Assert.Equal(3L, lease2.Generation);
                     Assert.NotEqual(lease1.LeaseToken, lease2.LeaseToken);
                     Assert.False(await coordinator.ReleaseAsync(
                         first.WorkpackId, lease1.LeaseToken,
@@ -934,10 +970,12 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         .GitLaterCheckpointBundleLeaseEvents.AsNoTracking()
                         .Where(x => x.WorkpackId == first.WorkpackId)
                         .OrderBy(x => x.Id).ToArrayAsync();
-                    Assert.Equal(new[] { "Acquired", "Released", "Acquired" },
+                    Assert.Equal(new[] {
+                        "Acquired", "Quarantined", "Recovered", "Acquired" },
                         leaseEvents.Select(x => x.Type));
-                    Assert.Equal(new long[] { 1, 1, 2 },
+                    Assert.Equal(new long[] { 1, 1, 2, 3 },
                         leaseEvents.Select(x => x.Generation));
+                    Assert.Equal(reviewerId, leaseEvents[2].ActorId);
                     Assert.All(leaseEvents, ev =>
                         Assert.Equal(bundlePreparation.EvidenceSha256,
                             ev.BundlePlanSha256));
