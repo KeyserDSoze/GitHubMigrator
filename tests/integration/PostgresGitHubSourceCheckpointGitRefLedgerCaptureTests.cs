@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
 using GitHubMigrator.Infrastructure.PostgreSql;
@@ -914,6 +915,23 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         first.WorkpackId, Guid.NewGuid(), lease1.Generation,
                         candidate.RequestedBy, lease1.BundlePlanSha256,
                         default));
+                    // Simulate failure AFTER a real trusted Git fsck
+                    // and binary export but BEFORE durable SQL evidence.
+                    // The file must survive byte-for-byte but move out
+                    // of UUID.bundle upon independently approved recovery.
+                    var orphanRunner = auditScope.ServiceProvider
+                        .GetRequiredService<
+                            GitIncrementalLaterCheckpointLocalBundleAcquisition>();
+                    var orphan = await orphanRunner.RehearseAsync(
+                        run.Id, plan.Id, later.Id, observationId,
+                        first.WorkpackId, "repo-1",
+                        targetReceipt.EvidenceSha256, default);
+                    var orphanPath = Path.Combine(physicalMirror!.BundleRoot,
+                        first.WorkpackId.ToString("N") + ".bundle");
+                    Assert.True(File.Exists(orphanPath));
+                    Assert.Empty(await verifiedDb.GitLaterCheckpointBundleEvidence
+                        .AsNoTracking().Where(x => x.WorkpackId ==
+                            first.WorkpackId).ToArrayAsync());
                     // #113: an incomplete or cancelled binary export is
                     // QUARANTINED, not silently available for reuse. Only
                     // the independently approved F-031 human reviewer can
@@ -949,6 +967,17 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         first.WorkpackId, "repo-1",
                         targetReceipt.EvidenceSha256, reviewerId, 1,
                         lease1.BundlePlanSha256, default));
+                    Assert.False(File.Exists(orphanPath));
+                    var quarantinedFiles = Directory.GetFiles(
+                        physicalMirror.BundleRoot,
+                        first.WorkpackId.ToString("N") + ".*.quarantine");
+                    Assert.Single(quarantinedFiles);
+                    Assert.Equal(orphan.BundleBytes,
+                        new FileInfo(quarantinedFiles[0]).Length);
+                    await using (var preserved = File.OpenRead(quarantinedFiles[0]))
+                        Assert.Equal(orphan.BundleSha256,
+                            Convert.ToHexStringLower(
+                                await SHA256.HashDataAsync(preserved)));
                     Assert.False(await coordinator.RecoverAsync(
                         run.Id, plan.Id, later.Id, observationId,
                         first.WorkpackId, "repo-1",
