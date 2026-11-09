@@ -82,8 +82,11 @@ independently covered by the F-094
 workpack-specific F-060/F-061 mirror (production default). The ledger
 derives the mirror ID from `GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId`,
 recomputes the original F-060 SHA-256 from the F-035 bundle row,
-verified F-014 ref set and persisted F-061 object digest/count,
-and checks the latest `Verified` lifecycle event and lease state.
+verified F-014 ref set and persisted F-061 object digest/count.
+It also recomputes the F-032 ref/OID reconciliation SHA and decisions
+against the exact F-031 observation, requires the linked F-038 workpack
+to be blocked at the destination-write barrier, and checks the latest
+`Verified` F-061 lifecycle event and lease state.
 The F-094 physical auditor must read the derived `<physicalMirrorId>.git`
 rather than the logical `<snapshotId>.git`, then match the same complete
 object-set digest before and after fsck. Both mirror ID and F-060 proof
