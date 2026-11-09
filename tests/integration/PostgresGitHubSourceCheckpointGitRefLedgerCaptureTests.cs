@@ -1584,6 +1584,15 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         // source-fenced acquisition, periodic SQL heartbeat,
                         // exact UUID.bundle -> UUID.git import, double
                         // physical fsck and immutable F-061v2 Verified.
+                        var blockingImporter = new CancellableMirrorImporter();
+                        IGitIncrementalLaterCheckpointMirrorImporter chosenImporter =
+                            fenceWorker
+                                ? blockingImporter
+                                : new DelayedVerifiedImporter(
+                                    auditScope.ServiceProvider
+                                        .GetRequiredService<
+                                            IGitIncrementalLaterCheckpointMirrorImporter>(),
+                                    failWorker);
                         var mirrorWorkerRunner = new
                             GitIncrementalLaterCheckpointMirrorImportWorker(
                                 api.Host.Services.GetRequiredService<
@@ -1591,13 +1600,88 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 new(
                                     true, TimeSpan.FromMinutes(3),
                                     TimeSpan.FromMilliseconds(250)),
-                                new DelayedVerifiedImporter(
-                                    auditScope.ServiceProvider
-                                        .GetRequiredService<
-                                            IGitIncrementalLaterCheckpointMirrorImporter>(),
-                                    failWorker));
+                                chosenImporter);
                         var activeWorker = Guid.NewGuid();
-                        if (failWorker)
+                        if (fenceWorker)
+                        {
+                            // One independent replica quarantines the real
+                            // Held generation while an import is blocked.
+                            // The next source-bound heartbeat must fence
+                            // the worker, CANCEL pending local Git and
+                            // forbid any immutable Verified event.
+                            var pending = mirrorWorkerRunner.RunAsync(
+                                run.Id, plan.Id, later.Id, observationId,
+                                first.WorkpackId, "repo-1",
+                                targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, activeWorker,
+                                default);
+                            await blockingImporter.Entered.WaitAsync(
+                                TimeSpan.FromSeconds(90));
+                            await using var fenceScope =
+                                api.Host.Services.CreateAsyncScope();
+                            var fencingStore = fenceScope.ServiceProvider
+                                .GetRequiredService<
+                                    PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>();
+                            var tokenInDatabase = await verifiedDb.Database
+                                .SqlQuery<Guid>($"""
+                                    SELECT lease_token AS "Value"
+                                    FROM git_later_checkpoint_mirror_leases
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """).SingleAsync();
+                            var quarantined = false;
+                            for (var attempt = 0;
+                                attempt < 12 && !quarantined; attempt++)
+                            {
+                                var currentDeadline = await verifiedDb.Database
+                                    .SqlQuery<DateTimeOffset>($"""
+                                        SELECT lease_until_utc AS "Value"
+                                        FROM git_later_checkpoint_mirror_leases
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """).SingleAsync();
+                                var handle =
+                                    new GitIncrementalLaterCheckpointMirrorLeaseClaim(
+                                        staging.PhysicalMirrorId,
+                                        first.WorkpackId,
+                                        staging.SourceSnapshotId,
+                                        later.Id, tokenInDatabase, 1,
+                                        activeWorker, candidate.RequestedBy,
+                                        staging.EvidenceSha256,
+                                        currentDeadline, false, false, false,
+                                        false, false);
+                                quarantined = await fencingStore
+                                    .QuarantineAsync(handle,
+                                        "TestOwnerRevoked", default);
+                            }
+                            Assert.True(quarantined);
+                            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                                () => pending.WaitAsync(
+                                    TimeSpan.FromSeconds(90)));
+                            var fencedState = await verifiedDb.Database
+                                .SqlQuery<string>($"""
+                                    SELECT state AS "Value"
+                                    FROM git_later_checkpoint_mirror_leases
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """).SingleAsync();
+                            Assert.Equal("RecoveryRequired", fencedState);
+                            var fencedEvents = await verifiedDb.Database
+                                .SqlQuery<string>($"""
+                                    SELECT type AS "Value"
+                                    FROM git_later_checkpoint_mirror_lease_events
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """).ToArrayAsync();
+                            Assert.Contains("Acquired", fencedEvents);
+                            Assert.Equal(1, fencedEvents.Count(x =>
+                                x == "Quarantined"));
+                            Assert.DoesNotContain("Verified", fencedEvents);
+                            var noneVerified = await verifiedDb.Database
+                                .SqlQuery<long>($"""
+                                    SELECT count(*)::bigint AS "Value"
+                                    FROM git_later_checkpoint_mirror_verified_evidence
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """).SingleAsync();
+                            Assert.Equal(0L, noneVerified);
+                        }
+                        else if (failWorker)
                         {
                             // Deliberately interrupted import after
                             // several live heartbeats: verify the exact
