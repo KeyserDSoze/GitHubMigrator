@@ -1510,6 +1510,20 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     Assert.Equal(0, checkedAdmission.F061LeaseGeneration);
                     GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Verify(
                         checkedAdmission, readStaging, committed);
+                    Assert.Equal("LaterCheckpointMirrorStagingProvenanceUnverified",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => admission.ReadAsync(
+                                run.Id, plan.Id, later.Id, observationId,
+                                first.WorkpackId, "repo-1",
+                                targetReceipt.EvidenceSha256,
+                                Guid.NewGuid(), default))).Code);
+                    Assert.Equal("LaterCheckpointMirrorStagingProvenanceUnverified",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => admission.ReadAsync(
+                                run.Id, plan.Id, later.Id, observationId,
+                                first.WorkpackId, "foreign-repo",
+                                targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, default))).Code);
                     Assert.Equal("LaterCheckpointMirrorAdmissionInvalidScope",
                         (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
                             () => admission.ReadAsync(
