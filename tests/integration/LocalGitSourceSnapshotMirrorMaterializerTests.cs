@@ -292,6 +292,135 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         Assert.Single(Directory.GetDirectories(f.MirrorRoot, "*.git"));
     }
 
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task F060v2_imports_real_later_checkpoint_bundle_without_legacy_currentness(
+        string format)
+    {
+        using var f = new Fixture();
+        var baseline = f.CreatePlan(format);
+        var (stage, durable) = LaterOfflineEvidence(baseline);
+
+        // This is an INTERNAL local-only adapter, not a registered F-061
+        // worker. Legacy F-060 and v2 feature switches stay independent.
+        var oldOnly = f.Materializer();
+        Assert.Equal("LaterCheckpointMirrorMaterializationDisabled",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                oldOnly.MaterializeLaterCheckpointAsync(stage, durable, default))).Code);
+        var local = new LocalGitSourceSnapshotMirrorMaterializer(
+            f.BundleRoot, f.MirrorRoot,
+            new LocalGitBundleArtifactStore(f.BundleRoot),
+            enabled: false, laterCheckpointEnabled: true);
+        Assert.Equal("SourceMirrorDisabled",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                local.MaterializeAsync(baseline, default))).Code);
+        Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+
+        var first = await local.MaterializeLaterCheckpointAsync(
+            stage, durable, default);
+        Assert.Equal(stage.SourceSnapshotId, first.SourceSnapshotId);
+        Assert.Equal(stage.PhysicalMirrorId, first.PhysicalMirrorId);
+        Assert.Equal(stage.SourceFullRefProofSha256, first.FullRefProofSha256);
+        Assert.Equal(stage.BundleSha256, first.BundleSha256);
+        Assert.Equal(format, first.GitObjectFormat);
+        Assert.True(first.ObjectCount >= 9);
+        Assert.False(first.DurableEvidencePersisted || first.CanMaterialize ||
+            first.CanPush || first.CanRetry || first.CanDispatch ||
+            first.MigrationComplete);
+        Assert.Equal(0, first.F061LeaseGeneration);
+        GitIncrementalLaterCheckpointMirrorOfflineAuditIntegrity.Verify(
+            first, stage, durable);
+        Assert.Single(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+        Assert.Equal(stage.SourceRefs, f.Refs(f.Physical(baseline)));
+        Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.tmp"));
+
+        // Multiple local callers may read/reverify the same immutable
+        // UUID.git but must not make a second physical import.
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ =>
+            local.MaterializeLaterCheckpointAsync(stage, durable, default)));
+        Assert.All(results, x =>
+        {
+            Assert.Equal(first.ObjectSetSha256, x.ObjectSetSha256);
+            Assert.Equal(first.PhysicalMirrorId, x.PhysicalMirrorId);
+            Assert.False(x.MigrationComplete);
+        });
+        Assert.Single(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+
+        // The #114 read-only inspector agrees with the new physical import.
+        var reader = new LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
+            f.BundleRoot, f.MirrorRoot, enabled: true);
+        var checkedMirror = await reader.AuditAsync(stage, durable, default);
+        Assert.Equal(first.ObjectSetSha256, checkedMirror.ObjectSetSha256);
+        Assert.Equal(first.ObjectCount, checkedMirror.ObjectCount);
+
+        // After promotion, refuse corrupted source bundle replay. Existing
+        // immutable mirror is never deleted, overwritten or silently healed.
+        await File.AppendAllTextAsync(Path.Combine(f.BundleRoot,
+            durable.BundleFileName), "changed");
+        Assert.Equal("LaterCheckpointMirrorBundleChanged",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                local.MaterializeLaterCheckpointAsync(stage, durable, default))).Code);
+        Assert.Single(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+    }
+
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task F060v2_import_refuses_wrong_stage_missing_graph_and_unsafe_root(
+        string format)
+    {
+        using var f = new Fixture();
+        var baseline = f.CreatePlan(format);
+        var (stage, durable) = LaterOfflineEvidence(baseline);
+        var local = new LocalGitSourceSnapshotMirrorMaterializer(
+            f.BundleRoot, f.MirrorRoot,
+            new LocalGitBundleArtifactStore(f.BundleRoot),
+            laterCheckpointEnabled: true);
+
+        Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                local.MaterializeLaterCheckpointAsync(stage with {
+                    SourceSnapshotId = stage.BaselineSnapshotId
+                }, durable, default))).Code);
+        Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                local.MaterializeLaterCheckpointAsync(stage with {
+                    F061LeaseGeneration = 1, CanPush = true
+                }, durable, default))).Code);
+        Assert.Equal("LaterCheckpointMirrorStagingInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                local.MaterializeLaterCheckpointAsync(stage, durable with {
+                    BundleSha256 = new string('0', 64)
+                }, default))).Code);
+        Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+
+        var linked = Path.Combine(f.Root, "symlinked-mirror-root");
+        Directory.CreateSymbolicLink(linked, f.MirrorRoot);
+        var unsafeRunner = new LocalGitSourceSnapshotMirrorMaterializer(
+            f.BundleRoot, linked, new LocalGitBundleArtifactStore(f.BundleRoot),
+            laterCheckpointEnabled: true);
+        Assert.Equal("SourceMirrorSymlinkBlocked",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                unsafeRunner.MaterializeLaterCheckpointAsync(
+                    stage, durable, default))).Code);
+
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            local.MaterializeLaterCheckpointAsync(stage, durable, cancel.Token));
+        Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+
+        // No ghost mirror on Git IO error: the v2 importer cannot promote
+        // files that do not match the immutable F-035v2 receipt.
+        var path = Path.Combine(f.BundleRoot, durable.BundleFileName);
+        File.Delete(path);
+        Assert.Equal("SourceMirrorBundleInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                local.MaterializeLaterCheckpointAsync(stage, durable, default))).Code);
+        Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.git"));
+    }
+
     // Real Git objects are taken from the fixture, while the historical
     // F-091/F-097b/F-038v2/F-035v2 domain test input is deliberately
     // synthetic. It is NOT a substitute for the PostgreSQL source lock.
