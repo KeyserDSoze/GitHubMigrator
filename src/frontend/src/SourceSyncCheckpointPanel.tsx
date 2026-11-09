@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCheck, Clock3, GitCommitHorizontal, LockKeyhole, RefreshCw, ShieldCheck } from 'lucide-react';
 import SourceCheckpointRefChangePreview from './SourceCheckpointRefChangePreview';
+import SourceCheckpointHumanReview from './SourceCheckpointHumanReview';
 import {
   api, type SourceSyncCheckpointPage,
   type SourceSyncCheckpointReceipt
@@ -86,6 +87,15 @@ function Checkpoint({ receipt, token, preparationId, planId }: {
       <SourceCheckpointRefChangePreview
         receipt={receipt} token={token}
         preparationId={preparationId} planId={planId} />}
+    {receipt.evidenceVersion === 2 && !receipt.proof.isBaselineSnapshot &&
+      <div className="checkpoint-human-reviews">
+        {receipt.proof.repositories.map(repo =>
+          <SourceCheckpointHumanReview
+            key={repo.sourceRepositoryId} receipt={receipt}
+            sourceRepositoryId={repo.sourceRepositoryId}
+            targetRepositoryName={repo.targetRepositoryName}
+            token={token} preparationId={preparationId} planId={planId} />)}
+      </div>}
   </article>;
 }
 

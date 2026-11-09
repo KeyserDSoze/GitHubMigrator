@@ -74,6 +74,27 @@ export type CheckpointTargetRefReviewPage = {
   migrationComplete: false;
 };
 
+// F-097c.4c.0c: safe projection of the independently verified later-epoch
+// candidate and immutable audit decision. All authority fields are false.
+export type CheckpointHumanReviewCandidate = {
+  preparationId: string; planId: string; checkpointId: string;
+  sourceSnapshotId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; evidenceSha256: string;
+  canObserveTarget: false; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+};
+export type CheckpointHumanReviewReceipt = {
+  id: string; evidenceVersion: 1;
+  preparationId: string; planId: string; checkpointId: string;
+  sourceSnapshotId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; candidateEvidenceSha256: string;
+  requestedBy: string; reviewedBy: string;
+  reviewedAtUtc: string; evidenceSha256: string;
+  decision: 'ApprovedForObservation' | 'Rejected';
+  canObserveTarget: false; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+};
+
 export type RepositorySyncSourceDelta = {
   sourceRepositoryId: string; targetRepositoryName: string;
   addedRefs: number; changedRefs: number; restoredRefs: number;
@@ -614,6 +635,18 @@ export const api = {
     call<CheckpointTargetRefReviewPage>(
       `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-ref-review/${encodeURIComponent(targetObservationId)}?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}&expectedTargetEvidenceSha256=${encodeURIComponent(expectedTargetEvidenceSha256)}&take=${take}` +
         (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  readCheckpointHumanReview: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      sourceRepositoryId: string) =>
+    call<CheckpointHumanReviewReceipt>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-human-review?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}`,
+      { headers: withToken(token) }),
+  previewCheckpointHumanReview: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      sourceRepositoryId: string) =>
+    call<CheckpointHumanReviewCandidate>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-human-review/candidate?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}`,
       { headers: withToken(token) }),
   captureSourceSyncCheckpoint: (token: string,
       preparationId: string, planId: string, snapshotId: string,

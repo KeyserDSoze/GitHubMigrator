@@ -4,6 +4,17 @@ import { initReactI18next } from 'react-i18next';
 const translations = {
   en: {
     translation: {
+      cpHumanReview: "Inspect independent checkpoint review",
+      cpHumanHide: "Hide checkpoint human review",
+      cpHumanIntro: "Read-only PostgreSQL verification. A human approval never authorizes a GitHub GET, push or dispatch.",
+      cpHumanLoading: "Verifying checkpoint review…",
+      cpHumanMissing: "No eligible checkpoint review recorded or source evidence is no longer current.",
+      cpHumanPreview: "Verified candidate awaiting separate human sign-off",
+      cpHumanApproved: "Independent approval recorded (observation still prohibited)",
+      cpHumanRejected: "Rejected: final for this checkpoint",
+      cpHumanEvidence: "Verified SHA-256",
+      cpHumanReviewedAt: "Reviewed at",
+      cpHumanFailed: "Unable to inspect checkpoint human review",
       cpDisabled: "Source checkpoint recording is not enabled for this environment. Existing source sync monitoring remains available.",
       cpTitle: "Durable source checkpoints",
       cpIntro: "Immutable snapshot-by-snapshot source evidence linked to the exact reviewed plan, saved in PostgreSQL. These checks are not a GitHub migration.",
@@ -513,6 +524,17 @@ const translations = {
   },
   it: {
     translation: {
+      cpHumanReview: "Esamina revisione umana checkpoint",
+      cpHumanHide: "Nascondi revisione umana checkpoint",
+      cpHumanIntro: "Verifica PostgreSQL di sola lettura. Una decisione umana non autorizza GET GitHub, push o dispatch.",
+      cpHumanLoading: "Verifica della revisione checkpoint…",
+      cpHumanMissing: "Non è stata registrata una revisione idonea, oppure la prova sorgente non è più attuale.",
+      cpHumanPreview: "Checkpoint verificato, in attesa di revisione umana indipendente",
+      cpHumanApproved: "Approvazione indipendente registrata (osservazione ancora vietata)",
+      cpHumanRejected: "Rifiutato: decisione definitiva per questo checkpoint",
+      cpHumanEvidence: "SHA-256 verificato",
+      cpHumanReviewedAt: "Data revisione",
+      cpHumanFailed: "Impossibile verificare la revisione umana checkpoint",
       cpDisabled: "La registrazione dei checkpoint sorgente non è abilitata in questo ambiente. Il monitoraggio dello staging resta disponibile.",
       cpTitle: "Checkpoint sorgente persistenti",
       cpIntro: "Prove immutabili, snapshot per snapshot, collegate al piano revisionato e salvate in PostgreSQL. Non attestano una migrazione GitHub.",

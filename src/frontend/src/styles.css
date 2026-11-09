@@ -386,3 +386,14 @@
 .source-cp-more{justify-self:center}
 @media(max-width:1000px){.source-cp-evidence{grid-template-columns:repeat(2,minmax(0,1fr))}.source-cp-repositories{grid-template-columns:1fr}}
 @media(max-width:650px){.source-cp-title,.source-cp-next,.source-cp-head{flex-direction:column;align-items:stretch}.source-cp-next .primary{width:100%}.source-cp-head{padding:14px}.source-cp-head>div{flex-wrap:wrap}.source-cp-evidence{padding:14px}.source-cp-repositories{padding:0 14px 14px}.source-cp-repositories>div{flex-wrap:wrap}}
+
+/* F-097c.4c.0c: read-only checkpoint human-review evidence panel. */
+.checkpoint-human-reviews{display:grid;gap:9px;padding:0 20px 16px}
+.checkpoint-human-review{display:grid;gap:9px;border:1px solid var(--border);background:var(--surface2);border-radius:10px;padding:12px 14px}
+.checkpoint-human-review>button{justify-self:start}
+.checkpoint-human-review p{margin:0;font-size:11px;color:var(--muted)}
+.checkpoint-human-review-summary{display:grid;gap:8px}
+.checkpoint-human-review-summary strong{font-size:12px}
+.checkpoint-human-review-summary small{font-size:11px;color:var(--muted)}
+.checkpoint-human-review-summary code{font-size:11px;overflow-wrap:anywhere}
+@media(max-width:650px){.checkpoint-human-reviews{padding:0 14px 14px}}

@@ -100,7 +100,7 @@ function attestedEpoch(index: number, forged = false) {
   };
 }
 
-function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' | 'badrefpage' | 'targetreview' | 'badtargetreview' = 'normal') {
+function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' | 'badrefpage' | 'targetreview' | 'badtargetreview' | 'humanhistory' | 'humancandidate' | 'humanrejected' | 'humanunsafe' = 'normal') {
   const requests: Array<{ path: string; method: string; body: any }> = [];
   let records = 0;
   void page.route('**/api/incremental-preparations/**', async (route: Route) => {
@@ -194,6 +194,35 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
         canDispatch: false, migrationComplete: false
       } });
     }
+    const reviewRoot = check + `/${last}/target-human-review`;
+    if (method === 'GET' &&
+        (path === reviewRoot || path === reviewRoot + '/candidate')) {
+      expect(new URL(request.url()).searchParams.get('sourceRepositoryId'))
+        .toBe('repo-1');
+      if (mode === 'humancandidate' && path === reviewRoot)
+        return route.fulfill({ status: 404,
+          json: { error: 'CheckpointHumanReviewNotFound' } });
+      const common = {
+        preparationId: prep, planId: plan, checkpointId: last,
+        sourceSnapshotId: next, sourceRepositoryId: 'repo-1',
+        targetRepositoryName: 'migration-one',
+        canObserveTarget: false, canPush: mode === 'humanunsafe',
+        canRetry: false, canDispatch: false, migrationComplete: false
+      };
+      if (path === reviewRoot + '/candidate') {
+        return route.fulfill({ json: { ...common,
+          evidenceSha256: sha('e') } });
+      }
+      return route.fulfill({ json: { ...common,
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        evidenceVersion: 1, candidateEvidenceSha256: sha('e'),
+        evidenceSha256: sha('f'),
+        requestedBy: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        reviewedBy: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        reviewedAtUtc: stamp, decision:
+          mode === 'humanrejected' ? 'Rejected' : 'ApprovedForObservation'
+      } });
+    }
     if (method === 'GET' && path === check && mode === 'disabled')
       return route.fulfill({ status: 409,
         json: { error: 'SourceSyncCheckpointDisabled' } });
@@ -201,7 +230,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
       return route.fulfill({ json: {
         preparationId: prep, planId: plan,
         items: Array.from({ length: records }, (_, i) =>
-          mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview'
+          mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || mode.startsWith('human')
             ? attestedEpoch(records - i - 1, mode === 'forged')
             : epoch(records - i - 1)),
         nextAfter: null,
@@ -226,7 +255,7 @@ function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 
         records === 0 ? null : old);
       expect(path).toBe(check + '/' + (records === 0 ? original : next));
       records++;
-      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview'
+      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || mode.startsWith('human')
         ? attestedEpoch(records - 1, mode === 'forged')
         : epoch(records - 1) });
     }
@@ -483,4 +512,67 @@ test('F-093 rejects a forged GitHub authority flag and renders no target compari
     /Presente nell.osservazione GitHub|Observed at GitHub/i)).toHaveCount(0);
   expect(service.requests().filter(x =>
     x.path.includes('/target-ref-review/'))).toHaveLength(1);
+});
+
+test('F-097c.4c.0c shows immutable independent review history using GET only', async ({ page }) => {
+  const service = mock(page, 'humanhistory');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await expect(page.getByText(
+    /Approvazione indipendente registrata|Independent approval recorded/i
+  )).toBeVisible();
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-human-review')).every(x =>
+      x.method === 'GET')).toBe(true);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+  expect(service.requests().some(x =>
+    /git-push|retry-push|dispatch|github-get/i.test(x.path))).toBe(false);
+});
+
+test('F-097c.4c.0c shows only a bounded candidate when no human review exists', async ({ page }) => {
+  const service = mock(page, 'humancandidate');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await expect(page.getByText(
+    /in attesa di revisione umana|awaiting separate human sign-off/i
+  )).toBeVisible();
+  expect(service.requests().filter(x =>
+    x.path.endsWith('/target-human-review/candidate'))).toHaveLength(1);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+});
+
+test('F-097c.4c.0c never displays forged review authority or invokes a provider', async ({ page }) => {
+  const service = mock(page, 'humanunsafe');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await expect(page.getByRole('alert').getByText(
+    /CheckpointHumanReviewUnsafeResponse/
+  )).toBeVisible();
+  await expect(page.getByText(
+    /Approvazione indipendente registrata|Independent approval recorded/i
+  )).toHaveCount(0);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+  expect(service.requests().some(x =>
+    /git-push|retry-push|dispatch|github-get/i.test(x.path))).toBe(false);
 });
