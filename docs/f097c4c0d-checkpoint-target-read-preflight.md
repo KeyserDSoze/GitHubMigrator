@@ -61,12 +61,57 @@ persisted as F-031 and does not restore historical F-029 currency.
   verify the non-authorizing witness only after #108 approval, reject
   alternate reviewers, stale digests, rejection and later revocation.
 
+## Phase 2: independently authorized fixed-host GitHub GET and F-031
+
+The next explicit opt-in `GitCheckpointTargetObservation:Enabled=true`
+is independent from `GitCheckpointTargetReadPreflight:Enabled=true`.
+The new `POST /api/incremental-preparations/{id}/operation-plans/{planId}/source-sync-checkpoints/{checkpointId}/target-ref-observations`
+requires the same `PasswordChanged` JWT and `superadmin` role.
+It accepts only the source repository ID and expected candidate/human
+decision SHA-256 values. **The body cannot select a GitHub URL, OID,
+credential, organization or reviewer.** The principal ID comes from JWT.
+The endpoint is rate-limited by the existing external-work limiter.
+
+When both feature switches and all current #106/#108 checks pass,
+the service resolves the destination's validated connection and
+encrypted server-owned credential, then invokes the existing
+fixed-host `GitHubRefObservationReader`. It can issue **only two GETs**
+to `https://api.github.com/repos/{organization}/{repo}/git/matching-refs/heads`
+and `.../tags` (no redirects); its transport rejects inaccessible,
+hidden, throttled, partial, oversized, invalid or mixed-format ref
+responses. The response must contain 1..128 canonical refs, whose Git
+object IDs all match the source's SHA1/SHA256 object format. No HEAD,
+POST, PATCH, PUT, DELETE or push adapter is injected into the service.
+
+After the provider GET, the service independently reruns the source
+and review preflight. It then acquires source FIRST and plan SECOND
+PostgreSQL advisory transaction locks and rechecks newest staging,
+checkpoint, reviewed mapping, active F-027, exact human review event,
+destination organization/provider/validation and expiry before
+atomically storing a NEW checkpoint-specific F-031 receipt and
+`ObservedReadOnly` audit event. The immutable evidence SHA-256 includes
+the human decision, candidate and preflight SHA-256, checkpoint ID,
+source snapshot, target ref hash, Git object format and observation time.
+Historical F-029/F-031 rows are untouched. Exact-scope idempotent
+replays return verified existing evidence without another provider GET;
+a changed target observation cannot overwrite an existing receipt.
+
+The additive `git_checkpoint_target_observations` and
+`git_checkpoint_target_observation_events` tables have SQL CHECK,
+UNIQUE, FK and UPDATE/DELETE-blocking triggers. The scoped GET endpoint
+verifies the stored full receipt digest, canonical Git ref hash and
+exactly one matching immutable event before returning a **redacted**
+summary. Neither receipt nor API response grants push, retry, dispatch,
+additional provider GET or migration-completed authority. The frontend
+provides only explicit GET-only saved-history inspection after a
+human-approved checkpoint; it never triggers the provider POST.
+
 ## Still open in #109
 
-The **separate actual provider GET authorization and network operation**
-must be built next: fixed-host GitHub Cloud GET-only access, verified
-server credentials, rate limits, complete/ref format validation,
-source-locked post-GET recheck, a brand-new immutable checkpoint-scoped
-F-031 receipt + audit event and verified historical readback. No legacy
-F-029/F-031 reuse. #105/#104/#103/#100/#96/#92 stay open. No push, retry,
-dispatch, migration success or authorization to write a target.
+Complete the two-epoch and provider failure/concurrency/restart/
+tamper test matrix and require green CI 4/4 before closing #109.
+The saved ref-name presence is not a proof of Git object ancestry or
+permission to write. Workpack F-032/F-038/F-035 integration still belongs
+to #104/#103, and physical mirror ancestry remains #100/#96/#92.
+Parent #105 stays open pending the integrated checkpoint-scoped workpack.
+No push, retry, dispatch or migration success is authorized.
