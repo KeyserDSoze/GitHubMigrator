@@ -158,6 +158,10 @@ builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointBundleLeaseStore
 builder.Services.AddSingleton(new GitIncrementalLaterCheckpointDurableBundleOptions(
     builder.Configuration.GetValue("GitIncrementalLaterCheckpointDurableBundle:Enabled", false)));
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointBundleHistory>();
+// #100: non-authorizing F-060v2 staging readback of genuine later F-035v2.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointMirrorStagingOptions(
+    builder.Configuration.GetValue("GitIncrementalLaterCheckpointMirrorStaging:Enabled", false)));
+builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight>();
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
