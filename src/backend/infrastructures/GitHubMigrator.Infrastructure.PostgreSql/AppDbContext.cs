@@ -29,6 +29,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<IdentityMappingDraftRecord> IdentityMappingDrafts => Set<IdentityMappingDraftRecord>();
     public DbSet<MigrationPlanDraftRecord> MigrationPlanDrafts => Set<MigrationPlanDraftRecord>();
     public DbSet<StagingAssetRecord> StagingAssets => Set<StagingAssetRecord>();
+    public DbSet<GitIncrementalAncestryLedgerRecord> GitIncrementalAncestryLedgers
+        => Set<GitIncrementalAncestryLedgerRecord>();
+    public DbSet<GitIncrementalAncestryLedgerEventRecord> GitIncrementalAncestryLedgerEvents
+        => Set<GitIncrementalAncestryLedgerEventRecord>();
     public DbSet<GitHubSourceSyncCheckpointRecord> GitHubSourceSyncCheckpoints
         => Set<GitHubSourceSyncCheckpointRecord>();
     public DbSet<GitHubSourceSyncCheckpointEventRecord> GitHubSourceSyncCheckpointEvents
@@ -250,6 +254,42 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
                 .HasDatabaseName("ix_staging_assets_changed");
             entity.HasIndex(x => new { x.SourceConnectionId, x.Missing })
                 .HasDatabaseName("ix_staging_assets_missing");
+        });
+        // F-095 offline Git ancestry audit evidence and Recorded event.
+        builder.Entity<GitIncrementalAncestryLedgerRecord>(entity =>
+        {
+            entity.ToTable("git_incremental_ancestry_ledgers");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PreparationId).HasColumnName("preparation_id");
+            entity.Property(x => x.PlanId).HasColumnName("plan_id");
+            entity.Property(x => x.CheckpointId).HasColumnName("checkpoint_id");
+            entity.Property(x => x.TargetObservationId).HasColumnName("target_observation_id");
+            entity.Property(x => x.SourceRepositoryId).HasColumnName("source_repository_id").HasMaxLength(256);
+            entity.Property(x => x.TargetRepositoryName).HasColumnName("target_repository_name").HasMaxLength(100);
+            entity.Property(x => x.OperationManifestSha256).HasColumnName("operation_manifest_sha256").HasMaxLength(64);
+            entity.Property(x => x.SourceEvidenceSha256).HasColumnName("source_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.SourceCheckpointAttestationSha256).HasColumnName("source_checkpoint_attestation_sha256").HasMaxLength(64);
+            entity.Property(x => x.TargetEvidenceSha256).HasColumnName("target_evidence_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReceiptSha256).HasColumnName("receipt_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReceiptJson).HasColumnName("receipt_json");
+            entity.Property(x => x.RecordedBy).HasColumnName("recorded_by");
+            entity.Property(x => x.RecordedAtUtc).HasColumnName("recorded_at_utc");
+            entity.Property(x => x.CanPush).HasColumnName("can_push");
+            entity.Property(x => x.CanRetry).HasColumnName("can_retry");
+            entity.Property(x => x.CanDispatch).HasColumnName("can_dispatch");
+            entity.Property(x => x.MigrationComplete).HasColumnName("migration_complete");
+        });
+        builder.Entity<GitIncrementalAncestryLedgerEventRecord>(entity =>
+        {
+            entity.ToTable("git_incremental_ancestry_ledger_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.LedgerId).HasColumnName("ledger_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(16);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.ReceiptSha256).HasColumnName("receipt_sha256").HasMaxLength(64);
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
         });
         // F-090 source-only append-only checkpoint chain; DDL installed by
         // GitHubSourceSyncCheckpointSchema after EF's base tables.
