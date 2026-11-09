@@ -20,6 +20,9 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             .BuildServiceProvider();
         await GitHubSourceSyncCheckpointSchema.InitializeAsync(services);
         await GitHubSourceCheckpointGitRefLedgerSchema.InitializeAsync(services);
+        // The negative assertion below proves this preflight never writes
+        // a durable F-095 receipt, even on a database without other tests.
+        await GitIncrementalAncestryLedgerSchema.InitializeAsync(services);
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
