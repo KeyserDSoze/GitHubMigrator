@@ -293,7 +293,7 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
                 Assert.Throws<GitSourceSnapshotMirrorException>(() =>
                     GitIncrementalLaterCheckpointMirrorStagingIntegrity.Verify(
                         altered, plan, selection, x.Source,
-                        prepared, receipt)).Code);
+                        prepared, receipt, pack)).Code);
 
         Assert.Equal("LaterCheckpointMirrorStagingInvalid",
             Assert.Throws<GitSourceSnapshotMirrorException>(() =>
