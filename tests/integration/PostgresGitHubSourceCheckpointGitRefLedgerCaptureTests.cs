@@ -1555,6 +1555,11 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     WorkerId = Guid.NewGuid()
                                 }, TimeSpan.FromSeconds(90),
                                 default))).Code);
+                    Assert.Equal("LaterCheckpointMirrorLeaseNotExtended",
+                        (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                            () => leaseStore.RenewAsync(
+                                acquiredLease, TimeSpan.FromSeconds(30),
+                                default))).Code);
                     var renewed = await leaseStore.RenewAsync(
                         acquiredLease, TimeSpan.FromSeconds(90), default);
                     Assert.Equal(acquiredLease.Generation, renewed.Generation);
