@@ -248,7 +248,7 @@ fresh local Git fsck, including an actual two-epoch PostgreSQL + Git
 integration test. Never re-use the baseline F-035 storage foreign key
 to point to an F-038v2 workpack.
 
-## #112 additive F-035v2 PostgreSQL storage *without a writer* (2026-11-09)
+## #112 additive F-035v2 PostgreSQL storage (2026-11-09)
 
 New separate `git_later_checkpoint_bundle_evidence` and
 `git_later_checkpoint_bundle_events` tables prepare future append-only
@@ -265,10 +265,64 @@ valid lower-case SHA-256 fields and immutable UPDATE/DELETE triggers.
 Entity Framework's `EnsureCreated` mappings include these foreign keys;
 `InitializeAsync` creates and backfills CHECKs/triggers in existing DBs.
 
-This migration **does not make the current rehearsal durable**:
-no code currently INSERTs these rows. In particular, a successful local
-bundle export alone does **not** assert that its file exists unchanged
-or that it is eligible for F-060/F-061. The missing next step is a
-source-locked, independently revalidated **lease + fenced INSERT writer**
-with exactly one append-only event, true Git fsck/re-hash and crash/restart
-quarantine. No API, worker or remote GitHub operation is enabled.
+The schema was introduced **before** the #113 writer and did not by itself
+make a file durable. The implementation and audit boundary added subsequently
+are described below. No bundle or receipt is eligible for F-060/F-061
+on the strength of this metadata alone; no public route, worker or GitHub
+destination operation is enabled.
+
+
+## #113 local source-fenced durable F-035v2 writer and crash recovery
+
+The F-035v2 **internal, default-OFF** durable journal now has a separate
+feature `GitIncrementalLaterCheckpointDurableBundle:Enabled=false`, in
+addition to independent read, local Git and lease switches. A normal
+installation creates the schema but **does not run** the writer. There is no
+HTTP operation, background job, provider transport, or permission to push
+to GitHub.
+
+Its protected source-only sequence is:
+
+1. Independently re-verify the original immutable F-091/F-097b Git
+   ref/object proof, approved human F-031 checkpoint target observation,
+   F-032v2 canonical reconciliation and permanently `Blocked/WriteBlocked`
+   F-038v2. Under PostgreSQL source-first, plan-second advisory locks,
+   persist the time-limited, non-authorizing `Held` lease with
+   UUID token, monotonically increasing generation and actor. Never
+   hold a transaction lock across a Git subprocess.
+2. Verify the trusted local bare mirror's **complete** source refs/OIDs,
+   strict `git fsck`, and actual binary `UUID.bundle` via a sandboxed
+   Git process. Re-check current approval and snapshot **after** export.
+3. Re-run the full historical/current proof preflight and trusted Git
+   inspection **outside** the final SQL transaction. Inside a new short
+   transaction, reacquire source/plan locks, re-check mutable source,
+   target, reviewer and connection state, and compare the exact lease
+   token/generation/actor/expiry. Independently **rehash the real file
+   bytes** before inserting precisely one immutable F-035v2 receipt row,
+   one F-035v2 event and one lease `Recorded` event atomically.
+4. Historical replay independently recomputes the sealed F-035v2 digest,
+   verifies one immutable event, exact F-038v2 and recorded lease linkage
+   and rehashes the file. This remains historical-only after F-027
+   revocation, with every execution flag false.
+
+**Crash and expiry handling:** an aborted export now attempts to atomically
+mark its lease `RecoveryRequired` rather than silently release it. The
+next claim for an expired `Held` lease also commits
+`RecoveryRequired` with a unique append-only `Quarantined` event.
+The orphan file is **logically quarantined by the database** and not
+considered durable evidence; it is not automatically deleted or
+silently adopted. An explicit recovery requires the original approved
+independent F-031 reviewer, different from the stale worker, and renewed
+proof of the current source/target/human gate. The recovery operation
+increments the generation, changes the token and appends a
+`Recovered` audit event; the source actor must then acquire a fresh
+lease, and any original token is permanently fenced.
+
+The PostgreSQL + real Linux Git integration exercises two source epochs
+for SHA-1 and SHA-256; stored F-035v2 receipt and append-only events;
+idempotent history after reviewer revocation; altered/missing binary
+refusal; quarantined and expired workers; independent reviewer recovery;
+and parallel competing PostgreSQL leases. **Issue #113 remains open
+until the newest HEAD is verified 4/4 and any additional crash/fencing
+acceptance gaps are resolved.** No F-061/F-095 import/ancestry or remote
+GitHub writes are implied.
