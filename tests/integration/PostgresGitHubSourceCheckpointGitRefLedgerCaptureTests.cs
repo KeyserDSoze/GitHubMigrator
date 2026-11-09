@@ -932,6 +932,82 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         pack.CanRetry || pack.CanDispatch ||
                         pack.MigrationComplete);
 
+                    // #112: the new F-035v2 table is isolated from
+                    // legacy F-035, references a v2 F-038 workpack and
+                    // independently rejects executable evidence even
+                    // when inserted via direct SQL without any API.
+                    Assert.Empty(await verifiedDb.GitLaterCheckpointBundleEvidence
+                        .AsNoTracking().Where(x => x.WorkpackId ==
+                            first.WorkpackId).ToArrayAsync());
+                    var v2ForeignKeys = await verifiedDb.Database
+                        .SqlQueryRaw<long>("""
+                            SELECT count(*)::bigint AS "Value"
+                            FROM pg_constraint WHERE contype = 'f'
+                            AND conrelid =
+                                'git_later_checkpoint_bundle_evidence'::regclass
+                            AND confrelid =
+                                'git_later_checkpoint_workpacks'::regclass
+                            """).SingleAsync();
+                    var legacyForeignKeys = await verifiedDb.Database
+                        .SqlQueryRaw<long>("""
+                            SELECT count(*)::bigint AS "Value"
+                            FROM pg_constraint WHERE contype = 'f'
+                            AND conrelid =
+                                'git_later_checkpoint_bundle_evidence'::regclass
+                            AND confrelid =
+                                'git_transfer_workpacks'::regclass
+                            """).SingleAsync();
+                    Assert.Equal(1L, v2ForeignKeys);
+                    Assert.Equal(0L, legacyForeignKeys);
+                    var f035Triggers = await verifiedDb.Database
+                        .SqlQueryRaw<long>("""
+                            SELECT count(*)::bigint AS "Value" FROM pg_trigger
+                            WHERE tgrelid =
+                                'git_later_checkpoint_bundle_evidence'::regclass
+                                AND tgname='trg_later_checkpoint_f035_immutable'
+                                AND NOT tgisinternal
+                            """).SingleAsync();
+                    Assert.Equal(1L, f035Triggers);
+                    var timestamp = DateTimeOffset.UtcNow;
+                    var invalidF035 = await Assert.ThrowsAsync<
+                        Npgsql.PostgresException>(() =>
+                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                            INSERT INTO git_later_checkpoint_bundle_evidence (
+                                workpack_id, preparation_id, plan_id,
+                                checkpoint_id, source_snapshot_id,
+                                target_observation_id, source_repository_id,
+                                workpack_evidence_sha256, bundle_plan_sha256,
+                                full_ref_proof_sha256, source_evidence_sha256,
+                                source_manifest_root_sha256,
+                                target_receipt_sha256, reconciliation_sha256,
+                                bundle_file_name, bundle_sha256,
+                                bundle_bytes, ref_count, acquired_at_utc,
+                                recorded_at_utc, recorded_by, evidence_sha256,
+                                ready_for_execution, can_push, can_retry,
+                                can_dispatch, migration_complete)
+                            VALUES (
+                                {first.WorkpackId}, {run.Id}, {plan.Id},
+                                {later.Id}, {fullRefs.SnapshotId},
+                                {observationId}, {"repo-1"},
+                                {first.EvidenceSha256},
+                                {bundlePreparation.EvidenceSha256},
+                                {fullRefs.EvidenceSha256},
+                                {fullRefs.SourceEvidenceSha256},
+                                {fullRefs.SourceManifestRootSha256},
+                                {targetReceipt.EvidenceSha256},
+                                {first.ReconciliationSha256},
+                                {first.WorkpackId.ToString("N") + ".bundle"},
+                                {new string('a', 64)}, {128L}, {2},
+                                {timestamp}, {timestamp},
+                                {candidate.RequestedBy}, {new string('b', 64)},
+                                {false}, {true}, {false}, {false}, {false})
+                            """));
+                    Assert.Equal(Npgsql.PostgresErrorCodes.CheckViolation,
+                        invalidF035.SqlState);
+                    Assert.Empty(await verifiedDb.GitLaterCheckpointBundleEvidence
+                        .AsNoTracking().Where(x => x.WorkpackId ==
+                            first.WorkpackId).ToArrayAsync());
+
                     // Both SQL layers independently forbid mutation, even
                     // with no API/worker involved or an existing EF table.
                     var update = await Assert.ThrowsAsync<Npgsql.PostgresException>(
