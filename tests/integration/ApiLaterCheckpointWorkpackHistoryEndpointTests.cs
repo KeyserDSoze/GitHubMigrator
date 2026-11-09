@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using GitHubMigrator.Business;
+using GitHubMigrator.Infrastructure.PostgreSql;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace GitHubMigrator.Integration.Tests;
@@ -44,6 +47,21 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             url, reviewer))
             Assert.Equal(HttpStatusCode.MethodNotAllowed, post.StatusCode);
         Assert.Equal(calls, harness.Calls.Count);
+    }
+
+    [Fact]
+    public async Task F035v2_source_bundle_read_is_independently_disabled_by_default()
+    {
+        var outboundBefore = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var reader = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointBundleReadPreflight>();
+        var denied = await Assert.ThrowsAsync<GitSourceBundleException>(() =>
+            reader.ReadAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                "repo-1", new string('a', 64), default));
+        Assert.Equal("LaterCheckpointBundleReadDisabled", denied.Code);
+        Assert.Equal(outboundBefore, harness.Calls.Count);
     }
 
     [Fact]
