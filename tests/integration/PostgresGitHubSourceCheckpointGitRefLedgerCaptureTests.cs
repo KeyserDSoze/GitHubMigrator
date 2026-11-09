@@ -1553,7 +1553,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         // source-fenced acquisition, periodic SQL heartbeat,
                         // exact UUID.bundle -> UUID.git import, double
                         // physical fsck and immutable F-061v2 Verified.
-                        var coordinator = new
+                        var mirrorWorkerRunner = new
                             GitIncrementalLaterCheckpointMirrorImportWorker(
                                 api.Host.Services.GetRequiredService<
                                     IServiceScopeFactory>(),
@@ -1565,7 +1565,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         .GetRequiredService<
                                             IGitIncrementalLaterCheckpointMirrorImporter>()));
                         var activeWorker = Guid.NewGuid();
-                        var actual = await coordinator.RunAsync(
+                        var actual = await mirrorWorkerRunner.RunAsync(
                             run.Id, plan.Id, later.Id, observationId,
                             first.WorkpackId, "repo-1",
                             targetReceipt.EvidenceSha256,
@@ -1596,22 +1596,22 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     AND NOT migration_complete
                                 """).SingleAsync();
                         Assert.Equal(1L, recorded);
-                        var events = await verifiedDb.Database
+                        var mirrorLeaseEvents = await verifiedDb.Database
                             .SqlQuery<string>($"""
                                 SELECT type AS "Value"
                                 FROM git_later_checkpoint_mirror_lease_events
                                 WHERE mirror_id = {actual.PhysicalMirrorId}
                                 """).ToArrayAsync();
-                        Assert.Contains("Acquired", events);
+                        Assert.Contains("Acquired", mirrorLeaseEvents);
                         // The three-second delayed *real* Git import is
                         // longer than heartbeat interval, so repeated SQL
                         // Renewed events prove the source-bound pulse ran
                         // WHILE physical Git work was pending, not just
                         // the one final renewal after the import finished.
-                        Assert.True(events.Count(x => x == "Renewed") >= 2);
-                        Assert.Equal(1, events.Count(x => x == "Verified"));
-                        Assert.DoesNotContain("Quarantined", events);
-                        var replay = await Assert.ThrowsAsync<
+                        Assert.True(mirrorLeaseEvents.Count(x => x == "Renewed") >= 2);
+                        Assert.Equal(1, mirrorLeaseEvents.Count(x => x == "Verified"));
+                        Assert.DoesNotContain("Quarantined", mirrorLeaseEvents);
+                        var secondWorkerDenied = await Assert.ThrowsAsync<
                             GitSourceSnapshotMirrorException>(() =>
                             coordinator.RunAsync(run.Id, plan.Id, later.Id,
                                 observationId, first.WorkpackId, "repo-1",
@@ -1619,7 +1619,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 candidate.RequestedBy, Guid.NewGuid(),
                                 default));
                         Assert.Equal("LaterCheckpointMirrorLeaseAlreadyVerified",
-                            replay.Code);
+                            secondWorkerDenied.Code);
                         Assert.Empty(await verifiedDb.GitSourceMirrorLifecycles
                             .AsNoTracking().Where(x =>
                                 x.MirrorId == actual.PhysicalMirrorId)
