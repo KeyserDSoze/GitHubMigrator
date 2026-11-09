@@ -176,6 +176,21 @@ builder.Services.AddSingleton(new GitIncrementalLaterCheckpointMirrorLeaseOption
         "GitIncrementalLaterCheckpointMirrorLease:Enabled", false)));
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>();
+// #119 separately default-OFF F-061v2 Verified journal. Physical bare
+// Git audit is bound ONLY to server-selected trusted local roots.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointMirrorVerifiedOptions(
+    builder.Configuration.GetValue(
+        "GitIncrementalLaterCheckpointMirrorVerified:Enabled", false)));
+builder.Services.AddScoped<IGitIncrementalLaterCheckpointMirrorPhysicalAuditor>(sp =>
+    new GitHubMigrator.Infrastructure.GitObjects.LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
+        builder.Configuration["GitSourceBundles:BundleRoot"] ?? "",
+        builder.Configuration[
+            "GitIncrementalLaterCheckpointMirrorVerified:MirrorRoot"] ?? "",
+        enabled: builder.Configuration.GetValue(
+            "GitIncrementalLaterCheckpointMirrorVerified:PhysicalAuditEnabled", false),
+        clock: sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorVerifiedJournal>();
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
@@ -774,6 +789,8 @@ await GitIncrementalLaterCheckpointBundleEvidenceSchema.InitializeAsync(app.Serv
 await GitIncrementalLaterCheckpointBundleLeaseSchema.InitializeAsync(app.Services);
 // #118 installs constraint-only F-061v2 tables; does not enable workers.
 await GitIncrementalLaterCheckpointMirrorLeaseSchema.InitializeAsync(app.Services);
+// #119 installs only write-blocked physical Verified evidence tables.
+await GitIncrementalLaterCheckpointMirrorVerifiedSchema.InitializeAsync(app.Services);
 await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
