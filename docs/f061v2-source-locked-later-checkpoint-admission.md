@@ -230,3 +230,67 @@ to exercise the new Verified writer. An explicit heartbeat across
 physical import, operator-reviewed quarantine recovery, and F-095v3
 physically bound ancestry are separate remaining work under #115
 and #96. No remote GitHub destination operation was added.
+
+
+## #120: explicitly invoked local import and lease heartbeat worker
+
+`GitIncrementalLaterCheckpointMirrorImportWorker` composes the
+source-first PostgreSQL lease (#118), the hardened local-only F-060v2
+bundle importer (#116), and the physically re-audited immutable
+F-061v2 `Verified` journal (#119). Its registration is separate from
+the legacy F-029 source mirror and is **OFF by default**:
+`GitIncrementalLaterCheckpointMirrorImportWorker:Enabled=false`.
+Actual local import requires a SECOND explicit gate,
+`GitIncrementalLaterCheckpointMirrorImportWorker:LocalImportEnabled=false`,
+in addition to all the earlier F-091/F-097b/F-031/F-035v2,
+admission, lease, Verified and trusted physical auditor switches.
+
+No HTTP route or hosted background service invokes the worker. An
+internal caller must supply the exact server-known checkpoint,
+workpack, source repository, immutable F-031 receipt digest, original
+F-035v2 actor and worker ID. No path, Git ref/OID, remote host or
+bundle contents may be provided by the caller.
+
+After the live source-locked `ClaimAsync`, the coordinator starts a
+single periodic renewal loop in **new DI/DbContext scopes** (never on
+the importer thread's context), then independently reconstructs the
+source-only stage, retrieves the original real UUID.bundle F-035v2
+provenance and invokes the hardened materializer. The heartbeat uses
+the worker's exact generation, opaque token, previous expiry and
+PostgreSQL clock, up to 3 minutes per lease and 2 hours overall. Its
+interval is configuration-bounded to below one-third the lease
+duration. On a lost renewal, the same linked cancellation token
+interrupts local filesystem/Git work; no `Verified` transition is
+permitted.
+
+On successful physical import, the worker stops and **joins** its
+heartbeat before obtaining one final source-locked renewal of the
+last persisted handle. The separate Verified journal then rechecks
+current live source and reviewed target, actual F-035v2 bytes and
+the already promoted UUID.git with two full Git fsck/ref/OID/closure
+passes outside SQL locks. The final F-061v2 `Verified` row + event
+is committed only while the same generation/token/worker/expiry
+remains held. If any part fails, a short source-first, exact-owner
+quarantine attempt marks `RecoveryRequired`; the mirror and bundle
+are **never** deleted, adopted or overwritten.
+
+These guarantees are fail-closed: slow final physical verification
+may exhaust the last 3-minute lease, in which case the journal must
+refuse to write `Verified` and require quarantine/recovery. A later
+optimization can add a DB-clock heartbeat within the final re-audit
+phase with a distinct freeze handshake, but must not permit a race
+between heartbeat and final CAS.
+
+Real PostgreSQL17 two-epoch SHA-1/SHA-256 integration tests invoke
+a delayed **real** local importer, asserting multiple immutable
+`Renewed` audit events followed by exactly one `Verified` event,
+no `Quarantined` event, exact physical refs/object proof, and no
+legacy F-061 or provider write. Unit/API tests keep the worker OFF
+by default. The import worker remains unrelated to F-095v3 source
+ancestry authority and GitHub destination migration.
+
+**Open safety work:** explicit operator-reviewed recovery of
+`RecoveryRequired` orphans; additional cancellation/DB-failure/
+deadline tests; cold-process restarts; load/performance bounds on
+repeated F-035v2 SHA rehash; complete CI. Nothing in this worker
+enables GitHub pushes, dispatch, retries or migration completion.
