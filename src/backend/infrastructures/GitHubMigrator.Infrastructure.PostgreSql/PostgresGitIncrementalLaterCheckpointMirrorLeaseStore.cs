@@ -159,6 +159,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
             now >= row.AcquiredAtUtc.Add(MaximumLifetime))
             throw Refused("LaterCheckpointMirrorLeaseExpired");
         var expires = now.Add(duration);
+        if (expires <= lease.ExpiresAtUtc)
+            throw Refused("LaterCheckpointMirrorLeaseNotExtended");
         if (expires > row.AcquiredAtUtc.Add(MaximumLifetime))
             throw Refused("LaterCheckpointMirrorLeaseLifetimeExceeded");
 
@@ -175,6 +177,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
                 AND staging_evidence_sha256 = {lease.StagingEvidenceSha256}
                 AND lease_until_utc = {lease.ExpiresAtUtc}
                 AND lease_until_utc > {now}
+                AND lease_until_utc < {expires}
                 AND NOT can_materialize AND NOT can_push
                 AND NOT can_retry AND NOT can_dispatch
                 AND NOT migration_complete
