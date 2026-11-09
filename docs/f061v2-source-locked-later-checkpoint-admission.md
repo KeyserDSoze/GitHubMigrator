@@ -76,3 +76,39 @@ lease/write flags. The tests do not exercise a final F-061 claim because
 Until completed, keep #117 (if CI/tests remain incomplete), #115,
 #100, #96 and #92 open. No destination GitHub push, dispatch, retry
 or migration success may be inferred from this step.
+
+
+## #118: additive PostgreSQL F-061v2 lease and audit *schema* (no writer)
+
+`GitIncrementalLaterCheckpointMirrorLeaseSchema` installs independent
+`git_later_checkpoint_mirror_leases` and
+`git_later_checkpoint_mirror_lease_events` tables after the F-035v2
+bundle evidence/lease schemas. These are deliberately **not** the
+legacy F-029/F-061 tables. The new workpack FK references exactly the
+sealed F-035v2 evidence's workpack, while other FKs bind plan,
+preparation, F-091 checkpoint/snapshot, source connection and reviewed
+checkpoint F-031 observation. The row stores the exact stage SHA-256,
+F-097b source proof and ref-set digests, F-038v2/F-035v2 proof and
+binary digest, target receipt, physical mirror UUID, worker, actor,
+lease token, generation, bounded lease timestamps and local proof
+fields.
+
+Database checks require homogeneous source-bound SHA-256 digests,
+positive generation, nonzero IDs, constrained
+`Held/RecoveryRequired/Verified` states, bounded physical proof counts
+and false materialization/push/retry/dispatch/completion flags.
+The scope is immutable even across lease transitions. A terminal row
+cannot be silently reclaimed; event rows reject UPDATE and DELETE.
+The schema does **not** claim that a lease is durably acquired: no
+claim/renew/complete/recover writer is registered, and an internal
+SQL row inserted by integration tests is not a runtime admission.
+
+Tests exercise the exact F-035v2 FK (not legacy F-061), PostgreSQL
+checks and append-only triggers, and a manually inserted **test-only**
+lease bound to a real two-epoch F-091/F-097b/F-035v2 SHA-1/SHA-256
+scenario. The production writer must still acquire its own
+source-first transaction, re-read the latest full source and approval
+evidence, use database clock/generation fencing and never run Git
+while holding SQL locks. Immutable `Verified` commits and physical
+quarantine remain **not implemented**. Keep #118/#115/#100 open until
+those requirements and full CI are demonstrated.
