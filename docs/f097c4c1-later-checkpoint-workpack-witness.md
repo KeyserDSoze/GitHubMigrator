@@ -178,3 +178,32 @@ human gate before any actual local Git export, then verify source mirror
 refs/OIDs with fsck and persist bundle SHA/bytes and lease fencing.
 This future physical acquisition/replay is **still open** under #112/#103,
 as are F-061 and F-095 under #100/#96. See [issue #112](https://github.com/KeyserDSoze/GitHubMigrator/issues/112).
+
+## #112 internal PostgreSQL F-035v2 live read gate (2026-11-09)
+
+`PostgresGitIncrementalLaterCheckpointBundleReadPreflight` is now a distinct
+default-**OFF** internal reader (`GitIncrementalLaterCheckpointBundleRead:Enabled=false`).
+The caller supplies **only persisted identifiers** (preparation, plan,
+F-091 checkpoint, F-031 observation, F-038v2 workpack, repository source ID
+and full expected F-031 receipt digest). It first requires the verified
+F-032v2/F-038v2 historical store/readback, then independently rechecks the
+**current** F-091/F-097b source chain, latest snapshot, reviewer approval,
+F-031 target observation and destination validation via the existing
+source-locked v2 audit gate. It reloads and compares the workpack receipt,
+F-032v2 SHA, source manifest and exact original OIDs, and produces the
+domain F-035v2 preparation only when historical **and** live gates agree.
+
+This is not a capability, not an exposed HTTP operation, and not a physical
+Git bundle. It deliberately includes `CanAcquireBundle=false` and all
+write flags false. The existing local bare-mirror acquirer is NOT invoked.
+A future **physical** F-035v2 writer still needs its own source-first lock
+and lease fencing across staging, local mirror fsck/object closure, canonical
+ref comparison, restricted `UUID.bundle` path, file SHA-256 and byte length
+persistence, fault recovery and idempotent replay. A prior historical receipt
+cannot authorize this after reviewer revocation or source supersession.
+
+SHA-1/SHA-256 two-epoch PostgreSQL tests check successful read-only
+preparation, wrong F-031 SHA/scope and F-027 revocation. #112 and #103
+remain open for the physical source-only acquisition. The closed #111
+history readback remains safe and available as *history* even when
+the new current F-035v2 gate rejects a bundle.
