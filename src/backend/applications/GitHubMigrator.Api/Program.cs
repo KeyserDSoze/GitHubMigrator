@@ -134,6 +134,10 @@ builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointAuditPreflight>(
 builder.Services.AddSingleton(new GitIncrementalLaterCheckpointWorkpackOptions(
     builder.Configuration.GetValue("GitIncrementalLaterCheckpointWorkpack:Enabled", false)));
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointWorkpackJournal>();
+// #111 is an entirely separate default-OFF GET-only historical reader.
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointHistoryOptions(
+    builder.Configuration.GetValue("GitIncrementalLaterCheckpointHistory:Enabled", false)));
+builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointWorkpackHistory>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
@@ -818,6 +822,7 @@ app.MapGitHubSourceSyncCheckpointEndpoints();
 app.MapGitCheckpointTargetHumanReviewEndpoints();
 app.MapGitCheckpointTargetReadPreflightEndpoints();
 app.MapGitCheckpointTargetObservationEndpoints();
+app.MapGitIncrementalLaterCheckpointWorkpackHistoryEndpoints();
 app.MapGitSandboxDispatchEndpoints();
 app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
