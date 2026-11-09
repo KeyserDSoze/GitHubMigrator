@@ -441,6 +441,11 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         f.Git("--git-dir=" + mirror, "prune-packed");
         var pack = Assert.Single(Directory.GetFiles(
             Path.Combine(mirror, "objects", "pack"), "*.pack"));
+        // Git writes packed objects read-only (0444). The corruption
+        // fixture must explicitly enable writing on POSIX runners;
+        // production never modifies an existing promoted pack.
+        File.SetUnixFileMode(pack,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite);
         await File.WriteAllBytesAsync(pack, [1, 2, 3, 4, 5]);
 
         Assert.Equal("SourceMirrorGitClosureInvalid",
