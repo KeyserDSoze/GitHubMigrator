@@ -157,6 +157,7 @@ builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointBundleLeaseStore
 // No route, worker, import admission or destination GitHub authority.
 builder.Services.AddSingleton(new GitIncrementalLaterCheckpointDurableBundleOptions(
     builder.Configuration.GetValue("GitIncrementalLaterCheckpointDurableBundle:Enabled", false)));
+builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointBundleHistory>();
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointDurableBundleJournal>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));

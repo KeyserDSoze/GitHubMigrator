@@ -10,6 +10,7 @@ public sealed record GitIncrementalLaterCheckpointDurableBundleOptions(bool Enab
 public sealed class PostgresGitIncrementalLaterCheckpointDurableBundleJournal(
     GitIncrementalLaterCheckpointDurableBundleOptions options,
     PostgresGitIncrementalLaterCheckpointBundleLeaseStore leaseStore,
+    PostgresGitIncrementalLaterCheckpointBundleHistory history,
     GitIncrementalLaterCheckpointLocalBundleAcquisition local,
     IGitSourceBundleArtifactVerifier fileVerifier)
 {
@@ -21,6 +22,15 @@ public sealed class PostgresGitIncrementalLaterCheckpointDurableBundleJournal(
         if (!options.Enabled)
             throw new GitSourceBundleException(
                 "LaterCheckpointDurableBundleDisabled");
+        // Restart/idempotence checks the exact, immutable stored receipt
+        // and on-disk bytes BEFORE requesting a new lease. This historical
+        // replay never asserts current approval or re-runs Git.
+        var previouslyRecorded = await history.ReadAsync(preparationId,
+            planId, checkpointId, targetObservationId, workpackId,
+            sourceRepositoryId, expectedTargetReceiptSha256, actorId, ct);
+        if (previouslyRecorded is not null)
+            return previouslyRecorded;
+
         var lease = await leaseStore.ClaimAsync(preparationId, planId,
             checkpointId, targetObservationId, workpackId, sourceRepositoryId,
             expectedTargetReceiptSha256, actorId,
