@@ -311,7 +311,15 @@ next claim for an expired `Held` lease also commits
 `RecoveryRequired` with a unique append-only `Quarantined` event.
 The orphan file is **logically quarantined by the database** and not
 considered durable evidence; it is not automatically deleted or
-silently adopted. An explicit recovery requires the original approved
+silently adopted. When the independently reviewed recovery is authorized,
+the trusted local store now also atomically **moves** an existing
+`UUID.bundle` to `UUID.<random>.quarantine` on the SAME volume, under
+its cross-process file lock and the short source-first recovery transaction.
+No bytes are deleted or overwritten; failure leaves the DB lease
+quarantined and cannot activate a new one. No git subprocess runs under
+that transaction. A subsequent fresh claim must regenerate and verify
+the canonical `UUID.bundle`, never use the quarantined file.
+An explicit recovery requires the original approved
 independent F-031 reviewer, different from the stale worker, and renewed
 proof of the current source/target/human gate. The recovery operation
 increments the generation, changes the token and appends a
@@ -326,3 +334,28 @@ and parallel competing PostgreSQL leases. **Issue #113 remains open
 until the newest HEAD is verified 4/4 and any additional crash/fencing
 acceptance gaps are resolved.** No F-061/F-095 import/ancestry or remote
 GitHub writes are implied.
+
+
+### F-035v2 physical orphan quarantine follow-up
+
+`LocalGitBundleArtifactStore.QuarantineOrphanAsync` accepts **only** an
+internal workpack UUID, never an arbitrary filesystem path. It refuses
+symlink or unexpected directory entries, uses the existing global
+local-volume write lock and atomically renames an uncommitted
+`UUID.bundle` to `UUID.<random>.quarantine`. The bytes remain
+on disk, continue counting against the storage quota, and cannot
+satisfy historical replay or the normal acquirer's canonical filename.
+For an already absent file it is idempotent and makes no changes.
+The only production call is the independently reviewer-verified
+`RecoverAsync` path, inside short source-first PostgreSQL locks,
+**before** moving the lease to `Released`. A failed SQL commit after
+file renaming remains safe: the file stays quarantined and the lease
+cannot silently grant import or GitHub write authority.
+
+Real local SHA-1/SHA-256 tests prove preserved file size/SHA, absence
+from the canonical name, no implicit reuse and a fresh export. Real
+two-epoch PostgreSQL/Git tests simulate an orphan after export but
+before F-035v2 INSERT, then verify exactly one physical quarantine
+during independently reviewed recovery, audit generations and final
+durable regenerated bundle. #113 closure requires green CI for this
+latest slice.
