@@ -43,12 +43,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             "f035v2-checkpoint-" + Guid.NewGuid().ToString("N"));
         public string SourceRoot => Path.Combine(root, "sources");
         public string BundleRoot => Path.Combine(root, "bundles");
+        public string VerifiedMirrorRoot => Path.Combine(root, "later-mirrors");
         public IReadOnlyList<GitMirrorRef> Refs { get; }
 
         public CheckpointLocalMirror(Guid sourceId, int oidLength)
         {
             Directory.CreateDirectory(SourceRoot);
             Directory.CreateDirectory(BundleRoot);
+            Directory.CreateDirectory(VerifiedMirrorRoot);
             var work = Path.Combine(root, "working");
             if (oidLength == 64)
                 Git("init", "--quiet", "--object-format=sha256", work);
@@ -329,11 +331,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     // The reviewer identity comes from JWT claims, even when the caller
     // tries to smuggle two different actor UUIDs into the JSON request.
     [Theory]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true)]
     public async Task F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_immutable(
-        int oidLength, string decision)
+        int oidLength, string decision, bool verifyPhysical)
     {
         var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
             DateTimeOffset.UtcNow);
@@ -386,6 +390,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableLaterCheckpointMirrorStaging = true,
             EnableLaterCheckpointMirrorAdmission = true,
             EnableLaterCheckpointMirrorLease = true,
+            EnableLaterCheckpointMirrorVerified = verifyPhysical,
+            TrustedLocalVerifiedMirrorRoot = physicalMirror.VerifiedMirrorRoot,
             TrustedLocalBundleSourceRoot = physicalMirror.SourceRoot,
             TrustedLocalBundleOutputRoot = physicalMirror.BundleRoot,
             TargetObjectIdLength = oidLength
