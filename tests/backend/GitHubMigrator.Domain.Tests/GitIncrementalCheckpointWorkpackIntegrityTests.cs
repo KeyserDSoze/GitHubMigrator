@@ -217,6 +217,49 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
     [Theory]
     [InlineData(40)]
     [InlineData(64)]
+    public void F035v2_preparation_is_bounded_to_128_canonical_Git_refs(
+        int oidLength)
+    {
+        var fixture = Fixture(oidLength);
+        var plan = fixture.Plan with { IsCurrent = false };
+        foreach (var count in new[] { 128, 129 })
+        {
+            var refs = Enumerable.Range(0, count).Select(i =>
+                new GitMirrorRef($"refs/heads/branch-{i:D3}",
+                    new string('a', oidLength))).ToArray();
+            var source = fixture.Source with { Refs = refs };
+            var selected = fixture.Selection with {
+                EvidenceVersion = 2,
+                TargetEvidenceSha256 = new string('f', 64),
+                ExpectedSourceRefs = refs
+            };
+            var compared = GitMirrorRefReconciler.Compare(new(
+                plan.Id, plan.ManifestSha256, source.SourceEvidenceSha256,
+                selected.TargetEvidenceSha256,
+                selected.ExpectedSourceRefs, selected.ExpectedTargetRefs));
+            var workpack = GitIncrementalLaterCheckpointWorkpackIntegrity.Seal(
+                plan, selected, source, compared,
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+            if (count == 128)
+            {
+                var planForBundle = GitIncrementalLaterCheckpointBundleIntegrity
+                    .Prepare(plan, selected, source, compared, workpack);
+                Assert.Equal(128, planForBundle.SourceOnlyRequest.ExpectedRefs.Count);
+                Assert.False(planForBundle.CanAcquireBundle);
+            }
+            else
+            {
+                Assert.Equal("LaterCheckpointBundleEvidenceInvalid",
+                    Assert.Throws<GitSourceBundleException>(() =>
+                        GitIncrementalLaterCheckpointBundleIntegrity.Prepare(
+                            plan, selected, source, compared, workpack)).Code);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
     public void Witness_is_versioned_deterministic_and_never_grants_push(int oidLength)
     {
         var x = Fixture(oidLength);
