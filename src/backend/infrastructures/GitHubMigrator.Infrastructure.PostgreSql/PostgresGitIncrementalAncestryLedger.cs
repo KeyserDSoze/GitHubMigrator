@@ -56,7 +56,7 @@ public sealed class PostgresGitIncrementalAncestryLedger(
         GitIncrementalSourceMirrorBinding? mirror = null;
         if (options.RequireBoundSourceMirror)
         {
-            if (sourceWorkpackId is null or Guid.Empty)
+            if (sourceWorkpackId is null || sourceWorkpackId == Guid.Empty)
                 throw Refused("GitAncestryLedgerWorkpackRequired");
             mirror = await ReadSourceMirrorAsync(first.Plan, first.Source,
                 sourceWorkpackId.Value, requireFresh: true, ct);
