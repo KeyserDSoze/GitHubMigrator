@@ -13,6 +13,7 @@ public sealed record GitIncrementalLaterCheckpointMirrorAdmissionCandidate(
     Guid TargetObservationId, Guid WorkpackId, Guid PhysicalMirrorId,
     string SourceRepositoryId, string StagingEvidenceSha256,
     string SourceFullRefProofSha256, string SourceRefSetSha256,
+    string WorkpackEvidenceSha256, string TargetReceiptSha256,
     string BundleEvidenceSha256, string BundleSha256, long BundleBytes,
     DateTimeOffset ReviewedAtUtc, string EvidenceSha256,
     bool DurableLeasePersisted, long F061LeaseGeneration,
@@ -50,6 +51,7 @@ public static class GitIncrementalLaterCheckpointMirrorAdmissionIntegrity
             stage.WorkpackId, stage.PhysicalMirrorId,
             stage.SourceRepositoryId, stage.EvidenceSha256,
             stage.SourceFullRefProofSha256, stage.SourceRefSetSha256,
+            stage.WorkpackEvidenceSha256, stage.TargetReceiptSha256,
             stage.BundleEvidenceSha256, stage.BundleSha256, stage.BundleBytes,
             at, "", false, 0, false, false, false, false, false);
         return draft with { EvidenceSha256 = Hash(draft) };
@@ -83,6 +85,7 @@ public static class GitIncrementalLaterCheckpointMirrorAdmissionIntegrity
             d.WorkpackId.ToString("D"), d.PhysicalMirrorId.ToString("D"),
             d.SourceRepositoryId, d.StagingEvidenceSha256,
             d.SourceFullRefProofSha256, d.SourceRefSetSha256,
+            d.WorkpackEvidenceSha256, d.TargetReceiptSha256,
             d.BundleEvidenceSha256, d.BundleSha256, d.BundleBytes,
             d.ReviewedAtUtc.ToUniversalTime().ToString("O"),
             false, 0L, false, false, false, false, false
