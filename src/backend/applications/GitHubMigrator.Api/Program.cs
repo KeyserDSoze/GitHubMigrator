@@ -142,6 +142,12 @@ builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointWorkpackHistory>
 builder.Services.AddSingleton(new GitIncrementalLaterCheckpointBundleReadOptions(
     builder.Configuration.GetValue("GitIncrementalLaterCheckpointBundleRead:Enabled", false)));
 builder.Services.AddScoped<PostgresGitIncrementalLaterCheckpointBundleReadPreflight>();
+// F-035v2 opt-in local-only rehearsal; no HTTP/worker/DB bundle receipt.
+builder.Services.AddScoped<IGitIncrementalLaterCheckpointBundleReadPreflight>(
+    sp => sp.GetRequiredService<PostgresGitIncrementalLaterCheckpointBundleReadPreflight>());
+builder.Services.AddSingleton(new GitIncrementalLaterCheckpointLocalBundleOptions(
+    builder.Configuration.GetValue("GitIncrementalLaterCheckpointLocalBundle:Enabled", false)));
+builder.Services.AddScoped<GitIncrementalLaterCheckpointLocalBundleAcquisition>();
 builder.Services.AddSingleton(new GitHubSourceSyncCheckpointOptions(
     builder.Configuration.GetValue("GitHubSourceSyncCheckpoints:Enabled", false)));
 builder.Services.AddScoped<IGitHubSourceSyncCheckpointJournal,
