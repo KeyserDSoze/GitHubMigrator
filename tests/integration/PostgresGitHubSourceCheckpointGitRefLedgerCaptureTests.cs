@@ -26,6 +26,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         await GitSourceBundleSchema.InitializeAsync(services);
         await GitSourceMirrorLifecycleSchema.InitializeAsync(services);
         await GitIncrementalAncestryLedgerSchema.InitializeAsync(services);
+        await GitIncrementalCheckpointWorkpackSchema.InitializeAsync(services);
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
@@ -167,11 +168,213 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 new PostgresStagingRepository(db, clock)),
             Ledger(db, clock));
 
+    private static PostgresGitIncrementalCheckpointWorkpackJournal Workpacks(
+        AppDbContext db, TimeProvider clock, bool enabled = true) =>
+        new(db, clock, new(enabled), Preflight(db, clock), Ledger(db, clock),
+            new PostgresIncrementalOperationPlanRepository(db, clock));
+
+    // A genuine SECOND completed immutable F-014 source ref manifest, not
+    // a relabelled baseline or a fingerprint-only F-025 staging delta.
+    private static async Task<Guid> LaterF014SnapshotAsync(
+        AppDbContext db, PostgresIncrementalOperationPlanTests.ManualClock clock,
+        IncrementalOperationPlan plan, int oidLength)
+    {
+        var jobs = new PostgresMigrationJobRepository(db, clock);
+        var job = await jobs.EnqueueDiscoveryAsync(
+            plan.SourceConnectionId, Guid.NewGuid(), Guid.NewGuid(), default);
+        var lease = (await jobs.ClaimForSourceAsync(
+            plan.SourceConnectionId, Guid.NewGuid(),
+            TimeSpan.FromMinutes(3), default))!;
+        Assert.Equal(job.Id, lease.Id);
+        var observedAt = clock.GetUtcNow().AddMinutes(2);
+        var refs = new[] {
+            new RepositoryRef("repo-1", "refs/heads/main",
+                new string('c', oidLength)),
+            new RepositoryRef("repo-1", "refs/tags/v1",
+                new string('b', oidLength))
+        };
+        var inventory = new DiscoveryInventory
+        {
+            Id = job.Id, ConnectionId = plan.SourceConnectionId,
+            SourceProvider = "azure-devops-services",
+            Organization = "az-org", CollectedAtUtc = observedAt,
+            Snapshot = new DiscoverySnapshot
+            {
+                SnapshotId = job.Id,
+                SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                CollectedAt = observedAt,
+                Projects = [new SourceProject("project", "Project", [
+                    new SourceRepository("repo-1", "project", "One",
+                        VersionControlKind.Git),
+                    new SourceRepository("repo-2", "project", "Two",
+                        VersionControlKind.Git)])],
+                Identities = [], AccessGrants = []
+            },
+            Refs = [], RefsExternalized = true, RefCount = refs.Length,
+            Issues = [new DiscoveryIssue("EffectivePermissionsNotVerified")],
+            Completeness = DiscoveryCompleteness.Partial,
+            IdentitiesComplete = false, PermissionsComplete = false
+        };
+        await new PostgresDiscoveryRepository(db).SaveAsync(inventory, default);
+        Assert.True(await jobs.CheckpointSnapshotAsync(lease, job.Id, default));
+        await new PostgresDiscoveryPageCheckpointStore(db, clock).SaveAsync(
+            new(lease.Id, lease.LeaseToken, lease.Attempt),
+            new DiscoveryPageCheckpoint(job.Id, "refs:repo-1", 0,
+                new string('e', 64),
+                JsonSerializer.Serialize(new {
+                    value = refs.Select(x => new {
+                        name = x.Name, objectId = x.ObjectId
+                    })
+                }), null, observedAt), default);
+        var manifests = new PostgresDiscoveryRefManifestStore(db, clock);
+        Assert.Equal(refs.Length,
+            (await manifests.PrepareAsync(lease, refs.Length, default)).AssetCount);
+        var staged = await new StagingSyncService(
+            new PostgresDiscoveryRepository(db),
+            new PostgresStagingRepository(db, clock, manifests))
+            .SyncUsingRefManifestAsync(
+                lease with { SnapshotId = lease.Id }, default);
+        Assert.True(await jobs.CompleteAsync(lease, staged, default));
+        return job.Id;
+    }
+
     private static PostgresGitIncrementalCheckpointMirrorPreflight Physical(
         AppDbContext db, TimeProvider clock, bool enabled = true) =>
         new(db, clock, new(enabled),
             Preflight(db, clock), Ledger(db, clock),
             new PostgresIncrementalOperationPlanRepository(db, clock));
+
+    [Theory]
+    [InlineData(40)]
+    [InlineData(64)]
+    public async Task F097c4c1_true_later_snapshot_workpack_is_source_locked_and_append_only(
+        int oidLength)
+    {
+        var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
+            DateTimeOffset.UtcNow);
+        IncrementalPreparationView run;
+        IncrementalOperationPlan plan;
+        GitHubSourceSyncCheckpointReceipt latest;
+        GitHubTargetRefEvidenceView target;
+        Guid actor;
+        GitIncrementalCheckpointWorkpackProof first;
+
+        await using (var db = fixture.NewContext())
+        {
+            var setup = await SetupAsync(db, clock, oidLength);
+            (run, plan, var baseline, _, actor) = setup;
+            var sourceLedger = Ledger(db, clock);
+            var initial = await sourceLedger.CaptureAsync(
+                run.Id, plan.Id, baseline.Id, "repo-1", actor, default);
+            var laterId = await LaterF014SnapshotAsync(
+                db, clock, plan, oidLength);
+            Assert.NotEqual(plan.SnapshotId, laterId);
+            latest = await new PostgresGitHubSourceSyncCheckpointJournal(
+                db, clock, new(true),
+                new PostgresIncrementalOperationPlanRepository(db, clock),
+                new PostgresStagingRepository(db, clock)).CaptureAsync(
+                    run.Id, plan.Id, laterId, baseline.Id,
+                    plan.ManifestSha256, actor, default);
+            Assert.Equal(baseline.Id, latest.Proof.PreviousCheckpointId);
+            var newer = await sourceLedger.CaptureAsync(
+                run.Id, plan.Id, latest.Id, "repo-1", actor, default);
+            Assert.Equal(initial.EvidenceSha256,
+                newer.PreviousFullRefProofSha256);
+            Assert.Equal(laterId, newer.SnapshotId);
+            Assert.NotEqual(initial.SourceEvidenceSha256,
+                newer.SourceEvidenceSha256);
+
+            clock.Advance(TimeSpan.FromSeconds(2));
+            var observation = GitHubRefObservationIntegrity.Seal(
+                plan.Organization, "migration-one", clock.GetUtcNow(),
+                [new("refs/heads/main",
+                    new string('a', oidLength), "commit")]);
+            var dest = await db.Connections.AsNoTracking()
+                .SingleAsync(x => x.Id == plan.DestinationConnectionId);
+            target = await new PostgresGitHubTargetRefEvidenceStore(db, clock)
+                .SaveAsync(plan, "repo-1", actor,
+                    dest.ValidatedAtUtc, observation, default);
+
+            Assert.Equal("CheckpointWorkpackDisabled",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointWorkpackException>(() =>
+                    Workpacks(db, clock, false).CaptureAsync(
+                        run.Id, plan.Id, latest.Id, target.Id, "repo-1",
+                        target.EvidenceSha256, actor, default))).Code);
+            Assert.Equal("CheckpointWorkpackSourceTargetUnverified",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointWorkpackException>(() =>
+                    Workpacks(db, clock).CaptureAsync(
+                        run.Id, plan.Id, latest.Id, target.Id, "repo-1",
+                        new string('f', 64), actor, default))).Code);
+            Assert.Empty(await db.GitIncrementalCheckpointWorkpacks
+                .AsNoTracking().Where(x => x.PlanId == plan.Id).ToArrayAsync());
+
+            first = await Workpacks(db, clock).CaptureAsync(
+                run.Id, plan.Id, latest.Id, target.Id,
+                "repo-1", target.EvidenceSha256, actor, default);
+            Assert.Equal(1, first.EvidenceVersion);
+            Assert.Equal(laterId, first.SourceSnapshotId);
+            Assert.Equal(newer.EvidenceSha256, first.FullRefProofSha256);
+            Assert.Equal(newer.SourceManifestRootSha256,
+                first.SourceManifestRootSha256);
+            Assert.NotEqual(plan.SnapshotId, first.SourceSnapshotId);
+            Assert.False(first.CanPush || first.CanRetry ||
+                first.CanDispatch || first.MigrationComplete);
+
+            var rec = await db.IncrementalGitRefReconciliations
+                .AsNoTracking().SingleAsync(x => x.Id == first.ReconciliationId);
+            var pack = await db.GitTransferWorkpacks.AsNoTracking()
+                .SingleAsync(x => x.Id == first.WorkpackId);
+            Assert.Equal(first.SourceSnapshotId, rec.SnapshotId);
+            Assert.Equal(first.SourceEvidenceSha256,
+                rec.SourceEvidenceSha256);
+            Assert.Equal(first.ReconciliationSha256,
+                rec.ReconciliationSha256);
+            Assert.Equal(GitTransferWorkpackStates.Blocked, pack.State);
+            Assert.Equal(GitTransferWorkpackPhases.WriteBlocked, pack.Phase);
+            Assert.Equal("DestinationWritesNotAuthorized",
+                pack.LastErrorCode);
+            Assert.False(pack.ReadyForExecution);
+            Assert.Empty(await db.GitSourceBundleEvidence.AsNoTracking()
+                .Where(x => x.WorkpackId == first.WorkpackId).ToArrayAsync());
+        }
+
+        async Task<GitIncrementalCheckpointWorkpackProof> ReopenAsync(Guid who)
+        {
+            await using var db = fixture.NewContext();
+            return await Workpacks(db, clock).CaptureAsync(
+                run.Id, plan.Id, latest.Id, target.Id,
+                "repo-1", target.EvidenceSha256, who, default);
+        }
+
+        var copies = await Task.WhenAll(
+            Enumerable.Range(0, 3).Select(_ => ReopenAsync(actor)));
+        Assert.All(copies, x => Assert.Equal(first, x));
+        await using (var db = fixture.NewContext())
+        {
+            Assert.Single(await db.GitIncrementalCheckpointWorkpacks.AsNoTracking()
+                .Where(x => x.CheckpointId == latest.Id).ToArrayAsync());
+            Assert.Single(await db.GitIncrementalCheckpointWorkpackEvents.AsNoTracking()
+                .Where(x => x.WorkpackId == first.WorkpackId).ToArrayAsync());
+            Assert.Equal("CheckpointWorkpackSourceChanged",
+                (await Assert.ThrowsAsync<
+                    GitIncrementalCheckpointWorkpackException>(() =>
+                    Workpacks(db, clock).CaptureAsync(
+                        run.Id, plan.Id, latest.Id, target.Id, "repo-1",
+                        target.EvidenceSha256, Guid.NewGuid(), default))).Code);
+
+            // Verify SQL append-only fencing, not just application guards.
+            var fail = await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                () => db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE git_checkpoint_source_workpack_proofs
+                    SET evidence_sha256 = {new string('f', 64)}
+                    WHERE workpack_id = {first.WorkpackId}
+                    """));
+            Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                fail.SqlState);
+        }
+    }
 
     [Theory]
     [InlineData(40)]
