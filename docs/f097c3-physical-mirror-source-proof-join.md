@@ -25,3 +25,20 @@ record a new F-095 audit, or send any objects to GitHub. It is a
 precondition only, not an authorization. F-095 still requires a separate
 source-locked re-read and real physical F-094 v3 audit. Existing F-095
 v1/v2 records and SHA hashes remain untouched; #96/#92 stay open.
+
+## Verified integration coverage
+
+The real PostgreSQL 17 integration fixture uses a completed F-014 source
+discovery, an F-091 checkpoint, F-097b immutable source ref/OID evidence,
+a current F-031 destination observation, an F-032 reconciliation with
+exact source F-014 manifest root and source/target SHA, an F-038 durable
+WriteBlocked workpack, a source bundle F-035, and an F-061 Verified
+physical-mirror receipt plus its latest Verified event.
+
+SHA-1 (40-character OIDs) and SHA-256 (64-character OIDs) pass the
+proof join, survive a new DbContext/restart read, and remain
+non-executable. Tests reject disabled mode, foreign/missing workpack,
+wrong target SHA and F-061 immutable ref-set mutation; no F-095 row
+is created. The original F-095 baseline-only writer is unchanged.
+Verified by [GitHub Actions run 42607239215](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/42607239215)
+(all four jobs successful).
