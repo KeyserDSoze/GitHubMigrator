@@ -55,6 +55,78 @@ public sealed class ApiCheckpointTargetHumanReviewEndpointTests(
         Assert.Equal(before, harness.Calls.Count);
     }
 
+    [Fact]
+    public async Task F097c4c0c_opt_in_is_read_only_and_fails_closed_without_verified_epoch()
+    {
+        // A separate explicitly enabled host proves wiring and request
+        // validation; an unverified checkpoint must never reach a provider.
+        var optIn = new ApiHarness {
+            EnableCheckpointHumanReview = true
+        };
+        try
+        {
+            await optIn.InitializeAsync();
+            var token = await optIn.LoginAsync(
+                optIn.SuperadminName, ApiHarness.SuperadminPassword);
+            var root = "/api/incremental-preparations/" + Guid.NewGuid() +
+                "/operation-plans/" + Guid.NewGuid() +
+                "/source-sync-checkpoints/" + Guid.NewGuid() +
+                "/target-human-review";
+            var before = optIn.Calls.Count;
+            using (var candidate = await CallOptIn(HttpMethod.Get,
+                root + "/candidate?sourceRepositoryId=repo-1", null))
+            {
+                Assert.Equal(HttpStatusCode.Conflict, candidate.StatusCode);
+                Assert.Contains("CheckpointHumanReviewCandidateUnverified",
+                    await candidate.Content.ReadAsStringAsync());
+            }
+            using (var absent = await CallOptIn(HttpMethod.Get,
+                root + "?sourceRepositoryId=repo-1", null))
+            {
+                Assert.Equal(HttpStatusCode.NotFound, absent.StatusCode);
+            }
+            using (var invalid = await CallOptIn(HttpMethod.Post, root,
+                new {
+                    sourceRepositoryId = "repo-1",
+                    decision = "ApprovedForObservation",
+                    expectedCandidateEvidenceSha256 = "not-a-sha",
+                    reviewedBy = Guid.NewGuid(),
+                    requestedBy = Guid.NewGuid()
+                }))
+            {
+                Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+                Assert.Contains("CheckpointHumanReviewInvalidRequest",
+                    await invalid.Content.ReadAsStringAsync());
+            }
+            using (var missing = await CallOptIn(HttpMethod.Post, root,
+                new {
+                    sourceRepositoryId = "repo-1",
+                    decision = "Rejected",
+                    expectedCandidateEvidenceSha256 = new string('a', 64),
+                    reviewedBy = Guid.NewGuid(),
+                    requestedBy = Guid.NewGuid()
+                }))
+            {
+                Assert.Equal(HttpStatusCode.Conflict, missing.StatusCode);
+                Assert.Contains("CheckpointHumanReviewCandidateUnverified",
+                    await missing.Content.ReadAsStringAsync());
+            }
+            Assert.Equal(before, optIn.Calls.Count);
+
+            async Task<HttpResponseMessage> CallOptIn(
+                HttpMethod method, string path, object? body)
+            {
+                using var req = new HttpRequestMessage(method, path);
+                req.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+                if (method == HttpMethod.Post)
+                    req.Content = JsonContent.Create(body);
+                return await optIn.Client.SendAsync(req);
+            }
+        }
+        finally { await optIn.DisposeAsync(); }
+    }
+
     private async Task<HttpResponseMessage> Send(
         HttpMethod method, string path, string? token)
     {

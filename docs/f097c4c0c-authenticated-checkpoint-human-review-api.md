@@ -48,7 +48,8 @@ F-038, destination push, retry, dispatch or migration completion.
 
 Domain tests cover historical self-contained digest and authority tampering.
 API integration exercises 401/403 across roles, disabled-by-default
-superadmin 409 and zero outbound provider requests. The real
+superadmin 409, opt-in malformed/unknown-checkpoint 400/404/409,
+and zero outbound provider requests. The real
 PostgreSQL two-epoch tests also validate authenticated-path requester
 lookup, independent reviewer enforcement and historical readback across
 restart/expiry. Full opt-in

@@ -264,7 +264,11 @@ public sealed class PostgresGitCheckpointTargetHumanReviewJournal(
             string decision, string expectedCandidateEvidenceSha256,
             CancellationToken ct)
     {
-        if (authenticatedReviewerId == Guid.Empty)
+        if (authenticatedReviewerId == Guid.Empty ||
+            decision is not (
+                GitCheckpointTargetHumanReviewStates.ApprovedForObservation or
+                GitCheckpointTargetHumanReviewStates.Rejected) ||
+            !Sha(expectedCandidateEvidenceSha256))
             throw Refused("CheckpointHumanReviewInvalidRequest");
         var candidate = await ReadAuthenticatedCandidateAsync(
             preparationId, planId, checkpointId, sourceRepositoryId, ct);

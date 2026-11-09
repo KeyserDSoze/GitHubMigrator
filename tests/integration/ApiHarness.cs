@@ -33,6 +33,10 @@ public sealed class ApiHarness : IAsyncLifetime
     public const string SourceValue = "SENSITIVE_SOURCE_VALUE_DO_NOT_LEAK";
     public const string Sha = "aaaabbbbccccddddeeeeffff0000111122223333";
 
+    // Opt in only for dedicated API authorization tests. The default
+    // fixture must continue exercising the production default OFF.
+    public bool EnableCheckpointHumanReview { get; set; }
+
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
     public string PendingName { get; } = "pending-" + Guid.NewGuid().ToString("N");
@@ -66,6 +70,13 @@ public sealed class ApiHarness : IAsyncLifetime
             ["ASPNETCORE_ENVIRONMENT"] = "Development",
             ["DOTNET_ENVIRONMENT"] = "Development"
         };
+        if (EnableCheckpointHumanReview)
+        {
+            values["GitCheckpointTargetHumanReview__Enabled"] = "true";
+            values["GitCheckpointTargetReReview__Enabled"] = "true";
+            values["GitHubSourceCheckpointGitRefLedger__Enabled"] = "true";
+            values["GitHubSourceSyncCheckpoints__Enabled"] = "true";
+        }
         foreach (var pair in values)
         {
             _savedEnvironment[pair.Key] = Environment.GetEnvironmentVariable(pair.Key);
