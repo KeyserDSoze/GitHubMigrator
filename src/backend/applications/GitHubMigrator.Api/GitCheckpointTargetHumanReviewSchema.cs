@@ -25,7 +25,7 @@ public static class GitCheckpointTargetHumanReviewSchema
                 source_repository_id varchar(256) NOT NULL,
                 target_repository_name varchar(100) NOT NULL,
                 destination_connection_id uuid NOT NULL
-                    REFERENCES connections(id) ON DELETE RESTRICT,
+                    REFERENCES migration_connections(id) ON DELETE RESTRICT,
                 candidate_evidence_sha256 varchar(64) NOT NULL,
                 requested_by uuid NOT NULL,
                 reviewed_by uuid NOT NULL,
