@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.Json;
 using GitHubMigrator.Business;
 using GitHubMigrator.Infrastructure.GitObjects;
 using Xunit;
@@ -46,6 +47,24 @@ public sealed class LocalGitSourceBundleAcquirerTests
             receipt.ReadyForExecution);
         GitIncrementalLaterCheckpointBundleReceiptIntegrity.Verify(
             receipt, plan, result);
+        Assert.Equal(0L, receipt.AcquiredAtUtc.UtcTicks %
+            TimeSpan.TicksPerMillisecond);
+        Assert.Equal(0L, receipt.RecordedAtUtc.UtcTicks %
+            TimeSpan.TicksPerMillisecond);
+        Assert.True(receipt.RecordedAtUtc >= result.RecheckedAtUtc);
+        var afterRestart = JsonSerializer.Deserialize<
+            GitIncrementalLaterCheckpointBundleReceipt>(
+                JsonSerializer.Serialize(receipt));
+        Assert.NotNull(afterRestart);
+        Assert.Equal(receipt, afterRestart);
+        GitIncrementalLaterCheckpointBundleReceiptIntegrity.Verify(
+            afterRestart!, plan, result);
+        Assert.Equal("LaterCheckpointBundleReceiptInvalid",
+            Assert.Throws<GitSourceBundleException>(() =>
+                GitIncrementalLaterCheckpointBundleReceiptIntegrity.Seal(
+                    plan, result, Guid.NewGuid(),
+                    result.AcquiredAtUtc.AddMinutes(-1))).Code);
+
         foreach (var tampered in new[] {
             receipt with { BundleSha256 = new string('0', 64) },
             receipt with { BundleBytes = receipt.BundleBytes + 1 },
