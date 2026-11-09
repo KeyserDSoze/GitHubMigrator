@@ -4,6 +4,7 @@ using System.Text.Json;
 using GitHubMigrator.Business;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace GitHubMigrator.Integration.Tests;
@@ -77,6 +78,51 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                 new string('a', 64), Guid.NewGuid(), default));
         Assert.Equal("LaterCheckpointMirrorStagingDisabled", denied.Code);
         Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
+    public async Task F061v2_schema_is_isolated_from_baseline_and_requires_immutable_events()
+    {
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var f035V2Fk = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid='git_later_checkpoint_mirror_leases'::regclass
+              AND confrelid='git_later_checkpoint_bundle_evidence'::regclass
+              AND contype='f'
+            """).SingleAsync();
+        var legacyFk = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid='git_later_checkpoint_mirror_leases'::regclass
+              AND confrelid='git_source_mirror_lifecycles'::regclass
+              AND contype='f'
+            """).SingleAsync();
+        Assert.Equal(1L, f035V2Fk);
+        Assert.Equal(0L, legacyFk);
+
+        var safety = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid='git_later_checkpoint_mirror_leases'::regclass
+              AND conname='ck_later_f061v2_mirror_safety'
+            """).SingleAsync();
+        var eventSafety = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid='git_later_checkpoint_mirror_lease_events'::regclass
+              AND conname='ck_later_f061v2_event_safety'
+            """).SingleAsync();
+        var guards = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_trigger
+            WHERE NOT tgisinternal AND (
+                (tgrelid='git_later_checkpoint_mirror_leases'::regclass
+                 AND tgname='trg_later_f061v2_lease_guard')
+                OR
+                (tgrelid='git_later_checkpoint_mirror_lease_events'::regclass
+                 AND tgname='trg_later_f061v2_event_immutable')
+            )
+            """).SingleAsync();
+        Assert.Equal(1L, safety);
+        Assert.Equal(1L, eventSafety);
+        Assert.Equal(2L, guards);
     }
 
     [Fact]
