@@ -165,6 +165,7 @@ public sealed class GitHubSourceCheckpointGitRefProofTests
     public void Ambiguous_mixed_or_unbounded_git_oid_sets_are_refused()
     {
         var checkpoint = Checkpoint();
+        var trusted = Source(checkpoint);
         foreach (var refs in new IReadOnlyList<GitMirrorRef>[] {
             [],
             [new("refs/heads/main", new string('1', 40)),
@@ -177,11 +178,11 @@ public sealed class GitHubSourceCheckpointGitRefProofTests
                     "refs/heads/test-" + i, new string('1', 40))).ToArray()
         })
         {
-            var source = VerifiedSourceGitRefIntegrity.Seal(
-                checkpoint.Proof.SnapshotId, Connection, "repo-a", Root, refs);
+            // Forged/invalid ref observations should fail at the new F-097
+            // boundary, even if they bypass the earlier F-032 constructor.
             Assert.Throws<GitHubSourceCheckpointGitRefProofException>(() =>
                 GitHubSourceCheckpointGitRefProofIntegrity.Seal(
-                    checkpoint, source));
+                    checkpoint, trusted with { Refs = refs }));
         }
     }
 }
