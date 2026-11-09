@@ -110,7 +110,11 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
             [new("refs/heads/b-0000", Oid)]);
         var workpack = Guid.NewGuid();
         var reconciliation = Guid.NewGuid();
-        var reconciliationSha = new string('f', 64);
+        var compared = GitMirrorRefReconciler.Compare(new(
+            plan.Id, plan.ManifestSha256, refs.SourceEvidenceSha256,
+            target.EvidenceSha256, refs.Refs,
+            [new("refs/heads/b-0000", Oid)]));
+        var reconciliationSha = compared.ReconciliationSha256;
         var bundleSha = new string('e', 64);
         var objectSet = new string('d', 64);
         var mirrorId = GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
@@ -130,8 +134,13 @@ public sealed class PostgresGitIncrementalAncestryLedgerTests(
             SourceManifestRootSha256 = refs.RefManifestRootSha256,
             TargetEvidenceSha256 = target.EvidenceSha256,
             ReconciliationSha256 = reconciliationSha, CreatedAtUtc = now,
-            CreatedBy = Guid.NewGuid(), SourceRefCount = 1,
-            TargetRefCount = 1, MatchingCount = 1, ItemsJson = "[]",
+            CreatedBy = Guid.NewGuid(), SourceRefCount = compared.SourceRefCount,
+            TargetRefCount = compared.TargetRefCount,
+            MatchingCount = compared.MatchingCount,
+            CreateCandidateCount = compared.CreateCandidateCount,
+            DivergedCount = compared.DivergedCount,
+            TargetOnlyCount = compared.TargetOnlyCount,
+            ItemsJson = System.Text.Json.JsonSerializer.Serialize(compared.Items),
             ReadyForExecution = false
         });
         await db.SaveChangesAsync();
