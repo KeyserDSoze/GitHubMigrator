@@ -506,6 +506,10 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
             receipt.IsolatedDirectoryName);
         Assert.False(Directory.Exists(original));
         Assert.True(Directory.Exists(isolated));
+        var reread = await mover.AuditIsolatedAsync(
+            stage, durable, inspection, decision, default);
+        Assert.Equal(observed.ObjectCount, reread.Count);
+        Assert.Equal(observed.ObjectSetSha256, reread.ObjectSetSha256);
         Assert.Equal(stage.PhysicalMirrorId, receipt.PhysicalMirrorId);
         Assert.Equal(observed.ObjectSetSha256, receipt.ObjectSetSha256);
         Assert.Equal(observed.ObjectCount, receipt.ObjectCount);
@@ -528,6 +532,18 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
                 mover.IsolateAsync(stage, durable, inspection, decision,
                     default))).Code);
         Assert.True(Directory.Exists(isolated));
+        // A concurrent/stale worker recreating the original UUID.git
+        // must invalidate the quarantine read, not be silently ignored.
+        Directory.CreateDirectory(original);
+        Assert.Equal("LaterCheckpointMirrorOrphanIsolationOriginalPresent",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                mover.AuditIsolatedAsync(stage, durable, inspection,
+                    decision, default))).Code);
+        Directory.Delete(original);
+        Assert.Equal(observed.ObjectSetSha256,
+            (await mover.AuditIsolatedAsync(
+                stage, durable, inspection, decision,
+                default)).ObjectSetSha256);
 
         // If a caller changes any immutable physical/reviewer audit
         // evidence, the offline seal cannot be reused for re-admission.
