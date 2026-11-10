@@ -213,6 +213,14 @@ destination.
 Only after these checks may it perform a **same-directory atomic
 no-overwrite rename**:
 `UUID.git` -> `UUID.DECISION_SHA256.quarantine.git`.
+On Linux the filesystem move uses `renameat2(RENAME_NOREPLACE)`,
+which atomically refuses even a competing process creating the
+destination **after** the application's existence check. An ordinary
+`Directory.Move` or an unchecked POSIX `rename` would not protect this
+race (an empty target directory can be replaced). Unsupported OS/kernel
+or filesystem behavior fails closed, without falling back to an unsafe
+rename. The shared POSIX lock still protects against cooperating F-060
+import workers, but it is not the sole no-overwrite guarantee.
 This deterministic name allows later crash diagnosis; a replay with
 the same approved decision refuses rather than overwriting the old
 quarantine. The original `UUID.bundle` is never moved or deleted,
