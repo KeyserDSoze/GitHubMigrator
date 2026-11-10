@@ -32,12 +32,17 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRecoveryReviewJou
         if (!options.Enabled)
             throw Refused("LaterCheckpointMirrorRecoveryReviewDisabled");
         if (authenticatedReviewerId == Guid.Empty ||
-            authenticatedReviewerId == originalBundleActorId ||
             !GitSourceBundleStorageCheck.ValidSha(expectedInspectionSha256) ||
             decision is not (
                 GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.ApprovedForIsolationReview or
                 GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Rejected))
             throw Refused("LaterCheckpointMirrorRecoveryReviewInvalid");
+        // A valid JWT subject who is also the F-035v2 bundle actor is an
+        // independent-review policy conflict, not malformed JSON/HTTP 400.
+        // Use the same refusal as the final source-locked reviewer check.
+        if (authenticatedReviewerId == originalBundleActorId)
+            throw Refused(
+                "LaterCheckpointMirrorRecoveryReviewIndependentReviewerRequired");
 
         // The candidate is NOT accepted from the request. Independently
         // rebuild current-epoch source and target proof; real trusted Git
