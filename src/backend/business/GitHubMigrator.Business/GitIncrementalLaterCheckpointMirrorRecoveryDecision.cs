@@ -92,6 +92,48 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
             throw Refused();
     }
 
+    // A #122 decision is immutable history. A later source-locked
+    // inspection has a NEW observation timestamp: do not attempt to
+    // verify the historical decision by pretending its reviewer
+    // timestamp occurred after the fresh read. Instead validate the
+    // original domain-separated decision digest and join it to the
+    // stable, independently re-audited candidate identity.
+    public static void VerifyHistoricalForIsolationIntent(
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision recorded,
+        GitIncrementalLaterCheckpointMirrorRecoveryInspection current)
+    {
+        if (recorded is null || current is null ||
+            recorded.EvidenceVersion != 1 ||
+            recorded.Decision != ApprovedForIsolationReview ||
+            current.PhysicalState !=
+                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Intact ||
+            recorded.OriginalWorkerId != current.WorkerId ||
+            recorded.OriginalLeaseToken != current.LeaseToken ||
+            recorded.OriginalLeaseGeneration != current.LeaseGeneration ||
+            recorded.PhysicalMirrorId != current.PhysicalMirrorId ||
+            recorded.WorkpackId != current.WorkpackId ||
+            recorded.CheckpointId != current.CheckpointId ||
+            recorded.SourceSnapshotId != current.SourceSnapshotId ||
+            recorded.StagingEvidenceSha256 != current.StagingEvidenceSha256 ||
+            recorded.LeaseEventHistorySha256 != current.LeaseEventHistorySha256 ||
+            recorded.ObjectSetSha256 != current.ObjectSetSha256 ||
+            recorded.InspectionEvidenceSha256 !=
+                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                    .ReviewCandidateSha256(current) ||
+            recorded.ReviewerId == Guid.Empty ||
+            recorded.ReviewerId == recorded.OriginalBundleActorId ||
+            recorded.ReviewerId == recorded.OriginalWorkerId ||
+            recorded.ReviewedAtUtc == default ||
+            recorded.ReviewedAtUtc.Offset != TimeSpan.Zero ||
+            recorded.ReviewedAtUtc > current.InspectedAtUtc ||
+            recorded.ReviewedAtUtc < current.QuarantinedAtUtc ||
+            recorded.CanReAdmit || recorded.CanMaterialize ||
+            recorded.CanPush || recorded.CanRetry ||
+            recorded.CanDispatch || recorded.MigrationComplete ||
+            recorded.EvidenceSha256 != Digest(recorded))
+            throw Refused();
+    }
+
     private static bool OriginalWorkerInvalid(
         this GitIncrementalLaterCheckpointMirrorRecoveryInspection row) =>
         row.WorkerId == Guid.Empty || row.LeaseToken == Guid.Empty ||
