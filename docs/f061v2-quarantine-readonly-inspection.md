@@ -186,3 +186,62 @@ separate step must explicitly recheck both the decision and the
 current source under SQL source lock and must not weaken the current
 terminal lease/Verified triggers. No F-095v3 ancestry, GitHub
 push/retry/dispatch or migration-complete authority is added here.
+
+
+## #123: local physical no-overwrite orphan isolation primitive (NOT wired)
+
+A separate component,
+`LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator`,
+now implements only the **offline filesystem operation**, independently
+disabled by default, and deliberately **not registered in DI, hosted
+workers or HTTP routes**. It is NOT yet a production recovery
+coordinator. No input path/refspec/OID is accepted, only the
+independently sealed later F-091/F-097b staging, immutable F-035v2
+bundle, current quarantine inspection and exact #122 reviewed
+decision `ApprovedForIsolationReview`.
+
+The local primitive reuses **the same** process gate and POSIX
+`.f060-source-materialization.lock` as the F-060 importer, and
+revalidates the trusted absolute mirror root and all symlinks. While
+holding that lock it reruns the server-owned bundle SHA/length audit
+and two full local Git SHA1/SHA256 fsck, branch/tag ref/OID and reachable
+object-set checks against the exact original F-097b refs. It refuses
+a changed closure SHA/count, foreign scope, rejected decision,
+symlinked root, missing/corrupt UUID.git or a pre-existing quarantine
+destination.
+
+Only after these checks may it perform a **same-directory atomic
+no-overwrite rename**:
+`UUID.git` -> `UUID.DECISION_SHA256.quarantine.git`.
+This deterministic name allows later crash diagnosis; a replay with
+the same approved decision refuses rather than overwriting the old
+quarantine. The original `UUID.bundle` is never moved or deleted,
+and neither directory is re-imported or adopted by this component.
+
+The returned
+`GitIncrementalLaterCheckpointMirrorOrphanIsolationReceipt`
+SHA-256-seals the exact approved decision, source/workpack/checkpoint,
+original worker/generation/token, ordered SQL event-history SHA and
+physically measured object-set/count, plus the bounded deterministic
+quarantine name. Crucially,
+`DurableIsolationRecorded=false`, `CanReAdmit=false`,
+`CanMaterialize=false`, `CanPush=false`, `CanRetry=false`,
+`CanDispatch=false` and `MigrationComplete=false`. It is a
+**non-authorizing local witness, not a SQL recovery receipt**.
+
+The next #123 step still requires an independently trusted SQL
+coordinator: live **source-first** lock, authenticated reread of the
+immutable #122 human reviewer and latest F-091/F-097b/F-031/F-035v2,
+pre-registered crash-safe physical isolation intent, actual POSIX
+operation, post-move recovery reconciliation and immutable SQL
+isolation evidence. This must prevent the filesystem rename from
+being interpreted as an F-061 new-generation license even if
+PostgreSQL fails between the move and final audit commit.
+
+A still later step under #121 must design append-only generation
+history and **separate reviewer-approved** re-admission, without
+editing or reopening historical terminal F-061v2 lease rows or
+weakening any existing Verified triggers. No destination GitHub
+operation or F-095v3 ancestry is enabled by #123. Keep both #123
+and parent #121 OPEN until all required 4/4 CI and SQL crash/race
+tests pass.
