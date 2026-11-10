@@ -265,3 +265,52 @@ weakening any existing Verified triggers. No destination GitHub
 operation or F-095v3 ancestry is enabled by #123. Keep both #123
 and parent #121 OPEN until all required 4/4 CI and SQL crash/race
 tests pass.
+
+
+## #123: durable PRE-MOVE SQL isolation intent (separate from actual isolation)
+
+The additive source-only
+`GitIncrementalLaterCheckpointMirrorIsolationSchema` now creates
+**four isolated, append-only PostgreSQL tables**: isolation intents and
+their immutable `Prepared` event, plus separate future physical isolation
+receipts and their immutable `Isolated` event. Both pairs are FK-bound
+to the *exact* F-061v2 mirror/workpack and the immutable #122 reviewed
+decision, not to a baseline F-061, destination operation or any client path.
+The SQL guards refuse a decision other than
+`ApprovedForIsolationReview`, wrong original worker/token/generation,
+stale/non-quarantined leases, a previous F-061v2 `Verified` record,
+unmatched SHA-256 evidence, invalid quarantine filenames and mutations of
+historical journal rows. SQL CHECK constraints persistently forbid
+re-admission, materialization, push, retry, dispatch and completion.
+
+`PostgresGitIncrementalLaterCheckpointMirrorIsolationIntentJournal` is an
+independent **default-OFF** scoped service, controlled by
+`GitIncrementalLaterCheckpointMirrorIsolationIntent:Enabled=false`.
+It is not callable via HTTP or an unattended/background worker.
+`PrepareAsync` takes only source/plan/checkpoint/target/workpack identities
+and the original bundle actor; it takes **no filesystem path, Git ref/OID,
+reviewer override, signed intent object or lease token**. It reruns the real
+#121 double-Git SHA1/SHA256 physical inspector and sealed bundle reads
+outside PostgreSQL, then reads the latest F-091/F-097b/F-031/F-038v2/
+F-035v2 candidate. Under a short source-first, plan-second PostgreSQL
+transaction, it rereads current source and the exact terminal F-061v2
+lease, recomputes the **entire ordered worker event chain**, verifies the
+immutable original #122 human-review receipt SHA against its stable
+freshly re-audited physical candidate and checks the decision audit event.
+Only then does it atomically write a versioned domain-separated SHA-256
+`Prepared` intent and its single event. Replays fail closed.
+
+**Very important:** an existing `Prepared` row with no matching
+`Isolated` receipt is unresolved, regardless of whether `UUID.git`
+still exists or a `UUID.DECISION_SHA.quarantine.git` directory has
+appeared. It never means the filesystem was moved, and it cannot grant
+a new F-061 generation or authorize any GitHub destination operation.
+The isolation receipt tables are installed as strict schema boundaries,
+but **no trusted post-move SQL writer or isolation coordinator is connected
+yet**. Physical no-overwrite rename remains separately OFF and outside DI.
+The remaining #123 acceptance is to establish a crash-safe source-locked
+coordinator that invokes the POSIX-locked no-replace move, re-audits the
+quarantined bytes, commits one immutable isolated receipt+event, and
+reconciles a crash between OS and DB without accepting an unapproved
+path, false Verified or prior generation. Re-admission/new generation
+remains separately reviewed under #121; no remote GitHub writes.
