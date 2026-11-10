@@ -1897,8 +1897,12 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         candidate.RequestedBy, reviewerId,
                                         reviewDecision, new string('0',64),
                                         default))).Code);
+                            // A JWT actor who is also the original bundle
+                            // producer is forbidden to review their own
+                            // orphan. This is a policy conflict, not a
+                            // malformed request, and must agree with HTTP 409.
                             Assert.Equal(
-                                "LaterCheckpointMirrorRecoveryReviewInvalid",
+                                "LaterCheckpointMirrorRecoveryReviewIndependentReviewerRequired",
                                 (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
                                     () => journal.RecordAsync(
                                         run.Id, plan.Id, later.Id, observationId,
