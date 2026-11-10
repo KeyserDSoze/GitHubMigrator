@@ -456,6 +456,182 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.tmp"));
     }
 
+    // #123: the OFF-by-default local physical primitive is deliberately
+    // NOT registered with a DB or API and is NOT re-admission authority.
+    // The production SQL coordinator must authenticate and recheck the
+    // #122 reviewed decision before invoking any local rename.
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task F061v2_reviewed_orphan_isolation_renames_real_Git_once_without_re_admission(
+        string format)
+    {
+        using var f = new Fixture();
+        var physical = f.CreatePlan(format);
+        var (stage, durable) = LaterOfflineEvidence(physical);
+        var importer = new LocalGitSourceSnapshotMirrorMaterializer(
+            f.BundleRoot, f.MirrorRoot,
+            new LocalGitBundleArtifactStore(f.BundleRoot),
+            laterCheckpointEnabled: true);
+        await importer.MaterializeLaterCheckpointAsync(stage, durable, default);
+        var observed = await new LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
+            f.BundleRoot, f.MirrorRoot, enabled: true).AuditAsync(
+                stage, durable, default);
+        var reviewedAt = DateTimeOffset.UtcNow;
+        var inspection =
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Seal(
+                stage, durable, Guid.NewGuid(), Guid.NewGuid(), 1,
+                "ImportWorkerFailed", reviewedAt.AddMinutes(-1),
+                2, 0, new string('d', 64), observed, reviewedAt);
+        var actor = Guid.NewGuid();
+        var reviewer = Guid.NewGuid();
+        var decision =
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Seal(
+                inspection, actor, reviewer,
+                GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                    .ApprovedForIsolationReview, reviewedAt);
+        var off = new LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+            f.BundleRoot, f.MirrorRoot);
+        Assert.Equal("LaterCheckpointMirrorOrphanIsolationDisabled",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                off.IsolateAsync(stage, durable, inspection, decision,
+                    default))).Code);
+
+        var mover = new LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+            f.BundleRoot, f.MirrorRoot, enabled: true);
+        var receipt = await mover.IsolateAsync(
+            stage, durable, inspection, decision, default);
+        var original = f.Physical(physical);
+        var isolated = Path.Combine(f.MirrorRoot,
+            receipt.IsolatedDirectoryName);
+        Assert.False(Directory.Exists(original));
+        Assert.True(Directory.Exists(isolated));
+        Assert.Equal(stage.PhysicalMirrorId, receipt.PhysicalMirrorId);
+        Assert.Equal(observed.ObjectSetSha256, receipt.ObjectSetSha256);
+        Assert.Equal(observed.ObjectCount, receipt.ObjectCount);
+        Assert.Equal(decision.EvidenceSha256, receipt.RecoveryDecisionSha256);
+        Assert.Equal(inspection.LeaseEventHistorySha256,
+            receipt.OrderedEventHistorySha256);
+        Assert.False(receipt.DurableIsolationRecorded ||
+            receipt.CanReAdmit || receipt.CanMaterialize ||
+            receipt.CanPush || receipt.CanRetry ||
+            receipt.CanDispatch || receipt.MigrationComplete);
+        GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity.Verify(
+            receipt, inspection, decision);
+        Assert.Single(Directory.GetDirectories(f.MirrorRoot,
+            "*.quarantine.git"));
+        Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.git",
+            SearchOption.TopDirectoryOnly).Where(p =>
+                Path.GetFileName(p) == stage.PhysicalMirrorId.ToString("N") + ".git"));
+        Assert.Equal("LaterCheckpointMirrorOrphanIsolationAlreadyPresent",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                mover.IsolateAsync(stage, durable, inspection, decision,
+                    default))).Code);
+        Assert.True(Directory.Exists(isolated));
+
+        // If a caller changes any immutable physical/reviewer audit
+        // evidence, the offline seal cannot be reused for re-admission.
+        Assert.Equal("LaterCheckpointMirrorOrphanIsolationInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity
+                    .Verify(receipt with { CanReAdmit = true },
+                        inspection, decision)).Code);
+        Assert.Equal("LaterCheckpointMirrorOrphanIsolationInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity
+                    .Verify(receipt with { RecoveryDecisionSha256 =
+                        new string('f', 64) }, inspection, decision)).Code);
+    }
+
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task F061v2_orphan_isolation_refuses_collisions_corrupt_Git_and_symlink_roots(
+        string format)
+    {
+        using var f = new Fixture();
+        var source = f.CreatePlan(format);
+        var (stage, durable) = LaterOfflineEvidence(source);
+        var materializer = new LocalGitSourceSnapshotMirrorMaterializer(
+            f.BundleRoot, f.MirrorRoot,
+            new LocalGitBundleArtifactStore(f.BundleRoot),
+            laterCheckpointEnabled: true);
+        await materializer.MaterializeLaterCheckpointAsync(stage, durable,
+            default);
+        var measured = await new LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
+            f.BundleRoot, f.MirrorRoot, enabled: true)
+            .AuditAsync(stage, durable, default);
+        var at = DateTimeOffset.UtcNow;
+        var inspection =
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Seal(
+                stage, durable, Guid.NewGuid(), Guid.NewGuid(), 1,
+                "ImportWorkerFailed", at.AddMinutes(-1),
+                2, 0, new string('a', 64), measured, at);
+        var actor = Guid.NewGuid();
+        var reviewer = Guid.NewGuid();
+        var decision =
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Seal(
+                inspection, actor, reviewer,
+                GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                    .ApprovedForIsolationReview, at);
+        var mover = new LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+            f.BundleRoot, f.MirrorRoot, enabled: true);
+        using (var cancelled = new CancellationTokenSource())
+        {
+            cancelled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                mover.IsolateAsync(stage, durable, inspection, decision,
+                    cancelled.Token));
+        }
+        var original = f.Physical(source);
+        Assert.True(Directory.Exists(original));
+
+        var reject = GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Seal(
+            inspection, actor, reviewer,
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Rejected,
+            at);
+        Assert.Equal("LaterCheckpointMirrorOrphanIsolationScopeInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                mover.IsolateAsync(stage, durable, inspection, reject,
+                    default))).Code);
+
+        var destination = Path.Combine(f.MirrorRoot,
+            GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity
+                .IsolationName(decision));
+        Directory.CreateDirectory(destination);
+        Assert.Equal("LaterCheckpointMirrorOrphanIsolationAlreadyPresent",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                mover.IsolateAsync(stage, durable, inspection, decision,
+                    default))).Code);
+        Assert.True(Directory.Exists(original));
+        Directory.Delete(destination);
+
+        var symlink = Path.Combine(f.Root, "unsafe-quarantine-root");
+        Directory.CreateSymbolicLink(symlink, f.MirrorRoot);
+        var unsafeMover =
+            new LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+                f.BundleRoot, symlink, enabled: true);
+        Assert.Equal("SourceMirrorSymlinkBlocked",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                unsafeMover.IsolateAsync(stage, durable, inspection, decision,
+                    default))).Code);
+        Assert.True(Directory.Exists(original));
+
+        // Corrupt a real Git OID after the earlier physical review.
+        // The isolator MUST run fresh fsck under the POSIX lock, and
+        // must leave the original UUID.git in place on mismatch.
+        var refFile = Path.Combine(original, "refs", "heads", "main");
+        Directory.CreateDirectory(Path.GetDirectoryName(refFile)!);
+        await File.WriteAllTextAsync(refFile,
+            new string('0', format == "sha1" ? 40 : 64) + "\n");
+        Assert.Equal("LaterCheckpointMirrorOfflineClosureInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                mover.IsolateAsync(stage, durable, inspection, decision,
+                    default))).Code);
+        Assert.True(Directory.Exists(original));
+        Assert.False(Directory.Exists(destination));
+    }
+
     // Real Git objects are taken from the fixture, while the historical
     // F-091/F-097b/F-038v2/F-035v2 domain test input is deliberately
     // synthetic. It is NOT a substitute for the PostgreSQL source lock.
