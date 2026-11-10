@@ -834,6 +834,9 @@ await GitIncrementalLaterCheckpointMirrorLeaseSchema.InitializeAsync(app.Service
 await GitIncrementalLaterCheckpointMirrorVerifiedSchema.InitializeAsync(app.Services);
 // #122: additive immutable reviewed-intent SQL; no recovery authority.
 await GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema.InitializeAsync(app.Services);
+// #123: constraint-only pre-move isolation intent and post-move journal;
+// NOT a source-lock coordinator, filesystem actor, new lease or HTTP route.
+await GitIncrementalLaterCheckpointMirrorIsolationSchema.InitializeAsync(app.Services);
 await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
