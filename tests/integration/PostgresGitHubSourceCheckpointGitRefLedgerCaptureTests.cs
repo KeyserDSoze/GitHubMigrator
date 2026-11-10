@@ -446,6 +446,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableLaterCheckpointMirrorLease = true,
             EnableLaterCheckpointMirrorVerified = verifyPhysical,
             EnableLaterCheckpointMirrorImportWorker = runWorker,
+            EnableLaterCheckpointMirrorRecoveryInspection = runWorker,
             TrustedLocalVerifiedMirrorRoot = physicalMirror.VerifiedMirrorRoot,
             TrustedLocalBundleSourceRoot = physicalMirror.SourceRoot,
             TrustedLocalBundleOutputRoot = physicalMirror.BundleRoot,
@@ -1680,6 +1681,34 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     WHERE mirror_id = {staging.PhysicalMirrorId}
                                     """).SingleAsync();
                             Assert.Equal(0L, noneVerified);
+                            var recoveryInspector = auditScope.ServiceProvider
+                                .GetRequiredService<
+                                    PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector>();
+                            var diagnostic = await recoveryInspector.ReadAsync(
+                                run.Id, plan.Id, later.Id, observationId,
+                                first.WorkpackId, "repo-1",
+                                targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, default);
+                            Assert.Equal(staging.PhysicalMirrorId,
+                                diagnostic.PhysicalMirrorId);
+                            Assert.Equal("TestOwnerRevoked", diagnostic.FailureCode);
+                            Assert.Equal(activeWorker, diagnostic.WorkerId);
+                            Assert.Equal(1L, diagnostic.LeaseGeneration);
+                            Assert.Equal(
+                                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                                    .Uninspectable, diagnostic.PhysicalState);
+                            Assert.Null(diagnostic.ObjectSetSha256);
+                            Assert.Null(diagnostic.ObjectCount);
+                            Assert.Equal(fencedEvents.Length,
+                                diagnostic.LeaseEventCount);
+                            Assert.Equal(fencedEvents.Count(x => x == "Renewed"),
+                                diagnostic.RenewedEventCount);
+                            Assert.False(diagnostic.DurableRecoveryApprovalPersisted ||
+                                diagnostic.CanReAdmit || diagnostic.CanMaterialize ||
+                                diagnostic.CanPush || diagnostic.CanRetry ||
+                                diagnostic.CanDispatch || diagnostic.MigrationComplete);
+                            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                                .Verify(diagnostic, staging, committed, null);
                         }
                         else if (failWorker)
                         {
@@ -1723,6 +1752,40 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                             Assert.Equal(1, interruptedEvents.Count(x =>
                                 x == "Quarantined"));
                             Assert.DoesNotContain("Verified", interruptedEvents);
+                            var recoveryInspector = auditScope.ServiceProvider
+                                .GetRequiredService<
+                                    PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector>();
+                            var diagnostic = await recoveryInspector.ReadAsync(
+                                run.Id, plan.Id, later.Id, observationId,
+                                first.WorkpackId, "repo-1",
+                                targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, default);
+                            Assert.Equal("ImportWorkerFailed",
+                                diagnostic.FailureCode);
+                            Assert.Equal(activeWorker, diagnostic.WorkerId);
+                            Assert.Equal(1L, diagnostic.LeaseGeneration);
+                            Assert.Equal(staging.PhysicalMirrorId,
+                                diagnostic.PhysicalMirrorId);
+                            Assert.Equal(
+                                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                                    .Uninspectable, diagnostic.PhysicalState);
+                            Assert.Null(diagnostic.ObjectSetSha256);
+                            Assert.Equal(interruptedEvents.Length,
+                                diagnostic.LeaseEventCount);
+                            Assert.Equal(interruptedEvents.Count(x => x == "Renewed"),
+                                diagnostic.RenewedEventCount);
+                            Assert.False(diagnostic.DurableRecoveryApprovalPersisted ||
+                                diagnostic.CanReAdmit || diagnostic.CanMaterialize ||
+                                diagnostic.CanPush || diagnostic.CanRetry ||
+                                diagnostic.CanDispatch || diagnostic.MigrationComplete);
+                            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                                .Verify(diagnostic, staging, committed, null);
+                            await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                () => recoveryInspector.ReadAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "foreign-repo",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, default));
                         }
                         else
                         {
@@ -1781,6 +1844,17 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 default));
                         Assert.Equal("LaterCheckpointMirrorLeaseAlreadyVerified",
                             secondWorkerDenied.Code);
+                        var recoveryInspector = auditScope.ServiceProvider
+                            .GetRequiredService<
+                                PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector>();
+                        Assert.Equal(
+                            "LaterCheckpointMirrorRecoveryNotQuarantined",
+                            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                () => recoveryInspector.ReadAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, default))).Code);
                         Assert.Empty(await verifiedDb.GitSourceMirrorLifecycles
                             .AsNoTracking().Where(x =>
                                 x.MirrorId == actual.PhysicalMirrorId)
