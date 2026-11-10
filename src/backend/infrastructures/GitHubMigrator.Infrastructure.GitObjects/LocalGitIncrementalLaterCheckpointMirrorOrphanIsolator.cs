@@ -13,6 +13,96 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
+    // Read-only crash-diagnosis primitive. This method never restores
+    // UUID.git, creates a new lease or returns authority. The only
+    // filesystem path is derived from the reviewed decision SHA.
+    public async Task<(int Count, string ObjectSetSha256)> AuditIsolatedAsync(
+        GitIncrementalLaterCheckpointMirrorStagingPlan stage,
+        GitIncrementalLaterCheckpointBundleReceipt durable,
+        GitIncrementalLaterCheckpointMirrorRecoveryInspection inspection,
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision decision,
+        CancellationToken ct)
+    {
+        if (!enabled)
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationDisabled");
+        GitIncrementalLaterCheckpointMirrorStagingIntegrity
+            .VerifyOfflineCandidate(stage, durable);
+        GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Verify(
+            decision, inspection);
+        if (decision.Decision !=
+                GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                    .ApprovedForIsolationReview ||
+            inspection.PhysicalState !=
+                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Intact ||
+            inspection.PhysicalMirrorId != stage.PhysicalMirrorId ||
+            inspection.WorkpackId != stage.WorkpackId ||
+            inspection.SourceSnapshotId != stage.SourceSnapshotId ||
+            inspection.CheckpointId != stage.CheckpointId ||
+            inspection.StagingEvidenceSha256 != stage.EvidenceSha256 ||
+            inspection.BundleSha256 != durable.BundleSha256 ||
+            inspection.BundleEvidenceSha256 != durable.EvidenceSha256 ||
+            inspection.FullRefProofSha256 != stage.SourceFullRefProofSha256 ||
+            inspection.SourceRefSetSha256 != stage.SourceRefSetSha256 ||
+            !GitSourceBundleStorageCheck.ValidSha(inspection.ObjectSetSha256) ||
+            inspection.ObjectCount is null or < 1)
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationScopeInvalid");
+        var root = LocalGitSourceSnapshotMirrorMaterializer
+            .CheckMirrorRoot(mirrorRoot);
+        var store = new LocalGitBundleArtifactStore(bundleRoot);
+        if (string.Equals(root, store.Root, StringComparison.Ordinal))
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationRootsOverlap");
+        await LocalGitSourceSnapshotMirrorMaterializer.ProcessGate.WaitAsync(ct);
+        try
+        {
+            await using var rootLock =
+                await LocalGitSourceSnapshotMirrorMaterializer
+                    .AcquireRootLockAsync(root, ct);
+            var original = Path.Combine(root,
+                stage.PhysicalMirrorId.ToString("N") + ".git");
+            if (Directory.Exists(original) || File.Exists(original) ||
+                new DirectoryInfo(original).LinkTarget is not null)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorOrphanIsolationOriginalPresent");
+            var before = await store.InspectExistingAsync(stage.WorkpackId, ct);
+            if (before.Sha256 != durable.BundleSha256 ||
+                before.Bytes != durable.BundleBytes)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorOrphanIsolationBundleChanged");
+            (int Count, string Digest) checkedGraph;
+            try
+            {
+                checkedGraph =
+                    await LocalGitObjectClosureAuditor.VerifyQuarantinedOneAsync(
+                        root, stage.PhysicalMirrorId,
+                        decision.EvidenceSha256, stage.SourceRefs, ct);
+            }
+            catch (GitObjectClosureAuditException)
+            {
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorOrphanIsolationClosureInvalid");
+            }
+            var after = await store.InspectExistingAsync(stage.WorkpackId, ct);
+            if (before != after ||
+                checkedGraph.Count != inspection.ObjectCount ||
+                checkedGraph.Digest != inspection.ObjectSetSha256)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorOrphanIsolationPhysicalChanged");
+            return (checkedGraph.Count, checkedGraph.Digest);
+        }
+        catch (GitSourceBundleException)
+        {
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationBundleInvalid");
+        }
+        finally
+        {
+            LocalGitSourceSnapshotMirrorMaterializer.ProcessGate.Release();
+        }
+    }
+
     public async Task<GitIncrementalLaterCheckpointMirrorOrphanIsolationReceipt>
         IsolateAsync(
             GitIncrementalLaterCheckpointMirrorStagingPlan stage,
