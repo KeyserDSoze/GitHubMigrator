@@ -46,7 +46,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRecoveryReviewJou
             checkpointId, targetObservationId, workpackId,
             sourceRepositoryId, expectedTargetReceiptSha256,
             originalBundleActorId, ct);
-        if (inspected.EvidenceSha256 != expectedInspectionSha256 ||
+        if (GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                .ReviewCandidateSha256(inspected) != expectedInspectionSha256 ||
             inspected.SourceSnapshotId == Guid.Empty ||
             inspected.DurableRecoveryApprovalPersisted ||
             inspected.CanReAdmit || inspected.CanMaterialize ||
