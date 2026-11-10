@@ -557,6 +557,19 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
                 GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity
                     .Verify(receipt with { RecoveryDecisionSha256 =
                         new string('f', 64) }, inspection, decision)).Code);
+
+        // A later orphan read is a fresh Git fsck, NOT a trust in
+        // the previously sealed isolation receipt's object SHA.
+        var isolatedRef = Path.Combine(isolated, "refs", "heads", "main");
+        Directory.CreateDirectory(Path.GetDirectoryName(isolatedRef)!);
+        await File.WriteAllTextAsync(isolatedRef,
+            new string('0', format == "sha1" ? 40 : 64) + "\n");
+        Assert.Equal("LaterCheckpointMirrorOrphanIsolationClosureInvalid",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                mover.AuditIsolatedAsync(stage, durable, inspection,
+                    decision, default))).Code);
+        Assert.False(Directory.Exists(original));
+        Assert.True(Directory.Exists(isolated));
     }
 
     [Theory]
