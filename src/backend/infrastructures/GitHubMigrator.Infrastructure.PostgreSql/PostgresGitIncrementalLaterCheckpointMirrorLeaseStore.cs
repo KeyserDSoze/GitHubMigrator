@@ -288,6 +288,15 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
         public string State { get; set; } = "";
         public DateTimeOffset AcquiredAtUtc { get; set; }
         public DateTimeOffset? LeaseUntilUtc { get; set; }
+        // Additional immutable/fenced state for #121 READ-ONLY review.
+        public DateTimeOffset UpdatedAtUtc { get; set; }
+        public string? FailureCode { get; set; }
+        public bool HasVerifiedLocalObjects { get; set; }
+        public bool CanMaterialize { get; set; }
+        public bool CanPush { get; set; }
+        public bool CanRetry { get; set; }
+        public bool CanDispatch { get; set; }
+        public bool MigrationComplete { get; set; }
     }
 
     internal Task<LeaseRow?> ReadLeaseAsync(Guid id, CancellationToken ct) =>
@@ -310,7 +319,14 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
                 worker_id AS "WorkerId",
                 original_bundle_actor_id AS "OriginalBundleActorId",
                 state AS "State", acquired_at_utc AS "AcquiredAtUtc",
-                lease_until_utc AS "LeaseUntilUtc"
+                lease_until_utc AS "LeaseUntilUtc",
+                updated_at_utc AS "UpdatedAtUtc",
+                failure_code AS "FailureCode",
+                has_verified_local_objects AS "HasVerifiedLocalObjects",
+                can_materialize AS "CanMaterialize",
+                can_push AS "CanPush", can_retry AS "CanRetry",
+                can_dispatch AS "CanDispatch",
+                migration_complete AS "MigrationComplete"
             FROM git_later_checkpoint_mirror_leases
             WHERE mirror_id = {id}
             """).SingleOrDefaultAsync(ct);
