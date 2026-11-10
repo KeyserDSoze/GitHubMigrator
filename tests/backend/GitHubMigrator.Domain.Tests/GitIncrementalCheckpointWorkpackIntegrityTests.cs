@@ -452,6 +452,66 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
                         "ImportWorkerFailed", quarantinedAt, 4, 0,
                         new string('d', 64), null, inspectedAt)).Code);
 
+        // #122: the actual F-031 human reviewer may record ONLY
+        // a non-authorizing reviewed isolation decision. An intact
+        // source mirror by itself is NOT permission to re-admit.
+        var independentReviewerId = Guid.NewGuid();
+        while (independentReviewerId == verifiedWorker ||
+               independentReviewerId == pack.RecordedBy)
+            independentReviewerId = Guid.NewGuid();
+        var reviewed = GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+            .Seal(intact, pack.RecordedBy, independentReviewerId,
+                GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                    .ApprovedForIsolationReview, inspectedAt.AddSeconds(1));
+        Assert.Equal(staged.PhysicalMirrorId, reviewed.PhysicalMirrorId);
+        Assert.Equal(verifiedWorker, reviewed.OriginalWorkerId);
+        Assert.Equal(verifiedLease, reviewed.OriginalLeaseToken);
+        Assert.Equal(intact.LeaseEventHistorySha256,
+            reviewed.LeaseEventHistorySha256);
+        Assert.False(reviewed.CanReAdmit || reviewed.CanMaterialize ||
+            reviewed.CanPush || reviewed.CanRetry ||
+            reviewed.CanDispatch || reviewed.MigrationComplete);
+        GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Verify(
+            reviewed, intact);
+        var rejected = GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+            .Seal(missing, pack.RecordedBy, independentReviewerId,
+                GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Rejected,
+                inspectedAt.AddSeconds(1));
+        Assert.Equal(
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Rejected,
+            rejected.Decision);
+        foreach (var falsified in new[] {
+            reviewed with { OriginalWorkerId = Guid.NewGuid() },
+            reviewed with { OriginalLeaseGeneration = 2 },
+            reviewed with { OriginalLeaseToken = Guid.NewGuid() },
+            reviewed with { ReviewerId = verifiedWorker },
+            reviewed with { OriginalBundleActorId = Guid.NewGuid() },
+            reviewed with { Decision =
+                GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Rejected },
+            reviewed with { InspectionEvidenceSha256 = new string('0', 64) },
+            reviewed with { LeaseEventHistorySha256 = new string('0', 64) },
+            reviewed with { CanReAdmit = true },
+            reviewed with { CanPush = true },
+            reviewed with { EvidenceSha256 = new string('0', 64) }
+        })
+            Assert.Equal("LaterCheckpointMirrorRecoveryDecisionInvalid",
+                Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                        .Verify(falsified, intact)).Code);
+        Assert.Equal("LaterCheckpointMirrorRecoveryDecisionInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                    .Seal(missing, pack.RecordedBy, independentReviewerId,
+                        GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                            .ApprovedForIsolationReview,
+                        inspectedAt.AddSeconds(1))).Code);
+        Assert.Equal("LaterCheckpointMirrorRecoveryDecisionInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                    .Seal(intact, pack.RecordedBy, pack.RecordedBy,
+                        GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                            .Rejected, inspectedAt.AddSeconds(1))).Code);
+
         foreach (var altered in new[] {
             staged with { CanMaterialize = true },
             staged with { CanPush = true },
