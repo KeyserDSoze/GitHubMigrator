@@ -323,6 +323,21 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2_isolation_intent_writer_is_default_OFF_without_file_or_provider_actions()
+    {
+        var before = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var writer = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointMirrorIsolationIntentJournal>();
+        var error = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+            () => writer.PrepareAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                "repo-1", new string('a', 64), Guid.NewGuid(), default));
+        Assert.Equal("LaterCheckpointMirrorIsolationIntentDisabled", error.Code);
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F061v2_recovery_inspection_is_independently_default_OFF_and_no_provider_calls()
     {
         var before = harness.Calls.Count;
