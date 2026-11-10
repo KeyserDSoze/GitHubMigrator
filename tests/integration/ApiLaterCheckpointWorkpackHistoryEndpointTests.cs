@@ -126,6 +126,22 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2_recovery_inspection_is_independently_default_OFF_and_no_provider_calls()
+    {
+        var before = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var reviewer = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector>();
+        var rejected = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+            () => reviewer.ReadAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                "repo-1", new string('a', 64), Guid.NewGuid(), default));
+        Assert.Equal("LaterCheckpointMirrorRecoveryInspectionDisabled",
+            rejected.Code);
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F061v2_local_import_worker_is_default_OFF_with_no_DB_or_provider_work()
     {
         var originalCalls = harness.Calls.Count;
