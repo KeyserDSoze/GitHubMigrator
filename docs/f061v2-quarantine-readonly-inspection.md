@@ -72,7 +72,8 @@ A SHA-256 versioned, domain-separated
 source snapshot, mirror/workpack/checkpoint/target, worker/token/
 generation, original failure code, event counts/quarantine timestamp,
 the actual physical graph SHA/count if independently inspectable,
-and the DB-time review timestamp.
+the **full ordered immutable lease-event-chain SHA-256** (not merely
+the event counts) and the DB-time review timestamp.
 
 `DurableRecoveryApprovalPersisted=false`,
 `CanReAdmit=false`, `CanMaterialize=false`,
