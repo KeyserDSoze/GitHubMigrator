@@ -120,3 +120,69 @@ It must not mutate/erase the existing Verified evidence or automatically
 retry from a matching self-sealed SHA. No F-095v3 ancestry, destination
 push, dispatch, retry, remote Git or migration completion is granted
 by this inspector. Keep #121/#115/#100/#96/#92 open.
+
+
+## #122: immutable independent superadmin review (no recovery action)
+
+`PostgresGitIncrementalLaterCheckpointMirrorRecoveryReviewJournal`
+is a **separate, OFF-by-default** component controlled by
+`GitIncrementalLaterCheckpointMirrorRecoveryReview:Enabled=false`.
+A separately authenticated GET candidate and POST decision route are
+available to **superadmin** JWT holders who have already changed
+their password, under
+`/api/incremental-preparations/{id}/operation-plans/{planId}/source-sync-checkpoints/{checkpointId}/mirror-recovery`.
+Both routes are rate-limited. The reviewer UUID is obtained from
+the verified JWT `NameIdentifier` claim, never the JSON payload.
+
+A decision requires a fresh, independently rebuilt #121 diagnostic
+with current F-091/F-097b/F-031/F-038v2/F-035v2, the real SHA-256
+UUID.bundle and physical UUID.git double-fsck, the **same** original
+F-061v2 `RecoveryRequired` lease and entire acquired/renewed/
+quarantined audit chain. The client supplies no Git paths, refs,
+object IDs or lease token. The API GET omits the opaque lease token.
+
+GET returns both the time-stamped inspection evidence hash and
+`reviewCandidateSha256`, a separate SHA over the *immutable*
+source/worker/lease/event-chain/physical closure portion of the
+diagnostic. This distinction is deliberate: the two real Git/SQL
+inspections occur at different database-clock instants, so using the
+inspection timestamp's hash as optimistic concurrency would make
+every legitimate POST stale. POST verifies the **stable** candidate
+SHA against a newly rerun trusted audit, then acquires short
+SOURCE-first and PLAN-second PostgreSQL locks and rechecks source,
+independent F-031 human reviewer and F-061 terminal lease scope.
+
+Only the previously approved checkpoint F-031 reviewer may sign
+the quarantine decision, and this identity must differ from the
+original bundle actor and failed worker. Valid values are
+`ApprovedForIsolationReview` (requires independently **Intact**
+UUID.git) or `Rejected` (may also describe an uninspectable
+orphan). `ApprovedForIsolationReview` is an approval for **later
+human inspection/isolation planning**, not authority to rename,
+adopt, delete, import, reacquire or push a mirror.
+
+One immutable `git_later_checkpoint_mirror_recovery_decisions` row
+and one append-only decision event are written in a single source-
+locked transaction. PostgreSQL binds the decision to the *exact*
+RecoveryRequired mirror/workpack/checkpoint/source-snapshot,
+worker/lease-token/generation, original bundle actor, F-031
+reviewer, frozen stage/evidence/ordered-event-history digests and
+object-set digest. The SQL triggers refuse UPDATE/DELETE and
+accept no already Verified mirror. All capability fields are
+persistently false: `can_readmit`, `can_materialize`, `can_push`,
+`can_retry`, `can_dispatch`, `migration_complete`.
+Even a successfully recorded decision leaves the terminal lease
+`RecoveryRequired` and UUID.git unchanged.
+
+The integration suite covers real SHA1/SHA256 two-epoch source Git,
+both already-promoted **Intact** and missing **Uninspectable**
+orphans, stale optimistic SHA, unauthorized self-review, JWT role
+gating, durable PostgreSQL immutability, replay and zero remote
+provider I/O.
+
+**Still missing for #121:** reviewed safe POSIX-locked physical
+orphan segregation and new-generation history/re-admission. This
+separate step must explicitly recheck both the decision and the
+current source under SQL source lock and must not weaken the current
+terminal lease/Verified triggers. No F-095v3 ancestry, GitHub
+push/retry/dispatch or migration-complete authority is added here.
