@@ -103,6 +103,32 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegri
             throw Refused();
     }
 
+    // A GET inspected at database time T and a POST re-inspected
+    // at T+delta must agree on the *immutable* source/physical/lease
+    // candidate, not on the wall-clock inspection timestamp. The
+    // reviewer never signs a raw user-provided SHA: RecordAsync reruns
+    // the trusted physical/SQL reader and compares this canonical root.
+    public static string ReviewCandidateSha256(
+        GitIncrementalLaterCheckpointMirrorRecoveryInspection inspection)
+    {
+        if (inspection is null ||
+            !GitSourceBundleStorageCheck.ValidSha(inspection.EvidenceSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(
+                inspection.LeaseEventHistorySha256) ||
+            inspection.DurableRecoveryApprovalPersisted ||
+            inspection.CanReAdmit || inspection.CanMaterialize ||
+            inspection.CanPush || inspection.CanRetry ||
+            inspection.CanDispatch || inspection.MigrationComplete)
+            throw Refused();
+        var stable = inspection with {
+            InspectedAtUtc = DateTimeOffset.UnixEpoch
+        };
+        return Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(
+                "f097c4-f061v2-recovery-review-candidate-v1:" +
+                Digest(stable))));
+    }
+
     private static DateTimeOffset Milliseconds(DateTimeOffset value) =>
         DateTimeOffset.FromUnixTimeMilliseconds(
             value.ToUnixTimeMilliseconds());
