@@ -113,17 +113,36 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRecoveryReviewJou
             authenticatedReviewerId == current.OriginalBundleActorId)
             throw Refused("LaterCheckpointMirrorRecoveryReviewIndependentReviewerRequired");
 
-        var lastEvent = await db.Database.SqlQuery<long>($"""
-            SELECT count(*)::bigint AS "Value"
+        // F-061v2 events remain append-only, but the reviewer must
+        // atomically pin the COMPLETE Acquired/Renewed*/Quarantined chain,
+        // not just count Quarantined events. This closes the race between
+        // the re-audited GET/POST candidate and the final SQL INSERT.
+        var ordered = await db.Database.SqlQuery<
+            PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector.EventRow>($"""
+            SELECT id AS "Id", generation AS "Generation",
+                worker_id AS "WorkerId", type AS "Type",
+                staging_evidence_sha256 AS "StagingEvidenceSha256",
+                occurred_at_utc AS "OccurredAtUtc"
             FROM git_later_checkpoint_mirror_lease_events
             WHERE mirror_id = {inspected.PhysicalMirrorId}
-                AND type = 'Quarantined'
-                AND worker_id = {inspected.WorkerId}
-                AND generation = {inspected.LeaseGeneration}
-                AND staging_evidence_sha256 =
-                    {inspected.StagingEvidenceSha256}
-            """).SingleAsync(ct);
-        if (lastEvent != 1 ||
+            ORDER BY id ASC LIMIT 1001
+            """).ToArrayAsync(ct);
+        if (ordered.Length != inspected.LeaseEventCount ||
+            ordered.Length is < 2 or > 1000 ||
+            ordered[0].Type != "Acquired" ||
+            ordered[^1].Type != "Quarantined" ||
+            ordered.Count(e => e.Type == "Quarantined") != 1 ||
+            ordered.Count(e => e.Type == "Acquired") != 1 ||
+            ordered.Count(e => e.Type == "Renewed") !=
+                inspected.RenewedEventCount ||
+            ordered.Any(e =>
+                e.Generation != inspected.LeaseGeneration ||
+                e.WorkerId != inspected.WorkerId ||
+                e.StagingEvidenceSha256 != inspected.StagingEvidenceSha256) ||
+            ordered[^1].OccurredAtUtc.ToUnixTimeMilliseconds() !=
+                inspected.QuarantinedAtUtc.ToUnixTimeMilliseconds() ||
+            PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector
+                .HashEvents(ordered) != inspected.LeaseEventHistorySha256 ||
             now < inspected.InspectedAtUtc ||
             now - inspected.InspectedAtUtc > TimeSpan.FromMinutes(2))
             throw Refused("LaterCheckpointMirrorRecoveryReviewInspectionExpired");
