@@ -126,6 +126,103 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2_recovery_review_is_independently_default_OFF_and_requires_superadmin_JWT()
+    {
+        var before = harness.Calls.Count;
+        await using (var scope = harness.Host.Services.CreateAsyncScope())
+        {
+            var journal = scope.ServiceProvider.GetRequiredService<
+                PostgresGitIncrementalLaterCheckpointMirrorRecoveryReviewJournal>();
+            var denied = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                () => journal.RecordAsync(Guid.NewGuid(), Guid.NewGuid(),
+                    Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                    "repo-1", new string('a', 64), Guid.NewGuid(),
+                    Guid.NewGuid(), "Rejected", new string('b', 64),
+                    default));
+            Assert.Equal("LaterCheckpointMirrorRecoveryReviewDisabled",
+                denied.Code);
+        }
+
+        var path = "/api/incremental-preparations/" + Guid.NewGuid() +
+            "/operation-plans/" + Guid.NewGuid() +
+            "/source-sync-checkpoints/" + Guid.NewGuid() +
+            "/mirror-recovery";
+        var query = path + "/candidate?sourceRepositoryId=repo-1" +
+            "&targetObservationId=" + Guid.NewGuid() +
+            "&workpackId=" + Guid.NewGuid() +
+            "&originalBundleActorId=" + Guid.NewGuid() +
+            "&expectedTargetReceiptSha256=" + new string('a',64);
+        var admin = await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword);
+        var user = await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword);
+        var superadmin = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        foreach (var (bearer, expected) in new[] {
+            ((string?)null, HttpStatusCode.Unauthorized),
+            (user, HttpStatusCode.Forbidden),
+            (admin, HttpStatusCode.Forbidden),
+            (superadmin, HttpStatusCode.Conflict)
+        })
+        {
+            using var reply = await Send(harness.Client, HttpMethod.Get,
+                query, bearer);
+            Assert.Equal(expected, reply.StatusCode);
+            if (bearer == superadmin)
+                Assert.Contains("LaterCheckpointMirrorRecoveryInspectionDisabled",
+                    await reply.Content.ReadAsStringAsync());
+        }
+        using (var postUnauthorized = await Send(harness.Client,
+            HttpMethod.Post, path + "/decision", null))
+            Assert.Equal(HttpStatusCode.Unauthorized,
+                postUnauthorized.StatusCode);
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
+    public async Task F061v2_recovery_review_schema_is_immutable_source_only_and_not_legacy_F061()
+    {
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var fk = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_recovery_decisions'::regclass
+                AND confrelid =
+                'git_later_checkpoint_mirror_leases'::regclass
+                AND contype = 'f'
+            """).SingleAsync();
+        var old = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_recovery_decisions'::regclass
+                AND confrelid =
+                'git_source_mirror_lifecycles'::regclass
+                AND contype = 'f'
+            """).SingleAsync();
+        var check = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_recovery_decisions'::regclass
+                AND conname='ck_f061v2_recovery_review_safe'
+            """).SingleAsync();
+        var immutable = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value" FROM pg_trigger
+            WHERE NOT tgisinternal AND (
+                (tgrelid =
+                   'git_later_checkpoint_mirror_recovery_decisions'::regclass
+                 AND tgname='trg_f061v2_recovery_decision_guard')
+                OR (tgrelid =
+                   'git_later_checkpoint_mirror_recovery_decision_events'::regclass
+                 AND tgname='trg_f061v2_recovery_decision_event'))
+            """).SingleAsync();
+        Assert.Equal(1L, fk);
+        Assert.Equal(0L, old);
+        Assert.Equal(1L, check);
+        Assert.Equal(2L, immutable);
+    }
+
+    [Fact]
     public async Task F061v2_recovery_inspection_is_independently_default_OFF_and_no_provider_calls()
     {
         var before = harness.Calls.Count;
