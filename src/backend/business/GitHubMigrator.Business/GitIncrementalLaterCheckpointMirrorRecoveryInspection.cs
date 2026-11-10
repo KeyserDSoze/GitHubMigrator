@@ -17,6 +17,7 @@ public sealed record GitIncrementalLaterCheckpointMirrorRecoveryInspection(
     string FullRefProofSha256, string SourceRefSetSha256,
     string FailureCode, DateTimeOffset QuarantinedAtUtc,
     int LeaseEventCount, int RenewedEventCount,
+    string LeaseEventHistorySha256,
     string PhysicalState, string? ObjectSetSha256, int? ObjectCount,
     DateTimeOffset InspectedAtUtc, string EvidenceSha256,
     bool DurableRecoveryApprovalPersisted,
@@ -37,7 +38,7 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegri
         GitIncrementalLaterCheckpointBundleReceipt durable,
         Guid workerId, Guid leaseToken, long generation,
         string failureCode, DateTimeOffset quarantinedAtUtc,
-        int totalEvents, int renewedEvents,
+        int totalEvents, int renewedEvents, string eventHistorySha256,
         GitIncrementalLaterCheckpointMirrorOfflineAudit? physical,
         DateTimeOffset inspectedAtUtc)
     {
@@ -57,6 +58,7 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegri
             totalEvents is < 2 or > 1000 ||
             renewedEvents < 0 ||
             renewedEvents != totalEvents - 2 ||
+            !GitSourceBundleStorageCheck.ValidSha(eventHistorySha256) ||
             quarantinedAtUtc == default ||
             quarantinedAtUtc.Offset != TimeSpan.Zero ||
             inspectedAtUtc == default ||
@@ -76,7 +78,7 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegri
             stage.EvidenceSha256, durable.EvidenceSha256,
             durable.BundleSha256, stage.SourceFullRefProofSha256,
             stage.SourceRefSetSha256, failureCode, quarantine,
-            totalEvents, renewedEvents,
+            totalEvents, renewedEvents, eventHistorySha256,
             physical is null ? Uninspectable : Intact,
             physical?.ObjectSetSha256, physical?.ObjectCount, at,
             "", false, false, false, false, false, false, false);
@@ -96,7 +98,8 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegri
             row != Seal(stage, durable, row.WorkerId, row.LeaseToken,
                 row.LeaseGeneration, row.FailureCode,
                 row.QuarantinedAtUtc, row.LeaseEventCount,
-                row.RenewedEventCount, physical, row.InspectedAtUtc))
+                row.RenewedEventCount, row.LeaseEventHistorySha256,
+                physical, row.InspectedAtUtc))
             throw Refused();
     }
 
@@ -122,6 +125,7 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegri
             row.SourceRefSetSha256, row.FailureCode,
             row.QuarantinedAtUtc.ToUniversalTime().ToString("O"),
             row.LeaseEventCount, row.RenewedEventCount,
+            row.LeaseEventHistorySha256,
             row.PhysicalState, row.ObjectSetSha256, row.ObjectCount,
             row.InspectedAtUtc.ToUniversalTime().ToString("O"),
             false, false, false, false, false, false, false
