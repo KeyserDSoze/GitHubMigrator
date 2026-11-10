@@ -1757,7 +1757,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     WHERE mirror_id = {staging.PhysicalMirrorId}
                                     """).ToArrayAsync();
                             Assert.Contains("Acquired", interruptedEvents);
-                            Assert.Contains("Renewed", interruptedEvents);
+                            // The local import can fail before the first
+                            // expensive SQL/physical pulse completes. A
+                            // zero-renewal Acquired -> Quarantined chain
+                            // is valid; the successful worker tests require
+                            // multiple completed Renewed events separately.
+                            Assert.All(interruptedEvents, item =>
+                                Assert.Contains(item,
+                                    new[] { "Acquired", "Renewed", "Quarantined" }));
                             Assert.Equal(1, interruptedEvents.Count(x =>
                                 x == "Quarantined"));
                             Assert.DoesNotContain("Verified", interruptedEvents);
