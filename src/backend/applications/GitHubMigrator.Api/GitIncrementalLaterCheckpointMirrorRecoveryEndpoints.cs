@@ -43,6 +43,9 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
                 c.PhysicalState, c.ObjectCount, c.ObjectSetSha256,
                 c.LeaseGeneration, c.LeaseEventCount, c.RenewedEventCount,
                 c.LeaseEventHistorySha256, c.EvidenceSha256,
+                reviewCandidateSha256 =
+                    GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                        .ReviewCandidateSha256(c),
                 canReAdmit = false, canMaterialize = false,
                 canPush = false, canRetry = false,
                 canDispatch = false, migrationComplete = false
