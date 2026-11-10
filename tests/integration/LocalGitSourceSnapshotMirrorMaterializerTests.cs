@@ -490,6 +490,43 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
                 inspection, actor, reviewer,
                 GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
                     .ApprovedForIsolationReview, reviewedAt);
+        // #123: the historical #122 human approval remains verifiable
+        // after a NEW physical/SQL inspection timestamp. It signs the
+        // stable candidate, not the wall-clock time of a later read.
+        var rereadInspection = inspection with {
+            InspectedAtUtc = reviewedAt.AddSeconds(15)
+        };
+        var preparedAt = reviewedAt.AddSeconds(16);
+        var prepared =
+            GitIncrementalLaterCheckpointMirrorIsolationIntentIntegrity.Seal(
+                rereadInspection, decision, preparedAt);
+        GitIncrementalLaterCheckpointMirrorIsolationIntentIntegrity.Verify(
+            prepared, rereadInspection, decision);
+        Assert.Equal(decision.EvidenceSha256,
+            prepared.RecoveryDecisionSha256);
+        Assert.Equal(inspection.LeaseEventHistorySha256,
+            prepared.LeaseEventHistorySha256);
+        Assert.Equal(GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity
+            .IsolationName(decision), prepared.IsolationDirectoryName);
+        Assert.False(prepared.CanReAdmit || prepared.CanMaterialize ||
+            prepared.CanPush || prepared.CanRetry ||
+            prepared.CanDispatch || prepared.MigrationComplete);
+        Assert.Equal("LaterCheckpointMirrorIsolationIntentInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorIsolationIntentIntegrity
+                    .Verify(prepared with { CanPush = true },
+                        rereadInspection, decision)).Code);
+        Assert.Equal("LaterCheckpointMirrorRecoveryDecisionInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorIsolationIntentIntegrity
+                    .Seal(rereadInspection,
+                        decision with { EvidenceSha256 = new string('0', 64) },
+                        preparedAt)).Code);
+        Assert.Equal("LaterCheckpointMirrorIsolationIntentInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorIsolationIntentIntegrity
+                    .Seal(rereadInspection, decision,
+                        preparedAt.AddMinutes(3))).Code);
         var off = new LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
             f.BundleRoot, f.MirrorRoot);
         Assert.Equal("LaterCheckpointMirrorOrphanIsolationDisabled",
