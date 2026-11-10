@@ -191,6 +191,15 @@ builder.Services.AddScoped<IGitIncrementalLaterCheckpointMirrorPhysicalAuditor>(
         clock: sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorVerifiedJournal>();
+// #121 quarantine is a READ-only diagnostic by default: no reviewer,
+// no SQL write, no orphan adoption or generation re-admission.
+builder.Services.AddSingleton(
+    new GitIncrementalLaterCheckpointMirrorRecoveryInspectionOptions(
+        builder.Configuration.GetValue(
+            "GitIncrementalLaterCheckpointMirrorRecoveryInspection:Enabled",
+            false)));
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector>();
 // #120: dedicated local-only F-060v2 importer, separated from the
 // historic baseline GitHubTrustedRemoteRead path. Both this import and
 // its worker need independent OFF-by-default feature switches.
