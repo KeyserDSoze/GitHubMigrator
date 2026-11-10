@@ -219,7 +219,9 @@ public static class GitIncrementalLaterCheckpointMirrorIsolationSchema
             CREATE OR REPLACE FUNCTION
                 git_later_checkpoint_mirror_isolation_event_guard()
             RETURNS trigger LANGUAGE plpgsql AS $isolation_event$
-            DECLARE actual_sha varchar(64);
+            DECLARE
+                actual_sha varchar(64);
+                provided_sha varchar(64);
             BEGIN
                 IF TG_OP <> 'INSERT' THEN
                     RAISE EXCEPTION 'F-061v2 isolation events are append-only';
@@ -230,6 +232,7 @@ public static class GitIncrementalLaterCheckpointMirrorIsolationSchema
                     FROM git_later_checkpoint_mirror_isolation_intents
                     WHERE mirror_id = NEW.mirror_id
                         AND prepared_at_utc = NEW.occurred_at_utc;
+                    provided_sha := NEW.intent_sha256;
                     IF NEW.type <> 'Prepared' THEN
                         RAISE EXCEPTION 'F-061v2 invalid isolation intent event';
                     END IF;
@@ -239,17 +242,14 @@ public static class GitIncrementalLaterCheckpointMirrorIsolationSchema
                     FROM git_later_checkpoint_mirror_isolation_receipts
                     WHERE mirror_id = NEW.mirror_id
                         AND recorded_at_utc = NEW.occurred_at_utc;
+                    provided_sha := NEW.evidence_sha256;
                     IF NEW.type <> 'Isolated' THEN
                         RAISE EXCEPTION 'F-061v2 invalid isolation receipt event';
                     END IF;
                 ELSE
                     RAISE EXCEPTION 'F-061v2 unknown isolation event table';
                 END IF;
-                IF actual_sha IS NULL OR actual_sha <> (
-                    CASE WHEN TG_TABLE_NAME =
-                        'git_later_checkpoint_mirror_isolation_intent_events'
-                        THEN NEW.intent_sha256 ELSE NEW.evidence_sha256 END)
-                THEN
+                IF actual_sha IS NULL OR actual_sha <> provided_sha THEN
                     RAISE EXCEPTION 'F-061v2 isolation event scope mismatch';
                 END IF;
                 RETURN NEW;
