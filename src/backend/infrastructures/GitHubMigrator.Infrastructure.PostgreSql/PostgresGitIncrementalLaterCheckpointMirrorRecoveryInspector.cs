@@ -137,7 +137,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector
                 after, afterDurable, second.WorkerId,
                 second.LeaseToken, second.Generation, second.FailureCode,
                 second.QuarantinedAtUtc, second.EventCount,
-                second.RenewedCount, observed, second.InspectedAtUtc);
+                second.RenewedCount, second.HistoryDigest,
+                observed, second.InspectedAtUtc);
         GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Verify(
             result, after, afterDurable, observed);
         return result;
