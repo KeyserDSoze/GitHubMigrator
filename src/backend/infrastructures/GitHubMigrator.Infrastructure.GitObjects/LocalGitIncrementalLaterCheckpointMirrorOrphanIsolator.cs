@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using GitHubMigrator.Business;
 
 namespace GitHubMigrator.Infrastructure.GitObjects;
@@ -12,6 +13,31 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
     bool enabled = false, TimeProvider? clock = null)
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+
+    // Directory.Move checks the destination separately from rename(2).
+    // On POSIX, an outsider can create an empty directory between those
+    // operations, making rename(2) replace it. The importer lock only
+    // coordinates OUR processes, not arbitrary other filesystem writers.
+    // Linux renameat2(RENAME_NOREPLACE) performs the collision check in
+    // the kernel atomically; unsupported filesystems/OSes fail closed.
+    private const int AtCurrentDirectory = -100; // AT_FDCWD
+    private const uint NoReplace = 1; // RENAME_NOREPLACE
+
+    [DllImport("libc", EntryPoint = "renameat2", SetLastError = true,
+        CharSet = CharSet.Ansi)]
+    private static extern int RenameNoReplace(
+        int oldDirectoryFd, string oldPath,
+        int newDirectoryFd, string newPath, uint flags);
+
+    private static void MoveDirectoryWithoutReplacement(
+        string original, string isolated)
+    {
+        if (!OperatingSystem.IsLinux() ||
+            RenameNoReplace(AtCurrentDirectory, original,
+                AtCurrentDirectory, isolated, NoReplace) != 0)
+            throw new IOException(
+                "F-061v2 orphan isolation requires atomic no-replace rename");
+    }
 
     // Read-only crash-diagnosis primitive. This method never restores
     // UUID.git, creates a new lease or returns authority. The only
@@ -200,7 +226,7 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
             {
                 // Same-volume atomic rename. NO deletion, no foreign
                 // path, no overwrite and no Git invocation after move.
-                Directory.Move(original, isolated);
+                MoveDirectoryWithoutReplacement(original, isolated);
             }
             catch (IOException)
             {
