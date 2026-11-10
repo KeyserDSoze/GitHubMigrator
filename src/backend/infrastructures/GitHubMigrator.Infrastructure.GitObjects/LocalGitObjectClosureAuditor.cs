@@ -88,8 +88,47 @@ public sealed class LocalGitObjectClosureAuditor(
         var canonical = GitMirrorRefReconciler.CanonicalizeObservedRefs(expected);
         if (!canonical.SequenceEqual(expected))
             throw new GitObjectClosureAuditException("GitClosureRefsChanged");
+        return await VerifyOneAtPathAsync(
+            SafeBarePath(root, mirrorId), expected, ct);
+    }
+
+    // #123: full, read-only post-rename verification of the EXACT
+    // deterministic quarantined UUID.git path. This code NEVER accepts
+    // user-supplied filesystem paths and never treats quarantine as an
+    // F-061 Verified/source authority. Used only for crash diagnosis.
+    internal static async Task<(int Count, string Digest)>
+        VerifyQuarantinedOneAsync(
+            string root, Guid mirrorId, string decisionSha256,
+            IReadOnlyList<GitMirrorRef> expected, CancellationToken ct)
+    {
+        if (mirrorId == Guid.Empty ||
+            !GitSourceBundleStorageCheck.ValidSha(decisionSha256) ||
+            string.IsNullOrWhiteSpace(root) ||
+            !Path.IsPathFullyQualified(root) || !Directory.Exists(root))
+            throw new GitObjectClosureAuditException("GitClosureRootInvalid");
+        var physical = Path.GetFullPath(root);
+        for (var dir = new DirectoryInfo(physical);
+            dir is not null; dir = dir.Parent)
+            if (dir.LinkTarget is not null ||
+                (dir.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new GitObjectClosureAuditException("GitClosureSymlinkBlocked");
+
+        var basename = mirrorId.ToString("N") + "." + decisionSha256 +
+            ".quarantine.git";
+        var path = Path.Combine(physical, basename);
+        CheckBare(path);
+        if (expected is null || expected.Count == 0 ||
+            !GitMirrorRefReconciler.CanonicalizeObservedRefs(expected)
+                .SequenceEqual(expected))
+            throw new GitObjectClosureAuditException("GitClosureRefsChanged");
+        return await VerifyOneAtPathAsync(path, expected, ct);
+    }
+
+    private static async Task<(int Count, string Digest)> VerifyOneAtPathAsync(
+        string path, IReadOnlyList<GitMirrorRef> expected,
+        CancellationToken ct)
+    {
         var format = expected[0].ObjectId.Length == 40 ? "sha1" : "sha256";
-        var path = SafeBarePath(root, mirrorId);
         await VerifyRepositoryAsync(path, expected, format, ct);
         var first = await ReachableAsync(path, expected, format, ct);
         await VerifyRepositoryAsync(path, expected, format, ct);
