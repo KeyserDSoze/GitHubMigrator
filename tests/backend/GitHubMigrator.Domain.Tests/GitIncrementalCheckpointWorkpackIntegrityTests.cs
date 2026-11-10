@@ -388,6 +388,69 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
                     staged, receipt, physical, verifiedWorker,
                     verifiedLease, 0, now.AddSeconds(1))).Code);
 
+        // #121 recovery diagnostics are sealed but NEVER authorize an
+        // orphan release, re-admission, import, GitHub send or F-095.
+        // They distinguish a fresh healthy physical Git audit from a
+        // missing/corrupt physical mirror without manufacturing Verified.
+        var quarantinedAt = now.AddSeconds(3);
+        var inspectedAt = now.AddSeconds(5);
+        var missing = GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+            .Seal(staged, receipt, verifiedWorker, verifiedLease, 1,
+                "ImportWorkerFailed", quarantinedAt, 4, 2,
+                null, inspectedAt);
+        Assert.Equal(
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                .Uninspectable, missing.PhysicalState);
+        Assert.Null(missing.ObjectSetSha256);
+        Assert.Null(missing.ObjectCount);
+        Assert.False(missing.DurableRecoveryApprovalPersisted ||
+            missing.CanReAdmit || missing.CanMaterialize ||
+            missing.CanPush || missing.CanRetry || missing.CanDispatch ||
+            missing.MigrationComplete);
+        GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Verify(
+            missing, staged, receipt, null);
+        var intact = GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+            .Seal(staged, receipt, verifiedWorker, verifiedLease, 1,
+                "ImportWorkerFailed", quarantinedAt, 4, 2,
+                physical, inspectedAt);
+        Assert.Equal(
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Intact,
+            intact.PhysicalState);
+        Assert.Equal(physical.ObjectSetSha256, intact.ObjectSetSha256);
+        Assert.Equal(physical.ObjectCount, intact.ObjectCount);
+        Assert.NotEqual(missing.EvidenceSha256, intact.EvidenceSha256);
+        GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Verify(
+            intact, staged, receipt, physical);
+        foreach (var changedInspection in new[] {
+            intact with { WorkerId = Guid.NewGuid() },
+            intact with { LeaseToken = Guid.NewGuid() },
+            intact with { LeaseGeneration = 2 },
+            intact with { FailureCode = "OtherFailure" },
+            intact with { QuarantinedAtUtc = now.AddSeconds(4) },
+            intact with { BundleSha256 = new string('0', 64) },
+            intact with { SourceSnapshotId = plan.SnapshotId },
+            intact with { LeaseEventCount = 5 },
+            intact with { RenewedEventCount = 3 },
+            intact with { ObjectSetSha256 = new string('0', 64) },
+            intact with { PhysicalState =
+                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                    .Uninspectable },
+            intact with { CanReAdmit = true },
+            intact with { CanPush = true },
+            intact with { DurableRecoveryApprovalPersisted = true },
+            intact with { EvidenceSha256 = new string('f', 64) }
+        })
+            Assert.Equal("LaterCheckpointMirrorRecoveryInspectionInvalid",
+                Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                    GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                        .Verify(changedInspection, staged, receipt, physical)).Code);
+        Assert.Equal("LaterCheckpointMirrorRecoveryInspectionInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                    .Seal(staged, receipt, verifiedWorker, verifiedLease, 1,
+                        "ImportWorkerFailed", quarantinedAt, 4, 0,
+                        null, inspectedAt)).Code);
+
         foreach (var altered in new[] {
             staged with { CanMaterialize = true },
             staged with { CanPush = true },
