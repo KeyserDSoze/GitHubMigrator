@@ -238,6 +238,18 @@ isolation evidence. This must prevent the filesystem rename from
 being interpreted as an F-061 new-generation license even if
 PostgreSQL fails between the move and final audit commit.
 
+A separate read-only `AuditIsolatedAsync` now supports
+diagnosing a crash **after** the atomic directory move but **before**
+PostgreSQL can record the operation. It derives the exact quarantine
+path from the reviewed decision SHA, checks that no original UUID.git
+has been recreated, locks with F-060, rehashes the original UUID.bundle
+before and after, and applies two strict bare-Git fsck/ref/OID/
+object-closure passes to the isolated directory. It refuses missing,
+symlinked, corrupted or changed Git objects; it never renames back,
+imports or issues a durable recovery receipt. The implementation
+reuses the same bounded F-056 object graph verifier, rather than
+trusting the filename or an earlier signed checksum.
+
 A still later step under #121 must design append-only generation
 history and **separate reviewer-approved** re-admission, without
 editing or reopening historical terminal F-061v2 lease rows or
