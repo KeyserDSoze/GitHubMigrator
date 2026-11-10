@@ -94,7 +94,7 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema
                 git_later_checkpoint_mirror_recovery_decision_guard()
             RETURNS trigger LANGUAGE plpgsql AS $review_guard$
             DECLARE lease record;
-            DECLARE human record;
+            human record;
             BEGIN
                 IF TG_OP <> 'INSERT' THEN
                     RAISE EXCEPTION 'F-061v2 recovery decision is immutable';
