@@ -453,6 +453,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
             EnableLaterCheckpointMirrorVerified = verifyPhysical,
             EnableLaterCheckpointMirrorImportWorker = runWorker,
             EnableLaterCheckpointMirrorRecoveryInspection = runWorker,
+            EnableLaterCheckpointMirrorRecoveryReview = runWorker,
             TrustedLocalVerifiedMirrorRoot = physicalMirror.VerifiedMirrorRoot,
             TrustedLocalBundleSourceRoot = physicalMirror.SourceRoot,
             TrustedLocalBundleOutputRoot = physicalMirror.BundleRoot,
@@ -1818,6 +1819,114 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 diagnostic.CanReAdmit || diagnostic.CanMaterialize ||
                                 diagnostic.CanPush || diagnostic.CanRetry ||
                                 diagnostic.CanDispatch || diagnostic.MigrationComplete);
+                            // #122: independent F-031 human review
+                            // persists a decision ONLY, never releases
+                            // the quarantined worker or adopts UUID.git.
+                            var journal = auditScope.ServiceProvider
+                                .GetRequiredService<
+                                    PostgresGitIncrementalLaterCheckpointMirrorRecoveryReviewJournal>();
+                            var stableCandidate =
+                                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                                    .ReviewCandidateSha256(diagnostic);
+                            Assert.Equal(stableCandidate,
+                                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                                    .ReviewCandidateSha256(
+                                        diagnostic with {
+                                            InspectedAtUtc =
+                                                diagnostic.InspectedAtUtc.AddSeconds(1)
+                                        }));
+                            var reviewDecision = failAfterImport
+                                ? GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                                    .ApprovedForIsolationReview
+                                : GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                                    .Rejected;
+                            Assert.Equal(
+                                "LaterCheckpointMirrorRecoveryReviewInspectionChanged",
+                                (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                    () => journal.RecordAsync(
+                                        run.Id, plan.Id, later.Id, observationId,
+                                        first.WorkpackId, "repo-1",
+                                        targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, reviewerId,
+                                        reviewDecision, new string('0',64),
+                                        default))).Code);
+                            Assert.Equal(
+                                "LaterCheckpointMirrorRecoveryReviewInvalid",
+                                (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                    () => journal.RecordAsync(
+                                        run.Id, plan.Id, later.Id, observationId,
+                                        first.WorkpackId, "repo-1",
+                                        targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy,
+                                        candidate.RequestedBy,
+                                        reviewDecision, stableCandidate,
+                                        default))).Code);
+                            var humanDecision = await journal.RecordAsync(
+                                run.Id, plan.Id, later.Id, observationId,
+                                first.WorkpackId, "repo-1",
+                                targetReceipt.EvidenceSha256,
+                                candidate.RequestedBy, reviewerId,
+                                reviewDecision, stableCandidate, default);
+                            Assert.Equal(reviewerId, humanDecision.ReviewerId);
+                            Assert.Equal(reviewDecision, humanDecision.Decision);
+                            Assert.Equal(stableCandidate,
+                                humanDecision.InspectionEvidenceSha256);
+                            Assert.Equal(diagnostic.LeaseEventHistorySha256,
+                                humanDecision.LeaseEventHistorySha256);
+                            Assert.False(humanDecision.CanReAdmit ||
+                                humanDecision.CanMaterialize ||
+                                humanDecision.CanPush || humanDecision.CanRetry ||
+                                humanDecision.CanDispatch ||
+                                humanDecision.MigrationComplete);
+                            var decisionRows = await verifiedDb.Database
+                                .SqlQuery<long>($"""
+                                    SELECT count(*)::bigint AS "Value"
+                                    FROM git_later_checkpoint_mirror_recovery_decisions
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        AND reviewer_id = {reviewerId}
+                                        AND evidence_sha256 = {humanDecision.EvidenceSha256}
+                                        AND NOT can_readmit AND NOT can_push
+                                        AND NOT can_retry AND NOT can_dispatch
+                                        AND NOT migration_complete
+                                    """).SingleAsync();
+                            Assert.Equal(1L, decisionRows);
+                            var decisionEvents = await verifiedDb.Database
+                                .SqlQuery<long>($"""
+                                    SELECT count(*)::bigint AS "Value"
+                                    FROM git_later_checkpoint_mirror_recovery_decision_events
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        AND reviewer_id = {reviewerId}
+                                        AND evidence_sha256 = {humanDecision.EvidenceSha256}
+                                    """).SingleAsync();
+                            Assert.Equal(1L, decisionEvents);
+                            Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                                (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                                    () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                        UPDATE git_later_checkpoint_mirror_recovery_decisions
+                                        SET can_push = {true}
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """))).SqlState);
+                            Assert.Equal("LaterCheckpointMirrorRecoveryReviewAlreadyRecorded",
+                                (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                                    () => journal.RecordAsync(
+                                        run.Id, plan.Id, later.Id, observationId,
+                                        first.WorkpackId, "repo-1",
+                                        targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, reviewerId,
+                                        reviewDecision, stableCandidate,
+                                        default))).Code);
+                            Assert.Equal("RecoveryRequired",
+                                await verifiedDb.Database.SqlQuery<string>($"""
+                                    SELECT state AS "Value"
+                                    FROM git_later_checkpoint_mirror_leases
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """).SingleAsync());
+                            Assert.Equal(0L, await verifiedDb.Database
+                                .SqlQuery<long>($"""
+                                    SELECT count(*)::bigint AS "Value"
+                                    FROM git_later_checkpoint_mirror_verified_evidence
+                                    WHERE mirror_id = {staging.PhysicalMirrorId}
+                                    """).SingleAsync());
                             await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
                                 () => recoveryInspector.ReadAsync(
                                     run.Id, plan.Id, later.Id, observationId,
