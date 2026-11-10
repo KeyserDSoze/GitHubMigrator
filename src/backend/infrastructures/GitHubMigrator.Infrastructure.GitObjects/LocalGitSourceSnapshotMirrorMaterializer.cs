@@ -18,7 +18,7 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
       IGitIncrementalLaterCheckpointMirrorImporter
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
-    private static readonly SemaphoreSlim ProcessGate = new(1, 1);
+    internal static readonly SemaphoreSlim ProcessGate = new(1, 1);
     private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(90);
 
     public async Task<GitSourceSnapshotMirrorProof> MaterializeAsync(
@@ -297,7 +297,7 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
                 "SourceMirrorBundleChanged");
     }
 
-    private static string CheckMirrorRoot(string root)
+    internal static string CheckMirrorRoot(string root)
     {
         if (string.IsNullOrWhiteSpace(root) ||
             !Path.IsPathFullyQualified(root) ||
@@ -316,7 +316,7 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializer(
         return path;
     }
 
-    private static async Task<FileStream> AcquireRootLockAsync(
+    internal static async Task<FileStream> AcquireRootLockAsync(
         string root, CancellationToken ct)
     {
         var path = Path.Combine(root, ".f060-source-materialization.lock");
