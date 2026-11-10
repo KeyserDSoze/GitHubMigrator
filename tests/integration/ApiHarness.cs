@@ -52,6 +52,7 @@ public sealed class ApiHarness : IAsyncLifetime
     public string? TrustedLocalVerifiedMirrorRoot { get; set; }
     public bool EnableLaterCheckpointMirrorImportWorker { get; set; }
     public bool EnableLaterCheckpointMirrorRecoveryInspection { get; set; }
+    public bool EnableLaterCheckpointMirrorRecoveryReview { get; set; }
     public int LaterCheckpointMirrorHeartbeatMilliseconds { get; set; } = 250;
     public string? TrustedLocalBundleSourceRoot { get; set; }
     public string? TrustedLocalBundleOutputRoot { get; set; }
@@ -137,6 +138,8 @@ public sealed class ApiHarness : IAsyncLifetime
                 TrustedLocalVerifiedMirrorRoot;
         if (EnableLaterCheckpointMirrorRecoveryInspection)
             values["GitIncrementalLaterCheckpointMirrorRecoveryInspection__Enabled"] = "true";
+        if (EnableLaterCheckpointMirrorRecoveryReview)
+            values["GitIncrementalLaterCheckpointMirrorRecoveryReview__Enabled"] = "true";
         if (EnableLaterCheckpointMirrorImportWorker)
         {
             values["GitIncrementalLaterCheckpointMirrorImportWorker__Enabled"] = "true";
