@@ -210,6 +210,15 @@ builder.Services.AddSingleton(
             false)));
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorRecoveryReviewJournal>();
+// #123: prepared durable intent only; independently default-OFF,
+// no physical mover, remote provider, generation or HTTP route.
+builder.Services.AddSingleton(
+    new GitIncrementalLaterCheckpointMirrorIsolationIntentOptions(
+        builder.Configuration.GetValue(
+            "GitIncrementalLaterCheckpointMirrorIsolationIntent:Enabled",
+            false)));
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorIsolationIntentJournal>();
 // #120: dedicated local-only F-060v2 importer, separated from the
 // historic baseline GitHubTrustedRemoteRead path. Both this import and
 // its worker need independent OFF-by-default feature switches.
