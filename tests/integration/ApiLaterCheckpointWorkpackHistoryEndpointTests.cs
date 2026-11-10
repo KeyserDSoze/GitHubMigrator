@@ -223,6 +223,106 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2_orphan_isolation_journal_has_two_immutable_non_authorizing_phases()
+    {
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        // Installing schema alone grants neither permission to move a
+        // mirror nor permission to adopt a RecoveryRequired lease.
+        var tables = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_class WHERE relkind = 'r' AND relname IN (
+                'git_later_checkpoint_mirror_isolation_intents',
+                'git_later_checkpoint_mirror_isolation_intent_events',
+                'git_later_checkpoint_mirror_isolation_receipts',
+                'git_later_checkpoint_mirror_isolation_receipt_events')
+            """).SingleAsync();
+        var checks = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_constraint WHERE conname IN (
+                'ck_f061v2_isolation_intent_safe',
+                'ck_f061v2_isolation_intent_event_safe',
+                'ck_f061v2_isolation_receipt_safe',
+                'ck_f061v2_isolation_receipt_event_safe')
+            """).SingleAsync();
+        var guards = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_trigger WHERE NOT tgisinternal
+              AND tgname IN (
+                'trg_f061v2_isolation_intent',
+                'trg_f061v2_isolation_intent_event',
+                'trg_f061v2_isolation_receipt',
+                'trg_f061v2_isolation_receipt_event')
+            """).SingleAsync();
+        var reviewFk = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_isolation_intents'::regclass
+              AND confrelid =
+                'git_later_checkpoint_mirror_recovery_decisions'::regclass
+              AND contype='f'
+            """).SingleAsync();
+        var legacyFk = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_isolation_intents'::regclass
+              AND confrelid='git_source_mirror_lifecycles'::regclass
+              AND contype='f'
+            """).SingleAsync();
+
+        Assert.Equal(4L, tables);
+        Assert.Equal(4L, checks);
+        Assert.Equal(4L, guards);
+        Assert.Equal(1L, reviewFk);
+        Assert.Equal(0L, legacyFk);
+        var flags = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM information_schema.columns
+            WHERE table_name IN (
+                'git_later_checkpoint_mirror_isolation_intents',
+                'git_later_checkpoint_mirror_isolation_receipts')
+              AND column_name IN (
+                'can_readmit', 'can_materialize', 'can_push',
+                'can_retry', 'can_dispatch', 'migration_complete')
+              AND column_default = 'false'
+            """).SingleAsync();
+        Assert.Equal(12L, flags);
+        // A fabricated decision cannot create an intent; the signed
+        // reviewer decision is an actual FK, never a caller's SHA string.
+        var mirror = Guid.NewGuid();
+        var worker = Guid.NewGuid();
+        var token = Guid.NewGuid();
+        var workpack = Guid.NewGuid();
+        var sha = new string('a', 64);
+        var quarantineName = mirror.ToString("N") + "." + sha +
+            ".quarantine.git";
+        var invalid = await Assert.ThrowsAsync<Npgsql.PostgresException>(
+            () => db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO git_later_checkpoint_mirror_isolation_intents (
+                    mirror_id,workpack_id,checkpoint_id,source_snapshot_id,
+                    original_worker_id,original_lease_token,
+                    original_generation,recovery_decision_sha256,
+                    inspection_sha256,lease_event_history_sha256,
+                    staging_evidence_sha256,object_set_sha256,
+                    object_count,isolation_directory_name,
+                    prepared_at_utc,intent_sha256)
+                VALUES (
+                    {mirror},{workpack},{Guid.NewGuid()},{Guid.NewGuid()},
+                    {worker},{token},{1L},{sha},{sha},{sha},{sha},{sha},
+                    {4},{quarantineName},{DateTimeOffset.UtcNow},{sha})
+                """));
+        Assert.Equal(Npgsql.PostgresErrorCodes.ForeignKeyViolation,
+            invalid.SqlState);
+        Assert.Equal(0L, await db.Database.SqlQuery<long>($"""
+            SELECT count(*)::bigint AS "Value"
+            FROM git_later_checkpoint_mirror_isolation_intents
+            WHERE mirror_id={mirror}
+            """).SingleAsync());
+    }
+
+    [Fact]
     public async Task F061v2_recovery_inspection_is_independently_default_OFF_and_no_provider_calls()
     {
         var before = harness.Calls.Count;
