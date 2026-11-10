@@ -26,7 +26,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector
     private static GitSourceSnapshotMirrorException Refused(string code) =>
         new(code);
 
-    private sealed class EventRow
+    internal sealed class EventRow
     {
         public long Id { get; set; }
         public long Generation { get; set; }
@@ -206,19 +206,27 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector
                 .Any(invalid => invalid))
             throw Refused("LaterCheckpointMirrorRecoveryEventChainInvalid");
         var renewedCount = events.Length - 2;
-        var eventParts = events.Select(e => new object[] {
-            e.Id, e.Generation, e.WorkerId.ToString("D"), e.Type,
-            e.StagingEvidenceSha256,
-            e.OccurredAtUtc.ToUniversalTime().ToString("O")
-        }).ToArray();
-        var digest = Convert.ToHexStringLower(SHA256.HashData(
-            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(eventParts))));
+        var digest = HashEvents(events);
         var result = new DiagnosticSnapshot(
             row.WorkerId, row.LeaseToken, row.Generation,
             row.FailureCode, events[^1].OccurredAtUtc,
             events.Length, renewedCount, digest, now);
         await tx.CommitAsync(ct);
         return result;
+    }
+
+    // Reused by the final human-review writer INSIDE its source-first
+    // SQL transaction. A mere number of Quarantined events would not
+    // detect a forged or out-of-order Renewed event appended after GET.
+    internal static string HashEvents(IReadOnlyList<EventRow> events)
+    {
+        var parts = events.Select(e => new object[] {
+            e.Id, e.Generation, e.WorkerId.ToString("D"), e.Type,
+            e.StagingEvidenceSha256,
+            e.OccurredAtUtc.ToUniversalTime().ToString("O")
+        }).ToArray();
+        return Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(parts))));
     }
 
     private static void RequireStage(
