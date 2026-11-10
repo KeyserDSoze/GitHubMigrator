@@ -7,6 +7,14 @@ on:
 permissions:
   contents: read
 
+# Only the latest commit on each ref needs the expensive full
+# PostgreSQL integration suite. Older, superseded runs must not
+# compete for CI resources or be mistaken for the current main gate.
+# Ref-scoping keeps PR checks separate from main checks.
+concurrency:
+  group: quality-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     name: .NET 10 / xUnit
