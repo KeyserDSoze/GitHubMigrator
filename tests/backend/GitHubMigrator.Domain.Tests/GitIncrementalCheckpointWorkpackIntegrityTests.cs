@@ -397,7 +397,7 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
         var missing = GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
             .Seal(staged, receipt, verifiedWorker, verifiedLease, 1,
                 "ImportWorkerFailed", quarantinedAt, 4, 2,
-                null, inspectedAt);
+                new string('d', 64), null, inspectedAt);
         Assert.Equal(
             GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
                 .Uninspectable, missing.PhysicalState);
@@ -412,7 +412,7 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
         var intact = GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
             .Seal(staged, receipt, verifiedWorker, verifiedLease, 1,
                 "ImportWorkerFailed", quarantinedAt, 4, 2,
-                physical, inspectedAt);
+                new string('d', 64), physical, inspectedAt);
         Assert.Equal(
             GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Intact,
             intact.PhysicalState);
@@ -431,6 +431,7 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
             intact with { SourceSnapshotId = plan.SnapshotId },
             intact with { LeaseEventCount = 5 },
             intact with { RenewedEventCount = 3 },
+            intact with { LeaseEventHistorySha256 = new string('0', 64) },
             intact with { ObjectSetSha256 = new string('0', 64) },
             intact with { PhysicalState =
                 GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
@@ -449,7 +450,7 @@ public sealed class GitIncrementalCheckpointWorkpackIntegrityTests
                 GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
                     .Seal(staged, receipt, verifiedWorker, verifiedLease, 1,
                         "ImportWorkerFailed", quarantinedAt, 4, 0,
-                        null, inspectedAt)).Code);
+                        new string('d', 64), null, inspectedAt)).Code);
 
         foreach (var altered in new[] {
             staged with { CanMaterialize = true },
