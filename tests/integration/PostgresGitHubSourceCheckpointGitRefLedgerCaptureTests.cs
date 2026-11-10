@@ -1919,6 +1919,17 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     Assert.Equal(System.Net.HttpStatusCode.Conflict,
                                         wrongReviewer.StatusCode);
                                 }
+                                using (var otherSuperadmin = await SendAsync(
+                                    HttpMethod.Post,
+                                    rootPath + "/decision", request,
+                                    otherReviewerToken))
+                                {
+                                    Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                                        otherSuperadmin.StatusCode);
+                                    Assert.Contains(
+                                        "LaterCheckpointMirrorRecoveryReviewIndependentReviewerRequired",
+                                        await otherSuperadmin.Content.ReadAsStringAsync());
+                                }
                                 using (var accepted = await SendAsync(
                                     HttpMethod.Post,
                                     rootPath + "/decision", request))
@@ -1994,6 +2005,19 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
                                         UPDATE git_later_checkpoint_mirror_recovery_decisions
                                         SET can_push = {true}
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """))).SqlState);
+                            Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                                (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                                    () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                        UPDATE git_later_checkpoint_mirror_recovery_decision_events
+                                        SET decision = {"Rejected"}
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """))).SqlState);
+                            Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                                (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                                    () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                        DELETE FROM git_later_checkpoint_mirror_recovery_decisions
                                         WHERE mirror_id = {staging.PhysicalMirrorId}
                                         """))).SqlState);
                             Assert.Equal("LaterCheckpointMirrorRecoveryReviewAlreadyRecorded",
