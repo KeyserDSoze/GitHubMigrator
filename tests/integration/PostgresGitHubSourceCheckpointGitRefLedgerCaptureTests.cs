@@ -1795,9 +1795,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     diagnostic.ObjectSetSha256);
                                 Assert.Equal(physicalAudit.ObjectCount,
                                     diagnostic.ObjectCount);
-                                GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
-                                    .Verify(diagnostic, staging, committed,
-                                        physicalAudit);
+                                // The second independent read occurs
+                                // after the inspection's timestamp: compare
+                                // its exact real physical graph SHA/count
+                                // rather than passing a *later* receipt
+                                // into the earlier inspection's time seal.
+                                Assert.False(diagnostic.CanReAdmit);
+                                Assert.False(diagnostic.DurableRecoveryApprovalPersisted);
                             }
                             else
                             {
