@@ -1861,12 +1861,102 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         candidate.RequestedBy,
                                         reviewDecision, stableCandidate,
                                         default))).Code);
-                            var humanDecision = await journal.RecordAsync(
-                                run.Id, plan.Id, later.Id, observationId,
-                                first.WorkpackId, "repo-1",
-                                targetReceipt.EvidenceSha256,
-                                candidate.RequestedBy, reviewerId,
-                                reviewDecision, stableCandidate, default);
+                            GitIncrementalLaterCheckpointMirrorRecoveryDecision
+                                humanDecision;
+                            if (failAfterImport)
+                            {
+                                // JWT subject comes from server claims.
+                                // A stable candidate survives the second
+                                // full PostgreSQL + physical Git audit.
+                                var rootPath =
+                                    "/api/incremental-preparations/" + run.Id +
+                                    "/operation-plans/" + plan.Id +
+                                    "/source-sync-checkpoints/" + later.Id +
+                                    "/mirror-recovery";
+                                var queryPath = rootPath + "/candidate" +
+                                    "?targetObservationId=" + observationId +
+                                    "&workpackId=" + first.WorkpackId +
+                                    "&sourceRepositoryId=repo-1" +
+                                    "&originalBundleActorId=" +
+                                        candidate.RequestedBy +
+                                    "&expectedTargetReceiptSha256=" +
+                                        targetReceipt.EvidenceSha256;
+                                using (var candidateGet = await SendAsync(
+                                    HttpMethod.Get, queryPath))
+                                {
+                                    Assert.Equal(System.Net.HttpStatusCode.OK,
+                                        candidateGet.StatusCode);
+                                    using var json = JsonDocument.Parse(
+                                        await candidateGet.Content.ReadAsStringAsync());
+                                    Assert.Equal(stableCandidate,
+                                        json.RootElement.GetProperty(
+                                            "reviewCandidateSha256").GetString());
+                                    Assert.Equal("Intact",
+                                        json.RootElement.GetProperty(
+                                            "physicalState").GetString());
+                                    Assert.False(json.RootElement.GetProperty(
+                                        "canReAdmit").GetBoolean());
+                                    Assert.DoesNotContain(
+                                        "originalLeaseToken",
+                                        json.RootElement.GetRawText());
+                                }
+                                var request = new {
+                                    targetObservationId = observationId,
+                                    workpackId = first.WorkpackId,
+                                    sourceRepositoryId = "repo-1",
+                                    originalBundleActorId =
+                                        candidate.RequestedBy,
+                                    expectedTargetReceiptSha256 =
+                                        targetReceipt.EvidenceSha256,
+                                    expectedInspectionSha256 = stableCandidate,
+                                    decision = reviewDecision
+                                };
+                                using (var wrongReviewer = await SendAsync(
+                                    HttpMethod.Post,
+                                    rootPath + "/decision", request,
+                                    requesterToken))
+                                {
+                                    Assert.Equal(System.Net.HttpStatusCode.Conflict,
+                                        wrongReviewer.StatusCode);
+                                }
+                                using (var accepted = await SendAsync(
+                                    HttpMethod.Post,
+                                    rootPath + "/decision", request))
+                                {
+                                    Assert.Equal(System.Net.HttpStatusCode.OK,
+                                        accepted.StatusCode);
+                                    using var json = JsonDocument.Parse(
+                                        await accepted.Content.ReadAsStringAsync());
+                                    Assert.Equal(reviewDecision,
+                                        json.RootElement.GetProperty(
+                                            "decision").GetString());
+                                    Assert.False(json.RootElement.GetProperty(
+                                        "canReAdmit").GetBoolean());
+                                    Assert.False(json.RootElement.GetProperty(
+                                        "canPush").GetBoolean());
+                                    Assert.DoesNotContain("originalLeaseToken",
+                                        json.RootElement.GetRawText());
+                                }
+                                var savedAt = await verifiedDb.Database
+                                    .SqlQuery<DateTimeOffset>($"""
+                                        SELECT reviewed_at_utc AS "Value"
+                                        FROM git_later_checkpoint_mirror_recovery_decisions
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """).SingleAsync();
+                                humanDecision =
+                                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                                        .Seal(diagnostic, candidate.RequestedBy,
+                                            reviewerId, reviewDecision, savedAt);
+                            }
+                            else
+                            {
+                                humanDecision = await journal.RecordAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, reviewerId,
+                                    reviewDecision, stableCandidate, default);
+                            }
                             Assert.Equal(reviewerId, humanDecision.ReviewerId);
                             Assert.Equal(reviewDecision, humanDecision.Decision);
                             Assert.Equal(stableCandidate,
