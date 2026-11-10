@@ -2051,6 +2051,86 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         AND evidence_sha256 = {humanDecision.EvidenceSha256}
                                     """).SingleAsync();
                             Assert.Equal(1L, decisionEvents);
+
+                            // #123: a true later-epoch, reviewed and
+                            // physically intact RecoveryRequired orphan can
+                            // create ONE immutable PRE-MOVE SQL intent.
+                            // No filesystem isolation is invoked by it.
+                            var isolationIntent = new
+                                PostgresGitIncrementalLaterCheckpointMirrorIsolationIntentJournal(
+                                    verifiedDb, new(true), recoveryInspector,
+                                    auditScope.ServiceProvider.GetRequiredService<
+                                        PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>(),
+                                    auditScope.ServiceProvider.GetRequiredService<
+                                        PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>());
+                            if (failAfterImport)
+                            {
+                                var prepared = await isolationIntent.PrepareAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, default);
+                                Assert.Equal(humanDecision.EvidenceSha256,
+                                    prepared.RecoveryDecisionSha256);
+                                Assert.Equal(stableCandidate,
+                                    prepared.InspectionSha256);
+                                Assert.Equal(diagnostic.LeaseEventHistorySha256,
+                                    prepared.LeaseEventHistorySha256);
+                                Assert.Equal(diagnostic.ObjectSetSha256,
+                                    prepared.ObjectSetSha256);
+                                Assert.Equal(staging.PhysicalMirrorId,
+                                    prepared.PhysicalMirrorId);
+                                Assert.False(prepared.CanReAdmit ||
+                                    prepared.CanMaterialize || prepared.CanPush ||
+                                    prepared.CanRetry || prepared.CanDispatch ||
+                                    prepared.MigrationComplete);
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_isolation_intents
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            AND intent_sha256 = {prepared.IntentSha256}
+                                            AND NOT can_readmit AND NOT can_push
+                                            AND NOT can_retry AND NOT can_dispatch
+                                            AND NOT migration_complete
+                                        """).SingleAsync());
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_isolation_intent_events
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            AND intent_sha256 = {prepared.IntentSha256}
+                                            AND type = 'Prepared'
+                                        """).SingleAsync());
+                                Assert.Equal(0L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_isolation_receipts
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """).SingleAsync());
+                                Assert.Equal("LaterCheckpointMirrorIsolationIntentAlreadyPrepared",
+                                    (await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                        isolationIntent.PrepareAsync(
+                                            run.Id, plan.Id, later.Id,
+                                            observationId, first.WorkpackId,
+                                            "repo-1",
+                                            targetReceipt.EvidenceSha256,
+                                            candidate.RequestedBy, default))).Code);
+                            }
+                            else
+                            {
+                                Assert.Equal("LaterCheckpointMirrorIsolationIntentNoIntactOrphan",
+                                    (await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                        isolationIntent.PrepareAsync(
+                                            run.Id, plan.Id, later.Id,
+                                            observationId, first.WorkpackId,
+                                            "repo-1",
+                                            targetReceipt.EvidenceSha256,
+                                            candidate.RequestedBy, default))).Code);
+                            }
+
                             Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
                                 (await Assert.ThrowsAsync<Npgsql.PostgresException>(
                                     () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
