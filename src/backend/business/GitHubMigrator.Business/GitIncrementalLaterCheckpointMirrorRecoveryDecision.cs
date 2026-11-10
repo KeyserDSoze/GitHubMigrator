@@ -70,7 +70,9 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
             inspection.CheckpointId, inspection.SourceSnapshotId,
             inspection.WorkerId, inspection.LeaseToken,
             inspection.LeaseGeneration, originalBundleActorId,
-            reviewerId, decision, inspection.EvidenceSha256,
+            reviewerId, decision,
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                .ReviewCandidateSha256(inspection),
             inspection.LeaseEventHistorySha256,
             inspection.StagingEvidenceSha256, inspection.ObjectSetSha256,
             at, "", false, false, false, false, false, false);
