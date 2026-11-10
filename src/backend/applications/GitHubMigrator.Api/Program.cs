@@ -200,6 +200,16 @@ builder.Services.AddSingleton(
             false)));
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector>();
+// #122: the human REVIEW journal is independently disabled. An
+// authenticated superadmin may only record an immutable, non-authorizing
+// decision. No orphan rename, lease release or new generation.
+builder.Services.AddSingleton(
+    new GitIncrementalLaterCheckpointMirrorRecoveryReviewOptions(
+        builder.Configuration.GetValue(
+            "GitIncrementalLaterCheckpointMirrorRecoveryReview:Enabled",
+            false)));
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorRecoveryReviewJournal>();
 // #120: dedicated local-only F-060v2 importer, separated from the
 // historic baseline GitHubTrustedRemoteRead path. Both this import and
 // its worker need independent OFF-by-default feature switches.
@@ -822,6 +832,8 @@ await GitIncrementalLaterCheckpointBundleLeaseSchema.InitializeAsync(app.Service
 await GitIncrementalLaterCheckpointMirrorLeaseSchema.InitializeAsync(app.Services);
 // #119 installs only write-blocked physical Verified evidence tables.
 await GitIncrementalLaterCheckpointMirrorVerifiedSchema.InitializeAsync(app.Services);
+// #122: additive immutable reviewed-intent SQL; no recovery authority.
+await GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema.InitializeAsync(app.Services);
 await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);
@@ -914,6 +926,7 @@ app.MapGitHubRemoteRecoveryWorkbenchEndpoints();
 app.MapGitHubMultiRepositorySyncPulseEndpoints();
 app.MapGitHubSourceSyncCheckpointEndpoints();
 app.MapGitCheckpointTargetHumanReviewEndpoints();
+app.MapGitIncrementalLaterCheckpointMirrorRecoveryEndpoints();
 app.MapGitCheckpointTargetReadPreflightEndpoints();
 app.MapGitCheckpointTargetObservationEndpoints();
 app.MapGitIncrementalLaterCheckpointWorkpackHistoryEndpoints();
