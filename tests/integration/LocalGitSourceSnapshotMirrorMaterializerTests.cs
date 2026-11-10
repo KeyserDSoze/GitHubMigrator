@@ -628,12 +628,28 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
             GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity
                 .IsolationName(decision));
         Directory.CreateDirectory(destination);
+        var operatorFile = Path.Combine(destination, "operator-evidence.txt");
+        await File.WriteAllTextAsync(operatorFile, "must survive collision");
         Assert.Equal("LaterCheckpointMirrorOrphanIsolationAlreadyPresent",
             (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
                 mover.IsolateAsync(stage, durable, inspection, decision,
                     default))).Code);
         Assert.True(Directory.Exists(original));
-        Directory.Delete(destination);
+        Assert.Equal("must survive collision",
+            await File.ReadAllTextAsync(operatorFile));
+        Directory.Delete(destination, recursive: true);
+
+        // Even a non-directory outsider entry with the same quarantine
+        // name is never removed, replaced or reinterpreted as recovery.
+        await File.WriteAllTextAsync(destination, "operator-owned file");
+        Assert.Equal("LaterCheckpointMirrorOrphanIsolationAlreadyPresent",
+            (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
+                mover.IsolateAsync(stage, durable, inspection, decision,
+                    default))).Code);
+        Assert.True(Directory.Exists(original));
+        Assert.Equal("operator-owned file",
+            await File.ReadAllTextAsync(destination));
+        File.Delete(destination);
 
         var symlink = Path.Combine(f.Root, "unsafe-quarantine-root");
         Directory.CreateSymbolicLink(symlink, f.MirrorRoot);
