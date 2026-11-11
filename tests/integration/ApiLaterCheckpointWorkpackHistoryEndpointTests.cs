@@ -809,6 +809,15 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             "/operation-plans/" + Guid.NewGuid() +
             "/source-sync-checkpoints/" + Guid.NewGuid() +
             "/mirror-recovery/second-review/preflight";
+        var admin = await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword);
+        var user = await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword);
+        var superadmin = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        // The preview must postdate the signed reviewer login, or
+        // elapsed test-host login time can trigger a false 400 even
+        // for an otherwise valid, default-OFF preflight.
         var valid = new {
             targetObservationId = Guid.NewGuid(),
             workpackId = Guid.NewGuid(),
@@ -818,15 +827,10 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             expectedAssessmentEvidenceSha256 = new string('b', 64),
             expectedReviewEvidenceSha256 = new string('c', 64),
             decision = "ApprovedForIndependentReview",
-            reviewedAtUtc = DateTimeOffset.UtcNow,
+            reviewedAtUtc = DateTimeOffset.FromUnixTimeMilliseconds(
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
             decisionNonce = Guid.NewGuid()
         };
-        var admin = await harness.LoginAsync(
-            harness.AdminName, ApiHarness.AdminPassword);
-        var user = await harness.LoginAsync(
-            harness.UserName, ApiHarness.UserPassword);
-        var superadmin = await harness.LoginAsync(
-            harness.SuperadminName, ApiHarness.SuperadminPassword);
         var outbound = harness.Calls.Count;
         foreach (var (bearer, expected) in new[] {
             ((string?)null, HttpStatusCode.Unauthorized),
