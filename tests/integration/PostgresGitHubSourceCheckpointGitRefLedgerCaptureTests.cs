@@ -2122,6 +2122,87 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         FROM git_later_checkpoint_mirror_isolation_receipts
                                         WHERE mirror_id = {staging.PhysicalMirrorId}
                                         """).SingleAsync());
+
+                                // Direct SQL is NOT a substitute for the
+                                // independently audited physical POSIX
+                                // session. The immutable DB guard must
+                                // reject a forged terminal receipt whose
+                                // worker identity differs from the
+                                // actually quarantined F-061 generation,
+                                // even when ALL other F-035/Prepared
+                                // hashes and plausible object counts
+                                // match. No receipt or event may appear.
+                                var forgedSqlReceipt = await Assert.ThrowsAsync<
+                                    Npgsql.PostgresException>(() =>
+                                    verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                        INSERT INTO git_later_checkpoint_mirror_isolation_receipts (
+                                            mirror_id, workpack_id,
+                                            isolation_directory_name,
+                                            intent_sha256,
+                                            recovery_decision_sha256,
+                                            original_worker_id,
+                                            original_lease_token,
+                                            original_generation,
+                                            bundle_sha256, bundle_bytes,
+                                            reconciled_existing_quarantine,
+                                            offline_receipt_sha256,
+                                            physically_verified_object_sha256,
+                                            physically_verified_object_count,
+                                            isolated_at_utc, recorded_at_utc,
+                                            evidence_sha256)
+                                        VALUES (
+                                            {staging.PhysicalMirrorId},
+                                            {first.WorkpackId},
+                                            {prepared.IsolationDirectoryName},
+                                            {prepared.IntentSha256},
+                                            {humanDecision.EvidenceSha256},
+                                            {Guid.NewGuid()},
+                                            {diagnostic.LeaseToken},
+                                            {diagnostic.LeaseGeneration},
+                                            {committed.BundleSha256},
+                                            {committed.BundleBytes},
+                                            {false}, {new string('c', 64)},
+                                            {diagnostic.ObjectSetSha256},
+                                            {diagnostic.ObjectCount},
+                                            {prepared.PreparedAtUtc},
+                                            {prepared.PreparedAtUtc.AddSeconds(1)},
+                                            {new string('a', 64)})
+                                        """));
+                                Assert.Equal(
+                                    Npgsql.PostgresErrorCodes.RaiseException,
+                                    forgedSqlReceipt.SqlState);
+                                Assert.Equal(0L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_isolation_receipts
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """).SingleAsync());
+
+                                // A fabricated Isolated event before the
+                                // source-locked physical receipt must fail
+                                // independently of the source writer.
+                                var forgedSqlEvent = await Assert.ThrowsAsync<
+                                    Npgsql.PostgresException>(() =>
+                                    verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                        INSERT INTO
+                                            git_later_checkpoint_mirror_isolation_receipt_events (
+                                                mirror_id, evidence_sha256,
+                                                type, occurred_at_utc)
+                                        VALUES ({staging.PhysicalMirrorId},
+                                            {new string('b', 64)},
+                                            'Isolated',
+                                            {prepared.PreparedAtUtc})
+                                        """));
+                                Assert.Equal(
+                                    Npgsql.PostgresErrorCodes.RaiseException,
+                                    forgedSqlEvent.SqlState);
+                                Assert.Equal(0L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_isolation_receipt_events
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """).SingleAsync());
+
                                 // #124: reboot a DIFFERENT reader from
                                 // actual source-locked durable SQL. No
                                 // caller-provided decision/inspection/intent
