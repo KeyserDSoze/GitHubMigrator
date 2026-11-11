@@ -873,6 +873,10 @@ await GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema.InitializeAsync(
 // #123: constraint-only pre-move isolation intent and post-move journal;
 // NOT a source-lock coordinator, filesystem actor, new lease or HTTP route.
 await GitIncrementalLaterCheckpointMirrorIsolationSchema.InitializeAsync(app.Services);
+// #127 installs audit-only generation assessment lineage after isolation.
+// It never mints worker/token or reopens the original RecoveryRequired lease.
+await GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchema
+    .InitializeAsync(app.Services);
 await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);

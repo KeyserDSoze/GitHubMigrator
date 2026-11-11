@@ -222,6 +222,88 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
         Assert.Equal(2L, immutable);
     }
 
+    // #127: additive append-only assessment history is not a new
+    // F-061 generation/worker/token. Its SQL structure refuses direct
+    // raw inserts without an actual immutable #124 Isolated parent.
+    [Fact]
+    public async Task F061v2e_generation_assessment_schema_is_immutable_and_requires_isolation()
+    {
+        // Repeat the bootstrap to test idempotent upgrade/restart.
+        await GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchema
+            .InitializeAsync(harness.Host.Services);
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var tables = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_class
+            WHERE relkind = 'r' AND relname IN (
+                'git_later_checkpoint_mirror_generation_assessments',
+                'git_later_checkpoint_mirror_generation_assessment_events')
+            """).SingleAsync();
+        var checks = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_constraint WHERE conname IN (
+                'ck_f061v2e_generation_assessment_safe',
+                'ck_f061v2e_generation_assessment_event_safe')
+            """).SingleAsync();
+        var guards = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_trigger WHERE NOT tgisinternal
+              AND tgname IN (
+                'trg_f061v2e_generation_assessment',
+                'trg_f061v2e_generation_assessment_event')
+            """).SingleAsync();
+        var noAuthorityDefaults = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM information_schema.columns
+            WHERE table_name =
+                'git_later_checkpoint_mirror_generation_assessments'
+              AND column_name IN (
+                  'durable_readmission_approved', 'can_readmit',
+                  'can_materialize', 'can_push', 'can_retry',
+                  'can_dispatch', 'migration_complete')
+              AND column_default = 'false'
+            """).SingleAsync();
+        Assert.Equal(2L, tables);
+        Assert.Equal(2L, checks);
+        Assert.Equal(2L, guards);
+        Assert.Equal(7L, noAuthorityDefaults);
+
+        // A synthetic SHA and a guessed proposed generation cannot
+        // directly register a reviewed re-admission against a missing
+        // physical isolation. No lease or original journal is altered.
+        var fake = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+            db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO
+                    git_later_checkpoint_mirror_generation_assessments (
+                        mirror_id, workpack_id, checkpoint_id,
+                        source_snapshot_id, evidence_version,
+                        original_worker_id, original_lease_token,
+                        original_generation, suggested_next_generation,
+                        staging_evidence_sha256,
+                        source_full_ref_proof_sha256,
+                        source_ref_set_sha256, target_receipt_sha256,
+                        bundle_sha256, bundle_bytes,
+                        isolation_receipt_sha256, assessed_at_utc,
+                        evidence_sha256)
+                VALUES ({Guid.NewGuid()}, {Guid.NewGuid()},
+                    {Guid.NewGuid()}, {Guid.NewGuid()}, {1},
+                    {Guid.NewGuid()}, {Guid.NewGuid()}, {1L}, {2L},
+                    {new string('a',64)}, {new string('b',64)},
+                    {new string('c',64)}, {new string('d',64)},
+                    {new string('e',64)}, {123L}, {new string('f',64)},
+                    {DateTimeOffset.UtcNow}, {new string('a',64)})
+                """));
+        Assert.Contains(fake.SqlState, new[] {
+            Npgsql.PostgresErrorCodes.RaiseException,
+            Npgsql.PostgresErrorCodes.ForeignKeyViolation
+        });
+        Assert.Equal(0L, await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM git_later_checkpoint_mirror_generation_assessments
+            """).SingleAsync());
+    }
+
     [Fact]
     public async Task F061v2_orphan_isolation_journal_has_two_immutable_non_authorizing_phases()
     {
