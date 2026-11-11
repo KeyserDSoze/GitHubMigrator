@@ -2233,6 +2233,161 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     first.WorkpackId, "foreign-repo",
                                     targetReceipt.EvidenceSha256,
                                     candidate.RequestedBy, default));
+
+                            if (failAfterImport)
+                            {
+                                // #124: REAL trusted physical quarantine +
+                                // source-first SQL terminal receipt. SHA1
+                                // exercises the crash window AFTER kernel
+                                // rename but BEFORE the SQL transaction.
+                                // SHA256 executes the normal path.
+                                var latestReader = new
+                                    PostgresGitIncrementalLaterCheckpointMirrorPreparedReconciliationReader(
+                                        verifiedDb, new(true),
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight>(),
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointBundleHistory>(),
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>(),
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>());
+                                var localSession = new
+                                    LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+                                        physicalMirror!.BundleRoot,
+                                        physicalMirror.VerifiedMirrorRoot,
+                                        enabled: true);
+                                if (oidLength == 40)
+                                {
+                                    var pendingHistory = await latestReader.ReadAsync(
+                                        run.Id, plan.Id, later.Id,
+                                        observationId, first.WorkpackId,
+                                        "repo-1", targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, default);
+                                    var crash = await Assert.ThrowsAsync<
+                                        InvalidOperationException>(() =>
+                                        localSession.WithVerifiedIsolationAsync(
+                                            pendingHistory.Stage,
+                                            pendingHistory.DurableBundle,
+                                            pendingHistory.ExpectedInspection,
+                                            pendingHistory.HumanDecision,
+                                            pendingHistory.PreparedIntent,
+                                            (physicalProof, token) =>
+                                                Task.FromException<string>(
+                                                    new InvalidOperationException(
+                                                        "SimulatedProcessCrashAfterRename")),
+                                            default));
+                                    Assert.Equal("SimulatedProcessCrashAfterRename",
+                                        crash.Message);
+                                    Assert.Equal(0L, await verifiedDb.Database
+                                        .SqlQuery<long>($"""
+                                            SELECT count(*)::bigint AS "Value"
+                                            FROM git_later_checkpoint_mirror_isolation_receipts
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """).SingleAsync());
+                                    Assert.False(Directory.Exists(Path.Combine(
+                                        physicalMirror.VerifiedMirrorRoot,
+                                        staging.PhysicalMirrorId.ToString("N") +
+                                            ".git")));
+                                }
+                                var isolation = new
+                                    PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordinator(
+                                        verifiedDb, new(true), latestReader,
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>(),
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>(),
+                                        localSession);
+                                var isolated = await isolation.RunAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, default);
+                                Assert.True(isolated.DurableIsolationRecorded);
+                                Assert.Equal(oidLength == 40,
+                                    isolated.ReconciledExistingQuarantine);
+                                Assert.Equal(humanDecision.EvidenceSha256,
+                                    isolated.RecoveryDecisionSha256);
+                                Assert.Equal(prepared.IntentSha256,
+                                    isolated.PreparedIntentSha256);
+                                Assert.Equal(diagnostic.ObjectSetSha256,
+                                    isolated.ObjectSetSha256);
+                                Assert.Equal(staging.PhysicalMirrorId,
+                                    isolated.PhysicalMirrorId);
+                                Assert.False(isolated.CanReAdmit ||
+                                    isolated.CanMaterialize ||
+                                    isolated.CanPush || isolated.CanRetry ||
+                                    isolated.CanDispatch ||
+                                    isolated.MigrationComplete);
+                                Assert.True(Directory.Exists(Path.Combine(
+                                    physicalMirror.VerifiedMirrorRoot,
+                                    isolated.IsolationDirectoryName)));
+                                Assert.False(Directory.Exists(Path.Combine(
+                                    physicalMirror.VerifiedMirrorRoot,
+                                    staging.PhysicalMirrorId.ToString("N") +
+                                        ".git")));
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_isolation_receipts
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            AND evidence_sha256 = {isolated.EvidenceSha256}
+                                            AND intent_sha256 = {prepared.IntentSha256}
+                                            AND original_worker_id = {diagnostic.WorkerId}
+                                            AND original_lease_token = {diagnostic.LeaseToken}
+                                            AND original_generation = {diagnostic.LeaseGeneration}
+                                            AND reconciled_existing_quarantine =
+                                                {oidLength == 40}
+                                            AND NOT can_readmit AND NOT can_push
+                                            AND NOT can_retry AND NOT can_dispatch
+                                            AND NOT migration_complete
+                                        """).SingleAsync());
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_isolation_receipt_events
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            AND evidence_sha256 = {isolated.EvidenceSha256}
+                                            AND type = 'Isolated'
+                                        """).SingleAsync());
+                                Assert.Equal(
+                                    "LaterCheckpointMirrorIsolationReconciliationAlreadyRecorded",
+                                    (await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                        isolation.RunAsync(run.Id, plan.Id,
+                                            later.Id, observationId,
+                                            first.WorkpackId, "repo-1",
+                                            targetReceipt.EvidenceSha256,
+                                            candidate.RequestedBy,
+                                            default))).Code);
+                                Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                                    (await Assert.ThrowsAsync<
+                                        Npgsql.PostgresException>(() =>
+                                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                            UPDATE git_later_checkpoint_mirror_isolation_receipts
+                                            SET can_push = true
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """))).SqlState);
+                                Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                                    (await Assert.ThrowsAsync<
+                                        Npgsql.PostgresException>(() =>
+                                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                            DELETE FROM git_later_checkpoint_mirror_isolation_receipt_events
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """))).SqlState);
+                                Assert.Equal("RecoveryRequired",
+                                    await verifiedDb.Database.SqlQuery<string>($"""
+                                        SELECT state AS "Value"
+                                        FROM git_later_checkpoint_mirror_leases
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """).SingleAsync());
+                                Assert.Equal(0L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_verified_evidence
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """).SingleAsync());
+                            }
                         }
                         else
                         {
