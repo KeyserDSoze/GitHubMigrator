@@ -2108,6 +2108,41 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         FROM git_later_checkpoint_mirror_isolation_receipts
                                         WHERE mirror_id = {staging.PhysicalMirrorId}
                                         """).SingleAsync());
+                                // #124: reboot a DIFFERENT reader from
+                                // actual source-locked durable SQL. No
+                                // caller-provided decision/inspection/intent
+                                // is allowed on this read path. Real
+                                // UUID.bundle and current F-031/F-091/F-097
+                                // provenance are checked again.
+                                var restarted = new
+                                    PostgresGitIncrementalLaterCheckpointMirrorPreparedReconciliationReader(
+                                        verifiedDb, new(true),
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight>(),
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointBundleHistory>(),
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>(),
+                                        auditScope.ServiceProvider.GetRequiredService<
+                                            PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>());
+                                var recovered = await restarted.ReadAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, default);
+                                Assert.Equal(prepared, recovered.PreparedIntent);
+                                Assert.Equal(humanDecision,
+                                    recovered.HumanDecision);
+                                Assert.Equal(staging.PhysicalMirrorId,
+                                    recovered.Stage.PhysicalMirrorId);
+                                Assert.Equal(diagnostic.ObjectSetSha256,
+                                    recovered.ExpectedInspection.ObjectSetSha256);
+                                Assert.Equal(diagnostic.LeaseEventHistorySha256,
+                                    recovered.ExpectedInspection.LeaseEventHistorySha256);
+                                Assert.False(recovered.PreparedIntent.CanReAdmit ||
+                                    recovered.PreparedIntent.CanPush ||
+                                    recovered.PreparedIntent.CanRetry ||
+                                    recovered.PreparedIntent.CanDispatch);
                                 Assert.Equal("LaterCheckpointMirrorIsolationIntentAlreadyPrepared",
                                     (await Assert.ThrowsAsync<
                                         GitSourceSnapshotMirrorException>(() =>
