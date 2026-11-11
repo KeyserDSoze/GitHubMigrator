@@ -691,3 +691,37 @@ the future source-first verified, authenticated atomic writer
 is not implemented. #131's long SHA1/SHA256 failAfterImport
 fixture still needs to complete within the original F-031 real
 PostgreSQL-clock freshness interval without weakening runtime checks.
+
+
+### #131: separate real F-031 epochs for pre-move denial and physical post-isolation
+
+The PG17 regression `F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_immutable`
+previously combined several independent adversarial SQL/restart checks
+with the SHA-1 post-rename crash case or SHA-256 three-replica POSIX
+isolation race **inside the same five-minute immutable F-031 source
+observation window**. Real PostgreSQL correctly rejected the late
+`RequireLiveLockedAsync` source re-check; changing only the API test
+clock could not affect the database time.
+
+Commit `1bfe472` adds two parameterized **pre-move-only** variants
+(one real SHA-1 and one real SHA-256, each provisioning its own real
+F-014/F-091/F-097/F-031/F-035 provenance and import-worker failure).
+They still execute the original verified Prepared journal, forgery
+refusals, restart readback, immutable mutation denials and first-human
+replay checks. They stop after proving that no `Isolated` receipt
+exists. The original two `failAfterImport=true` variants retain
+their independent source observation, actual Git object and marker
+checks, source-first SQL lease checks, POSIX-locked isolation,
+SHA-1 crash-after-rename recovery, SHA-256 real three-context
+one-winner race, post-isolation immutability and second-human
+preflight; they no longer rerun the independent pre-move attack
+probe sequence in the *same* 5-minute window.
+
+The test suite has **15 parameter rows instead of 13**, preserving
+the original 13 scenarios and all negative assertions. Both halves
+still use a genuine DB timestamp; the production five-minute TTL,
+source-freshness check, F-061 terminal lease and three DENY-ALL
+second-review journals are unchanged. This reduces the length of the
+source-freshness-critical path but is **not yet proof of a passing
+PostgreSQL17 integration run**. Review #131 and the latest main CI
+before treating the regression as resolved.
