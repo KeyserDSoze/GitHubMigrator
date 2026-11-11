@@ -553,6 +553,36 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
                 .PreparedOriginalIntact,
             await mover.InspectPreparedPathsAsync(stage, durable,
                 rereadInspection, decision, prepared, default));
+        // A PREPARED original may legitimately have no marker before the
+        // OS operation. A marker that exists with foreign bytes is
+        // different: it proves neither this SQL intent nor a valid
+        // interrupted rename and MUST NOT be reported as intact.
+        var originalMarker = Path.Combine(f.Physical(physical),
+            "agic-f061v2-reviewed-isolation-intent");
+        await File.WriteAllTextAsync(originalMarker,
+            "forged-or-partial-original-prepare");
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedOriginalUntrusted,
+            await mover.InspectPreparedPathsAsync(stage, durable,
+                rereadInspection, decision, prepared, default));
+        var forgedOriginal = await Assert.ThrowsAsync<
+            GitSourceSnapshotMirrorException>(() =>
+                mover.WithVerifiedIsolationAsync(
+                    stage, durable, rereadInspection, decision, prepared,
+                    (proof, ct) => Task.FromResult("no SQL write"),
+                    default));
+        Assert.Equal("LaterCheckpointMirrorIsolationMarkerInvalid",
+            forgedOriginal.Code);
+        Assert.True(Directory.Exists(f.Physical(physical)));
+        Assert.False(Directory.Exists(Path.Combine(f.MirrorRoot,
+            prepared.IsolationDirectoryName)));
+        File.Delete(originalMarker);
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedOriginalIntact,
+            await mover.InspectPreparedPathsAsync(stage, durable,
+                rereadInspection, decision, prepared, default));
         // The physical primitive also accepts a NEW real inspection
         // of the SAME signed candidate, not a time-travel review.
         var receipt = await mover.IsolateAsync(
