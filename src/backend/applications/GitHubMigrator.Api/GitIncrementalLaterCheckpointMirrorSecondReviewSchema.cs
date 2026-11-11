@@ -115,6 +115,41 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                 )
             );
 
+            -- #129: every event must be an EXACT second-review
+            -- witness, not just a foreign row with a matching mirror
+            -- UUID. The compound FK also covers the SHA, reviewer,
+            -- explicit approve/reject and exact reviewed timestamp.
+            -- This migration is additive/idempotent on installations
+            -- that already have the two default-DENY tables.
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                uq_f061v2e_second_review_event_tuple ON
+                git_later_checkpoint_mirror_second_reviews (
+                    mirror_id, evidence_sha256, second_reviewer_id,
+                    decision, reviewed_at_utc);
+
+            DO $f061v2e_exact_event_fk$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname =
+                        'fk_f061v2e_second_review_exact_event'
+                        AND conrelid =
+                        'git_later_checkpoint_mirror_second_review_events'::regclass
+                ) THEN
+                    ALTER TABLE
+                        git_later_checkpoint_mirror_second_review_events
+                    ADD CONSTRAINT fk_f061v2e_second_review_exact_event
+                    FOREIGN KEY (
+                        mirror_id, evidence_sha256, second_reviewer_id,
+                        decision, occurred_at_utc)
+                    REFERENCES
+                        git_later_checkpoint_mirror_second_reviews (
+                            mirror_id, evidence_sha256, second_reviewer_id,
+                            decision, reviewed_at_utc)
+                    ON DELETE RESTRICT;
+                END IF;
+            END $f061v2e_exact_event_fk$;
+
             -- A proposed second reviewer is NOT a verified JWT actor.
             -- No insert (even with matching SHA) can claim a review
             -- before a future protected, source-first and POSIX-locked

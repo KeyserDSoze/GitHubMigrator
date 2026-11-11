@@ -260,3 +260,23 @@ authorization for a new worker/lease or second-review SQL writer.
 Real PostgreSQL17 tests acquire the source lock on a separate
 connection and assert immediate fail-closed behavior with a
 bounded deadline. The full Git review remains non-authorizing.
+
+### #129 compound event-to-review foreign key
+
+The PostgreSQL second-review `events` table previously had a FK on
+`mirror_id` alone. A future writer could, without other safeguards,
+associate an event with the correct mirror but a **foreign evidence
+digest, reviewer, approval/rejection decision or timestamp**. The
+bootstrap now installs an idempotent composite UNIQUE index on the
+`second_reviews` row and an FK on FIVE event fields:
+`(mirror_id, evidence_sha256, second_reviewer_id, decision,
+occurred_at_utc)` matching `(mirror_id, evidence_sha256,
+second_reviewer_id, decision, reviewed_at_utc)` in the reviewed
+row. The FK prevents detached or mismatched audit events even if
+the future protected writer is subsequently activated. Existing
+deny-all mutation triggers are **not altered or relaxed**, and
+the extra constraint never grants a lease, generation or push.
+
+Real PostgreSQL17 integration checks the database-installed exact
+FK definition and unique index, in addition to the existing two
+DENY-ALL triggers, event immutability and rejected inserts.

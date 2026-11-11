@@ -2926,6 +2926,42 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             'trg_f061v2e_second_review_event_closed')
                                             AND NOT tgisinternal
                                         """).SingleAsync());
+                                // #129: even if a future protected SQL
+                                // writer is enabled, a foreign event
+                                // cannot point at a matching mirror
+                                // but forged reviewer, decision, evidence
+                                // SHA or occurrence time. The database
+                                // FK binds the complete immutable tuple,
+                                // and is installed on repeat bootstraps.
+                                var boundEventForeignKey = await verifiedDb
+                                    .Database.SqlQuery<string>($"""
+                                        SELECT pg_get_constraintdef(c.oid)
+                                            AS "Value"
+                                        FROM pg_constraint c
+                                        WHERE c.conname =
+                                            'fk_f061v2e_second_review_exact_event'
+                                            AND c.conrelid =
+                                                'git_later_checkpoint_mirror_second_review_events'::regclass
+                                            AND c.contype = 'f'
+                                        """).SingleAsync();
+                                Assert.Contains(
+                                    "FOREIGN KEY (mirror_id, evidence_sha256, second_reviewer_id, decision, occurred_at_utc)",
+                                    boundEventForeignKey);
+                                Assert.Contains(
+                                    "REFERENCES git_later_checkpoint_mirror_second_reviews(mirror_id, evidence_sha256, second_reviewer_id, decision, reviewed_at_utc)",
+                                    boundEventForeignKey);
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM pg_index i
+                                        JOIN pg_class t
+                                            ON t.oid = i.indexrelid
+                                        WHERE t.relname =
+                                            'uq_f061v2e_second_review_event_tuple'
+                                            AND i.indisunique
+                                            AND i.indisvalid
+                                        """).SingleAsync());
+
                                 Assert.Equal(
                                     Npgsql.PostgresErrorCodes.RaiseException,
                                     (await Assert.ThrowsAsync<Npgsql.PostgresException>(
