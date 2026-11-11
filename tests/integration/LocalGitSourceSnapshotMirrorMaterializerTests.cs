@@ -583,6 +583,52 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
             receipt.CanDispatch || receipt.MigrationComplete);
         GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity.Verify(
             receipt, inspection, decision);
+        // #124: a real quarantined object graph only becomes a durable
+        // SQL *audit* after the source-locked writer; its domain SHA
+        // must still bind the original worker/token/generation, exact
+        // Prepared event, bundle, graph and all false authority flags.
+        var checkedAt = preparedAt.AddSeconds(1);
+        var recordedAt = checkedAt.AddSeconds(1);
+        var physicalProof = new
+            GitIncrementalLaterCheckpointMirrorPhysicalIsolationProof(
+                stage.PhysicalMirrorId, stage.WorkpackId,
+                prepared.IsolationDirectoryName,
+                reread.ObjectSetSha256, reread.Count,
+                durable.BundleSha256, durable.BundleBytes,
+                checkedAt, false);
+        var recorded =
+            GitIncrementalLaterCheckpointMirrorRecordedIsolationIntegrity
+                .Seal(rereadInspection, decision, prepared, durable,
+                    physicalProof, recordedAt);
+        GitIncrementalLaterCheckpointMirrorRecordedIsolationIntegrity
+            .Verify(recorded, rereadInspection, decision,
+                prepared, durable, physicalProof);
+        Assert.Equal(prepared.IntentSha256,
+            recorded.PreparedIntentSha256);
+        Assert.Equal(prepared.ObjectSetSha256,
+            recorded.ObjectSetSha256);
+        Assert.True(recorded.DurableIsolationRecorded);
+        Assert.False(recorded.CanReAdmit || recorded.CanMaterialize ||
+            recorded.CanPush || recorded.CanRetry ||
+            recorded.CanDispatch || recorded.MigrationComplete);
+        Assert.Equal("LaterCheckpointMirrorRecordedIsolationInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorRecordedIsolationIntegrity
+                    .Verify(recorded with { CanPush = true },
+                        rereadInspection, decision, prepared,
+                        durable, physicalProof)).Code);
+        Assert.Equal("LaterCheckpointMirrorRecordedIsolationInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorRecordedIsolationIntegrity
+                    .Seal(rereadInspection, decision, prepared, durable,
+                        physicalProof with { ObjectCount =
+                            physicalProof.ObjectCount + 1 },
+                        recordedAt)).Code);
+        Assert.Equal("LaterCheckpointMirrorRecordedIsolationInvalid",
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorRecordedIsolationIntegrity
+                    .Seal(rereadInspection, decision, prepared, durable,
+                        physicalProof, preparedAt.AddSeconds(-1))).Code);
         Assert.Single(Directory.GetDirectories(f.MirrorRoot,
             "*.quarantine.git"));
         Assert.Empty(Directory.GetDirectories(f.MirrorRoot, "*.git",
