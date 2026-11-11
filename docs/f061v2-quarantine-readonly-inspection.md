@@ -442,3 +442,41 @@ push, retry/dispatch or migration completion. A *separately approved*
 generation-fenced re-admission remains #121. Validating the latest
 complete 4/4 CI and adversarial concurrent-replica coverage remains
 essential before #123/#124 are considered accepted.
+
+
+### Crash-safe physical causality and directory durability
+
+The final source-only coordinator now creates an exclusive
+`agic-f061v2-reviewed-isolation-intent` marker **inside the original
+bare Git directory only after the actual source-locked SQL
+`Prepared` event has been verified and the original Git closure
+has passed real checks**. The small marker binds the exact immutable
+`Prepared` SHA-256 and #122 independently reviewed decision SHA-256;
+it is not a credential or migration authority. Creation is
+`FileMode.CreateNew` with write-through/file flush and an fsync of
+the original directory to persist the marker's directory entry.
+After Linux `renameat2(RENAME_NOREPLACE)`, the server fsyncs the
+shared parent mirror directory **before** claiming a terminal SQL
+`Isolated` receipt. Unsupported OS/fsync operations fail closed.
+
+An interrupted operation with the original directory still present
+and the exact marker may repeat the *source-locked*, freshly audited
+rename. If the isolated directory alone exists on restart,
+`WithVerifiedIsolationAsync` **requires the matching persisted marker**
+in addition to real double-fsck Git closure, exact bundle SHA/length,
+the immutable SQL `Prepared` and signed #122 review event and the
+unchanged terminal `RecoveryRequired` lease. An otherwise
+byte-identical foreign quarantine, an existing directory generated
+by the earlier offline primitive, a changed marker or an absent marker
+is NOT accepted for durable SQL isolation. Both paths, neither path
+and unexpected symlinks/files also reject. No directory is deleted
+or overwritten. Tests cover SHA1/SHA256 Git, simulated OS-success/
+SQL-failure replay and refusal of graph-identical but unmarked
+preexisting quarantine.
+
+This protects against accidental/foreign on-disk lookalikes
+within the application's trusted filesystem model; it is not a
+cryptographic defense against a fully privileged host attacker
+who can change both the database and all filesystem contents.
+The SQL receipt still does not authorize a new generation, a
+GitHub destination push or migration completion.
