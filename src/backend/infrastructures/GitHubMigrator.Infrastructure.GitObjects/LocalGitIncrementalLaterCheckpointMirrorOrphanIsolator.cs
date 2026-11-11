@@ -32,11 +32,28 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
     private static void MoveDirectoryWithoutReplacement(
         string original, string isolated)
     {
-        if (!OperatingSystem.IsLinux() ||
-            RenameNoReplace(AtCurrentDirectory, original,
-                AtCurrentDirectory, isolated, NoReplace) != 0)
+        if (!OperatingSystem.IsLinux())
             throw new IOException(
                 "F-061v2 orphan isolation requires atomic no-replace rename");
+        try
+        {
+            if (RenameNoReplace(AtCurrentDirectory, original,
+                AtCurrentDirectory, isolated, NoReplace) != 0)
+                throw new IOException(
+                    "F-061v2 orphan isolation no-replace rename refused");
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            // Older libc/kernel combinations may not expose renameat2.
+            // Never fall back to Directory.Move/replace semantics.
+            throw new IOException(
+                "F-061v2 atomic no-replace rename is unavailable", ex);
+        }
+        catch (DllNotFoundException ex)
+        {
+            throw new IOException(
+                "F-061v2 POSIX rename library is unavailable", ex);
+        }
     }
 
     // #124: read-only classification of a prepared operation after a
