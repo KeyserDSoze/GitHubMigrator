@@ -246,6 +246,25 @@ builder.Services.AddScoped<
             clock: sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordinator>();
+// #129: separately OFF-by-default INTERNAL read-only post-Isolated
+// SQL/POSIX diagnostic. Cannot write an F-061 lease or record review.
+builder.Services.AddSingleton(
+    new GitIncrementalLaterCheckpointMirrorPostIsolationInspectionOptions(
+        builder.Configuration.GetValue(
+            "GitIncrementalLaterCheckpointMirrorPostIsolation:Enabled",
+            false)));
+builder.Services.AddScoped<
+    IGitIncrementalLaterCheckpointMirrorPostIsolationPathAudit>(sp =>
+        new GitHubMigrator.Infrastructure.GitObjects.LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+            builder.Configuration["GitSourceBundles:BundleRoot"] ?? "",
+            builder.Configuration[
+                "GitIncrementalLaterCheckpointMirrorVerified:MirrorRoot"] ?? "",
+            enabled: builder.Configuration.GetValue(
+                "GitIncrementalLaterCheckpointMirrorPostIsolation:PhysicalEnabled",
+                false),
+            clock: sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector>();
 // #120: dedicated local-only F-060v2 importer, separated from the
 // historic baseline GitHubTrustedRemoteRead path. Both this import and
 // its worker need independent OFF-by-default feature switches.

@@ -28,3 +28,17 @@ public interface IGitIncrementalLaterCheckpointMirrorPhysicalIsolationSession
             CancellationToken, Task<TResult>> persist,
         CancellationToken ct);
 }
+
+
+// #129: narrow READ-ONLY interface. Deliberately cannot invoke the
+// isolation session's rename operation or write a SQL receipt.
+public interface IGitIncrementalLaterCheckpointMirrorPostIsolationPathAudit
+{
+    Task<string> InspectPreparedPathsAsync(
+        GitIncrementalLaterCheckpointMirrorStagingPlan stage,
+        GitIncrementalLaterCheckpointBundleReceipt durable,
+        GitIncrementalLaterCheckpointMirrorRecoveryInspection inspection,
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision decision,
+        GitIncrementalLaterCheckpointMirrorIsolationIntent intent,
+        CancellationToken ct);
+}

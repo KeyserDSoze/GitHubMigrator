@@ -12,7 +12,8 @@ namespace GitHubMigrator.Infrastructure.GitObjects;
 public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
     string bundleRoot, string mirrorRoot,
     bool enabled = false, TimeProvider? clock = null)
-    : IGitIncrementalLaterCheckpointMirrorPhysicalIsolationSession
+    : IGitIncrementalLaterCheckpointMirrorPhysicalIsolationSession,
+      IGitIncrementalLaterCheckpointMirrorPostIsolationPathAudit
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 

@@ -2688,6 +2688,63 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         "foreign-repo",
                                         targetReceipt.EvidenceSha256,
                                         candidate.RequestedBy, default));
+                                // #129: source-first SQL/physical bridge
+                                // reads exact Isolated/decision/Prepared
+                                // history before and after REAL POSIX
+                                // root-locked double Git fsck and marker.
+                                var postIsolation = new
+                                    PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector(
+                                        verifiedDb, new(true), latestReader,
+                                        localSession, TimeProvider.System);
+                                Assert.Equal(
+                                    "LaterCheckpointMirrorPostIsolationInspectorDisabled",
+                                    (await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                        new PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector(
+                                            verifiedDb, new(false),
+                                            latestReader, localSession,
+                                            TimeProvider.System).ReadAsync(
+                                                run.Id, plan.Id, later.Id,
+                                                observationId, first.WorkpackId,
+                                                "repo-1",
+                                                targetReceipt.EvidenceSha256,
+                                                candidate.RequestedBy,
+                                                default))).Code);
+                                var inspectedIsolation = await postIsolation.ReadAsync(
+                                    run.Id, plan.Id, later.Id, observationId,
+                                    first.WorkpackId, "repo-1",
+                                    targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, default);
+                                Assert.Equal(staging.PhysicalMirrorId,
+                                    inspectedIsolation.PhysicalMirrorId);
+                                Assert.Equal(isolated.EvidenceSha256,
+                                    inspectedIsolation.IsolationReceiptSha256);
+                                Assert.Equal(isolated.RecoveryDecisionSha256,
+                                    inspectedIsolation.FirstReviewSha256);
+                                Assert.Equal(isolated.PreparedIntentSha256,
+                                    inspectedIsolation.PreparedIntentSha256);
+                                Assert.Equal(isolated.ObjectSetSha256,
+                                    inspectedIsolation.ObjectSetSha256);
+                                Assert.Equal(isolated.ObjectCount,
+                                    inspectedIsolation.ObjectCount);
+                                Assert.Equal(
+                                    LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                                        .PreparedIsolatedIntact,
+                                    inspectedIsolation.PhysicalState);
+                                Assert.False(inspectedIsolation.DurableSecondReviewPersisted ||
+                                    inspectedIsolation.CanReAdmit ||
+                                    inspectedIsolation.CanMaterialize ||
+                                    inspectedIsolation.CanPush ||
+                                    inspectedIsolation.CanRetry ||
+                                    inspectedIsolation.CanDispatch ||
+                                    inspectedIsolation.MigrationComplete);
+                                await Assert.ThrowsAsync<
+                                    GitSourceSnapshotMirrorException>(() =>
+                                    postIsolation.ReadAsync(
+                                        run.Id, plan.Id, later.Id, observationId,
+                                        first.WorkpackId, "foreign-repo",
+                                        targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, default));
                                 // #127: after ONE trusted physical + SQL
                                 // Isolated receipt, an additive audit-only
                                 // generation assessment can be written and
