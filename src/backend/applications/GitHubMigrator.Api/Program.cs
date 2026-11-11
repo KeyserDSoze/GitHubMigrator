@@ -224,6 +224,28 @@ builder.Services.AddScoped<
 // authorization. Shares the separate default-OFF #123 option.
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorPreparedReconciliationReader>();
+// #124: physically verified quarantine, independently default-OFF.
+// Even with its switch enabled this is an INTERNAL service: there is
+// no route, hosted job, destination push or automatic re-admission.
+// Real local Git and the final SQL write share the exact F-060 POSIX
+// root lock, while the SQL transaction itself never executes Git.
+builder.Services.AddSingleton(
+    new GitIncrementalLaterCheckpointMirrorIsolationCoordinatorOptions(
+        builder.Configuration.GetValue(
+            "GitIncrementalLaterCheckpointMirrorIsolationCoordinator:Enabled",
+            false)));
+builder.Services.AddScoped<
+    IGitIncrementalLaterCheckpointMirrorPhysicalIsolationSession>(sp =>
+        new GitHubMigrator.Infrastructure.GitObjects.LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+            builder.Configuration["GitSourceBundles:BundleRoot"] ?? "",
+            builder.Configuration[
+                "GitIncrementalLaterCheckpointMirrorVerified:MirrorRoot"] ?? "",
+            enabled: builder.Configuration.GetValue(
+                "GitIncrementalLaterCheckpointMirrorIsolationCoordinator:PhysicalEnabled",
+                false),
+            clock: sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordinator>();
 // #120: dedicated local-only F-060v2 importer, separated from the
 // historic baseline GitHubTrustedRemoteRead path. Both this import and
 // its worker need independent OFF-by-default feature switches.
