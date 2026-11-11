@@ -11,6 +11,7 @@ namespace GitHubMigrator.Infrastructure.GitObjects;
 public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
     string bundleRoot, string mirrorRoot,
     bool enabled = false, TimeProvider? clock = null)
+    : IGitIncrementalLaterCheckpointMirrorPhysicalIsolationSession
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
@@ -196,6 +197,179 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                 return oldExists
                     ? PreparedOriginalCorrupt : PreparedIsolatedCorrupt;
             }
+        }
+        finally
+        {
+            LocalGitSourceSnapshotMirrorMaterializer.ProcessGate.Release();
+        }
+    }
+
+    // #124: the only server-owned physical/SQL trust bridge. Every input
+    // is re-sealed against the source-locked Prepared reader; NO caller
+    // filename is accepted, and no destination GitHub API is invoked.
+    // Holding the POSIX root lock *through* the SQL callback prevents
+    // cooperating F-060 importers/recovery workers from changing paths
+    // between double-fsck and terminal source-first SQL commit.
+    public async Task<TResult> WithVerifiedIsolationAsync<TResult>(
+        GitIncrementalLaterCheckpointMirrorStagingPlan stage,
+        GitIncrementalLaterCheckpointBundleReceipt durable,
+        GitIncrementalLaterCheckpointMirrorRecoveryInspection expected,
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision decision,
+        GitIncrementalLaterCheckpointMirrorIsolationIntent prepared,
+        Func<GitIncrementalLaterCheckpointMirrorPhysicalIsolationProof,
+            CancellationToken, Task<TResult>> persist,
+        CancellationToken ct)
+    {
+        if (!enabled)
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationDisabled");
+        ArgumentNullException.ThrowIfNull(persist);
+        GitIncrementalLaterCheckpointMirrorStagingIntegrity
+            .VerifyOfflineCandidate(stage, durable);
+        GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+            .VerifyForPhysicalIsolation(decision, expected);
+        GitIncrementalLaterCheckpointMirrorIsolationIntentIntegrity
+            .Verify(prepared, expected, decision);
+        if (stage.PhysicalMirrorId != expected.PhysicalMirrorId ||
+            stage.WorkpackId != expected.WorkpackId ||
+            stage.SourceSnapshotId != expected.SourceSnapshotId ||
+            stage.CheckpointId != expected.CheckpointId ||
+            stage.EvidenceSha256 != expected.StagingEvidenceSha256 ||
+            stage.BundleSha256 != durable.BundleSha256 ||
+            stage.BundleEvidenceSha256 != durable.EvidenceSha256 ||
+            expected.ObjectSetSha256 != prepared.ObjectSetSha256 ||
+            expected.ObjectCount != prepared.ObjectCount ||
+            prepared.IsolationDirectoryName !=
+                GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity
+                    .IsolationName(decision) ||
+            prepared.CanReAdmit || prepared.CanMaterialize ||
+            prepared.CanPush || prepared.CanRetry ||
+            prepared.CanDispatch || prepared.MigrationComplete)
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationScopeInvalid");
+
+        var root = LocalGitSourceSnapshotMirrorMaterializer
+            .CheckMirrorRoot(mirrorRoot);
+        var store = new LocalGitBundleArtifactStore(bundleRoot);
+        if (string.Equals(root, store.Root, StringComparison.Ordinal))
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationRootsOverlap");
+        var original = Path.Combine(root,
+            stage.PhysicalMirrorId.ToString("N") + ".git");
+        var isolated = Path.Combine(root, prepared.IsolationDirectoryName);
+
+        await LocalGitSourceSnapshotMirrorMaterializer
+            .ProcessGate.WaitAsync(ct);
+        try
+        {
+            await using var rootLock =
+                await LocalGitSourceSnapshotMirrorMaterializer
+                    .AcquireRootLockAsync(root, ct);
+            ct.ThrowIfCancellationRequested();
+            // Both paths and foreign/symlinked files are ALWAYS
+            // conflicting, even if bytes appear valid. A no-replace
+            // rename protects unrelated operator-owned directories.
+            if (new DirectoryInfo(original).LinkTarget is not null ||
+                new DirectoryInfo(isolated).LinkTarget is not null ||
+                File.Exists(original) || File.Exists(isolated))
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorIsolationUnsafePath");
+            var originalExists = Directory.Exists(original);
+            var quarantinedExists = Directory.Exists(isolated);
+            if (originalExists == quarantinedExists)
+                throw new GitSourceSnapshotMirrorException(
+                    originalExists
+                        ? "LaterCheckpointMirrorIsolationBothPresent"
+                        : "LaterCheckpointMirrorIsolationBothMissing");
+            var before = await store.InspectExistingAsync(
+                stage.WorkpackId, ct);
+            if (before.Sha256 != durable.BundleSha256 ||
+                before.Bytes != durable.BundleBytes)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorIsolationBundleChanged");
+            if (originalExists)
+            {
+                // A pending PREPARED row does not by itself authorize
+                // a rename of unverified objects. Re-audit UUID.git
+                // under the exact importer POSIX root lock.
+                var auditor =
+                    new LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
+                        bundleRoot, mirrorRoot, enabled: true, clock: _clock);
+                var physical = await auditor.AuditAsync(stage, durable, ct);
+                if (physical.ObjectSetSha256 != prepared.ObjectSetSha256 ||
+                    physical.ObjectCount != prepared.ObjectCount)
+                    throw new GitSourceSnapshotMirrorException(
+                        "LaterCheckpointMirrorIsolationOriginalChanged");
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    // No fallback to an overwriting POSIX rename(2).
+                    MoveDirectoryWithoutReplacement(original, isolated);
+                }
+                catch (IOException)
+                {
+                    throw new GitSourceSnapshotMirrorException(
+                        "LaterCheckpointMirrorOrphanIsolationMoveFailed");
+                }
+            }
+
+            // Whether we just moved UUID.git or found an already
+            // quarantined path after a crash, a new proof needs TWO
+            // complete Git object/ref/OID passes. Identical graph SHA
+            // alone is never enough without the source-locked SQL
+            // callback below.
+            if (Directory.Exists(original) || File.Exists(original) ||
+                new DirectoryInfo(original).LinkTarget is not null ||
+                !Directory.Exists(isolated) || File.Exists(isolated) ||
+                new DirectoryInfo(isolated).LinkTarget is not null)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorIsolationPathsChanged");
+            (int Count, string Digest) first;
+            (int Count, string Digest) second;
+            try
+            {
+                first = await
+                    LocalGitObjectClosureAuditor.VerifyQuarantinedOneAsync(
+                        root, stage.PhysicalMirrorId,
+                        decision.EvidenceSha256, stage.SourceRefs, ct);
+                second = await
+                    LocalGitObjectClosureAuditor.VerifyQuarantinedOneAsync(
+                        root, stage.PhysicalMirrorId,
+                        decision.EvidenceSha256, stage.SourceRefs, ct);
+            }
+            catch (GitObjectClosureAuditException)
+            {
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorIsolationClosureInvalid");
+            }
+            var after = await store.InspectExistingAsync(stage.WorkpackId, ct);
+            if (first != second ||
+                second.Count != prepared.ObjectCount ||
+                second.Digest != prepared.ObjectSetSha256 ||
+                after != before ||
+                Directory.Exists(original) || File.Exists(original) ||
+                new DirectoryInfo(original).LinkTarget is not null ||
+                !Directory.Exists(isolated) || File.Exists(isolated) ||
+                new DirectoryInfo(isolated).LinkTarget is not null)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorIsolationPhysicalChanged");
+
+            // Call back into a short source-first PostgreSQL CAS while
+            // still holding BOTH physical locks. No Git subprocess or
+            // filesystem move occurs in that database transaction.
+            var proof = new
+                GitIncrementalLaterCheckpointMirrorPhysicalIsolationProof(
+                    stage.PhysicalMirrorId, stage.WorkpackId,
+                    prepared.IsolationDirectoryName,
+                    second.Digest, second.Count,
+                    before.Sha256, before.Bytes,
+                    _clock.GetUtcNow(), !originalExists);
+            return await persist(proof, ct);
+        }
+        catch (GitSourceBundleException)
+        {
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorIsolationBundleChanged");
         }
         finally
         {
