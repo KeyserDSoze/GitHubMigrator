@@ -741,6 +741,66 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2e_readonly_review_preflight_uses_real_postgres_clock()
+    {
+        // #130: a real PostgreSQL server instant must authorize only
+        // a *read-only candidate*, not an actual decision, event or
+        // session consumption. This does not fake DB time with the
+        // API's TimeProvider or disable a single mutation trigger.
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var readiness = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointMirrorSecondReviewSessionReadiness>();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var issued = DateTimeOffset.FromUnixTimeSeconds(
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        var session = Guid.NewGuid();
+        var nonce = Guid.NewGuid();
+        var mirror = Guid.NewGuid();
+        var observed = await readiness.RequireUnusedAsync(
+            session, nonce, issued, issued, Guid.Empty, default);
+        Assert.Equal(TimeSpan.Zero, observed.Offset);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(
+            observed.ToUnixTimeMilliseconds()), observed);
+        Assert.True(observed >= issued && observed < issued.AddMinutes(5));
+        // Second pass is scoped to the trusted mirror; an unconsumed
+        // session remains available for read-only preview only.
+        var second = await readiness.RequireUnusedAsync(
+            session, nonce, issued, issued, mirror, default);
+        Assert.True(second >= observed);
+
+        async Task Reject(Guid s, Guid n, DateTimeOffset issuedAt,
+            DateTimeOffset reviewedAt, string code)
+        {
+            var ex = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+                () => readiness.RequireUnusedAsync(
+                    s, n, issuedAt, reviewedAt, mirror, default));
+            Assert.Equal(code, ex.Code);
+        }
+        await Reject(session, session, issued, issued,
+            "LaterCheckpointMirrorSecondReviewPreflightInvalid");
+        await Reject(session, nonce, issued.AddMinutes(-6),
+            issued.AddMinutes(-6),
+            "LaterCheckpointMirrorSecondReviewPreflightExpired");
+        await Reject(session, nonce, issued, issued.AddMinutes(1),
+            "LaterCheckpointMirrorSecondReviewPreflightExpired");
+        await Reject(session, nonce, issued.AddTicks(1), issued,
+            "LaterCheckpointMirrorSecondReviewPreflightInvalid");
+        await Reject(session, nonce, issued, issued.AddTicks(1),
+            "LaterCheckpointMirrorSecondReviewPreflightInvalid");
+        foreach (var table in new[] {
+            "git_later_checkpoint_mirror_second_reviews",
+            "git_later_checkpoint_mirror_second_review_events",
+            "git_later_checkpoint_mirror_second_review_session_consumptions"
+        })
+        {
+            // Table names are fixed test literals, never request input.
+            Assert.Equal(0L, await db.Database.SqlQueryRaw<long>(
+                "SELECT count(*)::bigint AS \"Value\" FROM " + table)
+                .SingleAsync());
+        }
+    }
+
+    [Fact]
     public async Task F061v2e_real_postgres_session_checks_reject_noncanonical_evidence()
     {
         // #130: exercise PostgreSQL's INSTALLED CHECK expressions, not

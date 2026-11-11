@@ -125,6 +125,7 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             ClaimsPrincipal user,
             GitIncrementalLaterCheckpointMirrorSecondReviewActorPreflight actorPreflight,
             PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector inspector,
+            PostgresGitIncrementalLaterCheckpointMirrorSecondReviewSessionReadiness readiness,
             TimeProvider clock,
             CancellationToken ct) => await GuardAsync(async () =>
         {
@@ -162,6 +163,14 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
                 throw new GitSourceSnapshotMirrorException(
                     "LaterCheckpointMirrorSecondReviewPreflightInvalid");
 
+            // Fail closed on the *database* clock and known replay
+            // before costly POSIX-locked double physical fsck. No
+            // transaction/CAS and no session row is written here.
+            await readiness.RequireUnusedAsync(
+                reviewer.SessionId, req.DecisionNonce,
+                reviewer.IssuedAtUtc, req.ReviewedAtUtc,
+                Guid.Empty, ct);
+
             var fresh = await inspector.ReadAssessedAsync(
                 id, planId, checkpointId, req.TargetObservationId,
                 req.WorkpackId, req.SourceRepositoryId,
@@ -192,10 +201,14 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
 
             // #130: bind the already re-audited, Identity-backed
             // non-authorizing preview to this login session and nonce.
-            // This timestamp is an API observation, NOT PostgreSQL
-            // clock authority or a durable session consumption.
-            var proposedAt = DateTimeOffset.FromUnixTimeMilliseconds(
-                clock.GetUtcNow().ToUnixTimeMilliseconds());
+            // Re-read the genuine DB clock and all three one-use
+            // uniqueness scopes, now including the SERVER-derived
+            // physical mirror. This still cannot consume a session:
+            // only a future atomic source-locked writer can do that.
+            var proposedAt = await readiness.RequireUnusedAsync(
+                reviewer.SessionId, req.DecisionNonce,
+                reviewer.IssuedAtUtc, req.ReviewedAtUtc,
+                fresh.Inspection.PhysicalMirrorId, ct);
             if (proposedAt < req.ReviewedAtUtc ||
                 proposedAt >= reviewer.IssuedAtUtc.AddMinutes(5))
                 throw new GitSourceSnapshotMirrorException(

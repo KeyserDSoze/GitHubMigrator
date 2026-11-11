@@ -620,3 +620,32 @@ This is a **test-only, non-authorizing** clock fixture, not a
 production lease extension or a way to allow stale decisions.
 It needs full final-main PostgreSQL17 execution before #131
 can be accepted.
+
+
+### #130: authoritative PostgreSQL clock and read-only replay preflight
+
+An additional *read-only* `PostgresGitIncrementalLaterCheckpointMirrorSecondReviewSessionReadiness`
+now checks the **actual PostgreSQL server** `date_trunc('milliseconds', clock_timestamp())`
+against the signed reviewer login's canonical whole-second issuance,
+five-minute exclusive expiry and two-minute review freshness.
+It also reads the existing global session-ID, nonce and mirror-ID
+consumption keys (which are presently always empty because all review
+journals retain unconditional DENY-ALL triggers).
+
+The authenticated `POST .../second-review/preflight` invokes this
+read **before** costly source-first/POSIX-locked physical fsck, then
+again **after** fresh immutable source and physical verification,
+with the server-derived physical mirror ID. The non-authorizing
+session-intent preview now uses that second PostgreSQL clock instant
+instead of trusting only the API's `TimeProvider`. A real PG17
+integration test checks timestamp canonicality, replay scope, expiry,
+future and malformed timestamp refusals and zero journal rows.
+
+**This is explicitly not an atomic CAS or a DB writer.** A read can
+race against a subsequent write in any multi-replica deployment;
+the future approved implementation must authenticate the second
+human again, lock the source, recheck full proof/Identity, and record
+the second review, matching event and session/nonce/mirror consumption
+in ONE DB-clock-governed transaction. No `RecoveryRequired` lease,
+new generation, physical import or GitHub write is authorized. The
+three mutation triggers remain DENY ALL.

@@ -267,6 +267,10 @@ builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector>();
 builder.Services.AddScoped<
     GitIncrementalLaterCheckpointMirrorSecondReviewActorPreflight>();
+// #130: actual PostgreSQL server-clock and global session/nonce/mirror
+// replay read-only gate, NOT a privileged second-review writer.
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorSecondReviewSessionReadiness>();
 // #120: dedicated local-only F-060v2 importer, separated from the
 // historic baseline GitHubTrustedRemoteRead path. Both this import and
 // its worker need independent OFF-by-default feature switches.
