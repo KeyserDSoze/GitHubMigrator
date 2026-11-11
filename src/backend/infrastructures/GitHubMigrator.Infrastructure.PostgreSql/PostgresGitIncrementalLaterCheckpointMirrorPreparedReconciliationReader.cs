@@ -100,12 +100,40 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
                 CanPush, CanRetry, CanDispatch, MigrationComplete);
     }
 
-    public async Task<GitIncrementalLaterCheckpointMirrorPreparedSnapshot>
+    // The PRE-MOVE reader must reject completed isolation; #129 adds
+    // a separate READ-ONLY post-Isolated source-first history path.
+    public Task<GitIncrementalLaterCheckpointMirrorPreparedSnapshot>
         ReadAsync(
             Guid preparationId, Guid planId, Guid checkpointId,
             Guid targetObservationId, Guid workpackId,
             string sourceRepositoryId, string expectedTargetReceiptSha256,
-            Guid originalBundleActorId, CancellationToken ct)
+            Guid originalBundleActorId, CancellationToken ct) =>
+        ReadCoreAsync(preparationId, planId, checkpointId,
+            targetObservationId, workpackId, sourceRepositoryId,
+            expectedTargetReceiptSha256, originalBundleActorId,
+            requireRecordedIsolation: false, ct);
+
+    // Does NOT inspect disk, authorize a reviewer, grant generation
+    // ownership or invoke a physical rename. Callers must separately
+    // perform fresh POSIX-locked dual-fsck and authenticated review.
+    public Task<GitIncrementalLaterCheckpointMirrorPreparedSnapshot>
+        ReadCompletedAsync(
+            Guid preparationId, Guid planId, Guid checkpointId,
+            Guid targetObservationId, Guid workpackId,
+            string sourceRepositoryId, string expectedTargetReceiptSha256,
+            Guid originalBundleActorId, CancellationToken ct) =>
+        ReadCoreAsync(preparationId, planId, checkpointId,
+            targetObservationId, workpackId, sourceRepositoryId,
+            expectedTargetReceiptSha256, originalBundleActorId,
+            requireRecordedIsolation: true, ct);
+
+    private async Task<GitIncrementalLaterCheckpointMirrorPreparedSnapshot>
+        ReadCoreAsync(
+            Guid preparationId, Guid planId, Guid checkpointId,
+            Guid targetObservationId, Guid workpackId,
+            string sourceRepositoryId, string expectedTargetReceiptSha256,
+            Guid originalBundleActorId, bool requireRecordedIsolation,
+            CancellationToken ct)
     {
         if (!options.Enabled)
             throw Refused("LaterCheckpointMirrorIsolationReconciliationDisabled");
@@ -191,7 +219,37 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
                 WHERE mirror_id = {stage.PhysicalMirrorId}
                     OR workpack_id = {stage.WorkpackId}
                 """).SingleAsync(ct);
-            if (recorded != 0)
+            if (requireRecordedIsolation)
+            {
+                // One source-fenced, immutable, audit-linked Isolated
+                // receipt must match the original terminal worker,
+                // token, generation and exact Reviewed/Prepared object
+                // set. A receipt WITHOUT its real Isolated event does
+                // not count. No caller supplies the receipt SHA.
+                var completed = await db.Database.SqlQuery<long>($"""
+                    SELECT count(*)::bigint AS "Value"
+                    FROM git_later_checkpoint_mirror_isolation_receipts r
+                    JOIN git_later_checkpoint_mirror_isolation_receipt_events e
+                        ON e.mirror_id = r.mirror_id
+                        AND e.type = 'Isolated'
+                        AND e.evidence_sha256 = r.evidence_sha256
+                        AND e.occurred_at_utc = r.recorded_at_utc
+                    WHERE r.mirror_id = {stage.PhysicalMirrorId}
+                        AND r.workpack_id = {stage.WorkpackId}
+                        AND r.original_worker_id = {lease.WorkerId}
+                        AND r.original_lease_token = {lease.LeaseToken}
+                        AND r.original_generation = {lease.Generation}
+                        AND r.isolated_at_utc = r.recorded_at_utc
+                        AND r.bundle_sha256 = {durable.BundleSha256}
+                        AND r.bundle_bytes = {durable.BundleBytes}
+                        AND NOT r.can_readmit AND NOT r.can_materialize
+                        AND NOT r.can_push AND NOT r.can_retry
+                        AND NOT r.can_dispatch AND NOT r.migration_complete
+                    """).SingleAsync(ct);
+                if (recorded != 1 || completed != 1)
+                    throw Refused("LaterCheckpointMirrorPostIsolationReceiptMissing");
+            }
+            else if (recorded != 0)
                 throw Refused("LaterCheckpointMirrorIsolationReconciliationAlreadyRecorded");
 
             var events = await db.Database.SqlQuery<

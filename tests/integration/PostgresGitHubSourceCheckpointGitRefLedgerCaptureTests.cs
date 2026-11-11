@@ -2639,6 +2639,54 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             AND evidence_sha256 = {isolated.EvidenceSha256}
                                             AND type = 'Isolated'
                                         """).SingleAsync());
+                                // #129: source-first post-Isolated
+                                // reader requires the immutable SQL receipt
+                                // AND exact event, without allowing the
+                                // existing PRE-MOVE reader to replay rename.
+                                Assert.Equal(
+                                    "LaterCheckpointMirrorIsolationReconciliationAlreadyRecorded",
+                                    (await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                        latestReader.ReadAsync(
+                                            run.Id, plan.Id, later.Id,
+                                            observationId, first.WorkpackId,
+                                            "repo-1",
+                                            targetReceipt.EvidenceSha256,
+                                            candidate.RequestedBy,
+                                            default))).Code);
+                                var completedSource = await latestReader
+                                    .ReadCompletedAsync(
+                                        run.Id, plan.Id, later.Id,
+                                        observationId, first.WorkpackId,
+                                        "repo-1", targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, default);
+                                Assert.Equal(freshPrepared.PreparedIntent,
+                                    completedSource.PreparedIntent);
+                                Assert.Equal(humanDecision,
+                                    completedSource.HumanDecision);
+                                Assert.Equal(isolated.ObjectSetSha256,
+                                    completedSource.ExpectedInspection.ObjectSetSha256);
+                                Assert.Equal(
+                                    LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                                        .PreparedIsolatedIntact,
+                                    await localSession.InspectPreparedPathsAsync(
+                                        completedSource.Stage,
+                                        completedSource.DurableBundle,
+                                        completedSource.ExpectedInspection,
+                                        completedSource.HumanDecision,
+                                        completedSource.PreparedIntent,
+                                        default));
+                                Assert.Equal(
+                                    "LaterCheckpointMirrorIsolationReconciliationSourceChanged",
+                                    (await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                        latestReader.ReadCompletedAsync(
+                                            run.Id, plan.Id, later.Id,
+                                            observationId, first.WorkpackId,
+                                            "foreign-repo",
+                                            targetReceipt.EvidenceSha256,
+                                            candidate.RequestedBy,
+                                            default))).Code);
                                 // #127: after ONE trusted physical + SQL
                                 // Isolated receipt, an additive audit-only
                                 // generation assessment can be written and
