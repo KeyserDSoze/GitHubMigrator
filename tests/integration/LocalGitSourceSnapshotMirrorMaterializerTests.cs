@@ -763,17 +763,20 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         File.Delete(original);
     }
 
-    // #124: simulate host loss between successful kernel rename and
-    // fsync of the PARENT mirror directory. The original intent-marker
+    // #124: simulate host loss after the intent marker is persisted,
+    // either BEFORE kernel rename or between successful kernel rename
+    // and fsync of the PARENT mirror directory. The original marker
     // is already present, but the recovery invocation must make the
     // quarantine name durable *before* handing physical proof to SQL.
     // No trusted coordinator, generation or remote write is faked here:
     // this exercises the exact offline post-rename filesystem branch.
     [Theory]
-    [InlineData("sha1")]
-    [InlineData("sha256")]
-    public async Task F061v2_quarantine_restart_after_rename_before_parent_fsync_is_safe(
-        string format)
+    [InlineData("sha1", false)]
+    [InlineData("sha1", true)]
+    [InlineData("sha256", false)]
+    [InlineData("sha256", true)]
+    public async Task F061v2_quarantine_restart_after_marker_or_rename_preserves_durability(
+        string format, bool renameBeforeRestart)
     {
         using var f = new Fixture();
         var physical = f.CreatePlan(format);
@@ -813,12 +816,15 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
             prepared.IsolationDirectoryName);
         var marker = Path.Combine(original,
             "agic-f061v2-reviewed-isolation-intent");
-        // The fixture simulates the exact already-persisted marker
-        // and kernel move, but deliberately does not fsync the parent.
+        // The fixture simulates an exact already-persisted marker.
+        // Newlines must be real LF bytes, not literal backslash+n:
+        // the server rejects even graph-identical incorrectly marked
+        // directories. If requested, simulate kernel rename without
+        // calling fsync(parent), then restart the trusted physical path.
         var contents = System.Text.Encoding.ASCII.GetBytes(
-            "f061v2-physical-source-isolation-intent-v1\\n" +
-            prepared.IntentSha256 + "\\n" +
-            decision.EvidenceSha256 + "\\n");
+            "f061v2-physical-source-isolation-intent-v1\n" +
+            prepared.IntentSha256 + "\n" +
+            decision.EvidenceSha256 + "\n");
         await using (var file = new FileStream(marker,
             FileMode.CreateNew, FileAccess.Write, FileShare.None,
             4096, FileOptions.WriteThrough))
@@ -826,15 +832,19 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
             await file.WriteAsync(contents);
             file.Flush(flushToDisk: true);
         }
-        Directory.Move(original, isolated);
-        Assert.False(Directory.Exists(original));
-        Assert.True(Directory.Exists(isolated));
+        if (renameBeforeRestart)
+            Directory.Move(original, isolated);
+        Assert.Equal(!renameBeforeRestart, Directory.Exists(original));
+        Assert.Equal(renameBeforeRestart, Directory.Exists(isolated));
 
         var session = new LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
             f.BundleRoot, f.MirrorRoot, enabled: true);
         Assert.Equal(
-            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
-                .PreparedIsolatedIntact,
+            renameBeforeRestart
+                ? LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                    .PreparedIsolatedIntact
+                : LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                    .PreparedOriginalIntact,
             await session.InspectPreparedPathsAsync(
                 stage, durable, current, decision, prepared, default));
         var callbackInvocations = 0;
@@ -846,7 +856,7 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
                 return Task.FromResult(physicalProof);
             }, default);
         Assert.Equal(1, callbackInvocations);
-        Assert.True(proof.RecoveredExistingQuarantine);
+        Assert.Equal(renameBeforeRestart, proof.RecoveredExistingQuarantine);
         Assert.Equal(prepared.IsolationDirectoryName,
             proof.IsolationDirectoryName);
         Assert.Equal(prepared.ObjectSetSha256, proof.ObjectSetSha256);
