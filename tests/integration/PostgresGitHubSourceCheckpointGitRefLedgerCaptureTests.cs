@@ -3467,6 +3467,11 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                                 candidate.RequestedBy,
                                                 failFastDeadline.Token,
                                                 failIfSourceBusy: true))).Code);
+                                    // The internal 12s reader budget,
+                                    // never this outer 30s caller token,
+                                    // must terminate source-lock contention.
+                                    Assert.False(failFastDeadline
+                                        .IsCancellationRequested);
                                     await heldSource.RollbackAsync();
                                 }
                                 // #129: trusted completed #127

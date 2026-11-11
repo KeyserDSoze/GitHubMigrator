@@ -725,3 +725,28 @@ second-review journals are unchanged. This reduces the length of the
 source-freshness-critical path but is **not yet proof of a passing
 PostgreSQL17 integration run**. Review #131 and the latest main CI
 before treating the regression as resolved.
+
+
+### #131: fail-closed source-busy reader budget includes nested F-031 preflights
+
+The detailed canceled PG17 log showed the SHA-1 test at
+`F031-real-age=148.1s` after the pre-move negative checks,
+`181.6s` after real isolation and `216.2s` after post-isolation
+source audit, before a further **30-second blocked advisory lock**
+in an upstream F-031 preflight. The expected source-busy code
+was replaced by caller-token cancellation. This is separate from
+the finite five-minute database freshness limit.
+
+For the **POSIX-root-held `failIfSourceBusy=true` path only**,
+`ReadCompletedAsync` now applies a 12-second linked cancellation
+budget to *all* nested source, bundle and admission reads, not just
+its own already-nonblocking SQL transaction. Only internal budget
+expiry is translated to `LaterCheckpointMirrorPostIsolationSourceBusy`;
+caller-requested cancellation is preserved. The real PostgreSQL17
+advisory-lock contention test additionally asserts its **30-second
+caller timeout has not expired** when the fail-closed refusal returns.
+Under contention this may refuse an otherwise legitimate request,
+but cannot admit an untrusted mirror, extend F-031 TTL, or allow
+a stale second-review writer. The normal completed-reader path is
+unchanged. This is a bounded fail-closed behavior, not a claim of
+instantaneous nonblocking across independent readers.

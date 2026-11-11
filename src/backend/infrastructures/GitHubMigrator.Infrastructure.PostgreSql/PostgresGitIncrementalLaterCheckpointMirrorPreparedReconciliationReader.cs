@@ -123,11 +123,51 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
             string sourceRepositoryId, string expectedTargetReceiptSha256,
             Guid originalBundleActorId, CancellationToken ct,
             bool failIfSourceBusy = false) =>
-        ReadCoreAsync(preparationId, planId, checkpointId,
-            targetObservationId, workpackId, sourceRepositoryId,
-            expectedTargetReceiptSha256, originalBundleActorId,
-            requireRecordedIsolation: true, ct: ct,
-            failIfSourceBusy: failIfSourceBusy);
+        failIfSourceBusy
+            ? ReadCompletedFailFastAsync(preparationId, planId,
+                checkpointId, targetObservationId, workpackId,
+                sourceRepositoryId, expectedTargetReceiptSha256,
+                originalBundleActorId, ct)
+            : ReadCoreAsync(preparationId, planId, checkpointId,
+                targetObservationId, workpackId, sourceRepositoryId,
+                expectedTargetReceiptSha256, originalBundleActorId,
+                requireRecordedIsolation: true, ct: ct);
+
+    // #131: PostgreSQL source-first upstream F-031 readers can block
+    // BEFORE our own pg_try_advisory_xact_lock check. When a caller
+    // already holds the F-060 POSIX root, bound the ENTIRE source read
+    // to prevent a reverse-order SQL/POSIX lock deadlock. An expired
+    // internal read refuses; caller cancellation stays cancellation.
+    private async Task<GitIncrementalLaterCheckpointMirrorPreparedSnapshot>
+        ReadCompletedFailFastAsync(
+            Guid preparationId, Guid planId, Guid checkpointId,
+            Guid targetObservationId, Guid workpackId,
+            string sourceRepositoryId, string expectedTargetReceiptSha256,
+            Guid originalBundleActorId, CancellationToken ct)
+    {
+        using var budget = CancellationTokenSource
+            .CreateLinkedTokenSource(ct);
+        budget.CancelAfter(TimeSpan.FromSeconds(12));
+        try
+        {
+            return await ReadCoreAsync(preparationId, planId,
+                checkpointId, targetObservationId, workpackId,
+                sourceRepositoryId, expectedTargetReceiptSha256,
+                originalBundleActorId, requireRecordedIsolation: true,
+                ct: budget.Token, failIfSourceBusy: true);
+        }
+        catch (OperationCanceledException) when (
+            budget.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw Refused("LaterCheckpointMirrorPostIsolationSourceBusy");
+        }
+        catch (Npgsql.PostgresException error) when (
+            budget.IsCancellationRequested && !ct.IsCancellationRequested &&
+            error.SqlState == "57014")
+        {
+            throw Refused("LaterCheckpointMirrorPostIsolationSourceBusy");
+        }
+    }
 
     private async Task<GitIncrementalLaterCheckpointMirrorPreparedSnapshot>
         ReadCoreAsync(
