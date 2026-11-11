@@ -832,16 +832,19 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                     bad, intentSha, issued, reviewed, consumed, expires);
             await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
                 sha, new string('B', 64), issued, reviewed, consumed, expires);
+            // PostgreSQL timestamptz is microsecond-precise; one
+            // .NET tick (100 ns) may be truncated by Npgsql. Use
+            // ten ticks (1 us) to exercise the actual SQL CHECK.
             await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
-                sha, intentSha, issued.AddTicks(1), reviewed, consumed,
-                expires.AddTicks(1));
+                sha, intentSha, issued.AddTicks(10), reviewed, consumed,
+                expires.AddTicks(10));
             await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
-                sha, intentSha, issued, reviewed.AddTicks(1), consumed, expires);
+                sha, intentSha, issued, reviewed.AddTicks(10), consumed, expires);
             await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
-                sha, intentSha, issued, reviewed, consumed.AddTicks(1), expires);
+                sha, intentSha, issued, reviewed, consumed.AddTicks(10), expires);
             await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
                 sha, intentSha, issued, reviewed, consumed,
-                expires.AddTicks(1));
+                expires.AddTicks(10));
 
             // One accepted probe, zero accepted forged probes.
             Assert.Equal(1L, await db.Database.SqlQueryRaw<long>("""
