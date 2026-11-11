@@ -125,6 +125,7 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             ClaimsPrincipal user,
             GitIncrementalLaterCheckpointMirrorSecondReviewActorPreflight actorPreflight,
             PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector inspector,
+            TimeProvider clock,
             CancellationToken ct) => await GuardAsync(async () =>
         {
             var reviewer = await actorPreflight.RequireSessionAsync(user);
@@ -178,9 +179,31 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
                 throw new GitSourceSnapshotMirrorException(
                     "LaterCheckpointMirrorSecondReviewPreflightChanged");
 
+            // #130: bind the already re-audited, Identity-backed
+            // non-authorizing preview to this login session and nonce.
+            // This timestamp is an API observation, NOT PostgreSQL
+            // clock authority or a durable session consumption.
+            var proposedAt = DateTimeOffset.FromUnixTimeMilliseconds(
+                clock.GetUtcNow().ToUnixTimeMilliseconds());
+            if (proposedAt < req.ReviewedAtUtc ||
+                proposedAt >= reviewer.IssuedAtUtc.AddMinutes(5))
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorSecondReviewPreflightExpired");
+            var sessionIntent =
+                GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntentIntegrity
+                    .Seal(fresh.Inspection.PhysicalMirrorId, reviewer.ActorId,
+                        req.Decision, selected!, reviewer.SessionId,
+                        req.DecisionNonce, reviewer.IssuedAtUtc,
+                        req.ReviewedAtUtc, proposedAt);
+            GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntentIntegrity
+                .Verify(sessionIntent);
+
             return Results.Ok(new {
                 preflightMatched = true,
                 reviewPreviewEvidenceSha256 = selected,
+                readOnlySessionIntentSha256 = sessionIntent.EvidenceSha256,
+                readOnlySessionIntentExpiresAtUtc = sessionIntent.ExpiresAtUtc,
+                durableSessionIntentPersisted = false,
                 fresh.AssessmentEvidenceSha256,
                 fresh.PreviewReviewedAtUtc,
                 durableSecondReviewPersisted = false,

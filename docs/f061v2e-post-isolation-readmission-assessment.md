@@ -414,3 +414,31 @@ The fail-fast Python SQL guard now verifies that this precise
 check is present once and simulates the rendered SQL search.
 No lease, receipt, immutable SQL trigger, permission, worker,
 Git object, or destination operation is changed.
+
+
+### #130: authenticated read-only session/nonce intent integrated into preflight
+
+After successful `POST .../second-review/preflight` source-first PostgreSQL and
+POSIX-locked two-pass Git inspection, the endpoint now rechecks the **same**
+current superadmin Identity session, seals the exact decision preview digest
+to the server-side login session ID and request nonce, and rejects a proposed
+timestamp outside the five-minute JWT review window. The pure
+`GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntentIntegrity`
+contract also binds the reviewer and mirror, the canonical UTC issuance,
+review and post-audit timestamps and the exact decision (approve or reject).
+The result supplies only a `readOnlySessionIntentSha256` and
+`readOnlySessionIntentExpiresAtUtc`, with
+`durableSessionIntentPersisted=false`, `sessionConsumed=false`,
+`durableSecondReviewPersisted=false`, and **all authority flags false**.
+The JWT session ID, nonce-derived secret material, original lease token and
+local quarantine path are not returned.
+
+The digest is **not a bearer capability, not proof that SQL consumed a nonce,
+not PostgreSQL clock authority, not proof of lasting source freshness, and
+not permission to perform a write**. The three F-061 second-review tables
+retain their unconditional SQL DENY-ALL triggers. #130 still needs a
+separately guarded source-first / POSIX / PostgreSQL-clock atomic transaction
+for actual review+event+session consumption, direct-SQL forgery rejection,
+real SHA-1/SHA-256 integration, restart/replay and three-replica races. The
+original terminal `RecoveryRequired` lease, mirror and GitHub destination
+are not modified.
