@@ -652,6 +652,24 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
                 rereadInspection, decision, prepared, default));
         Assert.False(Directory.Exists(original));
         Assert.False(Directory.Exists(isolated));
+        // A symlink to even a VALID previous isolated graph is not
+        // accepted as the server-owned quarantine directory.
+        Directory.CreateSymbolicLink(isolated, detached);
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedUnsafePath,
+            await mover.InspectPreparedPathsAsync(stage, durable,
+                rereadInspection, decision, prepared, default));
+        Directory.Delete(isolated);
+        // Nor may an outsider file be mistaken for an absent UUID.git
+        // before an allegedly completed quarantine.
+        await File.WriteAllTextAsync(original, "outsider-claim");
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedUnsafePath,
+            await mover.InspectPreparedPathsAsync(stage, durable,
+                rereadInspection, decision, prepared, default));
+        File.Delete(original);
     }
 
     [Theory]
