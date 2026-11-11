@@ -36,6 +36,12 @@ public static class GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchem
                 bundle_sha256 varchar(64) NOT NULL,
                 bundle_bytes bigint NOT NULL,
                 isolation_receipt_sha256 varchar(64) NOT NULL,
+                recovery_decision_sha256 varchar(64) NOT NULL,
+                prepared_intent_sha256 varchar(64) NOT NULL,
+                isolation_directory_name varchar(160) NOT NULL,
+                object_set_sha256 varchar(64) NOT NULL,
+                object_count integer NOT NULL,
+                source_reviewed_at_utc timestamptz NOT NULL,
                 assessed_at_utc timestamptz NOT NULL,
                 evidence_sha256 varchar(64) NOT NULL,
                 durable_readmission_approved boolean NOT NULL DEFAULT false,
@@ -61,6 +67,16 @@ public static class GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchem
                     AND bundle_sha256 ~ '^[0-9a-f]{{64}}$'
                     AND bundle_bytes BETWEEN 1 AND 536870912
                     AND isolation_receipt_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND recovery_decision_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND prepared_intent_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND isolation_directory_name =
+                        replace(mirror_id::text, '-', '') || '.' ||
+                        recovery_decision_sha256 || '.quarantine.git'
+                    AND object_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND object_count BETWEEN 1 AND 200000
+                    AND source_reviewed_at_utc <= assessed_at_utc
+                    AND assessed_at_utc - source_reviewed_at_utc <=
+                        interval '2 minutes'
                     AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                     AND NOT durable_readmission_approved
                     AND NOT can_readmit AND NOT can_materialize
@@ -82,6 +98,56 @@ public static class GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchem
                     AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                 )
             );
+
+            -- Upgrade previously bootstrapped audit-only placeholders
+            -- without rewriting/deleting historical immutable rows.
+            -- Legacy rows are NOT backfilled or silently trusted: the
+            -- new NOT VALID check enforces all extra provenance for
+            -- subsequent INSERT/UPDATE without scanning old history.
+            ALTER TABLE git_later_checkpoint_mirror_generation_assessments
+                ADD COLUMN IF NOT EXISTS
+                    recovery_decision_sha256 varchar(64),
+                ADD COLUMN IF NOT EXISTS
+                    prepared_intent_sha256 varchar(64),
+                ADD COLUMN IF NOT EXISTS
+                    isolation_directory_name varchar(160),
+                ADD COLUMN IF NOT EXISTS
+                    object_set_sha256 varchar(64),
+                ADD COLUMN IF NOT EXISTS
+                    object_count integer,
+                ADD COLUMN IF NOT EXISTS
+                    source_reviewed_at_utc timestamptz;
+            DO $generation_scope_upgrade$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid =
+                        'git_later_checkpoint_mirror_generation_assessments'::regclass
+                        AND conname =
+                            'ck_f061v2e_generation_assessment_scope_v2'
+                ) THEN
+                    ALTER TABLE
+                        git_later_checkpoint_mirror_generation_assessments
+                    ADD CONSTRAINT ck_f061v2e_generation_assessment_scope_v2
+                    CHECK (
+                        recovery_decision_sha256 IS NOT NULL
+                        AND recovery_decision_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND prepared_intent_sha256 IS NOT NULL
+                        AND prepared_intent_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND isolation_directory_name IS NOT NULL
+                        AND isolation_directory_name =
+                            replace(mirror_id::text, '-', '') || '.' ||
+                            recovery_decision_sha256 || '.quarantine.git'
+                        AND object_set_sha256 IS NOT NULL
+                        AND object_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND object_count BETWEEN 1 AND 200000
+                        AND source_reviewed_at_utc IS NOT NULL
+                        AND source_reviewed_at_utc <= assessed_at_utc
+                        AND assessed_at_utc - source_reviewed_at_utc <=
+                            interval '2 minutes'
+                    ) NOT VALID;
+                END IF;
+            END $generation_scope_upgrade$;
 
             -- Database row ancestry is a safety check, NOT proof that
             -- a new lease has been authorized: only future source-first
@@ -135,7 +201,20 @@ public static class GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchem
                     OR isolation.bundle_bytes <> NEW.bundle_bytes
                     OR isolation.evidence_sha256 <>
                         NEW.isolation_receipt_sha256
-                    OR isolation.recorded_at_utc > NEW.assessed_at_utc
+                    OR isolation.recovery_decision_sha256 <>
+                        NEW.recovery_decision_sha256
+                    OR isolation.intent_sha256 <>
+                        NEW.prepared_intent_sha256
+                    OR isolation.isolation_directory_name <>
+                        NEW.isolation_directory_name
+                    OR isolation.physically_verified_object_sha256 <>
+                        NEW.object_set_sha256
+                    OR isolation.physically_verified_object_count <>
+                        NEW.object_count
+                    OR isolation.recorded_at_utc > NEW.source_reviewed_at_utc
+                    OR NEW.source_reviewed_at_utc > NEW.assessed_at_utc
+                    OR NEW.assessed_at_utc - NEW.source_reviewed_at_utc >
+                        interval '2 minutes'
                     OR EXISTS (
                         SELECT 1 FROM
                             git_later_checkpoint_mirror_verified_evidence

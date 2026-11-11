@@ -268,6 +268,28 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
         Assert.Equal(2L, checks);
         Assert.Equal(2L, guards);
         Assert.Equal(7L, noAuthorityDefaults);
+        // Even deployments bootstrapped with the earlier audit-only
+        // table gain the new provenance fence without rewriting rows.
+        var additionalColumns = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM information_schema.columns
+            WHERE table_name =
+                'git_later_checkpoint_mirror_generation_assessments'
+              AND column_name IN (
+                  'recovery_decision_sha256', 'prepared_intent_sha256',
+                  'isolation_directory_name', 'object_set_sha256',
+                  'object_count', 'source_reviewed_at_utc')
+            """).SingleAsync();
+        var additionalConstraint = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_generation_assessments'::regclass
+              AND conname = 'ck_f061v2e_generation_assessment_scope_v2'
+              AND contype = 'c'
+            """).SingleAsync();
+        Assert.Equal(6L, additionalColumns);
+        Assert.Equal(1L, additionalConstraint);
 
         // A synthetic SHA and a guessed proposed generation cannot
         // directly register a reviewed re-admission against a missing
@@ -284,7 +306,11 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                         source_full_ref_proof_sha256,
                         source_ref_set_sha256, target_receipt_sha256,
                         bundle_sha256, bundle_bytes,
-                        isolation_receipt_sha256, assessed_at_utc,
+                        isolation_receipt_sha256,
+                        recovery_decision_sha256, prepared_intent_sha256,
+                        isolation_directory_name,
+                        object_set_sha256, object_count,
+                        source_reviewed_at_utc, assessed_at_utc,
                         evidence_sha256)
                 VALUES ({Guid.NewGuid()}, {Guid.NewGuid()},
                     {Guid.NewGuid()}, {Guid.NewGuid()}, {1},
@@ -292,6 +318,11 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                     {new string('a',64)}, {new string('b',64)},
                     {new string('c',64)}, {new string('d',64)},
                     {new string('e',64)}, {123L}, {new string('f',64)},
+                    {new string('a',64)}, {new string('b',64)},
+                    {Guid.NewGuid().ToString("N") + "." +
+                        new string('a',64) + ".quarantine.git"},
+                    {new string('c',64)}, {10},
+                    {DateTimeOffset.UtcNow},
                     {DateTimeOffset.UtcNow}, {new string('a',64)})
                 """));
         Assert.Contains(fake.SqlState, new[] {

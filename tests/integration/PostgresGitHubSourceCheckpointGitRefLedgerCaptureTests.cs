@@ -2669,6 +2669,11 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             target_receipt_sha256,
                                             bundle_sha256, bundle_bytes,
                                             isolation_receipt_sha256,
+                                            recovery_decision_sha256,
+                                            prepared_intent_sha256,
+                                            isolation_directory_name,
+                                            object_set_sha256, object_count,
+                                            source_reviewed_at_utc,
                                             assessed_at_utc, evidence_sha256)
                                     VALUES (
                                         {generationAssessment.PhysicalMirrorId},
@@ -2687,6 +2692,12 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         {generationAssessment.BundleSha256},
                                         {generationAssessment.BundleBytes},
                                         {generationAssessment.IsolationReceiptSha256},
+                                        {generationAssessment.RecoveryDecisionSha256},
+                                        {generationAssessment.PreparedIntentSha256},
+                                        {generationAssessment.IsolationDirectoryName},
+                                        {generationAssessment.ObjectSetSha256},
+                                        {generationAssessment.ObjectCount},
+                                        {generationAssessment.SourceReviewedAtUtc},
                                         {generationAssessment.AssessedAtUtc},
                                         {generationAssessment.EvidenceSha256})
                                     """);
@@ -2713,6 +2724,18 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                                 {diagnostic.LeaseGeneration + 1}
                                             AND isolation_receipt_sha256 =
                                                 {isolated.EvidenceSha256}
+                                            AND recovery_decision_sha256 =
+                                                {isolated.RecoveryDecisionSha256}
+                                            AND prepared_intent_sha256 =
+                                                {isolated.PreparedIntentSha256}
+                                            AND isolation_directory_name =
+                                                {isolated.IsolationDirectoryName}
+                                            AND object_set_sha256 =
+                                                {isolated.ObjectSetSha256}
+                                            AND object_count =
+                                                {isolated.ObjectCount}
+                                            AND source_reviewed_at_utc =
+                                                {generationSourceRead.ReviewedAtUtc}
                                             AND NOT durable_readmission_approved
                                             AND NOT can_readmit
                                             AND NOT can_materialize
@@ -2729,6 +2752,60 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                                 {generationAssessment.EvidenceSha256}
                                             AND type = 'Assessed'
                                         """).SingleAsync());
+                                // A replay with a foreign Prepared SHA is
+                                // rejected by the INSERT trigger before
+                                // any uniqueness/append-only transition.
+                                Assert.Equal(
+                                    Npgsql.PostgresErrorCodes.RaiseException,
+                                    (await Assert.ThrowsAsync<
+                                        Npgsql.PostgresException>(() =>
+                                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                            INSERT INTO
+                                                git_later_checkpoint_mirror_generation_assessments (
+                                                    mirror_id, workpack_id,
+                                                    checkpoint_id, source_snapshot_id,
+                                                    evidence_version, original_worker_id,
+                                                    original_lease_token,
+                                                    original_generation,
+                                                    suggested_next_generation,
+                                                    staging_evidence_sha256,
+                                                    source_full_ref_proof_sha256,
+                                                    source_ref_set_sha256,
+                                                    target_receipt_sha256,
+                                                    bundle_sha256, bundle_bytes,
+                                                    isolation_receipt_sha256,
+                                                    recovery_decision_sha256,
+                                                    prepared_intent_sha256,
+                                                    isolation_directory_name,
+                                                    object_set_sha256, object_count,
+                                                    source_reviewed_at_utc,
+                                                    assessed_at_utc, evidence_sha256)
+                                            VALUES (
+                                                {generationAssessment.PhysicalMirrorId},
+                                                {generationAssessment.WorkpackId},
+                                                {generationAssessment.CheckpointId},
+                                                {generationAssessment.SourceSnapshotId},
+                                                {generationAssessment.EvidenceVersion},
+                                                {generationAssessment.OriginalWorkerId},
+                                                {generationAssessment.OriginalLeaseToken},
+                                                {generationAssessment.OriginalGeneration},
+                                                {generationAssessment.SuggestedNextGeneration},
+                                                {generationAssessment.StagingEvidenceSha256},
+                                                {generationAssessment.SourceFullRefProofSha256},
+                                                {generationAssessment.SourceRefSetSha256},
+                                                {generationAssessment.TargetReceiptSha256},
+                                                {generationAssessment.BundleSha256},
+                                                {generationAssessment.BundleBytes},
+                                                {generationAssessment.IsolationReceiptSha256},
+                                                {generationAssessment.RecoveryDecisionSha256},
+                                                {new string('0',64)},
+                                                {generationAssessment.IsolationDirectoryName},
+                                                {generationAssessment.ObjectSetSha256},
+                                                {generationAssessment.ObjectCount},
+                                                {generationAssessment.SourceReviewedAtUtc},
+                                                {generationAssessment.AssessedAtUtc},
+                                                {generationAssessment.EvidenceSha256})
+                                            """))).SqlState);
                                 Assert.Equal(
                                     Npgsql.PostgresErrorCodes.RaiseException,
                                     (await Assert.ThrowsAsync<
