@@ -150,6 +150,53 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                 END IF;
             END $f061v2e_exact_event_fk$;
 
+            -- #129: a review row must reference the EXACT original
+            -- Assessed evidence and F-061 terminal worker/token/gen,
+            -- source workpack/target and physical receipt, not merely
+            -- the same mirror UUID. This FK is additive and remains
+            -- active even if a future carefully scoped writer exists.
+            -- The parent assessment row is append-only and remains
+            -- non-authorizing. No second-review insert is enabled.
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                uq_f061v2e_assessment_second_review_scope ON
+                git_later_checkpoint_mirror_generation_assessments (
+                    mirror_id, workpack_id, checkpoint_id,
+                    source_snapshot_id, evidence_sha256,
+                    original_worker_id, original_lease_token,
+                    original_generation, suggested_next_generation,
+                    staging_evidence_sha256, target_receipt_sha256,
+                    recovery_decision_sha256, isolation_receipt_sha256);
+
+            DO $f061v2e_review_generation_fk$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname =
+                        'fk_f061v2e_second_review_generation_scope'
+                    AND conrelid =
+                        'git_later_checkpoint_mirror_second_reviews'::regclass
+                ) THEN
+                    ALTER TABLE git_later_checkpoint_mirror_second_reviews
+                    ADD CONSTRAINT
+                        fk_f061v2e_second_review_generation_scope
+                    FOREIGN KEY (
+                        mirror_id, workpack_id, checkpoint_id,
+                        source_snapshot_id, assessment_evidence_sha256,
+                        original_worker_id, original_lease_token,
+                        original_generation, suggested_next_generation,
+                        staging_evidence_sha256, target_receipt_sha256,
+                        first_decision_sha256, isolation_receipt_sha256)
+                    REFERENCES git_later_checkpoint_mirror_generation_assessments (
+                        mirror_id, workpack_id, checkpoint_id,
+                        source_snapshot_id, evidence_sha256,
+                        original_worker_id, original_lease_token,
+                        original_generation, suggested_next_generation,
+                        staging_evidence_sha256, target_receipt_sha256,
+                        recovery_decision_sha256, isolation_receipt_sha256)
+                    ON DELETE RESTRICT;
+                END IF;
+            END $f061v2e_review_generation_fk$;
+
             -- A proposed second reviewer is NOT a verified JWT actor.
             -- No insert (even with matching SHA) can claim a review
             -- before a future protected, source-first and POSIX-locked

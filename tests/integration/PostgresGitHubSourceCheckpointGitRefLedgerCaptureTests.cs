@@ -2926,6 +2926,55 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             'trg_f061v2e_second_review_event_closed')
                                             AND NOT tgisinternal
                                         """).SingleAsync());
+                                // #129: the review's original terminal
+                                // worker/token/gen and the #127 Assessed
+                                // digest MUST be tied to the SAME source
+                                // and physical row at the database level,
+                                // not just independently well-formed SHA.
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM pg_constraint c
+                                        WHERE c.conname =
+                                            'fk_f061v2e_second_review_generation_scope'
+                                            AND c.conrelid =
+                                                'git_later_checkpoint_mirror_second_reviews'::regclass
+                                            AND c.confrelid =
+                                                'git_later_checkpoint_mirror_generation_assessments'::regclass
+                                            AND c.contype = 'f'
+                                            AND cardinality(c.conkey) = 13
+                                            AND cardinality(c.confkey) = 13
+                                        """).SingleAsync());
+                                var reviewScopeFk = await verifiedDb
+                                    .Database.SqlQuery<string>($"""
+                                        SELECT pg_get_constraintdef(c.oid)
+                                            AS "Value"
+                                        FROM pg_constraint c
+                                        WHERE c.conname =
+                                            'fk_f061v2e_second_review_generation_scope'
+                                            AND c.conrelid =
+                                                'git_later_checkpoint_mirror_second_reviews'::regclass
+                                        """).SingleAsync();
+                                Assert.Contains("assessment_evidence_sha256",
+                                    reviewScopeFk);
+                                Assert.Contains("original_lease_token",
+                                    reviewScopeFk);
+                                Assert.Contains("original_generation",
+                                    reviewScopeFk);
+                                Assert.Contains("recovery_decision_sha256",
+                                    reviewScopeFk);
+                                Assert.Contains("isolation_receipt_sha256",
+                                    reviewScopeFk);
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM pg_index i
+                                        JOIN pg_class t ON t.oid = i.indexrelid
+                                        WHERE t.relname =
+                                            'uq_f061v2e_assessment_second_review_scope'
+                                            AND i.indisunique AND i.indisvalid
+                                        """).SingleAsync());
+
                                 // #129: even if a future protected SQL
                                 // writer is enabled, a foreign event
                                 // cannot point at a matching mirror

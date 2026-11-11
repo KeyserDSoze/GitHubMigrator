@@ -280,3 +280,25 @@ the extra constraint never grants a lease, generation or push.
 Real PostgreSQL17 integration checks the database-installed exact
 FK definition and unique index, in addition to the existing two
 DENY-ALL triggers, event immutability and rejected inserts.
+
+### #129 FK-bound second reviewer to the exact immutable generation assessment
+
+The second-review row now has a composite 13-column FK to the
+**exact #127 generation assessment**, not just the same `mirror_id`.
+It binds the workpack/checkpoint/source snapshot, Assessed digest,
+original terminal F-061 worker/lease token/generation, proposed
+generation hint, source staging SHA, F-031 target receipt SHA,
+original reviewed recovery decision SHA and actual #124 isolation
+receipt SHA. The parent assessment gets a corresponding idempotent
+unique index. An otherwise well-formed review with a foreign
+assessment digest or swapped failed worker/token/source/target
+cannot satisfy this database relationship. The audit **event** also
+keeps its separate exact five-field FK to the review row.
+
+This is additive, idempotent and **non-authorizing**. The two
+second-review SQL triggers still unconditionally deny INSERT,
+UPDATE and DELETE; there is still NO authenticated second review
+writer, one-use nonce, new generation, import or push.
+Real SHA1/SHA256 Git/PostgreSQL17 tests check the installed
+13-column FK, its parent relation, column mappings and valid
+unique index in addition to the existing deny-all guards.
