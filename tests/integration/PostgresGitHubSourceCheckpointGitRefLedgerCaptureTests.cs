@@ -3260,6 +3260,54 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     assessedIsolation.SuggestedNextGeneration);
                                 Assert.Equal(generationAssessment.AssessedAtUtc,
                                     assessedIsolation.AssessedAtUtc);
+                                // A submitted fixed GET timestamp must
+                                // re-seal to the *same* actor-bound SHA,
+                                // after repeating all live source/SQL
+                                // and POSIX physical checks. It remains
+                                // non-authorizing, and no nonce is
+                                // actually consumed in this preflight.
+                                var fixedPreview =
+                                    await postIsolation.ReadAssessedAsync(
+                                        run.Id, plan.Id, later.Id,
+                                        observationId, first.WorkpackId,
+                                        "repo-1",
+                                        targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, default,
+                                        authenticatedSecondReviewerId:
+                                            secondReviewer,
+                                        requestedReviewAtUtc:
+                                            assessedIsolation.PreviewReviewedAtUtc,
+                                        authenticatedReviewSessionId:
+                                            Guid.NewGuid(),
+                                        decisionNonce: Guid.NewGuid());
+                                Assert.Equal(
+                                    assessedIsolation.ApprovedPreviewEvidenceSha256,
+                                    fixedPreview.ApprovedPreviewEvidenceSha256);
+                                Assert.Equal(
+                                    assessedIsolation.RejectedPreviewEvidenceSha256,
+                                    fixedPreview.RejectedPreviewEvidenceSha256);
+                                Assert.False(fixedPreview.Inspection
+                                    .DurableSecondReviewPersisted);
+                                Assert.Equal(
+                                    "LaterCheckpointMirrorSecondReviewPreflightExpired",
+                                    (await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                            postIsolation.ReadAssessedAsync(
+                                                run.Id, plan.Id, later.Id,
+                                                observationId, first.WorkpackId,
+                                                "repo-1",
+                                                targetReceipt.EvidenceSha256,
+                                                candidate.RequestedBy, default,
+                                                authenticatedSecondReviewerId:
+                                                    secondReviewer,
+                                                requestedReviewAtUtc:
+                                                    assessedIsolation.PreviewReviewedAtUtc
+                                                        ?.AddMinutes(-3),
+                                                authenticatedReviewSessionId:
+                                                    Guid.NewGuid(),
+                                                decisionNonce:
+                                                    Guid.NewGuid()))).Code);
+
                                 Assert.False(
                                     assessedIsolation.Inspection.CanReAdmit ||
                                     assessedIsolation.Inspection.CanPush ||

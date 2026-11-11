@@ -100,10 +100,17 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
             Guid targetObservationId, Guid workpackId,
             string sourceRepositoryId, string expectedTargetReceiptSha256,
             Guid originalBundleActorId, CancellationToken ct,
-            Guid? authenticatedSecondReviewerId = null)
+            Guid? authenticatedSecondReviewerId = null,
+            DateTimeOffset? requestedReviewAtUtc = null,
+            Guid? authenticatedReviewSessionId = null,
+            Guid? decisionNonce = null)
     {
         if (!options.Enabled)
             throw Refused("LaterCheckpointMirrorPostIsolationInspectorDisabled");
+        if ((authenticatedReviewSessionId is not null ||
+             decisionNonce is not null || requestedReviewAtUtc is not null) &&
+            authenticatedSecondReviewerId is null)
+            throw Refused("LaterCheckpointMirrorSecondReviewPreflightInvalid");
         var before = await ReadSqlAsync(preparationId, planId,
             checkpointId, targetObservationId, workpackId,
             sourceRepositoryId, expectedTargetReceiptSha256,
@@ -232,8 +239,21 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
                 throw Refused(
                     "LaterCheckpointMirrorSecondReviewIndependentReviewerRequired");
 
-            var at = now >= assessed.AssessedAtUtc
-                ? now : assessed.AssessedAtUtc;
+            var at = requestedReviewAtUtc ??
+                (now >= assessed.AssessedAtUtc
+                    ? now : assessed.AssessedAtUtc);
+            // A POST must supply the exact UTC millisecond timestamp
+            // returned by GET. Re-seal an identical decision SHA only
+            // after a FRESH full physical+SQL audit, never by trusting
+            // a client-provided review digest.
+            if (at == default || at.Offset != TimeSpan.Zero ||
+                at < assessed.AssessedAtUtc || at > now ||
+                now - at > TimeSpan.FromMinutes(2) ||
+                (requestedReviewAtUtc is not null &&
+                 at != DateTimeOffset.FromUnixTimeMilliseconds(
+                    at.ToUnixTimeMilliseconds())))
+                throw Refused(
+                    "LaterCheckpointMirrorSecondReviewPreflightExpired");
             at = DateTimeOffset.FromUnixTimeMilliseconds(
                 at.ToUnixTimeMilliseconds());
             var approve =
@@ -263,6 +283,29 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
             approveSha = approve.EvidenceSha256;
             rejectSha = reject.EvidenceSha256;
             previewAt = at;
+            if (authenticatedReviewSessionId is not null ||
+                decisionNonce is not null)
+            {
+                if (authenticatedReviewSessionId is not Guid session ||
+                    session == Guid.Empty ||
+                    decisionNonce is not Guid nonce ||
+                    nonce == Guid.Empty)
+                    throw Refused(
+                        "LaterCheckpointMirrorSecondReviewPreflightInvalid");
+                // Non-authorizing snapshot only. SQL UNIQUE keys are
+                // the ultimate atomic replay protection once a future
+                // authenticated decision writer is implemented.
+                var used = await db.Database.SqlQuery<long>($"""
+                    SELECT count(*)::bigint AS "Value"
+                    FROM git_later_checkpoint_mirror_second_review_session_consumptions
+                    WHERE review_session_id = {session}
+                        OR decision_nonce = {nonce}
+                        OR mirror_id = {stage.PhysicalMirrorId}
+                    """).SingleAsync(lockedCt);
+                if (used != 0)
+                    throw Refused(
+                        "LaterCheckpointMirrorSecondReviewSessionAlreadyConsumed");
+            }
         }
         return new GitIncrementalLaterCheckpointMirrorAssessedIsolationInspection(
             physical, assessed.EvidenceSha256,

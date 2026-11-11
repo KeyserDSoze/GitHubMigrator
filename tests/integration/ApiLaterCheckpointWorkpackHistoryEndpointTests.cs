@@ -800,6 +800,56 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2e_second_review_preflight_requires_real_jwt_and_never_writes()
+    {
+        var route = "/api/incremental-preparations/" + Guid.NewGuid() +
+            "/operation-plans/" + Guid.NewGuid() +
+            "/source-sync-checkpoints/" + Guid.NewGuid() +
+            "/mirror-recovery/second-review/preflight";
+        var valid = new {
+            targetObservationId = Guid.NewGuid(),
+            workpackId = Guid.NewGuid(),
+            originalBundleActorId = Guid.NewGuid(),
+            sourceRepositoryId = "repo-1",
+            expectedTargetReceiptSha256 = new string('a', 64),
+            expectedAssessmentEvidenceSha256 = new string('b', 64),
+            expectedReviewEvidenceSha256 = new string('c', 64),
+            decision = "ApprovedForIndependentReview",
+            reviewedAtUtc = DateTimeOffset.UtcNow,
+            decisionNonce = Guid.NewGuid()
+        };
+        var admin = await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword);
+        var user = await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword);
+        var superadmin = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        var outbound = harness.Calls.Count;
+        foreach (var (bearer, expected) in new[] {
+            ((string?)null, HttpStatusCode.Unauthorized),
+            (user, HttpStatusCode.Forbidden),
+            (admin, HttpStatusCode.Forbidden),
+            (superadmin, HttpStatusCode.Conflict)
+        })
+        {
+            using var message = new HttpRequestMessage(HttpMethod.Post, route)
+            {
+                Content = System.Net.Http.Json.JsonContent.Create(valid)
+            };
+            if (bearer is not null)
+                message.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", bearer);
+            using var reply = await harness.Client.SendAsync(message);
+            Assert.Equal(expected, reply.StatusCode);
+            if (bearer == superadmin)
+                Assert.Contains(
+                    "LaterCheckpointMirrorPostIsolationInspectorDisabled",
+                    await reply.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(outbound, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F061v2e_second_reviewer_token_checks_current_account_stamp_and_role()
     {
         // Isolated host: rotating security stamp or removing the role

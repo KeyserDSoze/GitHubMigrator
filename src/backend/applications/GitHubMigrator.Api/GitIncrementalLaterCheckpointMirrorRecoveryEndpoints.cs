@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
 using GitHubMigrator.Business;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.AspNetCore.Authorization;
@@ -113,6 +114,83 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             });
         }));
 
+        // #129: explicit POST for re-auditing a *proposed* human
+        // decision. This is NOT /decision and NEVER persists a review,
+        // consumes a JWT session, re-admits a lease or grants authority.
+        // A future writer may only use independently rebuilt evidence
+        // after an atomic, source-first, POSIX-fenced SQL commit.
+        group.MapPost("/second-review/preflight", async Task<IResult> (
+            Guid id, Guid planId, Guid checkpointId,
+            LaterCheckpointMirrorSecondReviewPreflightRequest req,
+            ClaimsPrincipal user,
+            GitIncrementalLaterCheckpointMirrorSecondReviewActorPreflight actorPreflight,
+            PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector inspector,
+            CancellationToken ct) => await GuardAsync(async () =>
+        {
+            var reviewer = await actorPreflight.RequireSessionAsync(user);
+            if (req.DecisionNonce == Guid.Empty ||
+                req.TargetObservationId == Guid.Empty ||
+                req.WorkpackId == Guid.Empty ||
+                req.OriginalBundleActorId == Guid.Empty ||
+                req.Decision is not (
+                    GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                        .ApprovedForIndependentReview or
+                    GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                        .RejectedForIndependentReview) ||
+                !GitSourceBundleStorageCheck.ValidSha(
+                    req.ExpectedTargetReceiptSha256) ||
+                !GitSourceBundleStorageCheck.ValidSha(
+                    req.ExpectedAssessmentEvidenceSha256) ||
+                !GitSourceBundleStorageCheck.ValidSha(
+                    req.ExpectedReviewEvidenceSha256) ||
+                req.ReviewedAtUtc.Offset != TimeSpan.Zero ||
+                req.ReviewedAtUtc < reviewer.IssuedAtUtc ||
+                req.SourceRepositoryId is not { Length: >= 1 and <= 256 } ||
+                string.IsNullOrWhiteSpace(req.SourceRepositoryId))
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorSecondReviewPreflightInvalid");
+
+            var fresh = await inspector.ReadAssessedAsync(
+                id, planId, checkpointId, req.TargetObservationId,
+                req.WorkpackId, req.SourceRepositoryId,
+                req.ExpectedTargetReceiptSha256,
+                req.OriginalBundleActorId, ct,
+                authenticatedSecondReviewerId: reviewer.ActorId,
+                requestedReviewAtUtc: req.ReviewedAtUtc,
+                authenticatedReviewSessionId: reviewer.SessionId,
+                decisionNonce: req.DecisionNonce);
+            var selected = req.Decision ==
+                GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                    .ApprovedForIndependentReview
+                ? fresh.ApprovedPreviewEvidenceSha256
+                : fresh.RejectedPreviewEvidenceSha256;
+            static bool SameDigest(string? a, string? b) =>
+                GitSourceBundleStorageCheck.ValidSha(a) &&
+                GitSourceBundleStorageCheck.ValidSha(b) &&
+                CryptographicOperations.FixedTimeEquals(
+                    Convert.FromHexString(a!),
+                    Convert.FromHexString(b!));
+            if (!SameDigest(req.ExpectedAssessmentEvidenceSha256,
+                    fresh.AssessmentEvidenceSha256) ||
+                !SameDigest(req.ExpectedReviewEvidenceSha256, selected) ||
+                fresh.PreviewReviewedAtUtc != req.ReviewedAtUtc ||
+                await actorPreflight.RequireSessionAsync(user) != reviewer)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorSecondReviewPreflightChanged");
+
+            return Results.Ok(new {
+                preflightMatched = true,
+                reviewPreviewEvidenceSha256 = selected,
+                fresh.AssessmentEvidenceSha256,
+                fresh.PreviewReviewedAtUtc,
+                durableSecondReviewPersisted = false,
+                sessionConsumed = false,
+                canReAdmit = false, canMaterialize = false,
+                canPush = false, canRetry = false,
+                canDispatch = false, migrationComplete = false
+            });
+        }));
+
         group.MapPost("/decision", async Task<IResult> (
             Guid id, Guid planId, Guid checkpointId,
             LaterCheckpointMirrorRecoveryDecisionRequest req,
@@ -172,3 +250,14 @@ public sealed record LaterCheckpointMirrorRecoveryDecisionRequest(
     Guid OriginalBundleActorId, string? SourceRepositoryId,
     string? ExpectedTargetReceiptSha256, string? ExpectedInspectionSha256,
     string? Decision);
+
+
+// #129 preflight is NOT the decision writer. Caller supplies only
+// a candidate digest/timestamp from the authenticated GET and a fresh
+// unique nonce; the server re-seals all scope and actor evidence.
+public sealed record LaterCheckpointMirrorSecondReviewPreflightRequest(
+    Guid TargetObservationId, Guid WorkpackId, Guid OriginalBundleActorId,
+    string? SourceRepositoryId, string? ExpectedTargetReceiptSha256,
+    string? ExpectedAssessmentEvidenceSha256,
+    string? ExpectedReviewEvidenceSha256, string? Decision,
+    DateTimeOffset ReviewedAtUtc, Guid DecisionNonce);

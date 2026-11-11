@@ -336,3 +336,36 @@ The real SHA1/SHA256 PG17/Git test checks installed PK/UNIQUE
 and exact FK, rejects raw SQL session INSERT, and verifies all
 three tables remain empty. No additional EF raw SQL regexes
 were introduced in this bootstrap.
+
+### #129 read-only POST /second-review/preflight (no durable approval)
+
+The authenticated superadmin can submit a proposed decision for
+**read-only verification**, using the actor-bound digest/timestamp
+returned by the separate default-OFF GET candidate, the exact
+`Assessed` SHA, decision enum and a nonzero fresh nonce.
+The new `POST .../mirror-recovery/second-review/preflight` route
+revalidates the CURRENT Identity-checked login session, then reruns
+all source-first PostgreSQL / F-060 dual-fsck POSIX quarantine checks.
+The model re-seals approve and reject SHA over the requested
+**original UTC millisecond timestamp**, subject to a 2-minute
+freshness window and original assessed event provenance.
+The server compares submitted digest and assessment SHA with
+the newly sealed SHA in constant time, rejecting changed scope.
+
+While POSIX is held, it reads the three-field consumption keys
+from PostgreSQL and refuses if a previous review session, nonce
+or mirror has been consumed. This is a READ-ONLY snapshot,
+**not an atomic replay guarantee**. A future writer must enforce
+the same checks while atomically inserting review+event+session
+under the correct source-first SQL/POSIX locking protocol.
+Even on successful preflight, response explicitly states
+`durableSecondReviewPersisted=false`, `sessionConsumed=false`,
+and every operational authorization flag false. No F-061
+lease/generation/remote authority or SQL mutation is enabled.
+The ordinary POST /decision remains the separate FIRST review.
+
+Real SHA1/SHA256 Git/PostgreSQL17 fixtures assert same signed digest
+when a fixed GET timestamp is replayed into this read-only
+verification, reject expired timestamp, and preserve all flags
+false. JWT TestServer tests cover 401/403/409 default-disabled
+preflight and verify no provider transport is called.
