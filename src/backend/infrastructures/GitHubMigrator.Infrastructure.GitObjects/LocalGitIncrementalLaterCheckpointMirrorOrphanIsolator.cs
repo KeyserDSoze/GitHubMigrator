@@ -535,6 +535,17 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                 throw new GitSourceSnapshotMirrorException(
                     "LaterCheckpointMirrorIsolationPhysicalChanged");
 
+            // A process can crash AFTER renameat2 succeeds but BEFORE
+            // fsync(parent) makes its new directory entry durable. The
+            // restart branch finds only the reviewed quarantine and
+            // skips the rename. Before a *durable* SQL Isolated receipt,
+            // re-fsync the shared parent under the same root lock, after
+            // checking its exact marker and two complete Git closures.
+            // This makes crash reconciliation preserve the same
+            // directory durability ordering as the normal move.
+            if (!originalExists)
+                SyncDirectory(root);
+
             // Call back into a short source-first PostgreSQL CAS while
             // still holding BOTH physical locks. No Git subprocess or
             // filesystem move occurs in that database transaction.
