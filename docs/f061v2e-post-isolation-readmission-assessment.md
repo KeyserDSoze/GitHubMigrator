@@ -25,4 +25,40 @@ Real SHA-1 and SHA-256 Git integration fixtures exercise seal/verify after a phy
 
 This domain contract is *not* sufficient to close #121. The next slices require a new reviewed, authenticated re-admission decision, additive immutable generation history, source-first lock/CAS, POSIX-locked quarantine verification and separate physical import/Verified lifecycle evidence. F-095v3 ancestry and remote GitHub writes remain unrelated and unauthorized.
 
-Close #126 only after all four CI jobs, including PostgreSQL 17 integration, succeed on the final `main` commit. The concurrent #123/#124 isolation work must also pass its own acceptance checks.
+## #127: additive PostgreSQL assessment history (still not an F-061 lease)
+
+A separately scoped and **non-authorizing** database foundation is now
+bootstrapped after the immutable #123/#124 isolation receipt schema:
+`git_later_checkpoint_mirror_generation_assessments` and its
+`git_later_checkpoint_mirror_generation_assessment_events` journal.
+
+The new audit-only tables are FK-linked to the exact terminal
+`Isolated` receipt and F-035v2 workpack. The PostgreSQL insertion
+trigger checks the **original** F-061v2 `RecoveryRequired` lease,
+original worker/token/generation, checkpoint/snapshot, full source ref
+proof, F-031 target receipt, bundle SHA/bytes and recorded isolation
+receipt SHA. The bounded suggested next generation must equal the
+original generation plus one. SQL CHECK constraints permanently keep
+`durable_readmission_approved` and **all operation permissions FALSE**.
+Both the assessment and single `Assessed` event refuse
+UPDATE/DELETE, duplicate replay and foreign event SHA/timestamps.
+There is no second reviewer, new lease row, new worker/token, physical
+restoration or destination GitHub write path.
+
+The schema is additive and initialized idempotently; it does not relax
+the existing F-061v2 terminal lease trigger. Actual PostgreSQL17
+SHA1/SHA256 tests insert a truthful audit-only assessment after the
+trusted source-first physical isolation, verify exactly one immutable
+event and explicitly reject UPDATE/DELETE while the original lease
+remains `RecoveryRequired`. Separate bootstrap checks refuse forged
+raw SQL before a real isolation receipt exists.
+
+This is **NOT the authorizing append-only generation ledger**. Future
+#121 work must require a new independent authenticated human decision
+and a source-first, POSIX-root-locked single-winning CAS before a
+new distinct generation/worker/token may be created. No such writer
+is implemented. See [#127](https://github.com/KeyserDSoze/GitHubMigrator/issues/127).
+
+Close #126/#127 only after all four CI jobs, including PostgreSQL 17
+integration, succeed on the final `main` commit. The concurrent
+#123/#124 isolation work must also pass its own acceptance checks.
