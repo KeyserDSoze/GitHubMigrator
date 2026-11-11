@@ -2290,6 +2290,42 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         physicalMirror.VerifiedMirrorRoot,
                                         staging.PhysicalMirrorId.ToString("N") +
                                             ".git")));
+                                    // A real filesystem attacker/corruption
+                                    // between rename and SQL receipt must
+                                    // not be silently healed or accepted
+                                    // even when Git graph SHAs still match.
+                                    var quarantinedMarker = Path.Combine(
+                                        physicalMirror.VerifiedMirrorRoot,
+                                        pendingHistory.PreparedIntent.IsolationDirectoryName,
+                                        "agic-f061v2-reviewed-isolation-intent");
+                                    var sealedMarker =
+                                        await File.ReadAllBytesAsync(
+                                            quarantinedMarker);
+                                    await File.WriteAllTextAsync(
+                                        quarantinedMarker,
+                                        "forged-review-or-prepared-intent");
+                                    var markerDenied = await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                        localSession.WithVerifiedIsolationAsync(
+                                            pendingHistory.Stage,
+                                            pendingHistory.DurableBundle,
+                                            pendingHistory.ExpectedInspection,
+                                            pendingHistory.HumanDecision,
+                                            pendingHistory.PreparedIntent,
+                                            (p, token) =>
+                                                Task.FromResult("forged"),
+                                            default));
+                                    Assert.Equal(
+                                        "LaterCheckpointMirrorIsolationMarkerInvalid",
+                                        markerDenied.Code);
+                                    Assert.Equal(0L, await verifiedDb.Database
+                                        .SqlQuery<long>($"""
+                                            SELECT count(*)::bigint AS "Value"
+                                            FROM git_later_checkpoint_mirror_isolation_receipts
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """).SingleAsync());
+                                    await File.WriteAllBytesAsync(
+                                        quarantinedMarker, sealedMarker);
                                 }
                                 var isolation = new
                                     PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordinator(
