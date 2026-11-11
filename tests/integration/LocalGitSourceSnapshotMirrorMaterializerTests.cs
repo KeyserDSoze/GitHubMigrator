@@ -763,6 +763,99 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         File.Delete(original);
     }
 
+    // #124: simulate host loss between successful kernel rename and
+    // fsync of the PARENT mirror directory. The original intent-marker
+    // is already present, but the recovery invocation must make the
+    // quarantine name durable *before* handing physical proof to SQL.
+    // No trusted coordinator, generation or remote write is faked here:
+    // this exercises the exact offline post-rename filesystem branch.
+    [Theory]
+    [InlineData("sha1")]
+    [InlineData("sha256")]
+    public async Task F061v2_quarantine_restart_after_rename_before_parent_fsync_is_safe(
+        string format)
+    {
+        using var f = new Fixture();
+        var physical = f.CreatePlan(format);
+        var (stage, durable) = LaterOfflineEvidence(physical);
+        var importer = new LocalGitSourceSnapshotMirrorMaterializer(
+            f.BundleRoot, f.MirrorRoot,
+            new LocalGitBundleArtifactStore(f.BundleRoot),
+            laterCheckpointEnabled: true);
+        await importer.MaterializeLaterCheckpointAsync(stage, durable, default);
+        var observed = await new LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
+            f.BundleRoot, f.MirrorRoot, enabled: true)
+            .AuditAsync(stage, durable, default);
+        var reviewedAt = DateTimeOffset.UtcNow;
+        var inspected =
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Seal(
+                stage, durable, Guid.NewGuid(), Guid.NewGuid(), 1,
+                "TestHostInterruptedFsync", reviewedAt.AddMinutes(-1),
+                2, 0, new string('e', 64), observed, reviewedAt);
+        var decision =
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Seal(
+                inspected, Guid.NewGuid(), Guid.NewGuid(),
+                GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                    .ApprovedForIsolationReview, reviewedAt);
+        var current =
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Seal(
+                stage, durable, inspected.WorkerId, inspected.LeaseToken,
+                inspected.LeaseGeneration, inspected.FailureCode,
+                inspected.QuarantinedAtUtc, inspected.LeaseEventCount,
+                inspected.RenewedEventCount,
+                inspected.LeaseEventHistorySha256, observed,
+                reviewedAt.AddSeconds(10));
+        var prepared =
+            GitIncrementalLaterCheckpointMirrorIsolationIntentIntegrity.Seal(
+                current, decision, reviewedAt.AddSeconds(11));
+        var original = f.Physical(physical);
+        var isolated = Path.Combine(f.MirrorRoot,
+            prepared.IsolationDirectoryName);
+        var marker = Path.Combine(original,
+            "agic-f061v2-reviewed-isolation-intent");
+        // The fixture simulates the exact already-persisted marker
+        // and kernel move, but deliberately does not fsync the parent.
+        var contents = System.Text.Encoding.ASCII.GetBytes(
+            "f061v2-physical-source-isolation-intent-v1\\n" +
+            prepared.IntentSha256 + "\\n" +
+            decision.EvidenceSha256 + "\\n");
+        await using (var file = new FileStream(marker,
+            FileMode.CreateNew, FileAccess.Write, FileShare.None,
+            4096, FileOptions.WriteThrough))
+        {
+            await file.WriteAsync(contents);
+            file.Flush(flushToDisk: true);
+        }
+        Directory.Move(original, isolated);
+        Assert.False(Directory.Exists(original));
+        Assert.True(Directory.Exists(isolated));
+
+        var session = new LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+            f.BundleRoot, f.MirrorRoot, enabled: true);
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedIsolatedIntact,
+            await session.InspectPreparedPathsAsync(
+                stage, durable, current, decision, prepared, default));
+        var callbackInvocations = 0;
+        var proof = await session.WithVerifiedIsolationAsync(
+            stage, durable, current, decision, prepared,
+            (physicalProof, ct) =>
+            {
+                callbackInvocations++;
+                return Task.FromResult(physicalProof);
+            }, default);
+        Assert.Equal(1, callbackInvocations);
+        Assert.True(proof.RecoveredExistingQuarantine);
+        Assert.Equal(prepared.IsolationDirectoryName,
+            proof.IsolationDirectoryName);
+        Assert.Equal(prepared.ObjectSetSha256, proof.ObjectSetSha256);
+        Assert.Equal(prepared.ObjectCount, proof.ObjectCount);
+        Assert.Equal(durable.BundleSha256, proof.BundleSha256);
+        Assert.False(Directory.Exists(original));
+        Assert.True(Directory.Exists(isolated));
+    }
+
     [Theory]
     [InlineData("sha1")]
     [InlineData("sha256")]
