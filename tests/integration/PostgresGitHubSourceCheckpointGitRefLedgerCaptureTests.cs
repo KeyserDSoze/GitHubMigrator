@@ -3078,9 +3078,24 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         observationId, first.WorkpackId,
                                         "repo-1",
                                         targetReceipt.EvidenceSha256,
-                                        candidate.RequestedBy, default);
+                                        candidate.RequestedBy, default,
+                                        authenticatedSecondReviewerId:
+                                            secondReviewer);
                                 Assert.Equal(generationAssessment.EvidenceSha256,
                                     assessedIsolation.AssessmentEvidenceSha256);
+                                // Actor-scoped, domain-separated SHA1/SHA256
+                                // PostgreSQL/Git positive and denial
+                                // checks; no SQL decision is persisted.
+                                Assert.True(GitSourceBundleStorageCheck.ValidSha(
+                                    assessedIsolation.ApprovedPreviewEvidenceSha256 ?? ""));
+                                Assert.True(GitSourceBundleStorageCheck.ValidSha(
+                                    assessedIsolation.RejectedPreviewEvidenceSha256 ?? ""));
+                                Assert.NotEqual(
+                                    assessedIsolation.ApprovedPreviewEvidenceSha256,
+                                    assessedIsolation.RejectedPreviewEvidenceSha256);
+                                Assert.NotNull(assessedIsolation.PreviewReviewedAtUtc);
+                                Assert.False(assessedIsolation.Inspection
+                                    .DurableSecondReviewPersisted);
                                 Assert.Equal(
                                     generationAssessment.SuggestedNextGeneration,
                                     assessedIsolation.SuggestedNextGeneration);

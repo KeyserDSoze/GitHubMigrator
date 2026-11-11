@@ -71,7 +71,8 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             var checkedAssessment = await inspector.ReadAssessedAsync(
                 id, planId, checkpointId, targetObservationId, workpackId,
                 sourceRepositoryId ?? "",
-                expectedTargetReceiptSha256 ?? "", originalBundleActorId, ct);
+                expectedTargetReceiptSha256 ?? "", originalBundleActorId, ct,
+                authenticatedSecondReviewerId: secondReviewerId);
             var x = checkedAssessment.Inspection;
             if (secondReviewerId == x.FirstReviewerId ||
                 secondReviewerId == x.OriginalBundleActorId ||
@@ -99,6 +100,9 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
                 checkedAssessment.SuggestedNextGeneration,
                 checkedAssessment.SourceReviewedAtUtc,
                 checkedAssessment.AssessedAtUtc,
+                checkedAssessment.ApprovedPreviewEvidenceSha256,
+                checkedAssessment.RejectedPreviewEvidenceSha256,
+                checkedAssessment.PreviewReviewedAtUtc,
                 independentReviewerRequired = true,
                 durableSecondReviewPersisted = false,
                 canReAdmit = false, canMaterialize = false,

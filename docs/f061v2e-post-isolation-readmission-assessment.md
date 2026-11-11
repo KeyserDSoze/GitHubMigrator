@@ -217,3 +217,23 @@ prevent arbitrary hostile filesystem writers from bypassing our locks.
 #129 still needs independent one-time human review authorization and
 append-only guarded SQL, with three-replica race/nonce tests. The original
 F-061 `RecoveryRequired` lease is terminal and never modified here.
+
+### #129 live reviewer-scoped approve/reject SHA preview
+
+The separately default-OFF superadmin review-candidate GET can now
+return two distinct, ephemeral approved/rejected evidence SHA-256
+digests and their reviewed-at timestamp. These use the existing
+versioned SecondReviewIntegrity.Seal, with the live authenticated
+reviewer rather than a user-supplied actor GUID. The source-first
+complete F-091/F-097/F-031/F-035v2 history, original F-061
+RecoveryRequired lease/decision, #124 quarantine receipts and
+#127 Assessed row/event are reconstructed while the shared F-060
+POSIX root lock remains held after two actual Git fsck/OID audits.
+
+The proofs are NOT one-time bearer capabilities, NOT SQL-persisted
+human decisions, NOT authorization for a generation, import or push.
+The #129 review/event SQL tables remain deny-all. A future writer
+must independently enforce a one-shot authenticated JWT session and
+source-first SQL+POSIX CAS at write time, with three-replica tests.
+Existing real SHA1/SHA256 PostgreSQL/Git fixtures assert distinct
+SHA digests while all permission/persistence flags remain false.

@@ -28,7 +28,10 @@ public sealed record GitIncrementalLaterCheckpointMirrorPostIsolationInspection(
 public sealed record GitIncrementalLaterCheckpointMirrorAssessedIsolationInspection(
     GitIncrementalLaterCheckpointMirrorPostIsolationInspection Inspection,
     string AssessmentEvidenceSha256, long SuggestedNextGeneration,
-    DateTimeOffset SourceReviewedAtUtc, DateTimeOffset AssessedAtUtc);
+    DateTimeOffset SourceReviewedAtUtc, DateTimeOffset AssessedAtUtc,
+    string? ApprovedPreviewEvidenceSha256 = null,
+    string? RejectedPreviewEvidenceSha256 = null,
+    DateTimeOffset? PreviewReviewedAtUtc = null);
 
 public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector(
     AppDbContext db,
@@ -96,7 +99,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
             Guid preparationId, Guid planId, Guid checkpointId,
             Guid targetObservationId, Guid workpackId,
             string sourceRepositoryId, string expectedTargetReceiptSha256,
-            Guid originalBundleActorId, CancellationToken ct)
+            Guid originalBundleActorId, CancellationToken ct,
+            Guid? authenticatedSecondReviewerId = null)
     {
         if (!options.Enabled)
             throw Refused("LaterCheckpointMirrorPostIsolationInspectorDisabled");
@@ -181,10 +185,11 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
         // and recorded DB timestamps rather than accepting any guessed
         // SHA or actor ID from an HTTP query. An FK/check alone cannot
         // establish a genuine #127 assessment.
+        GitIncrementalLaterCheckpointMirrorAdmissionCandidate sourceRead;
         GitIncrementalLaterCheckpointMirrorReadmissionAssessment sealedValue;
         try
         {
-            var sourceRead =
+            sourceRead =
                 GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Seal(
                     stage, durable, assessed.SourceReviewedAtUtc);
             sealedValue =
@@ -211,10 +216,58 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
             assessed.AssessedAtUtc - now > TimeSpan.FromMinutes(2))
             throw Refused("LaterCheckpointMirrorSecondReviewAssessmentExpired");
 
+        // Seal only optional, actor-bound and ephemeral review PREVIEWS,
+        // NEVER SQL second-review events or lease authority. This still
+        // runs inside the shared F-060 POSIX-locked SQL callback.
+        string? approveSha = null;
+        string? rejectSha = null;
+        DateTimeOffset? previewAt = null;
+        if (authenticatedSecondReviewerId is Guid reviewer)
+        {
+            if (reviewer == Guid.Empty ||
+                reviewer == current.Snapshot.HumanDecision.ReviewerId ||
+                reviewer == current.Snapshot.HumanDecision.OriginalBundleActorId ||
+                reviewer == isolated.OriginalWorkerId)
+                throw Refused(
+                    "LaterCheckpointMirrorSecondReviewIndependentReviewerRequired");
+
+            var at = now >= assessed.AssessedAtUtc
+                ? now : assessed.AssessedAtUtc;
+            at = DateTimeOffset.FromUnixTimeMilliseconds(
+                at.ToUnixTimeMilliseconds());
+            var approve =
+                GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity.Seal(
+                    stage, durable, isolated, sourceRead, sealedValue,
+                    current.Snapshot.ExpectedInspection,
+                    current.Snapshot.HumanDecision, reviewer,
+                    GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                        .ApprovedForIndependentReview, at);
+            var reject =
+                GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity.Seal(
+                    stage, durable, isolated, sourceRead, sealedValue,
+                    current.Snapshot.ExpectedInspection,
+                    current.Snapshot.HumanDecision, reviewer,
+                    GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                        .RejectedForIndependentReview, at);
+            if (approve.DurableSecondReviewPersisted ||
+                reject.DurableSecondReviewPersisted ||
+                approve.CanReAdmit || reject.CanReAdmit ||
+                approve.CanMaterialize || reject.CanMaterialize ||
+                approve.CanPush || reject.CanPush ||
+                approve.CanRetry || reject.CanRetry ||
+                approve.CanDispatch || reject.CanDispatch ||
+                approve.MigrationComplete || reject.MigrationComplete ||
+                approve.EvidenceSha256 == reject.EvidenceSha256)
+                throw Refused("LaterCheckpointMirrorSecondReviewInvalid");
+            approveSha = approve.EvidenceSha256;
+            rejectSha = reject.EvidenceSha256;
+            previewAt = at;
+        }
         return new GitIncrementalLaterCheckpointMirrorAssessedIsolationInspection(
             physical, assessed.EvidenceSha256,
             assessed.SuggestedNextGeneration,
-            assessed.SourceReviewedAtUtc, assessed.AssessedAtUtc);
+            assessed.SourceReviewedAtUtc, assessed.AssessedAtUtc,
+            approveSha, rejectSha, previewAt);
         }, ct);
     }
 
