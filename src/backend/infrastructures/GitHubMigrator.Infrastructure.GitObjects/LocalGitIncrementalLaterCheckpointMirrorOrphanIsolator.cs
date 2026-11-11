@@ -64,6 +64,7 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
     // source-locked Prepared row and its immutable event both before
     // and after filesystem work. This method never renames/deletes.
     public const string PreparedOriginalIntact = "PreparedOriginalIntact";
+    public const string PreparedOriginalUntrusted = "PreparedOriginalUntrusted";
     public const string PreparedIsolatedIntact = "PreparedIsolatedIntact";
     public const string PreparedIsolatedUntrusted = "PreparedIsolatedUntrusted";
     public const string PreparedBothPresent = "PreparedBothPresent";
@@ -146,6 +147,13 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                         "LaterCheckpointMirrorOrphanIsolationBundleChanged");
                 if (oldExists)
                 {
+                    // No marker is normal BEFORE the first OS rename.
+                    // A marker that IS already present must be the exact
+                    // durable SQL Prepared + human reviewer pair. An
+                    // incomplete or foreign marker is not "intact".
+                    if (!OriginalMarkerTrustedOrAbsent(
+                        original, intent, decision))
+                        return PreparedOriginalUntrusted;
                     var physical = await new
                         LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
                             bundleRoot, mirrorRoot, enabled: true, clock: _clock)
@@ -153,6 +161,11 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                     if (physical.ObjectSetSha256 != intent.ObjectSetSha256 ||
                         physical.ObjectCount != intent.ObjectCount)
                         return PreparedOriginalCorrupt;
+                    // Detect marker tampering/replacement during the
+                    // potentially long offline double-fsck as well.
+                    if (!OriginalMarkerTrustedOrAbsent(
+                        original, intent, decision))
+                        return PreparedOriginalUntrusted;
                 }
                 else
                 {
@@ -289,6 +302,35 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                 IntentMarker(intent, reviewed)))
             throw new GitSourceSnapshotMirrorException(
                 "LaterCheckpointMirrorIsolationMarkerInvalid");
+    }
+
+    private static bool OriginalMarkerTrustedOrAbsent(
+        string directory,
+        GitIncrementalLaterCheckpointMirrorIsolationIntent intent,
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision reviewed)
+    {
+        var path = Path.Combine(directory, IntentMarkerFileName);
+        var entry = new FileInfo(path);
+        if (!entry.Exists && entry.LinkTarget is null &&
+            !Directory.Exists(path))
+            return true; // PREPARED and unmarked: no rename attempted.
+        try
+        {
+            CheckIntentMarker(directory, intent, reviewed);
+            return true;
+        }
+        catch (GitSourceSnapshotMirrorException)
+        {
+            return false; // Existing but forged/partial/dangling marker.
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static async Task PrepareIntentMarkerAsync(
