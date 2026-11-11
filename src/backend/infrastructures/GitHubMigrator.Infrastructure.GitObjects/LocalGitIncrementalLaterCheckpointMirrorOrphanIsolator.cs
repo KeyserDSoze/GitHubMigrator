@@ -503,6 +503,11 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                     second.Digest, second.Count,
                     before.Sha256, before.Bytes,
                     _clock.GetUtcNow(), !originalExists);
+            // A cancellation delivered after the last Git fsck and
+            // before the short PostgreSQL callback must not become a
+            // terminal receipt. The quarantined path remains intact
+            // for a later independently source-locked reconciliation.
+            ct.ThrowIfCancellationRequested();
             return await persist(proof, ct);
         }
         catch (GitSourceBundleException)
