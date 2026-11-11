@@ -14,7 +14,8 @@ namespace GitHubMigrator.Integration.Tests;
 // Real F-008/F-014 -> F-013 -> F-026/029 -> F-090/091 -> F-097b,
 // including restart/replay. No stubs for source, plan or checkpoint proofs.
 public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
-    PostgresDraftFixture fixture) : IClassFixture<PostgresDraftFixture>, IAsyncLifetime
+    PostgresDraftFixture fixture, Xunit.Abstractions.ITestOutputHelper output)
+    : IClassFixture<PostgresDraftFixture>, IAsyncLifetime
 {
     public async Task InitializeAsync()
     {
@@ -453,6 +454,21 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         bool corruptPhysical, bool runWorker, bool failWorker,
         bool fenceWorker, bool failAfterImport)
     {
+        // #131: per-phase real-source TTL budget for long Git tests.
+        // Diagnostic-only: no skip, altered clock, SQL or Git shortcut.
+        var phaseTimer = Stopwatch.StartNew();
+        void Phase(string stage, DateTimeOffset? observedAtUtc = null)
+        {
+            if (!failAfterImport) return;
+            var age = observedAtUtc is null ? "not-yet-observed"
+                : (DateTimeOffset.UtcNow - observedAtUtc.Value)
+                    .TotalSeconds.ToString("F1",
+                        System.Globalization.CultureInfo.InvariantCulture);
+            output.WriteLine($"#131 SHA{oidLength} {stage}: " +
+                $"elapsed={phaseTimer.Elapsed.TotalSeconds:F1}s; " +
+                $"F031-real-age={age}s");
+        }
+
         var clock = new PostgresIncrementalOperationPlanTests.ManualClock(
             DateTimeOffset.UtcNow);
         CheckpointLocalMirror? physicalMirror = null;
@@ -495,6 +511,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         // continue testing real wall-clock provenance expiry.
         var longPhysicalClock =
             failAfterImport ? new LongPhysicalFixtureClock() : null;
+        Phase("source/refs seeded");
         var api = new ApiHarness {
             IntegrationClockOverride = longPhysicalClock,
             EnableCheckpointHumanReview = true,
@@ -881,6 +898,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     // hundreds of real Git/SQL assertions exceed 5 min.
                     // All tests that intentionally validate stale denial
                     // continue on TimeProvider.System.
+                    Phase("F031 receipt acquired", targetReceipt.ObservedAtUtc);
                     longPhysicalClock?.BoundToOriginalObservation(
                         targetReceipt.ObservedAtUtc);
                     var joined = GitIncrementalCheckpointTargetJoin
@@ -1654,6 +1672,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                         .ToArrayAsync());
                     Assert.False(checkedAdmission.DurableLeasePersisted);
                     Assert.Equal(0L, checkedAdmission.F061LeaseGeneration);
+                    Phase("bundle/mirror admission done", targetReceipt.ObservedAtUtc);
                     if (runWorker)
                     {
                         // #120: end-to-end independently default-OFF
@@ -2129,6 +2148,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>());
                             if (failAfterImport)
                             {
+                                Phase("worker + reviewed recovery complete", targetReceipt.ObservedAtUtc);
                                 var prepared = await isolationIntent.PrepareAsync(
                                     run.Id, plan.Id, later.Id, observationId,
                                     first.WorkpackId, "repo-1",
@@ -2381,6 +2401,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
 
                             if (failAfterImport)
                             {
+                                Phase("prepared SQL + pre-move negatives done", targetReceipt.ObservedAtUtc);
                                 // #124: REAL trusted physical quarantine +
                                 // source-first SQL terminal receipt. SHA1
                                 // exercises the crash window AFTER kernel
@@ -2642,6 +2663,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         targetReceipt.EvidenceSha256,
                                         candidate.RequestedBy, default);
                                 }
+                                Phase("POSIX isolation committed", targetReceipt.ObservedAtUtc);
                                 Assert.True(isolated.DurableIsolationRecorded);
                                 Assert.Equal(oidLength == 40,
                                     isolated.ReconciledExistingQuarantine);
@@ -2704,6 +2726,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             targetReceipt.EvidenceSha256,
                                             candidate.RequestedBy,
                                             default))).Code);
+                                Phase("post-isolation SQL read starts", targetReceipt.ObservedAtUtc);
                                 var completedSource = await latestReader
                                     .ReadCompletedAsync(
                                         run.Id, plan.Id, later.Id,
@@ -2795,6 +2818,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         first.WorkpackId, "foreign-repo",
                                         targetReceipt.EvidenceSha256,
                                         candidate.RequestedBy, default));
+                                Phase("post-isolation source checked", targetReceipt.ObservedAtUtc);
                                 // #129 adversarial POST-Isolated check:
                                 // forging the durable Prepared marker
                                 // AFTER SQL has committed must fail the
