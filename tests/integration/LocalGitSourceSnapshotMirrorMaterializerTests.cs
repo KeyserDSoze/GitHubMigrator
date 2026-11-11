@@ -562,6 +562,18 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
             receipt.IsolatedDirectoryName);
         Assert.False(Directory.Exists(original));
         Assert.True(Directory.Exists(isolated));
+        // An identical existing quarantine created by an older local
+        // primitive (or an outsider) has no pre-rename durable marker.
+        // It must NEVER be adopted as a trusted SQL terminal receipt
+        // merely because the Git object graph hashes match.
+        var unmarked = await Assert.ThrowsAsync<
+            GitSourceSnapshotMirrorException>(() =>
+            mover.WithVerifiedIsolationAsync(
+                stage, durable, rereadInspection, decision, prepared,
+                (proof, token) => Task.FromResult("must not run SQL"),
+                default));
+        Assert.Equal("LaterCheckpointMirrorIsolationMarkerInvalid",
+            unmarked.Code);
         Assert.Equal(
             LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
                 .PreparedIsolatedIntact,
