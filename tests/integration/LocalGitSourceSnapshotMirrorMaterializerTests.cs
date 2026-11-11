@@ -653,6 +653,79 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         Assert.False(recorded.CanReAdmit || recorded.CanMaterialize ||
             recorded.CanPush || recorded.CanRetry ||
             recorded.CanDispatch || recorded.MigrationComplete);
+
+        // #126: read-only post-isolation comparison of immutable
+        // source/target/bundle + quarantined receipt. A suggested
+        // generation is NEVER a new F-061 lease, reviewer decision,
+        // re-import or GitHub destination permission. Real SHA1/SHA256
+        // source mirror fixtures bind both physical object formats.
+        var freshSourceRead =
+            GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Seal(
+                stage, durable, recordedAt.AddSeconds(1));
+        var assessment =
+            GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+                .Seal(stage, durable, recorded, freshSourceRead,
+                    recordedAt.AddSeconds(2));
+        GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+            .Verify(assessment, stage, durable, recorded, freshSourceRead);
+        Assert.Equal(stage.PhysicalMirrorId, assessment.PhysicalMirrorId);
+        Assert.Equal(stage.SourceSnapshotId, assessment.SourceSnapshotId);
+        Assert.Equal(stage.SourceFullRefProofSha256,
+            assessment.SourceFullRefProofSha256);
+        Assert.Equal(recorded.EvidenceSha256,
+            assessment.IsolationReceiptSha256);
+        Assert.Equal(recorded.IsolationDirectoryName,
+            assessment.IsolationDirectoryName);
+        Assert.Equal(recorded.OriginalGeneration + 1,
+            assessment.SuggestedNextGeneration);
+        Assert.False(assessment.DurableReAdmissionApproved ||
+            assessment.CanReAdmit || assessment.CanMaterialize ||
+            assessment.CanPush || assessment.CanRetry ||
+            assessment.CanDispatch || assessment.MigrationComplete);
+        var assessmentInvalid =
+            "LaterCheckpointMirrorReadmissionAssessmentInvalid";
+        Assert.Equal(assessmentInvalid,
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+                    .Verify(assessment with { CanReAdmit = true },
+                        stage, durable, recorded, freshSourceRead)).Code);
+        Assert.Equal(assessmentInvalid,
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+                    .Verify(assessment with { SuggestedNextGeneration =
+                        assessment.OriginalGeneration + 2 },
+                        stage, durable, recorded, freshSourceRead)).Code);
+        Assert.Equal(assessmentInvalid,
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+                    .Verify(assessment with { IsolationReceiptSha256 =
+                        new string('0', 64) },
+                        stage, durable, recorded, freshSourceRead)).Code);
+        foreach (var forged in new[] {
+            recorded with { OriginalGeneration = 2000 },
+            recorded with { CanPush = true },
+            recorded with { BundleSha256 = new string('0', 64) },
+            recorded with { RecoveryDecisionSha256 = new string('0', 64) }
+        })
+            Assert.Equal(assessmentInvalid,
+                Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                    GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+                        .Seal(stage, durable, forged, freshSourceRead,
+                            recordedAt.AddSeconds(2))).Code);
+        var staleSourceRead =
+            GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Seal(
+                stage, durable, recordedAt.AddSeconds(-1));
+        Assert.Equal(assessmentInvalid,
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+                    .Seal(stage, durable, recorded, staleSourceRead,
+                        recordedAt.AddSeconds(2))).Code);
+        Assert.Equal(assessmentInvalid,
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+                    .Seal(stage, durable, recorded, freshSourceRead,
+                        recordedAt.AddMinutes(4))).Code);
+
         Assert.Equal("LaterCheckpointMirrorRecordedIsolationInvalid",
             Assert.Throws<GitSourceSnapshotMirrorException>(() =>
                 GitIncrementalLaterCheckpointMirrorRecordedIsolationIntegrity
