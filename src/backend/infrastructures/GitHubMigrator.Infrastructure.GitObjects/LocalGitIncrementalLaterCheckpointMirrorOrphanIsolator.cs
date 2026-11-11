@@ -54,8 +54,15 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                 "LaterCheckpointMirrorOrphanIsolationDisabled");
         GitIncrementalLaterCheckpointMirrorStagingIntegrity
             .VerifyOfflineCandidate(stage, durable);
-        GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Verify(
-            decision, inspection);
+        (decision.Decision ==
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                .ApprovedForIsolationReview
+                ? (Action)(() =>
+                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                        .VerifyForPhysicalIsolation(decision, inspection))
+                : () =>
+                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                        .Verify(decision, inspection))();
         if (decision.Decision !=
                 GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
                     .ApprovedForIsolationReview ||
@@ -143,8 +150,15 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
 
         GitIncrementalLaterCheckpointMirrorStagingIntegrity
             .VerifyOfflineCandidate(stage, durable);
-        GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Verify(
-            decision, inspection);
+        (decision.Decision ==
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                .ApprovedForIsolationReview
+                ? (Action)(() =>
+                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                        .VerifyForPhysicalIsolation(decision, inspection))
+                : () =>
+                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                        .Verify(decision, inspection))();
         if (decision.Decision !=
                 GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
                     .ApprovedForIsolationReview ||
