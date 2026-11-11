@@ -108,6 +108,22 @@ def check() -> None:
                     "Expected four C# {{64}} SQL test quantifiers")
             require(rendered.count("'^[0-9a-f]{64}$'") == 4,
                     "Expected four PostgreSQL {64} SQL test quantifiers")
+    # The installed-CHECK repair test must search for literal
+    # malformed {{64}} in pg_get_constraintdef, not the expected
+    # correct {64}; EF's composite formatter removes one brace layer.
+    malformed_sql = [q for q in sql_queries
+                     if "pg_get_constraintdef(c.oid)" in q
+                     and "position(" in q]
+    require(len(malformed_sql) == 1,
+            "F-061 malformed installed-CHECK detection must remain unique")
+    raw_detection = malformed_sql[0]
+    require("position('{{{{64}}}}' in pg_get_constraintdef(c.oid))"
+            in raw_detection,
+            "Malformation detection must escape FOUR C# SQL braces")
+    require("position('{{64}}' in pg_get_constraintdef(c.oid))"
+            in raw_detection.format(),
+            "PostgreSQL must search for malformed double-brace regex")
+
     print(f"F-061 SqlQueryRaw format OK ({len(sql_queries)} test queries)")
 
 

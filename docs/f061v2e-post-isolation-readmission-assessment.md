@@ -395,3 +395,22 @@ All three F-061v2e independent-review SQL tables remain
 unconditionally DENY-ALL on INSERT/UPDATE/DELETE. Neither
 FK nor index is authorization for a decision, review session
 consumption, new generation, lease, filesystem write or push.
+
+### #128 PostgreSQL17 installed CHECK false-positive correction (2026-11-11)
+
+From the canceled [43058337245](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/43058337245)
+PG17 job, the real test `F061v2e_generation_assessment_schema_is_immutable_and_requires_isolation`
+failed with `Expected: 0, Actual: 12` while counting malformed
+installed constraints. Root cause: `SqlQueryRaw<long>` applies
+.NET composite formatting to the literal test SQL:
+`position('{{64}}' in pg_get_constraintdef(...))` was rendered to
+PostgreSQL as `position('{64}' ...)` and thus incorrectly matched
+**correct** 64-character hex CHECK constraints. The C# SQL must use
+`position('{{{{64}}}}' ...)`, which EF renders as
+`position('{{64}}' ...)`, matching only the **malformed double-brace**
+quantifier. This fixes the detector, not the stored schema.
+
+The fail-fast Python SQL guard now verifies that this precise
+check is present once and simulates the rendered SQL search.
+No lease, receipt, immutable SQL trigger, permission, worker,
+Git object, or destination operation is changed.

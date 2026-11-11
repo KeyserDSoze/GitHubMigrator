@@ -321,7 +321,11 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                   'git_later_checkpoint_mirror_isolation_receipt_events'::regclass,
                   'git_later_checkpoint_mirror_generation_assessments'::regclass,
                   'git_later_checkpoint_mirror_generation_assessment_events'::regclass)
-              AND position('{{64}}' in pg_get_constraintdef(c.oid)) > 0
+              -- EF composite formatting turns C# {{{{64}}}}
+              -- into PostgreSQL {{64}}, the malformed *stored*
+              -- quantifier. Searching for {64} instead falsely
+              -- counts every correctly installed SHA-256 CHECK.
+              AND position('{{{{64}}}}' in pg_get_constraintdef(c.oid)) > 0
             """).SingleAsync();
         Assert.Equal(0L, malformedBounds);
 
