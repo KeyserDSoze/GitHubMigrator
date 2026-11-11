@@ -121,7 +121,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
         {
         var current = await ReadSqlAsync(preparationId, planId, checkpointId,
             targetObservationId, workpackId, sourceRepositoryId,
-            expectedTargetReceiptSha256, originalBundleActorId, lockedCt);
+            expectedTargetReceiptSha256, originalBundleActorId, lockedCt,
+            failIfSourceBusy: true);
         var physical = ConfirmUnchanged(before, current, IsolatedIntact);
         var stage = current.Snapshot.Stage;
         var durable = current.Snapshot.DurableBundle;
@@ -345,12 +346,14 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
             Guid preparationId, Guid planId, Guid checkpointId,
             Guid targetObservationId, Guid workpackId,
             string sourceRepositoryId, string expectedTargetReceiptSha256,
-            Guid originalBundleActorId, CancellationToken ct)
+            Guid originalBundleActorId, CancellationToken ct,
+            bool failIfSourceBusy = false)
     {
         var snapshot = await reader.ReadCompletedAsync(
             preparationId, planId, checkpointId, targetObservationId,
             workpackId, sourceRepositoryId, expectedTargetReceiptSha256,
-            originalBundleActorId, ct);
+            originalBundleActorId, ct,
+            failIfSourceBusy: failIfSourceBusy);
         var intent = snapshot.PreparedIntent;
         var human = snapshot.HumanDecision;
         var stage = snapshot.Stage;

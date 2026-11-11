@@ -237,3 +237,26 @@ must independently enforce a one-shot authenticated JWT session and
 source-first SQL+POSIX CAS at write time, with three-replica tests.
 Existing real SHA1/SHA256 PostgreSQL/Git fixtures assert distinct
 SHA digests while all permission/persistence flags remain false.
+
+### #129 no-wait PostgreSQL locks inside the POSIX read-only audit
+
+The post-Isolated candidate checks source history before the F-060
+physical lock using its normal source-first advisory lock order.
+After dual Git fsck under the F-060 POSIX lock, its final PostgreSQL
+revalidation switches to a dedicated `failIfSourceBusy` path.
+That path uses `pg_try_advisory_xact_lock` for source then plan in
+`AdmissionPreflight` and `PreparedReconciliationReader`. A lock held
+by a concurrent source-first writer is refused immediately with
+`LaterCheckpointMirrorPostIsolationSourceBusy`; any partially
+acquired SQL advisory locks are released by transaction rollback.
+
+This is critical because waiting for source/plan SQL advisory locks
+**while already holding POSIX root** would invert the writers'
+source-first -> POSIX lock order and could deadlock. Existing writers
+and pre-POSIX reads retain their original blocking source-first
+semantics. The new alternate locking behavior is accessible only
+via an explicit read-only call flag and must NEVER be used as
+authorization for a new worker/lease or second-review SQL writer.
+Real PostgreSQL17 tests acquire the source lock on a separate
+connection and assert immediate fail-closed behavior with a
+bounded deadline. The full Git review remains non-authorizing.

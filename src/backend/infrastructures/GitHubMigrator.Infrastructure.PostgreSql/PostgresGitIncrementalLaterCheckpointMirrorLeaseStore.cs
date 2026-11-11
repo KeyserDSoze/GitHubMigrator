@@ -509,6 +509,23 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorLeaseStore(
             $"SELECT pg_advisory_xact_lock(hashtext({planId.ToString()}), 732990)", ct);
     }
 
+    // #129: final non-authorizing source re-read runs WHILE F-060
+    // holds the POSIX lock. Never block behind a source-first writer
+    // waiting to acquire that same physical lock.
+    // Transaction rollback releases a partially acquired source lock.
+    internal async Task<bool> TryLockAsync(
+        Guid sourceConnectionId, Guid planId, CancellationToken ct)
+    {
+        var source = await db.Database.SqlQuery<bool>(
+            $"SELECT pg_try_advisory_xact_lock(hashtext({sourceConnectionId.ToString()}), 732911) AS \"Value\"")
+            .SingleAsync(ct);
+        if (!source)
+            return false;
+        return await db.Database.SqlQuery<bool>(
+            $"SELECT pg_try_advisory_xact_lock(hashtext({planId.ToString()}), 732990) AS \"Value\"")
+            .SingleAsync(ct);
+    }
+
     // All lease deadline/fencing decisions use PostgreSQL clock authority
     // (never a caller, host or injected TimeProvider).
     internal Task<DateTimeOffset> DatabaseNowAsync(CancellationToken ct) =>

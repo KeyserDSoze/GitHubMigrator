@@ -121,11 +121,13 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
             Guid preparationId, Guid planId, Guid checkpointId,
             Guid targetObservationId, Guid workpackId,
             string sourceRepositoryId, string expectedTargetReceiptSha256,
-            Guid originalBundleActorId, CancellationToken ct) =>
+            Guid originalBundleActorId, CancellationToken ct,
+            bool failIfSourceBusy = false) =>
         ReadCoreAsync(preparationId, planId, checkpointId,
             targetObservationId, workpackId, sourceRepositoryId,
             expectedTargetReceiptSha256, originalBundleActorId,
-            requireRecordedIsolation: true, ct: ct);
+            requireRecordedIsolation: true, ct: ct,
+            failIfSourceBusy: failIfSourceBusy);
 
     private async Task<GitIncrementalLaterCheckpointMirrorPreparedSnapshot>
         ReadCoreAsync(
@@ -133,7 +135,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
             Guid targetObservationId, Guid workpackId,
             string sourceRepositoryId, string expectedTargetReceiptSha256,
             Guid originalBundleActorId, bool requireRecordedIsolation,
-            CancellationToken ct)
+            CancellationToken ct, bool failIfSourceBusy = false)
     {
         if (!options.Enabled)
             throw Refused("LaterCheckpointMirrorIsolationReconciliationDisabled");
@@ -161,7 +163,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
         var source = await admission.ReadAsync(preparationId, planId,
             checkpointId, targetObservationId, workpackId,
             sourceRepositoryId, expectedTargetReceiptSha256,
-            originalBundleActorId, ct);
+            originalBundleActorId, ct,
+            failIfSourceBusy: failIfSourceBusy);
         if (source.PhysicalMirrorId != stage.PhysicalMirrorId ||
             source.SourceSnapshotId != stage.SourceSnapshotId ||
             source.WorkpackId != stage.WorkpackId ||
@@ -180,7 +183,15 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
         await using (var tx = await db.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted, ct))
         {
-            await leaseStore.LockAsync(source.SourceConnectionId, planId, ct);
+            if (failIfSourceBusy)
+            {
+                if (!await leaseStore.TryLockAsync(
+                    source.SourceConnectionId, planId, ct))
+                    throw Refused("LaterCheckpointMirrorPostIsolationSourceBusy");
+            }
+            else
+                await leaseStore.LockAsync(
+                    source.SourceConnectionId, planId, ct);
             await leaseStore.RequireLiveLockedAsync(
                 source, originalBundleActorId, ct);
             var now = await leaseStore.DatabaseNowAsync(ct);
@@ -420,7 +431,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
         var laterSource = await admission.ReadAsync(preparationId, planId,
             checkpointId, targetObservationId, workpackId,
             sourceRepositoryId, expectedTargetReceiptSha256,
-            originalBundleActorId, ct);
+            originalBundleActorId, ct,
+            failIfSourceBusy: failIfSourceBusy);
         if (laterSource.PhysicalMirrorId != source.PhysicalMirrorId ||
             laterSource.SourceSnapshotId != source.SourceSnapshotId ||
             laterSource.StagingEvidenceSha256 != source.StagingEvidenceSha256 ||

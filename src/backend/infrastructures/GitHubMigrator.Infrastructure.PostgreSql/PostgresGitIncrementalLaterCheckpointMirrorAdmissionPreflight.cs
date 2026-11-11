@@ -26,7 +26,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorAdmissionPrefligh
             Guid preparationId, Guid planId, Guid checkpointId,
             Guid targetObservationId, Guid workpackId,
             string sourceRepositoryId, string expectedTargetReceiptSha256,
-            Guid originalBundleActorId, CancellationToken ct)
+            Guid originalBundleActorId, CancellationToken ct,
+            bool failIfSourceBusy = false)
     {
         if (!options.Enabled)
             throw Refused("LaterCheckpointMirrorAdmissionDisabled");
@@ -58,12 +59,30 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorAdmissionPrefligh
         await using (var tx = await db.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted, ct))
         {
-            await db.Database.ExecuteSqlInterpolatedAsync(
-                $"SELECT pg_advisory_xact_lock(hashtext({before.SourceConnectionId.ToString()}), 732911)",
-                ct);
-            await db.Database.ExecuteSqlInterpolatedAsync(
-                $"SELECT pg_advisory_xact_lock(hashtext({planId.ToString()}), 732990)",
-                ct);
+            if (failIfSourceBusy)
+            {
+                // Read-only POSIX-held callback must never WAIT on a
+                // source-first writer that may need this same root.
+                var sourceAvailable = await db.Database.SqlQuery<bool>(
+                    $"SELECT pg_try_advisory_xact_lock(hashtext({before.SourceConnectionId.ToString()}), 732911) AS \"Value\"")
+                    .SingleAsync(ct);
+                if (!sourceAvailable)
+                    throw Refused("LaterCheckpointMirrorPostIsolationSourceBusy");
+                var planAvailable = await db.Database.SqlQuery<bool>(
+                    $"SELECT pg_try_advisory_xact_lock(hashtext({planId.ToString()}), 732990) AS \"Value\"")
+                    .SingleAsync(ct);
+                if (!planAvailable)
+                    throw Refused("LaterCheckpointMirrorPostIsolationSourceBusy");
+            }
+            else
+            {
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"SELECT pg_advisory_xact_lock(hashtext({before.SourceConnectionId.ToString()}), 732911)",
+                    ct);
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"SELECT pg_advisory_xact_lock(hashtext({planId.ToString()}), 732990)",
+                    ct);
+            }
             var workpack = await db.GitLaterCheckpointWorkpacks
                 .AsNoTracking().SingleOrDefaultAsync(x =>
                     x.Id == workpackId && x.PreparationId == preparationId &&

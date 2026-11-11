@@ -3067,6 +3067,39 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         lockedAuditMarker,
                                         lockedAuditMarkerBytes);
                                 }
+                                // #129: PostgreSQL connection A holds
+                                // source-first advisory lease lock. A
+                                // separate guarded reader MUST refuse
+                                // non-blocking source lock acquisition
+                                // before the writer can need the F-060
+                                // root. This exercises the exact PG
+                                // source/plan lock IDs used in production.
+                                await using (var blockerDb =
+                                    fixture.NewContext())
+                                {
+                                    await using var heldSource =
+                                        await blockerDb.Database
+                                            .BeginTransactionAsync();
+                                    await blockerDb.Database
+                                        .ExecuteSqlInterpolatedAsync(
+                                            $"SELECT pg_advisory_xact_lock(hashtext({staging.SourceConnectionId.ToString()}), 732911)");
+                                    using var failFastDeadline =
+                                        new CancellationTokenSource(
+                                            TimeSpan.FromSeconds(30));
+                                    Assert.Equal(
+                                        "LaterCheckpointMirrorPostIsolationSourceBusy",
+                                        (await Assert.ThrowsAsync<
+                                            GitSourceSnapshotMirrorException>(() =>
+                                            latestReader.ReadCompletedAsync(
+                                                run.Id, plan.Id, later.Id,
+                                                observationId, first.WorkpackId,
+                                                "repo-1",
+                                                targetReceipt.EvidenceSha256,
+                                                candidate.RequestedBy,
+                                                failFastDeadline.Token,
+                                                failIfSourceBusy: true))).Code);
+                                    await heldSource.RollbackAsync();
+                                }
                                 // #129: trusted completed #127
                                 // assessment is now joined to its real
                                 // Assessed event and domain SHA, then
