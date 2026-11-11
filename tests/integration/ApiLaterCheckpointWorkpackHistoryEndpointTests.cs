@@ -849,6 +849,47 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                     "LaterCheckpointMirrorPostIsolationInspectorDisabled",
                     await reply.Content.ReadAsStringAsync());
         }
+        // The real signed login JWT carries the one-use session UUID.
+        // A guessed identical nonce, a noncanonical UTC timestamp or
+        // a future review must fail with 400 BEFORE the disabled
+        // inspector (which would return 409). No provider is contacted.
+        var jwt = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler()
+            .ReadJwtToken(superadmin);
+        var sessionId = Guid.ParseExact(
+            jwt.Claims.Single(c => c.Type == "f061_review_session_id").Value,
+            "N");
+        var badBase = new LaterCheckpointMirrorSecondReviewPreflightRequest(
+            valid.targetObservationId, valid.workpackId,
+            valid.originalBundleActorId, valid.sourceRepositoryId,
+            valid.expectedTargetReceiptSha256,
+            valid.expectedAssessmentEvidenceSha256,
+            valid.expectedReviewEvidenceSha256, valid.decision,
+            valid.reviewedAtUtc, sessionId);
+        var nonCanonical = DateTimeOffset.FromUnixTimeMilliseconds(
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).AddTicks(1);
+        foreach (var invalid in new[] {
+            badBase,
+            badBase with {
+                DecisionNonce = Guid.NewGuid(),
+                ReviewedAtUtc = nonCanonical
+            },
+            badBase with {
+                DecisionNonce = Guid.NewGuid(),
+                ReviewedAtUtc = DateTimeOffset.UtcNow.AddMinutes(1)
+            }
+        })
+        {
+            using var message = new HttpRequestMessage(HttpMethod.Post, route)
+            {
+                Content = System.Net.Http.Json.JsonContent.Create(invalid)
+            };
+            message.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", superadmin);
+            using var reply = await harness.Client.SendAsync(message);
+            Assert.Equal(HttpStatusCode.BadRequest, reply.StatusCode);
+            Assert.Contains("LaterCheckpointMirrorSecondReviewPreflightInvalid",
+                await reply.Content.ReadAsStringAsync());
+        }
         Assert.Equal(outbound, harness.Calls.Count);
     }
 

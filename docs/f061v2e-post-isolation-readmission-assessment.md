@@ -464,3 +464,27 @@ The fail-fast EF composite-format manifest now covers **64**
 SHA-256 CHECK regexes instead of 63. Actual acceptance continues to
 require a final 4/4 main run and a separately protected atomic
 decision+event+session transaction with three-replica race testing.
+
+
+### #130: reject invalid one-use review input before physical inspection
+
+The default-OFF authenticated `POST .../second-review/preflight`
+now rejects (HTTP 400) a nonce identical to the current signed
+review-session UUID, any noncanonical sub-millisecond UTC review
+timestamp, a review in the future, and reviews older than two minutes
+or outside the five-minute login-session window **before** invoking
+the heavy F-060 POSIX-locked two-pass Git audit. This early check
+matches the immutable SQL nonce CHECK and the independent
+non-authorizing `SessionIntentIntegrity` bound; successful requests
+still recheck all source, target, physical and current Identity
+evidence, including freshness, after the expensive audit.
+
+The real API/JWT integration test extracts the session UUID from a
+signed test login and verifies same-session nonce, sub-millisecond
+and future timestamp attempts each return 400 (not the default-off
+physical inspector's 409), with zero provider transport calls.
+Nothing persists a review/event/consumption, disables SQL DENY ALL,
+changes a `RecoveryRequired` lease or authorizes a GitHub write.
+The actual atomic PostgreSQL-clock writer, three-replica races,
+SHA-1/SHA-256 physical verification and final four-gate acceptance
+are still required.

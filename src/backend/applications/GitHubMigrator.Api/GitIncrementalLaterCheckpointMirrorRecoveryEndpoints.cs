@@ -129,7 +129,13 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             CancellationToken ct) => await GuardAsync(async () =>
         {
             var reviewer = await actorPreflight.RequireSessionAsync(user);
+            // #130: reject impossible one-use session/nonce and stale
+            // client previews BEFORE the expensive POSIX-locked Git
+            // double-fsck. A successful read-only preflight is never
+            // a durable decision or an authorization to recover.
+            var now = clock.GetUtcNow();
             if (req.DecisionNonce == Guid.Empty ||
+                req.DecisionNonce == reviewer.SessionId ||
                 req.TargetObservationId == Guid.Empty ||
                 req.WorkpackId == Guid.Empty ||
                 req.OriginalBundleActorId == Guid.Empty ||
@@ -145,7 +151,12 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
                 !GitSourceBundleStorageCheck.ValidSha(
                     req.ExpectedReviewEvidenceSha256) ||
                 req.ReviewedAtUtc.Offset != TimeSpan.Zero ||
+                req.ReviewedAtUtc != DateTimeOffset.FromUnixTimeMilliseconds(
+                    req.ReviewedAtUtc.ToUnixTimeMilliseconds()) ||
                 req.ReviewedAtUtc < reviewer.IssuedAtUtc ||
+                req.ReviewedAtUtc >= reviewer.IssuedAtUtc.AddMinutes(5) ||
+                req.ReviewedAtUtc > now ||
+                now - req.ReviewedAtUtc > TimeSpan.FromMinutes(2) ||
                 req.SourceRepositoryId is not { Length: >= 1 and <= 256 } ||
                 string.IsNullOrWhiteSpace(req.SourceRepositoryId))
                 throw new GitSourceSnapshotMirrorException(
