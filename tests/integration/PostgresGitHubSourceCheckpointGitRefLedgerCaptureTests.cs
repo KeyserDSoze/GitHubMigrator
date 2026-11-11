@@ -2299,11 +2299,81 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         auditScope.ServiceProvider.GetRequiredService<
                                             PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>(),
                                         localSession);
-                                var isolated = await isolation.RunAsync(
-                                    run.Id, plan.Id, later.Id, observationId,
-                                    first.WorkpackId, "repo-1",
-                                    targetReceipt.EvidenceSha256,
-                                    candidate.RequestedBy, default);
+                                GitIncrementalLaterCheckpointMirrorRecordedIsolationReceipt
+                                    isolated;
+                                if (oidLength == 64)
+                                {
+                                    // Three ACTUAL independent PostgreSQL
+                                    // contexts race on one Prepared row and
+                                    // same POSIX root lock. Exactly ONE can
+                                    // record the immutable Isolated event.
+                                    // Losers must observe only the original
+                                    // completed receipt, never a second
+                                    // rename, new lease or SQL event.
+                                    var go = new TaskCompletionSource(
+                                        TaskCreationOptions.RunContinuationsAsynchronously);
+                                    var replicas = Enumerable.Range(0, 3)
+                                        .Select(async _ =>
+                                        {
+                                            await using var replicaScope =
+                                                api.Host.Services.CreateAsyncScope();
+                                            var sp = replicaScope.ServiceProvider;
+                                            var replicaDb = sp.GetRequiredService<
+                                                AppDbContext>();
+                                            var replicaReader = new
+                                                PostgresGitIncrementalLaterCheckpointMirrorPreparedReconciliationReader(
+                                                    replicaDb, new(true),
+                                                    sp.GetRequiredService<
+                                                        PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight>(),
+                                                    sp.GetRequiredService<
+                                                        PostgresGitIncrementalLaterCheckpointBundleHistory>(),
+                                                    sp.GetRequiredService<
+                                                        PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>(),
+                                                    sp.GetRequiredService<
+                                                        PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>());
+                                            var replicaCoordinator = new
+                                                PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordinator(
+                                                    replicaDb, new(true),
+                                                    replicaReader,
+                                                    sp.GetRequiredService<
+                                                        PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>(),
+                                                    sp.GetRequiredService<
+                                                        PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>(),
+                                                    new LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+                                                        physicalMirror.BundleRoot,
+                                                        physicalMirror.VerifiedMirrorRoot,
+                                                        enabled: true));
+                                            await go.Task;
+                                            try
+                                            {
+                                                return await replicaCoordinator.RunAsync(
+                                                    run.Id, plan.Id, later.Id,
+                                                    observationId, first.WorkpackId,
+                                                    "repo-1",
+                                                    targetReceipt.EvidenceSha256,
+                                                    candidate.RequestedBy, default);
+                                            }
+                                            catch (GitSourceSnapshotMirrorException ex)
+                                                when (ex.Code is
+                                                    "LaterCheckpointMirrorIsolationReconciliationAlreadyRecorded"
+                                                    or "LaterCheckpointMirrorIsolationCoordinatorAlreadyRecorded")
+                                            {
+                                                return null;
+                                            }
+                                        }).ToArray();
+                                    go.SetResult();
+                                    var replies = await Task.WhenAll(replicas);
+                                    Assert.Single(replies.Where(x => x is not null));
+                                    isolated = replies.Single(x => x is not null)!;
+                                }
+                                else
+                                {
+                                    isolated = await isolation.RunAsync(
+                                        run.Id, plan.Id, later.Id, observationId,
+                                        first.WorkpackId, "repo-1",
+                                        targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, default);
+                                }
                                 Assert.True(isolated.DurableIsolationRecorded);
                                 Assert.Equal(oidLength == 40,
                                     isolated.ReconciledExistingQuarantine);
