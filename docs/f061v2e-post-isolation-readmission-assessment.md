@@ -590,3 +590,33 @@ The same run also revealed two independent five-minute long-lived
 SHA1/SHA256 `failAfterImport=true` scenarios with source-provenance
 expiry / unexpected error codes; those are tracked separately and
 not counted as passing. Final-main 4/4 acceptance remains mandatory.
+
+
+### #131: deterministic time only in long physical Git fixture
+
+Completed [PG17 CI 43080214985](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/43080214985)
+failed **only two** `F097c4c0c` real SHA-1/SHA-256
+`failAfterImport=true` cases, at `PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight`,
+where current source-first F-031 target observation/destination validation
+correctly expires after five minutes of real fixture execution.
+Other three gates and the new #130 SQL CHECK/UNIQUE probe passed.
+
+To maintain the **same** source-first production checks, the test
+harness offers a nullable, opt-in `IntegrationClockOverride`; default
+is still `TimeProvider.System` and production code is unchanged.
+Only `failAfterImport=true` injects a `LongPhysicalFixtureClock`,
+which tracks actual UTC until the original durable F-031 target
+observation is committed, then clamps the host's observation time to
+no later than its **fourth minute** (leaving a margin for older
+destination validation). No persisted F-031/F-035/F-061 evidence
+is rewritten; there is no new target observation, synthetic review
+SHA or change to actual PostgreSQL transaction time. Real Git
+SHA1/SHA256 import, post-rename POSIX lock, fsck/ref/OID audits,
+immutable SQL and the three-replica race remain active. All
+other theory cases, default hosts and explicit stale-source
+negative tests still use actual wall time.
+
+This is a **test-only, non-authorizing** clock fixture, not a
+production lease extension or a way to allow stale decisions.
+It needs full final-main PostgreSQL17 execution before #131
+can be accepted.

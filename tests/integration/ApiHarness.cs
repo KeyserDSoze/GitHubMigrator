@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace GitHubMigrator.Integration.Tests;
@@ -56,6 +57,9 @@ public sealed class ApiHarness : IAsyncLifetime
     public int LaterCheckpointMirrorHeartbeatMilliseconds { get; set; } = 250;
     public string? TrustedLocalBundleSourceRoot { get; set; }
     public string? TrustedLocalBundleOutputRoot { get; set; }
+    // Only integration fixtures may supply a deterministic clock. Normal
+    // production and default test hosts retain TimeProvider.System.
+    public TimeProvider? IntegrationClockOverride { get; set; }
     public int TargetObjectIdLength { get; set; } = 40;
     // Fake fixed-host provider fault injection; no real outbound network.
     public string TargetObservationFault { get; set; } = "";
@@ -178,6 +182,13 @@ public sealed class ApiHarness : IAsyncLifetime
             builder.UseEnvironment("Development");
             builder.ConfigureTestServices(services =>
             {
+                // A single explicitly opted-in long-running physical Git
+                // fixture controls wall-time freshness while retaining all
+                // real PostgreSQL transactions and live source checks.
+                // Never change the default clock used by other tests.
+                if (IntegrationClockOverride is not null)
+                    services.Replace(ServiceDescriptor.Singleton<TimeProvider>(
+                        IntegrationClockOverride));
                 // App constructs the actual typed readers; their outbound transport is a strict stub.
                 services.AddHttpClient<AzureDevOpsWorkloadReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => azure);

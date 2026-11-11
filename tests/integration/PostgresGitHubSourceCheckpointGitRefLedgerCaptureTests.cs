@@ -49,6 +49,42 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
         }
     }
 
+    // #131: the physical import/failure/restart fixture is deliberately
+    // longer than the five-minute F-031 target-observation lease when
+    // CI runs real SHA1/SHA256 Git subprocesses and serial SQL checks.
+    // Keep production expiry EXACTLY unchanged. For only the two
+    // failAfterImport=true cases, let the test host clock track real UTC
+    // until near the already committed F-031 TTL, then clamp it WITHIN
+    // that same window. A separate real system-clock fixture must still
+    // exercise stale-proof refusal. This is not a runtime clock or a
+    // source refresh: immutable SHA, locked DB, Git fsck remain real.
+    private sealed class LongPhysicalFixtureClock : TimeProvider
+    {
+        private long latestUtcTicks = DateTimeOffset.MaxValue.UtcDateTime.Ticks;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var utc = DateTimeOffset.UtcNow;
+            var maxTicks = Interlocked.Read(ref latestUtcTicks);
+            return utc.UtcDateTime.Ticks <= maxTicks
+                ? utc
+                : new DateTimeOffset(maxTicks, TimeSpan.Zero);
+        }
+
+        public void BoundToOriginalObservation(DateTimeOffset observedAtUtc)
+        {
+            if (observedAtUtc.Offset != TimeSpan.Zero)
+                throw new ArgumentException(
+                    "F-031 integration observation must be UTC");
+            // Also leave a minute for F-031's separate destination-
+            // validation window, which may predate the observation.
+            // No source permission TTL or PostgreSQL time is extended.
+            var withinWindow = observedAtUtc.AddMinutes(4);
+            Interlocked.Exchange(ref latestUtcTicks,
+                withinWindow.UtcDateTime.Ticks);
+        }
+    }
+
     // Actual local Git mirror with object IDs bound to F-097b. Only
     // the test provisions this trusted root; no HTTP path or token.
     private sealed class CheckpointLocalMirror : IDisposable
@@ -454,7 +490,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 candidate.ObjectFormat);
         }
 
+        // Only the two deliberately long post-import/restart scenarios
+        // use a deterministic TEST-HOST clock; all other theory cases
+        // continue testing real wall-clock provenance expiry.
+        var longPhysicalClock =
+            failAfterImport ? new LongPhysicalFixtureClock() : null;
         var api = new ApiHarness {
+            IntegrationClockOverride = longPhysicalClock,
             EnableCheckpointHumanReview = true,
             EnableCheckpointTargetReadPreflight = true,
             EnableCheckpointTargetObservation = true,
@@ -833,6 +875,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                     var targetReceipt = JsonSerializer.Deserialize<
                         GitCheckpointTargetObservation>(savedTarget.ReceiptJson);
                     Assert.NotNull(targetReceipt);
+                    // The live F-031 gate remains fully evaluated by the
+                    // production service, but this long fixture no longer
+                    // turns a valid source proof stale merely because
+                    // hundreds of real Git/SQL assertions exceed 5 min.
+                    // All tests that intentionally validate stale denial
+                    // continue on TimeProvider.System.
+                    longPhysicalClock?.BoundToOriginalObservation(
+                        targetReceipt.ObservedAtUtc);
                     var joined = GitIncrementalCheckpointTargetJoin
                         .ForReadOnlyComparison(latestPlan, later, fullRefs,
                             targetReceipt);
