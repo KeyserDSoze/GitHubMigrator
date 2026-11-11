@@ -741,6 +741,139 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2e_real_postgres_session_checks_reject_noncanonical_evidence()
+    {
+        // #130: exercise PostgreSQL's INSTALLED CHECK expressions, not
+        // a C# reimplementation or a string-only pg_constraint search.
+        // LIKE INCLUDING CONSTRAINTS copies the actual CHECKs and
+        // NOT NULL; INCLUDING DEFAULTS keeps immutable false flags.
+        // It does NOT copy the parent FKs or any trusted writer.
+        // The production session table must remain DENY-ALL.
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await db.Database.OpenConnectionAsync();
+        try
+        {
+            await using var tx = await db.Database.BeginTransactionAsync();
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE TEMP TABLE f061_second_review_session_probe (
+                    LIKE git_later_checkpoint_mirror_second_review_session_consumptions
+                        INCLUDING DEFAULTS INCLUDING CONSTRAINTS
+                ) ON COMMIT DROP
+                """);
+
+            var issued = new DateTimeOffset(
+                2026, 11, 11, 18, 0, 0, TimeSpan.Zero);
+            var reviewed = issued.AddSeconds(30);
+            var consumed = issued.AddSeconds(31);
+            var expires = issued.AddMinutes(5);
+            var reviewer = Guid.NewGuid();
+            var decision =
+                GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                    .ApprovedForIndependentReview;
+            var sha = new string('a', 64);
+            var intentSha = new string('b', 64);
+
+            Task<int> Insert(
+                Guid session, Guid mirror, Guid nonce,
+                string reviewSha, string sessionSha,
+                DateTimeOffset issuedAt, DateTimeOffset reviewedAt,
+                DateTimeOffset consumedAt, DateTimeOffset expiresAt) =>
+                db.Database.ExecuteSqlInterpolatedAsync($"""
+                    INSERT INTO pg_temp.f061_second_review_session_probe (
+                        review_session_id, mirror_id, decision_nonce,
+                        second_reviewer_id, decision,
+                        review_evidence_sha256, session_intent_evidence_sha256,
+                        issued_at_utc, reviewed_at_utc,
+                        consumed_at_utc, expires_at_utc
+                    ) VALUES (
+                        {session}, {mirror}, {nonce}, {reviewer}, {decision},
+                        {reviewSha}, {sessionSha}, {issuedAt}, {reviewedAt},
+                        {consumedAt}, {expiresAt}
+                    )
+                    """);
+
+            await Insert(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                sha, intentSha, issued, reviewed, consumed, expires);
+            Assert.Equal(1L, await db.Database.SqlQueryRaw<long>("""
+                SELECT count(*)::bigint AS "Value"
+                FROM pg_temp.f061_second_review_session_probe
+                """).SingleAsync());
+
+            async Task Rejected(
+                Guid session, Guid mirror, Guid nonce,
+                string reviewSha, string sessionSha,
+                DateTimeOffset issuedAt, DateTimeOffset reviewedAt,
+                DateTimeOffset consumedAt, DateTimeOffset expiresAt)
+            {
+                await tx.CreateSavepointAsync("bad_session");
+                var error = await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                    () => Insert(session, mirror, nonce, reviewSha,
+                        sessionSha, issuedAt, reviewedAt,
+                        consumedAt, expiresAt));
+                Assert.Equal(Npgsql.PostgresErrorCodes.CheckViolation,
+                    error.SqlState);
+                await tx.RollbackToSavepointAsync("bad_session");
+                await tx.ReleaseSavepointAsync("bad_session");
+            }
+
+            // Each case must fail a real installed CHECK, even without
+            // the original journal's unconditionally closed trigger.
+            var sameSession = Guid.NewGuid();
+            await Rejected(sameSession, Guid.NewGuid(), sameSession,
+                sha, intentSha, issued, reviewed, consumed, expires);
+            await Rejected(Guid.NewGuid(), Guid.Empty, Guid.NewGuid(),
+                sha, intentSha, issued, reviewed, consumed, expires);
+            foreach (var bad in new[] {
+                new string('a', 63), new string('a', 65),
+                new string('A', 64)
+            })
+                await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                    bad, intentSha, issued, reviewed, consumed, expires);
+            await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                sha, new string('B', 64), issued, reviewed, consumed, expires);
+            await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                sha, intentSha, issued.AddTicks(1), reviewed, consumed,
+                expires.AddTicks(1));
+            await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                sha, intentSha, issued, reviewed.AddTicks(1), consumed, expires);
+            await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                sha, intentSha, issued, reviewed, consumed.AddTicks(1), expires);
+            await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                sha, intentSha, issued, reviewed, consumed,
+                expires.AddTicks(1));
+
+            // One accepted probe, zero accepted forged probes.
+            Assert.Equal(1L, await db.Database.SqlQueryRaw<long>("""
+                SELECT count(*)::bigint AS "Value"
+                FROM pg_temp.f061_second_review_session_probe
+                """).SingleAsync());
+
+            // A raw INSERT on the REAL journal is still rejected by
+            // its unconditional mutation trigger, regardless of
+            // whether a future review SHA looks syntactically valid.
+            await tx.CreateSavepointAsync("real_closed");
+            var closed = await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                () => db.Database.ExecuteSqlInterpolatedAsync($"""
+                    INSERT INTO
+                        git_later_checkpoint_mirror_second_review_session_consumptions
+                        (review_session_id)
+                    VALUES ({Guid.NewGuid()})
+                    """));
+            Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                closed.SqlState);
+            await tx.RollbackToSavepointAsync("real_closed");
+            await tx.ReleaseSavepointAsync("real_closed");
+
+            await tx.RollbackAsync();
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task F061v2e_second_review_candidate_is_superadmin_only_default_off_GET_only()
     {
         // Uses REAL JWT middleware and the production API host, without

@@ -532,3 +532,25 @@ mutation triggers. This addition does not enable the second decision
 writer, consume any session, adopt a new F-061 generation, modify
 terminal leases, import a physical mirror or contact GitHub.
 The atomic review+event+session writer and 4/4 main CI remain open.
+
+
+### #130: real PostgreSQL17 negative CHECK execution without unlocking journal
+
+A separate API/PostgreSQL integration test now clones the INSTALLED
+second-review session journal CHECK and NOT NULL constraints into a
+transaction-scoped temporary probe table (with its immutable false
+defaults), **without** the production foreign keys or mutation triggers.
+It verifies one valid canonical session tuple is accepted and that
+PostgreSQL itself rejects session-as-nonce replay, zero mirror UUID,
+SHA-256 lengths 63/65, uppercase review and intent SHA, subsecond
+JWT issuance/expiry and submillisecond review/consumption with
+SQLSTATE CHECK violation. SAVEPOINT rollback isolates each invalid
+attempt and the entire probe transaction is rolled back afterward.
+
+The same test separately asserts a raw INSERT into the REAL production
+session-consumption table still raises the unconditional DENY-ALL trigger.
+No real session, second review or event is persisted, and no new
+generation/lease or GitHub destination action is enabled. The probe
+tests SQL CHECK enforcement, **not** an authenticated atomic writer or
+the complete FK/physical replay chain; #130 remains open until the
+full writer and its SHA1/SHA256/three-replica race acceptance.
