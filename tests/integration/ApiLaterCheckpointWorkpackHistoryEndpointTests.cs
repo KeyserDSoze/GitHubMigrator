@@ -357,6 +357,22 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2_physical_isolation_coordinator_is_default_OFF_without_database_or_Git()
+    {
+        var before = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var coordinator = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordinator>();
+        var failure = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+            () => coordinator.RunAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "repo-1",
+                new string('a', 64), Guid.NewGuid(), default));
+        Assert.Equal("LaterCheckpointMirrorIsolationCoordinatorDisabled",
+            failure.Code);
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F061v2_recovery_inspection_is_independently_default_OFF_and_no_provider_calls()
     {
         var before = harness.Calls.Count;
