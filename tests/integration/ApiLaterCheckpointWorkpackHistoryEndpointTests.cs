@@ -313,7 +313,10 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                     {worker},{token},{1L},{sha},{sha},{sha},{sha},{sha},
                     {4},{quarantineName},{DateTimeOffset.UtcNow},{sha})
                 """));
-        Assert.Equal(Npgsql.PostgresErrorCodes.ForeignKeyViolation,
+        // BEFORE INSERT trigger validates the immutable reviewer/lease
+        // boundary before PostgreSQL evaluates its FK. Either way this
+        // forged intent is refused, and the journal remains empty.
+        Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
             invalid.SqlState);
         Assert.Equal(0L, await db.Database.SqlQuery<long>($"""
             SELECT count(*)::bigint AS "Value"
