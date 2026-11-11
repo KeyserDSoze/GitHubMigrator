@@ -13,6 +13,8 @@ public sealed record GitIncrementalLaterCheckpointMirrorPostIsolationInspectionO
 public sealed record GitIncrementalLaterCheckpointMirrorPostIsolationInspection(
     int EvidenceVersion, Guid PhysicalMirrorId, Guid WorkpackId,
     Guid CheckpointId, Guid SourceSnapshotId,
+    Guid FirstReviewerId, Guid OriginalBundleActorId,
+    Guid OriginalWorkerId,
     string StagingEvidenceSha256, string IsolationReceiptSha256,
     string FirstReviewSha256, string PreparedIntentSha256,
     string IsolationDirectoryName, string ObjectSetSha256, int ObjectCount,
@@ -116,6 +118,9 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
         var receipt = after.Isolated;
         return new(1, last.Stage.PhysicalMirrorId, last.Stage.WorkpackId,
             last.Stage.CheckpointId, last.Stage.SourceSnapshotId,
+            last.HumanDecision.ReviewerId,
+            last.HumanDecision.OriginalBundleActorId,
+            receipt.OriginalWorkerId,
             last.Stage.EvidenceSha256, receipt.EvidenceSha256,
             receipt.RecoveryDecisionSha256, receipt.PreparedIntentSha256,
             receipt.IsolationDirectoryName, receipt.ObjectSetSha256,

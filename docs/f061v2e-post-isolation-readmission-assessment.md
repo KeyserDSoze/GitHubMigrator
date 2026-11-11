@@ -125,3 +125,23 @@ become stale; it is NOT a simultaneous SQL/POSIX CAS and does NOT prove
 that the actor is an independently authenticated superadmin reviewer.
 No route, JWT review decision writer, new generation, push, retry or
 dispatch is present. These remain separately OPEN in #129 and #121.
+
+
+### #129 authenticated second-review candidate (read-only HTTP)
+
+The `GET .../mirror-recovery/second-review/candidate` endpoint shares the existing
+`PasswordChanged` + `superadmin` JWT authorization and rate limiting. It
+calls only the separately default-OFF post-Isolated SQL/POSIX inspector,
+then refuses a reviewer matching the original recovery reviewer, original
+F-035 bundle actor or failed worker using **server-read identities**, not
+a client-supplied reviewer GUID. It returns a diagnostic subset without
+the opaque original lease token, any local filesystem path or a grant to
+readmit, retry, push, dispatch or mark migration complete. There is **no
+POST** counterpart or SQL second-review writer, and the audit itself
+remains disabled unless both server-side inspection switches are enabled.
+Integration HTTP tests cover anonymous/user/admin denials, default-OFF
+superadmin denial, GET-only semantics, and no provider transport. A
+successful authenticated candidate remains non-authorizing and can go
+stale immediately; completing #129 still requires SQL+POSIX-fenced
+persisted independent human decision, replay/race guards, and real
+Git/PostgreSQL security acceptance.

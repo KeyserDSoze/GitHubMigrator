@@ -52,6 +52,48 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             });
         }));
 
+        // #129: independent second-review CANDIDATE, NOT a second
+        // decision writer. The existing route group enforces changed-
+        // password JWT and superadmin role. No caller-selected disk
+        // path, Git OID, lease token, worker identity or reviewer GUID.
+        // The physical inspection is separately OFF by default.
+        group.MapGet("/second-review/candidate", async Task<IResult> (
+            Guid id, Guid planId, Guid checkpointId,
+            Guid targetObservationId, Guid workpackId,
+            Guid originalBundleActorId, string? sourceRepositoryId,
+            string? expectedTargetReceiptSha256,
+            ClaimsPrincipal user,
+            PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector inspector,
+            CancellationToken ct) => await GuardAsync(async () =>
+        {
+            var secondReviewerId = Actor(user);
+            var x = await inspector.ReadAsync(id, planId, checkpointId,
+                targetObservationId, workpackId, sourceRepositoryId ?? "",
+                expectedTargetReceiptSha256 ?? "",
+                originalBundleActorId, ct);
+            if (secondReviewerId == x.FirstReviewerId ||
+                secondReviewerId == x.OriginalBundleActorId ||
+                secondReviewerId == x.OriginalWorkerId)
+                throw new GitSourceSnapshotMirrorException(
+                    "LaterCheckpointMirrorSecondReviewIndependentReviewerRequired");
+
+            // No original F-061 lease token, local directory path,
+            // reviewer access token, or bearer credential in response.
+            // Candidate is NOT a review decision or new-generation CAS.
+            return Results.Ok(new {
+                x.EvidenceVersion, x.PhysicalMirrorId, x.WorkpackId,
+                x.CheckpointId, x.SourceSnapshotId,
+                x.StagingEvidenceSha256, x.IsolationReceiptSha256,
+                x.FirstReviewSha256, x.PreparedIntentSha256,
+                x.ObjectSetSha256, x.ObjectCount, x.PhysicalState,
+                x.ObservedAtUtc, independentReviewerRequired = true,
+                durableSecondReviewPersisted = false,
+                canReAdmit = false, canMaterialize = false,
+                canPush = false, canRetry = false, canDispatch = false,
+                migrationComplete = false
+            });
+        }));
+
         group.MapPost("/decision", async Task<IResult> (
             Guid id, Guid planId, Guid checkpointId,
             LaterCheckpointMirrorRecoveryDecisionRequest req,

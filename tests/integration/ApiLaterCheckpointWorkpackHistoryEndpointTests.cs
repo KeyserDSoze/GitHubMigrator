@@ -737,6 +737,68 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
         finally { await enabled.DisposeAsync(); }
     }
 
+    [Fact]
+    public async Task F061v2e_second_review_candidate_is_superadmin_only_default_off_GET_only()
+    {
+        // Uses REAL JWT middleware and the production API host, without
+        // enabling a filesystem root, SQL writer, remote transport, or
+        // F-061 lease worker. The candidate is never an authorization.
+        var path = "/api/incremental-preparations/" + Guid.NewGuid() +
+            "/operation-plans/" + Guid.NewGuid() +
+            "/source-sync-checkpoints/" + Guid.NewGuid() +
+            "/mirror-recovery/second-review/candidate" +
+            "?targetObservationId=" + Guid.NewGuid() +
+            "&workpackId=" + Guid.NewGuid() +
+            "&originalBundleActorId=" + Guid.NewGuid() +
+            "&sourceRepositoryId=repo-1" +
+            "&expectedTargetReceiptSha256=" + new string('a', 64);
+        var admin = await harness.LoginAsync(
+            harness.AdminName, ApiHarness.AdminPassword);
+        var user = await harness.LoginAsync(
+            harness.UserName, ApiHarness.UserPassword);
+        var superadmin = await harness.LoginAsync(
+            harness.SuperadminName, ApiHarness.SuperadminPassword);
+        var providerCalls = harness.Calls.Count;
+
+        foreach (var (bearer, expected) in new[] {
+            ((string?)null, HttpStatusCode.Unauthorized),
+            (user, HttpStatusCode.Forbidden),
+            (admin, HttpStatusCode.Forbidden),
+            (superadmin, HttpStatusCode.Conflict)
+        })
+        {
+            using var reply = await Send(harness.Client, HttpMethod.Get,
+                path, bearer);
+            Assert.Equal(expected, reply.StatusCode);
+            if (bearer == superadmin)
+            {
+                using var result = JsonDocument.Parse(
+                    await reply.Content.ReadAsStringAsync());
+                Assert.Equal("LaterCheckpointMirrorPostIsolationInspectorDisabled",
+                    result.RootElement.GetProperty("error").GetString());
+                Assert.DoesNotContain(ApiHarness.SourceToken,
+                    result.RootElement.GetRawText());
+                Assert.DoesNotContain(ApiHarness.TargetToken,
+                    result.RootElement.GetRawText());
+            }
+        }
+        using (var post = await Send(harness.Client, HttpMethod.Post,
+            path, superadmin))
+            Assert.Equal(HttpStatusCode.MethodNotAllowed, post.StatusCode);
+        Assert.Equal(providerCalls, harness.Calls.Count);
+
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var diagnostic = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector>();
+        var denied = await Assert.ThrowsAsync<
+            GitSourceSnapshotMirrorException>(() =>
+            diagnostic.ReadAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                "repo-1", new string('a', 64), Guid.NewGuid(), default));
+        Assert.Equal("LaterCheckpointMirrorPostIsolationInspectorDisabled",
+            denied.Code);
+    }
+
     private static string Root() =>
         "/api/incremental-preparations/" + Guid.NewGuid() +
         "/operation-plans/" + Guid.NewGuid() +
