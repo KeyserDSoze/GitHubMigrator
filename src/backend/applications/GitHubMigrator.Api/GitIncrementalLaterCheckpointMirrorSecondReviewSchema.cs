@@ -352,6 +352,38 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                 END IF;
             END $f061v2e_session_intent_sha_v3$;
 
+            -- #130: SQL matches the exact canonical time
+            -- precision of the signed login and domain-sealed intent:
+            -- whole seconds for JWT issuance/expiry; milliseconds
+            -- for the human review and observed consumption time.
+            -- PostgreSQL stores timestamptz instants, so this checks
+            -- precision, NOT the originating ISO8601 offset nor
+            -- independently trusted DB-clock authority.
+            DO $f061v2e_session_precision_v4$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname =
+                        'ck_f061v2e_second_review_session_precision_v4'
+                        AND conrelid =
+                            'git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                ) THEN
+                    ALTER TABLE
+                        git_later_checkpoint_mirror_second_review_session_consumptions
+                    ADD CONSTRAINT
+                        ck_f061v2e_second_review_session_precision_v4
+                    CHECK (
+                        issued_at_utc = date_trunc('second', issued_at_utc)
+                        AND reviewed_at_utc =
+                            date_trunc('milliseconds', reviewed_at_utc)
+                        AND consumed_at_utc =
+                            date_trunc('milliseconds', consumed_at_utc)
+                        AND expires_at_utc =
+                            date_trunc('second', expires_at_utc)
+                    );
+                END IF;
+            END $f061v2e_session_precision_v4$;
+
             -- A proposed second reviewer is NOT a verified JWT actor.
             -- No insert (even with matching SHA) can claim a review
             -- before a future protected, source-first and POSIX-locked

@@ -2983,6 +2983,36 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 Assert.Contains("'^[0-9a-f]{64}$'",
                                     sessionIntentShaConstraint);
 
+                                // #130: source-login canonical second
+                                // and review/consumption millisecond
+                                // timestamp precision must be enforced
+                                // by a validated, installed PostgreSQL
+                                // CHECK, not only by the C# domain.
+                                var sessionPrecisionV4 = await verifiedDb
+                                    .Database.SqlQuery<string>($"""
+                                        SELECT pg_get_constraintdef(c.oid)
+                                            AS "Value"
+                                        FROM pg_constraint c
+                                        WHERE c.conname =
+                                            'ck_f061v2e_second_review_session_precision_v4'
+                                            AND c.conrelid =
+                                                'git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                                            AND c.contype = 'c'
+                                            AND c.convalidated
+                                        """).SingleAsync();
+                                Assert.Contains("date_trunc('second'",
+                                    sessionPrecisionV4);
+                                Assert.Contains("date_trunc('milliseconds'",
+                                    sessionPrecisionV4);
+                                Assert.Contains("issued_at_utc",
+                                    sessionPrecisionV4);
+                                Assert.Contains("reviewed_at_utc",
+                                    sessionPrecisionV4);
+                                Assert.Contains("consumed_at_utc",
+                                    sessionPrecisionV4);
+                                Assert.Contains("expires_at_utc",
+                                    sessionPrecisionV4);
+
                                 // #129: the review's original terminal
                                 // worker/token/gen and the #127 Assessed
                                 // digest MUST be tied to the SAME source

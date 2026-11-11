@@ -510,3 +510,25 @@ and domain digest under the source-first PostgreSQL DB-clock and F-060
 POSIX locks and commit review+event+session in one atomic transaction.
 All review/event/session tables retain unconditional DENY-ALL triggers.
 No lease, generation, physical import or GitHub write is enabled.
+
+
+### #130: canonical PostgreSQL session timestamp precision
+
+The second-review consumption journal installs an **idempotent, validated**
+`ck_f061v2e_second_review_session_precision_v4` CHECK. PostgreSQL now
+rejects microsecond-level JWT issuance or expiry timestamps, and
+submillisecond review or consumption timestamps: issued/expiry must be
+whole seconds, reviewed/consumed whole milliseconds. This matches the
+standalone C# `SessionIntentIntegrity` contract and prevents a future
+writer from persisting a timestamp that cannot reproduce the
+domain-separated session-intent SHA exactly. PostgreSQL's
+`timestamptz` normalizes to an instant, so this is **not** an original
+timezone-offset attestation and **not** PostgreSQL clock authority.
+The real SHA1/SHA256 PG17 integration fixture inspects the installed,
+validated CHECK; the 65-expression EF SQL guard remains unchanged.
+
+All three second-review SQL tables retain **unconditional DENY ALL**
+mutation triggers. This addition does not enable the second decision
+writer, consume any session, adopt a new F-061 generation, modify
+terminal leases, import a physical mirror or contact GitHub.
+The atomic review+event+session writer and 4/4 main CI remain open.
