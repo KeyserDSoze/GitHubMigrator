@@ -806,6 +806,39 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2e_review_readiness_uses_explicit_real_schema_and_system_clock()
+    {
+        // #130: source lookup must not rely on a connection's
+        // search_path. With only pg_catalog visible, a query naming
+        // an unqualified production journal would fail; the reviewed
+        // session read uses its explicitly qualified real relation.
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var readiness = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointMirrorSecondReviewSessionReadiness>();
+        await db.Database.OpenConnectionAsync();
+        try
+        {
+            await using var tx = await db.Database.BeginTransactionAsync();
+            await db.Database.ExecuteSqlRawAsync(
+                "SET LOCAL search_path TO pg_catalog");
+            var issued = DateTimeOffset.FromUnixTimeSeconds(
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            var observed = await readiness.RequireUnusedAsync(
+                Guid.NewGuid(), Guid.NewGuid(), issued, issued,
+                Guid.NewGuid(), default);
+            Assert.Equal(TimeSpan.Zero, observed.Offset);
+            Assert.True(observed >= issued &&
+                observed < issued.AddMinutes(5));
+            await tx.RollbackAsync();
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
+    }
+
+    [Fact]
     public async Task F061v2e_real_postgres_session_checks_reject_noncanonical_evidence()
     {
         // #130: exercise PostgreSQL's INSTALLED CHECK expressions, not
