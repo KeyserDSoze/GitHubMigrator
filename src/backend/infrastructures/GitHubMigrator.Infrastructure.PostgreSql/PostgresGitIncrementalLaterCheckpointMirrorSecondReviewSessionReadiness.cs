@@ -43,7 +43,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorSecondReviewSessi
         // Truncate to the exact millisecond granularity of the immutable
         // C# SessionIntent and PostgreSQL CHECK v4.
         var databaseNow = await db.Database.SqlQueryRaw<DateTimeOffset>("""
-            SELECT date_trunc('milliseconds', clock_timestamp()) AS "Value"
+            SELECT pg_catalog.date_trunc('milliseconds', pg_catalog.clock_timestamp()) AS "Value"
             """).SingleAsync(ct);
         if (databaseNow < issuedAtUtc ||
             databaseNow >= expiresAtUtc ||
@@ -58,7 +58,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorSecondReviewSessi
         // the SQL UNIQUE constraints in a future locked atomic writer.
         var alreadyConsumed = await db.Database.SqlQuery<long>($"""
             SELECT count(*)::bigint AS "Value"
-            FROM git_later_checkpoint_mirror_second_review_session_consumptions
+            FROM public.git_later_checkpoint_mirror_second_review_session_consumptions
             WHERE review_session_id = {reviewSessionId}
                 OR decision_nonce = {decisionNonce}
                 OR mirror_id = {physicalMirrorId}
