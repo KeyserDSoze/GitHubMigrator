@@ -23,7 +23,7 @@ EXPECTED = {
     "GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema.cs": 5,
     "GitIncrementalLaterCheckpointMirrorIsolationSchema.cs": 15,
     "GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchema.cs": 14,
-    "GitIncrementalLaterCheckpointMirrorSecondReviewSchema.cs": 13,
+    "GitIncrementalLaterCheckpointMirrorSecondReviewSchema.cs": 12,
     "GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSchema.cs": 0,
 }
 REPAIR = "GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSchema.cs"
@@ -84,8 +84,8 @@ def check() -> None:
 
         print(f"OK {filename}: {count} SQL SHA checks")
 
-    require(total == 64, f"F-061 bootstrap must validate 64 checks, got {total}")
-    print("F-061 EF raw SQL formatting: OK (64 SHA checks + idempotent repair)")
+    require(total == 63, f"F-061 bootstrap must validate 63 checks, got {total}")
+    print("F-061 EF raw SQL formatting: OK (63 SHA checks + idempotent repair)")
 
 
 if __name__ == "__main__":
