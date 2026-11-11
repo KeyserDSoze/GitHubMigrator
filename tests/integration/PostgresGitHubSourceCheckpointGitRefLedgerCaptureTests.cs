@@ -2143,6 +2143,26 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     recovered.PreparedIntent.CanPush ||
                                     recovered.PreparedIntent.CanRetry ||
                                     recovered.PreparedIntent.CanDispatch);
+                                // A fabricated UPDATE or event DELETE
+                                // cannot erase/modify the crash fence.
+                                var immutableIntent = await Assert.ThrowsAsync<
+                                    Npgsql.PostgresException>(() =>
+                                    verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                        UPDATE git_later_checkpoint_mirror_isolation_intents
+                                        SET can_push = true
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """));
+                                Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                                    immutableIntent.SqlState);
+                                var immutableEvent = await Assert.ThrowsAsync<
+                                    Npgsql.PostgresException>(() =>
+                                    verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                        DELETE FROM
+                                            git_later_checkpoint_mirror_isolation_intent_events
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """));
+                                Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
+                                    immutableEvent.SqlState);
                                 Assert.Equal("LaterCheckpointMirrorIsolationIntentAlreadyPrepared",
                                     (await Assert.ThrowsAsync<
                                         GitSourceSnapshotMirrorException>(() =>
