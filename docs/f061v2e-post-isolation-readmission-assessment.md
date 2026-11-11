@@ -62,3 +62,29 @@ is implemented. See [#127](https://github.com/KeyserDSoze/GitHubMigrator/issues/
 Close #126/#127 only after all four CI jobs, including PostgreSQL 17
 integration, succeed on the final `main` commit. The concurrent
 #123/#124 isolation work must also pass its own acceptance checks.
+
+
+## #129: second independent review candidate (domain-only first slice)
+
+The next recovery review is **separate** from #122's original
+\`ApprovedForIsolationReview\`. The versioned
+\`GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity\` candidate
+binds the original reviewer, a **different** proposed second reviewer,
+the original failed worker/token/generation, exact immutable F-061
+\`Isolated\` receipt, #126 fresh source assessment, source refs/target
+receipt, bundle and quarantine object closure. Both
+\`ApprovedForIndependentReview\` and \`RejectedForIndependentReview\`
+are **non-authorizing** judgments; all durable-review/admission/import/
+push/retry/dispatch/migration flags remain \`false\`.
+SHA1/SHA256 PostgreSQL-backed real Git fixture checks that another
+reviewer cannot reuse the first reviewer's identity or the original
+bundle actor/worker, and refuses stale, tampered or permission-elevated
+evidence.
+
+**No authentication, SQL persistence, POSIX re-audit, generation lease,
+worker, new importer, HTTP endpoint, GitHub push or executable approval
+was introduced by this first slice.** The future #129 default-OFF
+writer must authenticate the actor and recheck immutable source,
+isolation and current physical evidence under SQL+POSIX locks; a
+caller-provided review digest or GUID is never sufficient authority.
+#121 still owns any separately approved new-generation CAS.

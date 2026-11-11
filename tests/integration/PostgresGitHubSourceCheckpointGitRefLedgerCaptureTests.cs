@@ -2654,6 +2654,105 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         staging, committed, isolated,
                                         generationSourceRead,
                                         isolated.RecordedAtUtc.AddSeconds(2));
+                                // #129: non-authorizing SECOND human review
+                                // candidate. This is still a domain proof,
+                                // NOT a JWT/SQL decision or a new F-061
+                                // generation, importer or push capability.
+                                var secondReviewer = Guid.NewGuid();
+                                var secondReview =
+                                    GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity.Seal(
+                                        staging, committed, isolated,
+                                        generationSourceRead, generationAssessment,
+                                        diagnostic, humanDecision, secondReviewer,
+                                        GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                            .ApprovedForIndependentReview,
+                                        isolated.RecordedAtUtc.AddSeconds(3));
+                                GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity.Verify(
+                                    secondReview, staging, committed, isolated,
+                                    generationSourceRead, generationAssessment,
+                                    diagnostic, humanDecision);
+                                Assert.Equal(reviewerId, secondReview.FirstReviewerId);
+                                Assert.Equal(secondReviewer, secondReview.SecondReviewerId);
+                                Assert.Equal(generationAssessment.EvidenceSha256,
+                                    secondReview.AssessmentEvidenceSha256);
+                                Assert.Equal(isolated.EvidenceSha256,
+                                    secondReview.IsolationReceiptSha256);
+                                Assert.Equal(humanDecision.EvidenceSha256,
+                                    secondReview.FirstDecisionSha256);
+                                Assert.False(secondReview.DurableSecondReviewPersisted ||
+                                    secondReview.CanReAdmit ||
+                                    secondReview.CanMaterialize ||
+                                    secondReview.CanPush || secondReview.CanRetry ||
+                                    secondReview.CanDispatch ||
+                                    secondReview.MigrationComplete);
+                                foreach (var tamperedReview in new[] {
+                                    secondReview with { CanReAdmit = true },
+                                    secondReview with { CanPush = true },
+                                    secondReview with { DurableSecondReviewPersisted = true },
+                                    secondReview with { SecondReviewerId = reviewerId },
+                                    secondReview with { FirstReviewerId = secondReviewer },
+                                    secondReview with { Decision = "ReadyToPush" },
+                                    secondReview with { IsolationReceiptSha256 =
+                                        new string('0', 64) },
+                                    secondReview with { AssessmentEvidenceSha256 =
+                                        new string('0', 64) },
+                                    secondReview with { OriginalGeneration = 2000 },
+                                    secondReview with { ReviewedAtUtc =
+                                        secondReview.ReviewedAtUtc.AddMinutes(3) },
+                                    secondReview with { EvidenceSha256 =
+                                        new string('0', 64) }
+                                })
+                                    Assert.Equal("LaterCheckpointMirrorSecondReviewInvalid",
+                                        Assert.Throws<GitSourceSnapshotMirrorException>(
+                                            () =>
+                                                GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                                    .Verify(tamperedReview,
+                                                        staging, committed, isolated,
+                                                        generationSourceRead,
+                                                        generationAssessment,
+                                                        diagnostic,
+                                                        humanDecision)).Code);
+                                foreach (var invalidReviewer in new[] {
+                                    Guid.Empty, reviewerId, candidate.RequestedBy,
+                                    diagnostic.WorkerId
+                                })
+                                    Assert.Equal("LaterCheckpointMirrorSecondReviewInvalid",
+                                        Assert.Throws<GitSourceSnapshotMirrorException>(
+                                            () =>
+                                                GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                                    .Seal(staging, committed, isolated,
+                                                        generationSourceRead,
+                                                        generationAssessment,
+                                                        diagnostic, humanDecision,
+                                                        invalidReviewer,
+                                                        GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                                            .ApprovedForIndependentReview,
+                                                        secondReview.ReviewedAtUtc)).Code);
+                                Assert.Equal("LaterCheckpointMirrorSecondReviewInvalid",
+                                    Assert.Throws<GitSourceSnapshotMirrorException>(
+                                        () =>
+                                            GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                                .Seal(staging, committed, isolated,
+                                                    generationSourceRead,
+                                                    generationAssessment with {
+                                                        IsolationReceiptSha256 =
+                                                            new string('f',64) },
+                                                    diagnostic, humanDecision,
+                                                    secondReviewer,
+                                                    GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                                        .ApprovedForIndependentReview,
+                                                    secondReview.ReviewedAtUtc)).Code);
+                                var rejectedSecondReview =
+                                    GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity.Seal(
+                                        staging, committed, isolated,
+                                        generationSourceRead, generationAssessment,
+                                        diagnostic, humanDecision, secondReviewer,
+                                        GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                            .RejectedForIndependentReview,
+                                        secondReview.ReviewedAtUtc);
+                                Assert.NotEqual(secondReview.EvidenceSha256,
+                                    rejectedSecondReview.EvidenceSha256);
+                                Assert.False(rejectedSecondReview.CanReAdmit);
                                 await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
                                     INSERT INTO
                                         git_later_checkpoint_mirror_generation_assessments (
