@@ -157,6 +157,7 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                 if (after != before ||
                     Directory.Exists(original) != oldExists ||
                     Directory.Exists(isolated) != quarantinedExists ||
+                    File.Exists(original) || File.Exists(isolated) ||
                     new DirectoryInfo(original).LinkTarget is not null ||
                     new DirectoryInfo(isolated).LinkTarget is not null)
                     return PreparedUnsafePath;
