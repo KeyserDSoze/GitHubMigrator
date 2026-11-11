@@ -65,6 +65,7 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
     // and after filesystem work. This method never renames/deletes.
     public const string PreparedOriginalIntact = "PreparedOriginalIntact";
     public const string PreparedIsolatedIntact = "PreparedIsolatedIntact";
+    public const string PreparedIsolatedUntrusted = "PreparedIsolatedUntrusted";
     public const string PreparedBothPresent = "PreparedBothPresent";
     public const string PreparedBothMissing = "PreparedBothMissing";
     public const string PreparedOriginalCorrupt = "PreparedOriginalCorrupt";
@@ -155,6 +156,19 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                 }
                 else
                 {
+                    // A matching graph alone is NOT evidence that this
+                    // prepared SQL operation caused the quarantine move.
+                    // Old local primitives and outsider-created lookalikes
+                    // have no fsynced intent marker: report UNTRUSTED,
+                    // never suggest a completed post-crash isolation.
+                    try
+                    {
+                        CheckIntentMarker(isolated, intent, decision);
+                    }
+                    catch (GitSourceSnapshotMirrorException)
+                    {
+                        return PreparedIsolatedUntrusted;
+                    }
                     // Two separate complete quarantined fsck/refs/OIDs
                     // graph passes, both under the same POSIX root
                     // lock, followed by immutable object-set equality.
@@ -170,6 +184,17 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                         second.Digest != intent.ObjectSetSha256 ||
                         second.Count != intent.ObjectCount)
                         return PreparedIsolatedCorrupt;
+                    // The marker is not an authority and may be
+                    // independently modified during the Git audit.
+                    // Recheck it after the complete double fsck.
+                    try
+                    {
+                        CheckIntentMarker(isolated, intent, decision);
+                    }
+                    catch (GitSourceSnapshotMirrorException)
+                    {
+                        return PreparedIsolatedUntrusted;
+                    }
                 }
                 var after = await store.InspectExistingAsync(
                     stage.WorkpackId, ct);
@@ -277,6 +302,9 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
             new FileInfo(name).LinkTarget is not null)
         {
             CheckIntentMarker(directory, intent, reviewed);
+            // Crash after file fsync but before directory fsync:
+            // persist the directory entry on restart before rename.
+            SyncDirectory(directory);
             return; // Idempotent restart AFTER mark, BEFORE rename.
         }
         var contents = IntentMarker(intent, reviewed);
@@ -451,6 +479,9 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                     "LaterCheckpointMirrorIsolationClosureInvalid");
             }
             var after = await store.InspectExistingAsync(stage.WorkpackId, ct);
+            // Foreign marker changes during a long double Git fsck
+            // must never flow through as a durable SQL receipt.
+            CheckIntentMarker(isolated, prepared, decision);
             if (first != second ||
                 second.Count != prepared.ObjectCount ||
                 second.Digest != prepared.ObjectSetSha256 ||
