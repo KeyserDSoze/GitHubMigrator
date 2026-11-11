@@ -87,39 +87,28 @@ def check() -> None:
     require(total == 63, f"F-061 bootstrap must validate 63 checks, got {total}")
     print("F-061 EF raw SQL formatting: OK (63 SHA checks + idempotent repair)")
 
-    # EF SqlQueryRaw<T> uses composite formatting too, even for
-    # argument-free raw C# SQL. Check real PG17 integration predicates
-    # before they can fail at runtime with System.FormatException.
-    sql_test = (ROOT / "tests/integration" /
-                "ApiLaterCheckpointWorkpackHistoryEndpointTests.cs")
-    snippets = re.findall(
+    # SqlQueryRaw<T> also invokes EF composite formatting on literal
+    # C# SQL. Validate every real PG17 RawSql test, not just bootstrap.
+    fixture = (ROOT / "tests/integration" /
+               "ApiLaterCheckpointWorkpackHistoryEndpointTests.cs")
+    sql_queries = re.findall(
         r'SqlQueryRaw<[^>]+>\(\s*"""(.*?)"""\s*\)',
-        sql_test.read_text(encoding="utf-8"), re.DOTALL)
-    require(len(snippets) >= 30,
-            "F-061 integration raw-SQL coverage unexpectedly changed")
-    for idx, query in enumerate(snippets):
+        fixture.read_text(encoding="utf-8"), re.DOTALL)
+    require(len(sql_queries) >= 30,
+            "F-061 RawSql integration test count unexpectedly decreased")
+    for index, sql in enumerate(sql_queries):
         try:
-            rendered = query.format()
-        except (ValueError, KeyError, IndexError) as exc:
+            rendered = sql.format()
+        except (ValueError, IndexError, KeyError) as exc:
             raise AssertionError(
-                f"SqlQueryRaw #{idx} invalid EF composite formatting: {exc}"
+                f"SqlQueryRaw SQL #{index} has invalid EF braces: {exc}"
             ) from exc
-        if "repeat('a',64) ~" in query:
-            require(query.count("'^[0-9a-f]{{64}}
-
-
-if __name__ == "__main__":
-    check()
-") == 4,
-                    "Four C# SQL regex quantifiers must be doubled")
-            require(rendered.count("'^[0-9a-f]{64}
-
-
-if __name__ == "__main__":
-    check()
-") == 4,
-                    "EF must emit the four valid PostgreSQL {64} quantifiers")
-    print(f"F-061 SqlQueryRaw integration SQL: OK ({len(snippets)} queries)")
+        if "repeat('a',64) ~" in sql:
+            require(sql.count("'^[0-9a-f]{{64}}$'") == 4,
+                    "Expected four C# {{64}} SQL test quantifiers")
+            require(rendered.count("'^[0-9a-f]{64}$'") == 4,
+                    "Expected four PostgreSQL {64} SQL test quantifiers")
+    print(f"F-061 SqlQueryRaw format OK ({len(sql_queries)} test queries)")
 
 
 

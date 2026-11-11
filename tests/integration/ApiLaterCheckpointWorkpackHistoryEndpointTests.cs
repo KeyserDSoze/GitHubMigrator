@@ -298,24 +298,10 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             .InitializeAsync(harness.Host.Services);
         var shaPredicate = await db.Database.SqlQueryRaw<long>("""
             SELECT CASE WHEN
-                repeat('a',64) ~ '^[0-9a-f]{{64}}
-                AND NOT (repeat('a',63) ~ '^[0-9a-f]{64}$')
-                AND NOT (repeat('a',65) ~ '^[0-9a-f]{64}$')
-                AND NOT (repeat('z',64) ~ '^[0-9a-f]{64}$')
-            THEN 1::bigint ELSE 0::bigint END AS "Value"
-            
-                AND NOT (repeat('a',63) ~ '^[0-9a-f]{{64}})
-                AND NOT (repeat('a',65) ~ '^[0-9a-f]{64}$')
-                AND NOT (repeat('z',64) ~ '^[0-9a-f]{64}$')
-            THEN 1::bigint ELSE 0::bigint END AS "Value"
-            )
-                AND NOT (repeat('a',65) ~ '^[0-9a-f]{{64}})
-                AND NOT (repeat('z',64) ~ '^[0-9a-f]{64}$')
-            THEN 1::bigint ELSE 0::bigint END AS "Value"
-            )
-                AND NOT (repeat('z',64) ~ '^[0-9a-f]{{64}})
-            THEN 1::bigint ELSE 0::bigint END AS "Value"
-            )
+                repeat('a',64) ~ '^[0-9a-f]{{64}}$'
+                AND NOT (repeat('a',63) ~ '^[0-9a-f]{{64}}$')
+                AND NOT (repeat('a',65) ~ '^[0-9a-f]{{64}}$')
+                AND NOT (repeat('z',64) ~ '^[0-9a-f]{{64}}$')
             THEN 1::bigint ELSE 0::bigint END AS "Value"
             """).SingleAsync();
         Assert.Equal(1L, shaPredicate);
