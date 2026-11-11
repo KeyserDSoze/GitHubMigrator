@@ -2745,6 +2745,50 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         first.WorkpackId, "foreign-repo",
                                         targetReceipt.EvidenceSha256,
                                         candidate.RequestedBy, default));
+                                // #129 adversarial POST-Isolated check:
+                                // forging the durable Prepared marker
+                                // AFTER SQL has committed must fail the
+                                // READ-ONLY physical audit. Restore the
+                                // exact bytes for subsequent history tests.
+                                var committedMarker = Path.Combine(
+                                    physicalMirror.VerifiedMirrorRoot,
+                                    isolated.IsolationDirectoryName,
+                                    "agic-f061v2-reviewed-isolation-intent");
+                                var originalMarkerBytes =
+                                    await File.ReadAllBytesAsync(committedMarker);
+                                try
+                                {
+                                    await File.WriteAllTextAsync(committedMarker,
+                                        "forged-second-review-marker");
+                                    Assert.Equal(
+                                        "LaterCheckpointMirrorPostIsolationPhysicalUntrusted",
+                                        (await Assert.ThrowsAsync<
+                                            GitSourceSnapshotMirrorException>(() =>
+                                            postIsolation.ReadAsync(
+                                                run.Id, plan.Id, later.Id,
+                                                observationId, first.WorkpackId,
+                                                "repo-1",
+                                                targetReceipt.EvidenceSha256,
+                                                candidate.RequestedBy,
+                                                default))).Code);
+                                }
+                                finally
+                                {
+                                    await File.WriteAllBytesAsync(
+                                        committedMarker, originalMarkerBytes);
+                                }
+                                Assert.Equal(isolated.EvidenceSha256,
+                                    (await postIsolation.ReadAsync(
+                                        run.Id, plan.Id, later.Id,
+                                        observationId, first.WorkpackId,
+                                        "repo-1",
+                                        targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, default))
+                                    .IsolationReceiptSha256);
+                                Assert.False(Directory.Exists(Path.Combine(
+                                    physicalMirror.VerifiedMirrorRoot,
+                                    staging.PhysicalMirrorId.ToString("N") +
+                                        ".git")));
                                 // #127: after ONE trusted physical + SQL
                                 // Isolated receipt, an additive audit-only
                                 // generation assessment can be written and

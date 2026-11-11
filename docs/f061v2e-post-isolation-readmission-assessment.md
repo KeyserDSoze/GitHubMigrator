@@ -98,3 +98,30 @@ The API bootstraps two additive tables after #127 and before the F-061 regex rep
 ### #129: source-first post-Isolated read-only preflight
 
 `PostgresGitIncrementalLaterCheckpointMirrorPreparedReconciliationReader.ReadCompletedAsync` now shares the existing live F-091/F-097b/F-031/F-035v2, original lease and immutable Reviewed+Prepared SQL checks, but requires **exactly one** recorded terminal `Isolated` receipt joined to its immutable event and the original failed worker/token/generation. The original `ReadAsync` still refuses a completed receipt; a retry cannot convert review into a second filesystem move. The SHA1/SHA256 physical-quarantine integration fixture combines this NEW source-first read with the EXISTING POSIX-locked double-fsck `InspectPreparedPathsAsync` and rejects foreign repository scope. **This is an internal read-only component, not an authenticated review endpoint; the source read and POSIX audit are not one authorizing transaction.** #129 still needs fresh simultaneous fencing, reviewer JWT, review SQL writer, CAS/replay/three-replica tests. No remote sends, new lease, generation, or successful migration claim.
+
+### #129 post-Isolated read-only SQL/POSIX bridge (no authorization)
+
+The separately default-OFF `PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector`
+requires `GitIncrementalLaterCheckpointMirrorPostIsolation:Enabled=true`
+and a separately enabled **physical** adapter at
+`GitIncrementalLaterCheckpointMirrorPostIsolation:PhysicalEnabled=true`.
+It reconstructs the immutable SQL `Isolated` receipt SHA and first
+review decision from trusted rows, checks complete source/target history,
+and surrounds the real POSIX-root-locked double Git fsck / Prepared
+marker / bundle proof with TWO source-first SQL reads. A changed receipt,
+source refs, previous reviewer, lease event chain or missing quarantine
+refuses the diagnostic. The local physical interface exposes ONLY
+`InspectPreparedPathsAsync`, never rename or SQL mutations.
+
+Real SHA1 and SHA256 Git/PostgreSQL fixture tests cover positive
+post-isolation read, disabled option, foreign repository and deliberate
+tampering with the committed Prepared marker, followed by restoration.
+The original `RecoveryRequired` lease remains terminal; the original
+source and quarantine paths are not restored or adopted.
+
+**Important limitation:** the physical lock is released before the
+second SQL read. This is only a non-authorizing observation that can
+become stale; it is NOT a simultaneous SQL/POSIX CAS and does NOT prove
+that the actor is an independently authenticated superadmin reviewer.
+No route, JWT review decision writer, new generation, push, retry or
+dispatch is present. These remain separately OPEN in #129 and #121.
