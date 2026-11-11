@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Fail fast on EF Core F-061 SQL brace regression
+        run: python3 script/check_f061_sql_format.py
       - name: Restore and test domain + business logic
         run: dotnet test src/backend/GitHubMigrator.slnx --verbosity normal --collect:"XPlat Code Coverage"
       - name: Compile actual ASP.NET API entrypoint
@@ -110,6 +112,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Verify F-061 bootstrap SQL formatting before integration
+        run: python3 script/check_f061_sql_format.py
       - name: Verify ASP.NET API + PostgreSQL persistence, security and concurrency
         env:
           GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
