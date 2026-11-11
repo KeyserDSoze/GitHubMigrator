@@ -374,3 +374,71 @@ may call a filesystem move on the strength of these read-only results.
 `RecoveryRequired` is immutable and never re-admitted here. A
 separate, independently reviewed generation-history authorization
 belongs to #121, without remote GitHub writes.
+
+
+## #124: optional trusted physical-to-SQL isolation coordinator
+
+The independently default-OFF internal
+`PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordinator`
+(`GitIncrementalLaterCheckpointMirrorIsolationCoordinator:Enabled=false`,
+`GitIncrementalLaterCheckpointMirrorIsolationCoordinator:PhysicalEnabled=false`)
+now joins the **source-locked** SQL `Prepared` history reader to the
+server-owned `LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator`
+physical session. **No HTTP route, hosted scheduler, remote GitHub
+sender, F-061 new generation or automatic re-admission is registered.**
+
+The coordinator accepts only source/plan/checkpoint/workpack identifiers,
+repository identity and original bundle actor. The SQL reader checks the
+actual immutable F-031 approved human reviewer, #122 signed
+`ApprovedForIsolationReview` and its event, #123 immutable
+`Prepared` intent+event and the *original terminal* F-061v2
+`RecoveryRequired` worker/token/generation plus full
+`Acquired/Renewed*/Quarantined` ordered audit SHA. It independently
+rechecks latest F-091/F-097b, F-038v2 and physical F-035v2 bundle bytes.
+
+**Filesystem phase**: the typed physical session holds the same
+process/POSIX volume lock as the F-060 importer. With an intact original
+`UUID.git`, it freshly audits real SHA1/SHA256 refs/OIDs, then calls
+Linux `renameat2(RENAME_NOREPLACE)` on strictly server-derived paths.
+When the same prepared intent is found with only the deterministic
+quarantine directory after a process crash, it may instead continue
+as a *reconciliation*, never re-create `UUID.git`. Both paths,
+neither path, symlinks, outsider files and graph/bundle mismatch
+fail closed. After the move (or discovered quarantine), the physical
+session checks the entire quarantined Git graph **twice**, checks
+`UUID.bundle` SHA and length before/after and verifies that the
+original path remains absent.
+
+**Database phase**: with that same physical volume lock still held,
+the session passes a typed, independently measured receipt to a short
+source-first, plan-second SQL transaction. The writer repeats the
+actual current source/lease/decision/prepared/event proof, compares
+the *complete* ordered worker-event SHA and verifies there is neither
+an F-061v2 `Verified` record nor a completed isolation receipt. It
+inserts a versioned, domain-separated SHA-256
+`git_later_checkpoint_mirror_isolation_receipts` record and exactly
+one immutable `Isolated` event in **one SQL transaction**.
+SQL CHECK/FK/triggers bind original worker/token/generation, immutable
+bundle SHA/bytes, decision/intent hashes, physically measured object
+set/count, and `reconciled_existing_quarantine` flag. The
+`isolated_at_utc` field represents **database-time confirmation of
+the physical audit**, not a fictional original kernel rename timestamp
+after a crash. Every write or migration authority flag remains FALSE.
+The original `RecoveryRequired` lease is **never reopened**.
+
+A process failure **after** the no-replace rename but **before** SQL
+commit leaves a prepared row with no isolated receipt. A subsequent
+explicit invocation can re-audit the existing isolated Git and persist
+the terminal SQL proof; it never treats a missing original directory,
+a caller-supplied receipt, a guessed directory name or a matching SHA
+alone as authority. Repeat calls after the final immutable receipt
+refuse rather than duplicate audit events. Real PostgreSQL17 two-epoch
+test cases exercise normal SHA256 rename and SHA1 crash-after-rename
+reconciliation; SQL UPDATE/DELETE of terminal receipt/events must fail.
+
+This is a safely gated physical isolation **only**. It is not a new
+F-061 generation, a new lease, an F-095v3 ancestry proof, a remote GitHub
+push, retry/dispatch or migration completion. A *separately approved*
+generation-fenced re-admission remains #121. Validating the latest
+complete 4/4 CI and adversarial concurrent-replica coverage remains
+essential before #123/#124 are considered accepted.
