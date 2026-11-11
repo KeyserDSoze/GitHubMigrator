@@ -575,3 +575,18 @@ journal and requires the unconditional DENY-ALL trigger. This proves
 database one-use indexes are operative, **not** that a real authenticated
 writer or a three-replica physical Git race exists. No recovery approval,
 lease re-admission or GitHub push has been enabled.
+
+
+### #130: PostgreSQL17 actual varchar-first SQLSTATE correction
+
+The completed [CI 43074185648](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/43074185648)
+exposed a genuine test expectation error: overlong 65-character input
+to a `varchar(64)` column is rejected with PostgreSQL `22001`
+**before** the 64-character SHA CHECK can run. The read-only probe
+test now requires `22001` for overlength while preserving `23514`
+for 63-character and uppercase input. This is a *stricter*, actual
+database rejection, not a skipped test or a relaxed CHECK.
+The same run also revealed two independent five-minute long-lived
+SHA1/SHA256 `failAfterImport=true` scenarios with source-provenance
+expiry / unexpected error codes; those are tracked separately and
+not counted as passing. Final-main 4/4 acceptance remains mandatory.

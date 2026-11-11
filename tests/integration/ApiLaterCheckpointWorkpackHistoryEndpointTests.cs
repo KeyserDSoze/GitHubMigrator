@@ -842,11 +842,16 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             await Rejected(Guid.NewGuid(), Guid.Empty, Guid.NewGuid(),
                 sha, intentSha, issued, reviewed, consumed, expires);
             foreach (var bad in new[] {
-                new string('a', 63), new string('a', 65),
-                new string('A', 64)
+                new string('a', 63), new string('A', 64)
             })
                 await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
                     bad, intentSha, issued, reviewed, consumed, expires);
+            // VARCHAR(64) rejects overlength values *before* executing
+            // the CHECK expression: SQLSTATE 22001, not 23514.
+            // Assert the real database's first safety fence.
+            await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                new string('a', 65), intentSha, issued, reviewed,
+                consumed, expires, "22001");
             await Rejected(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
                 sha, new string('B', 64), issued, reviewed, consumed, expires);
             // PostgreSQL timestamptz is microsecond-precise; one
