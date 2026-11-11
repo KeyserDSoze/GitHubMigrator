@@ -2639,6 +2639,121 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             AND evidence_sha256 = {isolated.EvidenceSha256}
                                             AND type = 'Isolated'
                                         """).SingleAsync());
+                                // #127: after ONE trusted physical + SQL
+                                // Isolated receipt, an additive audit-only
+                                // generation assessment can be written and
+                                // sealed without modifying the original
+                                // RecoveryRequired lease. This does NOT
+                                // authorize a new F-061 worker or import.
+                                var generationSourceRead =
+                                    GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Seal(
+                                        staging, committed,
+                                        isolated.RecordedAtUtc.AddSeconds(1));
+                                var generationAssessment =
+                                    GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity.Seal(
+                                        staging, committed, isolated,
+                                        generationSourceRead,
+                                        isolated.RecordedAtUtc.AddSeconds(2));
+                                await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                    INSERT INTO
+                                        git_later_checkpoint_mirror_generation_assessments (
+                                            mirror_id, workpack_id,
+                                            checkpoint_id, source_snapshot_id,
+                                            evidence_version, original_worker_id,
+                                            original_lease_token,
+                                            original_generation,
+                                            suggested_next_generation,
+                                            staging_evidence_sha256,
+                                            source_full_ref_proof_sha256,
+                                            source_ref_set_sha256,
+                                            target_receipt_sha256,
+                                            bundle_sha256, bundle_bytes,
+                                            isolation_receipt_sha256,
+                                            assessed_at_utc, evidence_sha256)
+                                    VALUES (
+                                        {generationAssessment.PhysicalMirrorId},
+                                        {generationAssessment.WorkpackId},
+                                        {generationAssessment.CheckpointId},
+                                        {generationAssessment.SourceSnapshotId},
+                                        {generationAssessment.EvidenceVersion},
+                                        {generationAssessment.OriginalWorkerId},
+                                        {generationAssessment.OriginalLeaseToken},
+                                        {generationAssessment.OriginalGeneration},
+                                        {generationAssessment.SuggestedNextGeneration},
+                                        {generationAssessment.StagingEvidenceSha256},
+                                        {generationAssessment.SourceFullRefProofSha256},
+                                        {generationAssessment.SourceRefSetSha256},
+                                        {generationAssessment.TargetReceiptSha256},
+                                        {generationAssessment.BundleSha256},
+                                        {generationAssessment.BundleBytes},
+                                        {generationAssessment.IsolationReceiptSha256},
+                                        {generationAssessment.AssessedAtUtc},
+                                        {generationAssessment.EvidenceSha256})
+                                    """);
+                                await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                    INSERT INTO
+                                        git_later_checkpoint_mirror_generation_assessment_events (
+                                            mirror_id, evidence_sha256,
+                                            type, occurred_at_utc)
+                                    VALUES (
+                                        {generationAssessment.PhysicalMirrorId},
+                                        {generationAssessment.EvidenceSha256},
+                                        'Assessed',
+                                        {generationAssessment.AssessedAtUtc})
+                                    """);
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_generation_assessments
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            AND original_worker_id = {diagnostic.WorkerId}
+                                            AND original_lease_token = {diagnostic.LeaseToken}
+                                            AND original_generation = {diagnostic.LeaseGeneration}
+                                            AND suggested_next_generation =
+                                                {diagnostic.LeaseGeneration + 1}
+                                            AND isolation_receipt_sha256 =
+                                                {isolated.EvidenceSha256}
+                                            AND NOT durable_readmission_approved
+                                            AND NOT can_readmit
+                                            AND NOT can_materialize
+                                            AND NOT can_push AND NOT can_retry
+                                            AND NOT can_dispatch
+                                            AND NOT migration_complete
+                                        """).SingleAsync());
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_generation_assessment_events
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            AND evidence_sha256 =
+                                                {generationAssessment.EvidenceSha256}
+                                            AND type = 'Assessed'
+                                        """).SingleAsync());
+                                Assert.Equal(
+                                    Npgsql.PostgresErrorCodes.RaiseException,
+                                    (await Assert.ThrowsAsync<
+                                        Npgsql.PostgresException>(() =>
+                                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                            UPDATE git_later_checkpoint_mirror_generation_assessments
+                                            SET can_readmit = true
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """))).SqlState);
+                                Assert.Equal(
+                                    Npgsql.PostgresErrorCodes.RaiseException,
+                                    (await Assert.ThrowsAsync<
+                                        Npgsql.PostgresException>(() =>
+                                        verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
+                                            DELETE FROM git_later_checkpoint_mirror_generation_assessment_events
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """))).SqlState);
+                                // The original generation is still terminal,
+                                // and no fresh Held or Verified claim exists.
+                                Assert.Equal("RecoveryRequired",
+                                    await verifiedDb.Database.SqlQuery<string>($"""
+                                        SELECT state AS "Value"
+                                        FROM git_later_checkpoint_mirror_leases
+                                        WHERE mirror_id = {staging.PhysicalMirrorId}
+                                        """).SingleAsync());
                                 Assert.Equal(
                                     "LaterCheckpointMirrorIsolationReconciliationAlreadyRecorded",
                                     (await Assert.ThrowsAsync<
