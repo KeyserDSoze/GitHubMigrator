@@ -341,6 +341,22 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
     }
 
     [Fact]
+    public async Task F061v2_post_crash_source_history_reader_is_default_OFF_and_read_only()
+    {
+        var before = harness.Calls.Count;
+        await using var scope = harness.Host.Services.CreateAsyncScope();
+        var reader = scope.ServiceProvider.GetRequiredService<
+            PostgresGitIncrementalLaterCheckpointMirrorPreparedReconciliationReader>();
+        var denied = await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(
+            () => reader.ReadAsync(Guid.NewGuid(), Guid.NewGuid(),
+                Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                "repo-1", new string('a', 64), Guid.NewGuid(), default));
+        Assert.Equal("LaterCheckpointMirrorIsolationReconciliationDisabled",
+            denied.Code);
+        Assert.Equal(before, harness.Calls.Count);
+    }
+
+    [Fact]
     public async Task F061v2_recovery_inspection_is_independently_default_OFF_and_no_provider_calls()
     {
         var before = harness.Calls.Count;
