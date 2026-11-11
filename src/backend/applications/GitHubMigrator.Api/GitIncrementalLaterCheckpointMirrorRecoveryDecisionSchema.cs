@@ -76,12 +76,12 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema
                         AND reviewer_id != original_worker_id
                         AND original_lease_generation BETWEEN 1 AND 2000
                         AND decision IN ('ApprovedForIsolationReview','Rejected')
-                        AND inspection_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
-                        AND lease_event_history_sha256 ~ '^[0-9a-f]{{64}}$'
-                        AND staging_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
-                        AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND inspection_evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND lease_event_history_sha256 ~ '^[0-9a-f]{64}$'
+                        AND staging_evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND evidence_sha256 ~ '^[0-9a-f]{64}$'
                         AND (object_set_sha256 IS NULL OR
-                            object_set_sha256 ~ '^[0-9a-f]{{64}}$')
+                            object_set_sha256 ~ '^[0-9a-f]{64}$')
                         AND (decision != 'ApprovedForIsolationReview' OR
                             object_set_sha256 IS NOT NULL)
                         AND NOT can_readmit AND NOT can_materialize

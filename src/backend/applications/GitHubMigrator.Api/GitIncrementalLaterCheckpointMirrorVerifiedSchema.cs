@@ -66,13 +66,13 @@ public static class GitIncrementalLaterCheckpointMirrorVerifiedSchema
                         AND worker_id != '00000000-0000-0000-0000-000000000000'::uuid
                         AND lease_token != '00000000-0000-0000-0000-000000000000'::uuid
                         AND lease_generation BETWEEN 1 AND 2000
-                        AND staging_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
-                        AND full_ref_proof_sha256 ~ '^[0-9a-f]{{64}}$'
-                        AND bundle_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
-                        AND bundle_sha256 ~ '^[0-9a-f]{{64}}$'
-                        AND source_ref_set_sha256 ~ '^[0-9a-f]{{64}}$'
-                        AND object_set_sha256 ~ '^[0-9a-f]{{64}}$'
-                        AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND staging_evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND full_ref_proof_sha256 ~ '^[0-9a-f]{64}$'
+                        AND bundle_evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND bundle_sha256 ~ '^[0-9a-f]{64}$'
+                        AND source_ref_set_sha256 ~ '^[0-9a-f]{64}$'
+                        AND object_set_sha256 ~ '^[0-9a-f]{64}$'
+                        AND evidence_sha256 ~ '^[0-9a-f]{64}$'
                         AND git_object_format IN ('sha1','sha256')
                         AND object_count BETWEEN 1 AND 200000
                         AND physical_verified_at_utc <= recorded_at_utc

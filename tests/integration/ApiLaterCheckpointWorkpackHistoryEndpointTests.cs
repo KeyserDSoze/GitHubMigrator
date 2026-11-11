@@ -291,6 +291,40 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
         Assert.Equal(6L, additionalColumns);
         Assert.Equal(1L, additionalConstraint);
 
+        // #128: real PostgreSQL17 correctness and idempotent replay of
+        // malformed historical raw-SQL bounds. A 64-digit hex digest
+        // MUST match, while 63/65 digits and nonhex characters fail.
+        await GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSchema
+            .InitializeAsync(harness.Host.Services);
+        var shaPredicate = await db.Database.SqlQueryRaw<long>("""
+            SELECT CASE WHEN
+                repeat('a',64) ~ '^[0-9a-f]{64}$'
+                AND NOT (repeat('a',63) ~ '^[0-9a-f]{64}$')
+                AND NOT (repeat('a',65) ~ '^[0-9a-f]{64}$')
+                AND NOT (repeat('z',64) ~ '^[0-9a-f]{64}$')
+            THEN 1::bigint ELSE 0::bigint END AS "Value"
+            """).SingleAsync();
+        Assert.Equal(1L, shaPredicate);
+        var malformedBounds = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_constraint c
+            WHERE c.contype = 'c'
+              AND c.conrelid IN (
+                  'git_later_checkpoint_mirror_leases'::regclass,
+                  'git_later_checkpoint_mirror_lease_events'::regclass,
+                  'git_later_checkpoint_mirror_verified_evidence'::regclass,
+                  'git_later_checkpoint_mirror_recovery_decisions'::regclass,
+                  'git_later_checkpoint_mirror_recovery_decision_events'::regclass,
+                  'git_later_checkpoint_mirror_isolation_intents'::regclass,
+                  'git_later_checkpoint_mirror_isolation_intent_events'::regclass,
+                  'git_later_checkpoint_mirror_isolation_receipts'::regclass,
+                  'git_later_checkpoint_mirror_isolation_receipt_events'::regclass,
+                  'git_later_checkpoint_mirror_generation_assessments'::regclass,
+                  'git_later_checkpoint_mirror_generation_assessment_events'::regclass)
+              AND position('{{64}}' in pg_get_constraintdef(c.oid)) > 0
+            """).SingleAsync();
+        Assert.Equal(0L, malformedBounds);
+
         // A synthetic SHA and a guessed proposed generation cannot
         // directly register a reviewed re-admission against a missing
         // physical isolation. No lease or original journal is altered.

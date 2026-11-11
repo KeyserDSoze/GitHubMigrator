@@ -877,6 +877,10 @@ await GitIncrementalLaterCheckpointMirrorIsolationSchema.InitializeAsync(app.Ser
 // It never mints worker/token or reopens the original RecoveryRequired lease.
 await GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchema
     .InitializeAsync(app.Services);
+// #128: AFTER all F-061 DDL, repair any previously installed CHECKs
+// with doubled regex bounds from non-interpolated SQL raw strings.
+await GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSchema
+    .InitializeAsync(app.Services);
 await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
 await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
 await AzureGitFetchJobSchema.InitializeAsync(app.Services);

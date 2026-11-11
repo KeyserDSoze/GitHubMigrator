@@ -60,24 +60,24 @@ public static class GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchem
                     AND original_generation BETWEEN 1 AND 1999
                     AND suggested_next_generation = original_generation + 1
                     AND suggested_next_generation BETWEEN 2 AND 2000
-                    AND staging_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
-                    AND source_full_ref_proof_sha256 ~ '^[0-9a-f]{{64}}$'
-                    AND source_ref_set_sha256 ~ '^[0-9a-f]{{64}}$'
-                    AND target_receipt_sha256 ~ '^[0-9a-f]{{64}}$'
-                    AND bundle_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND staging_evidence_sha256 ~ '^[0-9a-f]{64}$'
+                    AND source_full_ref_proof_sha256 ~ '^[0-9a-f]{64}$'
+                    AND source_ref_set_sha256 ~ '^[0-9a-f]{64}$'
+                    AND target_receipt_sha256 ~ '^[0-9a-f]{64}$'
+                    AND bundle_sha256 ~ '^[0-9a-f]{64}$'
                     AND bundle_bytes BETWEEN 1 AND 536870912
-                    AND isolation_receipt_sha256 ~ '^[0-9a-f]{{64}}$'
-                    AND recovery_decision_sha256 ~ '^[0-9a-f]{{64}}$'
-                    AND prepared_intent_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND isolation_receipt_sha256 ~ '^[0-9a-f]{64}$'
+                    AND recovery_decision_sha256 ~ '^[0-9a-f]{64}$'
+                    AND prepared_intent_sha256 ~ '^[0-9a-f]{64}$'
                     AND isolation_directory_name =
                         replace(mirror_id::text, '-', '') || '.' ||
                         recovery_decision_sha256 || '.quarantine.git'
-                    AND object_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND object_set_sha256 ~ '^[0-9a-f]{64}$'
                     AND object_count BETWEEN 1 AND 200000
                     AND source_reviewed_at_utc <= assessed_at_utc
                     AND assessed_at_utc - source_reviewed_at_utc <=
                         interval '2 minutes'
-                    AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND evidence_sha256 ~ '^[0-9a-f]{64}$'
                     AND NOT durable_readmission_approved
                     AND NOT can_readmit AND NOT can_materialize
                     AND NOT can_push AND NOT can_retry
@@ -95,7 +95,7 @@ public static class GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchem
                 occurred_at_utc timestamptz NOT NULL,
                 CONSTRAINT ck_f061v2e_generation_assessment_event_safe CHECK (
                     type = 'Assessed'
-                    AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND evidence_sha256 ~ '^[0-9a-f]{64}$'
                 )
             );
 
@@ -131,15 +131,15 @@ public static class GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchem
                     ADD CONSTRAINT ck_f061v2e_generation_assessment_scope_v2
                     CHECK (
                         recovery_decision_sha256 IS NOT NULL
-                        AND recovery_decision_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND recovery_decision_sha256 ~ '^[0-9a-f]{64}$'
                         AND prepared_intent_sha256 IS NOT NULL
-                        AND prepared_intent_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND prepared_intent_sha256 ~ '^[0-9a-f]{64}$'
                         AND isolation_directory_name IS NOT NULL
                         AND isolation_directory_name =
                             replace(mirror_id::text, '-', '') || '.' ||
                             recovery_decision_sha256 || '.quarantine.git'
                         AND object_set_sha256 IS NOT NULL
-                        AND object_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND object_set_sha256 ~ '^[0-9a-f]{64}$'
                         AND object_count BETWEEN 1 AND 200000
                         AND source_reviewed_at_utc IS NOT NULL
                         AND source_reviewed_at_utc <= assessed_at_utc
