@@ -64,7 +64,13 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntent
                 consumedAtUtc.ToUnixTimeMilliseconds()) != consumedAtUtc)
             throw Refused();
 
-        var expiry = issuedAtUtc.AddMinutes(5);
+        // A syntactically valid UTC instant near DateTimeOffset.MaxValue
+        // cannot represent a complete five-minute reviewer session.
+        // Fail closed with the domain error rather than leaking an
+        // ArgumentOutOfRangeException into the API's 500 response.
+        DateTimeOffset expiry;
+        try { expiry = issuedAtUtc.AddMinutes(5); }
+        catch (ArgumentOutOfRangeException) { throw Refused(); }
         if (reviewedAtUtc < issuedAtUtc ||
             consumedAtUtc < reviewedAtUtc ||
             consumedAtUtc >= expiry ||

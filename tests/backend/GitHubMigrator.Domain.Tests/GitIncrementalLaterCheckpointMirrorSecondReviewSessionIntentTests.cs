@@ -160,6 +160,16 @@ public sealed class GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntent
             x.ReviewEvidenceSha256, x.ReviewSessionId, x.DecisionNonce,
             x.IssuedAtUtc, x.ReviewedAtUtc,
             x.ReviewedAtUtc.AddSeconds(-1)));
+
+        // 9999-12-31 23:59:58Z is canonical to whole seconds,
+        // but calculating a five-minute expiry would overflow.
+        // Untrusted historical/future date evidence must not turn
+        // the safe HTTP rejection into an unexpected exception.
+        var nearMaximum = new DateTimeOffset(
+            9999, 12, 31, 23, 59, 58, TimeSpan.Zero);
+        Reject(() => Check(x.PhysicalMirrorId, x.SecondReviewerId,
+            x.Decision, x.ReviewEvidenceSha256, x.ReviewSessionId,
+            x.DecisionNonce, nearMaximum, nearMaximum, nearMaximum));
     }
 
     private static void Reject(Action attempt)
