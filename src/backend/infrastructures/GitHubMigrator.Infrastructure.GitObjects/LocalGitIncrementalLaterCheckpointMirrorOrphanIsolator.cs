@@ -39,6 +39,152 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                 "F-061v2 orphan isolation requires atomic no-replace rename");
     }
 
+    // #124: read-only classification of a prepared operation after a
+    // process restart. No SQL authority is inferred from this local
+    // result: the DB coordinator must separately verify the ACTUAL
+    // source-locked Prepared row and its immutable event both before
+    // and after filesystem work. This method never renames/deletes.
+    public const string PreparedOriginalIntact = "PreparedOriginalIntact";
+    public const string PreparedIsolatedIntact = "PreparedIsolatedIntact";
+    public const string PreparedBothPresent = "PreparedBothPresent";
+    public const string PreparedBothMissing = "PreparedBothMissing";
+    public const string PreparedOriginalCorrupt = "PreparedOriginalCorrupt";
+    public const string PreparedIsolatedCorrupt = "PreparedIsolatedCorrupt";
+    public const string PreparedUnsafePath = "PreparedUnsafePath";
+
+    public async Task<string> InspectPreparedPathsAsync(
+        GitIncrementalLaterCheckpointMirrorStagingPlan stage,
+        GitIncrementalLaterCheckpointBundleReceipt durable,
+        GitIncrementalLaterCheckpointMirrorRecoveryInspection inspection,
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision decision,
+        GitIncrementalLaterCheckpointMirrorIsolationIntent intent,
+        CancellationToken ct)
+    {
+        if (!enabled)
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationDisabled");
+        GitIncrementalLaterCheckpointMirrorStagingIntegrity
+            .VerifyOfflineCandidate(stage, durable);
+        GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+            .VerifyForPhysicalIsolation(decision, inspection);
+        // The original inspection was made of UUID.git. Its stable
+        // candidate and the signed intent still have to agree after
+        // the move, even though a subsequent original-path audit
+        // cannot succeed once UUID.git has been renamed.
+        GitIncrementalLaterCheckpointMirrorIsolationIntentIntegrity
+            .Verify(intent, inspection, decision);
+        if (stage.PhysicalMirrorId != inspection.PhysicalMirrorId ||
+            stage.SourceSnapshotId != inspection.SourceSnapshotId ||
+            stage.WorkpackId != inspection.WorkpackId ||
+            stage.CheckpointId != inspection.CheckpointId ||
+            stage.EvidenceSha256 != inspection.StagingEvidenceSha256 ||
+            durable.BundleSha256 != inspection.BundleSha256 ||
+            durable.EvidenceSha256 != inspection.BundleEvidenceSha256 ||
+            stage.SourceFullRefProofSha256 != inspection.FullRefProofSha256 ||
+            stage.SourceRefSetSha256 != inspection.SourceRefSetSha256)
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationScopeInvalid");
+
+        var root = LocalGitSourceSnapshotMirrorMaterializer
+            .CheckMirrorRoot(mirrorRoot);
+        var store = new LocalGitBundleArtifactStore(bundleRoot);
+        if (string.Equals(root, store.Root, StringComparison.Ordinal))
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorOrphanIsolationRootsOverlap");
+        var original = Path.Combine(root,
+            stage.PhysicalMirrorId.ToString("N") + ".git");
+        var isolated = Path.Combine(root, intent.IsolationDirectoryName);
+        await LocalGitSourceSnapshotMirrorMaterializer.ProcessGate.WaitAsync(ct);
+        try
+        {
+            await using var volumeLock =
+                await LocalGitSourceSnapshotMirrorMaterializer
+                    .AcquireRootLockAsync(root, ct);
+            ct.ThrowIfCancellationRequested();
+            // Check for link/reparse entries before a Git audit may
+            // traverse the path. Never follow an outsider's symlink.
+            if (new DirectoryInfo(original).LinkTarget is not null ||
+                new DirectoryInfo(isolated).LinkTarget is not null)
+                return PreparedUnsafePath;
+            var oldExists = Directory.Exists(original);
+            var quarantinedExists = Directory.Exists(isolated);
+            var oldFile = File.Exists(original);
+            var quarantineFile = File.Exists(isolated);
+            if (oldFile || quarantineFile)
+                return PreparedUnsafePath;
+            if (oldExists && quarantinedExists)
+                return PreparedBothPresent;
+            if (!oldExists && !quarantinedExists)
+                return PreparedBothMissing;
+            try
+            {
+                var before = await store.InspectExistingAsync(
+                    stage.WorkpackId, ct);
+                if (before.Sha256 != durable.BundleSha256 ||
+                    before.Bytes != durable.BundleBytes)
+                    throw new GitSourceSnapshotMirrorException(
+                        "LaterCheckpointMirrorOrphanIsolationBundleChanged");
+                if (oldExists)
+                {
+                    var physical = await new
+                        LocalGitIncrementalLaterCheckpointMirrorOfflineAuditor(
+                            bundleRoot, mirrorRoot, enabled: true, clock: _clock)
+                        .AuditAsync(stage, durable, ct);
+                    if (physical.ObjectSetSha256 != intent.ObjectSetSha256 ||
+                        physical.ObjectCount != intent.ObjectCount)
+                        return PreparedOriginalCorrupt;
+                }
+                else
+                {
+                    // Two separate complete quarantined fsck/refs/OIDs
+                    // graph passes, both under the same POSIX root
+                    // lock, followed by immutable object-set equality.
+                    var first = await
+                        LocalGitObjectClosureAuditor.VerifyQuarantinedOneAsync(
+                            root, stage.PhysicalMirrorId,
+                            decision.EvidenceSha256, stage.SourceRefs, ct);
+                    var second = await
+                        LocalGitObjectClosureAuditor.VerifyQuarantinedOneAsync(
+                            root, stage.PhysicalMirrorId,
+                            decision.EvidenceSha256, stage.SourceRefs, ct);
+                    if (first != second ||
+                        second.Digest != intent.ObjectSetSha256 ||
+                        second.Count != intent.ObjectCount)
+                        return PreparedIsolatedCorrupt;
+                }
+                var after = await store.InspectExistingAsync(
+                    stage.WorkpackId, ct);
+                if (after != before ||
+                    Directory.Exists(original) != oldExists ||
+                    Directory.Exists(isolated) != quarantinedExists ||
+                    new DirectoryInfo(original).LinkTarget is not null ||
+                    new DirectoryInfo(isolated).LinkTarget is not null)
+                    return PreparedUnsafePath;
+                return oldExists
+                    ? PreparedOriginalIntact : PreparedIsolatedIntact;
+            }
+            catch (GitObjectClosureAuditException)
+            {
+                return oldExists
+                    ? PreparedOriginalCorrupt : PreparedIsolatedCorrupt;
+            }
+            catch (GitSourceSnapshotMirrorException)
+            {
+                return oldExists
+                    ? PreparedOriginalCorrupt : PreparedIsolatedCorrupt;
+            }
+            catch (GitSourceBundleException)
+            {
+                return oldExists
+                    ? PreparedOriginalCorrupt : PreparedIsolatedCorrupt;
+            }
+        }
+        finally
+        {
+            LocalGitSourceSnapshotMirrorMaterializer.ProcessGate.Release();
+        }
+    }
+
     // Read-only crash-diagnosis primitive. This method never restores
     // UUID.git, creates a new lease or returns authority. The only
     // filesystem path is derived from the reviewed decision SHA.
