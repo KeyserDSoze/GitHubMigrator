@@ -109,7 +109,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
         // digest recheck now run inside the SAME F-060 root/process
         // lock as the current two-pass Git audit. There is NO SQL
         // transaction spanning Git subprocesses, and NO write/CAS.
-        return await physical.WithVerifiedQuarantineAsync(
+        return await physical.WithVerifiedQuarantineAsync<
+            GitIncrementalLaterCheckpointMirrorAssessedIsolationInspection>(
             before.Snapshot.Stage, before.Snapshot.DurableBundle,
             before.Snapshot.ExpectedInspection, before.Snapshot.HumanDecision,
             before.Snapshot.PreparedIntent, async lockedCt =>
@@ -210,7 +211,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
             assessed.AssessedAtUtc - now > TimeSpan.FromMinutes(2))
             throw Refused("LaterCheckpointMirrorSecondReviewAssessmentExpired");
 
-        return new(physical, assessed.EvidenceSha256,
+        return new GitIncrementalLaterCheckpointMirrorAssessedIsolationInspection(
+            physical, assessed.EvidenceSha256,
             assessed.SuggestedNextGeneration,
             assessed.SourceReviewedAtUtc, assessed.AssessedAtUtc);
         }, ct);
