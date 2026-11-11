@@ -712,6 +712,20 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
                     GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
                         .Seal(stage, durable, forged, freshSourceRead,
                             recordedAt.AddSeconds(2))).Code);
+        Assert.Equal(assessmentInvalid,
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+                    .Verify(assessment, stage, durable,
+                        recorded with { EvidenceSha256 =
+                            new string('0', 64) },
+                        freshSourceRead)).Code);
+        Assert.Equal(assessmentInvalid,
+            Assert.Throws<GitSourceSnapshotMirrorException>(() =>
+                GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
+                    .Seal(stage, durable, recorded,
+                        freshSourceRead with { SourceSnapshotId =
+                            Guid.NewGuid() },
+                        recordedAt.AddSeconds(2))).Code);
         var staleSourceRead =
             GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Seal(
                 stage, durable, recordedAt.AddSeconds(-1));
