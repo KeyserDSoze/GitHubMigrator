@@ -548,15 +548,27 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
 
         var mover = new LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
             f.BundleRoot, f.MirrorRoot, enabled: true);
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedOriginalIntact,
+            await mover.InspectPreparedPathsAsync(stage, durable,
+                rereadInspection, decision, prepared, default));
+        // The physical primitive also accepts a NEW real inspection
+        // of the SAME signed candidate, not a time-travel review.
         var receipt = await mover.IsolateAsync(
-            stage, durable, inspection, decision, default);
+            stage, durable, rereadInspection, decision, default);
         var original = f.Physical(physical);
         var isolated = Path.Combine(f.MirrorRoot,
             receipt.IsolatedDirectoryName);
         Assert.False(Directory.Exists(original));
         Assert.True(Directory.Exists(isolated));
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedIsolatedIntact,
+            await mover.InspectPreparedPathsAsync(stage, durable,
+                rereadInspection, decision, prepared, default));
         var reread = await mover.AuditIsolatedAsync(
-            stage, durable, inspection, decision, default);
+            stage, durable, rereadInspection, decision, default);
         Assert.Equal(observed.ObjectCount, reread.Count);
         Assert.Equal(observed.ObjectSetSha256, reread.ObjectSetSha256);
         Assert.Equal(stage.PhysicalMirrorId, receipt.PhysicalMirrorId);
@@ -584,6 +596,11 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         // A concurrent/stale worker recreating the original UUID.git
         // must invalidate the quarantine read, not be silently ignored.
         Directory.CreateDirectory(original);
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedBothPresent,
+            await mover.InspectPreparedPathsAsync(stage, durable,
+                rereadInspection, decision, prepared, default));
         Assert.Equal("LaterCheckpointMirrorOrphanIsolationOriginalPresent",
             (await Assert.ThrowsAsync<GitSourceSnapshotMirrorException>(() =>
                 mover.AuditIsolatedAsync(stage, durable, inspection,
@@ -619,6 +636,22 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
                     decision, default))).Code);
         Assert.False(Directory.Exists(original));
         Assert.True(Directory.Exists(isolated));
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedIsolatedCorrupt,
+            await mover.InspectPreparedPathsAsync(stage, durable,
+                rereadInspection, decision, prepared, default));
+        // A crash with neither path is not a completed move. Neither
+        // this read nor an operator can silently recreate UUID.git.
+        var detached = Path.Combine(f.Root, "detached-orphan.git");
+        Directory.Move(isolated, detached);
+        Assert.Equal(
+            LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                .PreparedBothMissing,
+            await mover.InspectPreparedPathsAsync(stage, durable,
+                rereadInspection, decision, prepared, default));
+        Assert.False(Directory.Exists(original));
+        Assert.False(Directory.Exists(isolated));
     }
 
     [Theory]
