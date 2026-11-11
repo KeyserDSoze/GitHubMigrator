@@ -219,6 +219,11 @@ builder.Services.AddSingleton(
             false)));
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorIsolationIntentJournal>();
+// #124: source-first crash-reconciliation lookup of existing immutable
+// PRE-MOVE evidence. No physical mutation, execution API or recovery
+// authorization. Shares the separate default-OFF #123 option.
+builder.Services.AddScoped<
+    PostgresGitIncrementalLaterCheckpointMirrorPreparedReconciliationReader>();
 // #120: dedicated local-only F-060v2 importer, separated from the
 // historic baseline GitHubTrustedRemoteRead path. Both this import and
 // its worker need independent OFF-by-default feature switches.
