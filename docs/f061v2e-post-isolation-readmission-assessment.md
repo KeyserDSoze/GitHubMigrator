@@ -442,3 +442,25 @@ for actual review+event+session consumption, direct-SQL forgery rejection,
 real SHA-1/SHA-256 integration, restart/replay and three-replica races. The
 original terminal `RecoveryRequired` lease, mirror and GitHub destination
 are not modified.
+
+
+### #130 SQL parity: exact session/nonce scope CHECK (non-authorizing)
+
+The second-review session-consumption schema now installs an additive,
+validated and idempotent `ck_f061v2e_second_review_session_scope_v2`
+CHECK. It rejects an empty mirror UUID, a reused login-session GUID as
+the decision nonce, and a malformed or uppercase 64-character SHA-256
+review evidence. These restrictions align the future trusted writer
+boundary with the standalone read-only #130 domain intent; they are
+not a substitute for a fresh server-verified JWT, source-first SQL
+and shared F-060 POSIX-locked two-pass Git audit.
+
+The existing three review/event/session SQL tables **still DENY ALL
+INSERT/UPDATE/DELETE**; this schema does not enable a writer,
+consume a JWT session, re-admit a terminal F-061 lease or perform
+GitHub writes. The real PostgreSQL17 SHA-1/SHA-256 two-epoch fixture
+checks the installed validated CHECK and its exact SHA quantifier.
+The fail-fast EF composite-format manifest now covers **64**
+SHA-256 CHECK regexes instead of 63. Actual acceptance continues to
+require a final 4/4 main run and a separately protected atomic
+decision+event+session transaction with three-replica race testing.

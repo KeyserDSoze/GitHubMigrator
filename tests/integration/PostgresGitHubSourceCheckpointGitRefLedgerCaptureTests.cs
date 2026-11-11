@@ -2927,6 +2927,29 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             'trg_f061v2e_second_review_session_closed')
                                             AND NOT tgisinternal
                                         """).SingleAsync());
+                                // #130: the database CHECK is installed
+                                // and validated on real PostgreSQL17, not
+                                // only a domain-side no-op digest guard.
+                                var sessionScopeV2 = await verifiedDb
+                                    .Database.SqlQuery<string>($"""
+                                        SELECT pg_get_constraintdef(c.oid)
+                                            AS "Value"
+                                        FROM pg_constraint c
+                                        WHERE c.conname =
+                                            'ck_f061v2e_second_review_session_scope_v2'
+                                            AND c.conrelid =
+                                                'git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                                            AND c.contype = 'c'
+                                            AND c.convalidated
+                                        """).SingleAsync();
+                                Assert.Contains("review_session_id <> decision_nonce",
+                                    sessionScopeV2);
+                                Assert.Contains("mirror_id", sessionScopeV2);
+                                Assert.Contains("review_evidence_sha256",
+                                    sessionScopeV2);
+                                Assert.Contains("'^[0-9a-f]{64}$'",
+                                    sessionScopeV2);
+
                                 // #129: the review's original terminal
                                 // worker/token/gen and the #127 Assessed
                                 // digest MUST be tied to the SAME source

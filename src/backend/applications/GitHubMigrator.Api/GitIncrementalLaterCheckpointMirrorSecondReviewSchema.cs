@@ -295,6 +295,31 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                     ON DELETE RESTRICT
             );
 
+            -- #130: SQL one-use intent parity. On repeat bootstrap
+            -- only add a validated, immutable source-scope guard.
+            -- This never permits a review/session/event INSERT.
+            DO $f061v2e_session_scope_v2$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname =
+                        'ck_f061v2e_second_review_session_scope_v2'
+                        AND conrelid =
+                            'git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                ) THEN
+                    ALTER TABLE
+                        git_later_checkpoint_mirror_second_review_session_consumptions
+                    ADD CONSTRAINT
+                        ck_f061v2e_second_review_session_scope_v2
+                    CHECK (
+                        mirror_id <>
+                            '00000000-0000-0000-0000-000000000000'::uuid
+                        AND review_session_id <> decision_nonce
+                        AND review_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                    );
+                END IF;
+            END $f061v2e_session_scope_v2$;
+
             -- A proposed second reviewer is NOT a verified JWT actor.
             -- No insert (even with matching SHA) can claim a review
             -- before a future protected, source-first and POSIX-locked
