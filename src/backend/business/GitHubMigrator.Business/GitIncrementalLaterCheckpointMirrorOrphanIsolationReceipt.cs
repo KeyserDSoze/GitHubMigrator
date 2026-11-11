@@ -32,8 +32,15 @@ public static class GitIncrementalLaterCheckpointMirrorOrphanIsolationIntegrity
         string quarantineDirectoryName,
         DateTimeOffset isolatedAtUtc)
     {
-        GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Verify(
-            decision, inspection);
+        (decision.Decision ==
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                .ApprovedForIsolationReview
+                ? (Action)(() =>
+                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                        .VerifyForPhysicalIsolation(decision, inspection))
+                : () =>
+                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                        .Verify(decision, inspection))();
         if (decision.Decision !=
                 GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
                     .ApprovedForIsolationReview ||
