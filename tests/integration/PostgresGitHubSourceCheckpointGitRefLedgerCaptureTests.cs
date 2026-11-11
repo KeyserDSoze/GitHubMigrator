@@ -436,23 +436,27 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     // The reviewer identity comes from JWT claims, even when the caller
     // tries to smuggle two different actor UUIDs into the JSON request.
     [Theory]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected, false, false, false, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, true, false, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, true, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected, false, false, false, false, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, true, false, false, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false, false, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, true, false, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false)]
+    // #131: separate fresh F-031 source epochs for adversarial
+    // pre-isolation denial and post-isolation physical review.
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, true)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, true)]
     public async Task F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_immutable(
         int oidLength, string decision, bool verifyPhysical,
         bool corruptPhysical, bool runWorker, bool failWorker,
-        bool fenceWorker, bool failAfterImport)
+        bool fenceWorker, bool failAfterImport, bool preMoveOnly)
     {
         // #131: per-phase real-source TTL budget for long Git tests.
         // Diagnostic-only: no skip, altered clock, SQL or Git shortcut.
@@ -2193,6 +2197,12 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         WHERE mirror_id = {staging.PhysicalMirrorId}
                                         """).SingleAsync());
 
+                                // These pre-move forgery/restart
+                                // probes run in an independent F-031
+                                // epoch, so a long physical post-isolation
+                                // audit still has its original 5m budget.
+                                if (preMoveOnly)
+                                {
                                 // Direct SQL is NOT a substitute for the
                                 // independently audited physical POSIX
                                 // session. The immutable DB guard must
@@ -2337,6 +2347,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             "repo-1",
                                             targetReceipt.EvidenceSha256,
                                             candidate.RequestedBy, default))).Code);
+                                }
+
                             }
                             else
                             {
@@ -2351,6 +2363,12 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             candidate.RequestedBy, default))).Code);
                             }
 
+                            // The independently provenanced pre-move
+                            // branch retains every mutation/replay denial;
+                            // the post-isolation case reuses only durable
+                            // immutable evidence, never those forged writes.
+                            if (!failAfterImport || preMoveOnly)
+                            {
                             Assert.Equal(Npgsql.PostgresErrorCodes.RaiseException,
                                 (await Assert.ThrowsAsync<Npgsql.PostgresException>(
                                     () => verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
@@ -2398,6 +2416,17 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     first.WorkpackId, "foreign-repo",
                                     targetReceipt.EvidenceSha256,
                                     candidate.RequestedBy, default));
+
+                            }
+                            if (preMoveOnly)
+                            {
+                                Phase("pre-move negatives complete",
+                                    targetReceipt.ObservedAtUtc);
+                                // The post-isolation SHA1 crash and SHA256
+                                // three-replica races run in OTHER genuine
+                                // target-observation test epochs.
+                                return;
+                            }
 
                             if (failAfterImport)
                             {
