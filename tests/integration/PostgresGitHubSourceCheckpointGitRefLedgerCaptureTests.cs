@@ -35,6 +35,20 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
 
     public Task DisposeAsync() => Task.CompletedTask;
 
+    // #124 cancellation injected at the exact physical -> PostgreSQL
+    // handoff, AFTER the kernel move and two complete quarantined
+    // fsck/ref/OID passes. A callback that ignores CancellationToken
+    // must never be entered on an already-cancelled operation.
+    private sealed class CancelAtPhysicalHandoffClock(
+        CancellationTokenSource cancellation) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow()
+        {
+            cancellation.Cancel();
+            return DateTimeOffset.UtcNow;
+        }
+    }
+
     // Actual local Git mirror with object IDs bound to F-097b. Only
     // the test provisions this trusted root; no HTTP path or token.
     private sealed class CheckpointLocalMirror : IDisposable
@@ -2359,6 +2373,51 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             pendingHistory.HumanDecision,
                                             pendingHistory.PreparedIntent,
                                             default));
+
+                                    // Cancellation arrives immediately
+                                    // after the second physical Git pass
+                                    // while constructing the trusted
+                                    // handoff proof. No SQL callback is
+                                    // invoked and no receipt is durable.
+                                    // A fresh uncancelled call below
+                                    // MUST still reconcile same marker.
+                                    using var canceledHandoff =
+                                        new CancellationTokenSource();
+                                    var canceledClock = new
+                                        CancelAtPhysicalHandoffClock(
+                                            canceledHandoff);
+                                    var canceledSession = new
+                                        LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
+                                            physicalMirror.BundleRoot,
+                                            physicalMirror.VerifiedMirrorRoot,
+                                            enabled: true, clock: canceledClock);
+                                    var callbacksAfterCancellation = 0;
+                                    await Assert.ThrowsAnyAsync<
+                                        OperationCanceledException>(() =>
+                                        canceledSession.WithVerifiedIsolationAsync(
+                                            pendingHistory.Stage,
+                                            pendingHistory.DurableBundle,
+                                            pendingHistory.ExpectedInspection,
+                                            pendingHistory.HumanDecision,
+                                            pendingHistory.PreparedIntent,
+                                            (proof, token) =>
+                                            {
+                                                Interlocked.Increment(
+                                                    ref callbacksAfterCancellation);
+                                                return Task.FromResult("must not run");
+                                            },
+                                            canceledHandoff.Token));
+                                    Assert.Equal(0, callbacksAfterCancellation);
+                                    Assert.Equal(0L, await verifiedDb.Database
+                                        .SqlQuery<long>($"""
+                                            SELECT count(*)::bigint AS "Value"
+                                            FROM git_later_checkpoint_mirror_isolation_receipts
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """).SingleAsync());
+                                    Assert.False(Directory.Exists(Path.Combine(
+                                        physicalMirror.VerifiedMirrorRoot,
+                                        staging.PhysicalMirrorId.ToString("N") +
+                                            ".git")));
                                 }
                                 var isolation = new
                                     PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordinator(
