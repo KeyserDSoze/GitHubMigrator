@@ -52,11 +52,18 @@ jobs:
         run: |
           npm install
           npm run build
-      - name: Install Playwright tests and browser
+      # The ubuntu-24.04 runner already carries Chromium's runtime
+      # libraries. --with-deps invokes apt, and the Ubuntu archive DNS
+      # can be unavailable even after npm + the production build succeed
+      # (run 43044355844). Browser-only installation avoids that flaky
+      # external apt dependency while keeping the real Chromium E2E gate.
+      # --only-shell matches Playwright's headless CI browser launch and
+      # avoids fetching the unused headed Chromium build.
+      - name: Install Playwright Chromium headless shell
         working-directory: tests/frontend
         run: |
           npm install
-          npx playwright install --with-deps chromium
+          npx playwright install --only-shell chromium
       - name: Run UI contract tests
         working-directory: tests/frontend
         env:
