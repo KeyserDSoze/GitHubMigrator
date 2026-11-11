@@ -2753,6 +2753,59 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 Assert.NotEqual(secondReview.EvidenceSha256,
                                     rejectedSecondReview.EvidenceSha256);
                                 Assert.False(rejectedSecondReview.CanReAdmit);
+                                // #129: SQL second-human-review FOUNDATION
+                                // has two FKs + immutable CHECKs and is
+                                // default DENY-ALL even against raw SQL.
+                                // Domain-only hashes and guessed GUIDs
+                                // cannot fake an authenticated reviewer.
+                                Assert.Equal(2L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM pg_constraint
+                                        WHERE conname IN (
+                                            'ck_f061v2e_second_review_safe',
+                                            'ck_f061v2e_second_review_event_safe')
+                                            AND contype = 'c'
+                                        """).SingleAsync());
+                                Assert.Equal(2L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM pg_trigger
+                                        WHERE tgname IN (
+                                            'trg_f061v2e_second_review_closed',
+                                            'trg_f061v2e_second_review_event_closed')
+                                            AND NOT tgisinternal
+                                        """).SingleAsync());
+                                Assert.Equal(
+                                    Npgsql.PostgresErrorCodes.RaiseException,
+                                    (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                                        () => verifiedDb.Database
+                                            .ExecuteSqlInterpolatedAsync($"""
+                                                INSERT INTO
+                                                    git_later_checkpoint_mirror_second_reviews
+                                                    (mirror_id)
+                                                VALUES ({staging.PhysicalMirrorId})
+                                                """))).SqlState);
+                                Assert.Equal(
+                                    Npgsql.PostgresErrorCodes.RaiseException,
+                                    (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                                        () => verifiedDb.Database
+                                            .ExecuteSqlInterpolatedAsync($"""
+                                                INSERT INTO
+                                                    git_later_checkpoint_mirror_second_review_events
+                                                    (mirror_id)
+                                                VALUES ({staging.PhysicalMirrorId})
+                                                """))).SqlState);
+                                Assert.Equal(0L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_second_reviews
+                                        """).SingleAsync());
+                                Assert.Equal(0L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_second_review_events
+                                        """).SingleAsync());
                                 await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
                                     INSERT INTO
                                         git_later_checkpoint_mirror_generation_assessments (

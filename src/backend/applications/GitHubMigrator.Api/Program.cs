@@ -877,6 +877,9 @@ await GitIncrementalLaterCheckpointMirrorIsolationSchema.InitializeAsync(app.Ser
 // It never mints worker/token or reopens the original RecoveryRequired lease.
 await GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchema
     .InitializeAsync(app.Services);
+// #129: empty, DB-enforced write-disabled second-review journals only.
+await GitIncrementalLaterCheckpointMirrorSecondReviewSchema
+    .InitializeAsync(app.Services);
 // #128: AFTER all F-061 DDL, repair any previously installed CHECKs
 // with doubled regex bounds from non-interpolated SQL raw strings.
 await GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSchema

@@ -88,3 +88,8 @@ writer must authenticate the actor and recheck immutable source,
 isolation and current physical evidence under SQL+POSIX locks; a
 caller-provided review digest or GUID is never sufficient authority.
 #121 still owns any separately approved new-generation CAS.
+
+
+## #129: PostgreSQL second-review schema foundation (no writer)
+
+The API bootstraps two additive tables after #127 and before the F-061 regex repair: `git_later_checkpoint_mirror_second_reviews` and `git_later_checkpoint_mirror_second_review_events`. They have immutable F-061 FK lineage, a strict distinct-second-reviewer constraint, source/target/isolation/assessment SHA-256 checks, bounded next-generation hint and persistent **FALSE** write and completion flags. **Both INSERT and UPDATE/DELETE are rejected unconditionally by PostgreSQL triggers**, including for arbitrary SQL with guessed reviewer identities or self-sealed evidence. This is deliberately more restrictive than a read-only candidate; there is **no authenticated writer yet**. The SHA1/SHA256 PostgreSQL integration fixture verifies the schema, trigger installation and direct-SQL denial. A future independent JWT-authenticated, source-first SQL and POSIX-audited implementation must explicitly replace this deny-all fence only after satisfying #129. Never treat an existing schema or review candidate as an approved F-061 lease or generation.
