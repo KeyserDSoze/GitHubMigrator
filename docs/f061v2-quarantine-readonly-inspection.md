@@ -314,3 +314,63 @@ quarantined bytes, commits one immutable isolated receipt+event, and
 reconciles a crash between OS and DB without accepting an unapproved
 path, false Verified or prior generation. Re-admission/new generation
 remains separately reviewed under #121; no remote GitHub writes.
+
+
+## #124: PREPARED → filesystem crash-state inspection (read-only phase)
+
+`PostgresGitIncrementalLaterCheckpointMirrorPreparedReconciliationReader`
+is an independently **OFF-by-default** source-first PostgreSQL
+reader. It does not accept caller-supplied SQL receipts, Git ref/OIDs,
+worker token, local root or quarantine directory. It reads immutable
+`Prepared` intent+event and original #122 human-reviewed
+`ApprovedForIsolationReview` decision+event, checks current
+F-091/F-097b/F-031/F-038v2/F-035v2 latest checkpoint and real
+`UUID.bundle` bytes, and locks source→plan in short SQL transactions
+to check terminal original F-061v2 `RecoveryRequired` owner/token/
+generation, **all** ordered worker events and their SHA-256 digest,
+no F-061v2 `Verified` and no existing `Isolated` receipt.
+It rechecks current source after releasing the transaction.
+
+Its `ExpectedInspection` field is deliberately reconstructed from
+persisted, domain-separated SQL evidence: it is **not a fresh physical
+Git observation**. The reader does not classify absence of `UUID.git`
+as a successful quarantine, and it cannot create a lease or record an
+`Isolated` SQL receipt. It provides expected immutable facts only for
+the independently re-audited on-disk phase.
+
+The new `LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator.
+InspectPreparedPathsAsync` is a separate disabled-by-default
+**read-only**, POSIX root-locked crash diagnostic. Inputs are bounded
+staged F-035v2 bundle/source evidence, the historical reviewed candidate,
+and an immutable intent whose deterministic quarantine pathname is
+fully server-derived. It verifies the sealed expected root, UUID.bundle
+SHA+bytes and actual Git SHA1/SHA256 ref/OID closure **twice** while
+the same process/POSIX root lock used by the F-060 importer is held.
+It distinguishes:
+- `PreparedOriginalIntact`: original `UUID.git` alone exists and
+  matches the exact reviewed graph (no rename yet).
+- `PreparedIsolatedIntact`: deterministic quarantine directory
+  alone exists and its graph matches (possible crash after rename,
+  still **not** a durable SQL receipt).
+- `PreparedBothPresent`, `PreparedBothMissing`: unresolved collisions/
+  disappearances. No unlink, overwrite or automatic reimport.
+- `PreparedOriginalCorrupt`, `PreparedIsolatedCorrupt`: source or
+  quarantined graph/bundle mismatch or fsck failure.
+- `PreparedUnsafePath`: foreign file/symlink/path changed; fail closed.
+
+Real local Git tests exercise SHA1 and SHA256 original, isolated,
+both-present, corrupt and missing crash conditions plus re-sealed
+fresh physical inspection of a historical reviewer decision. PostgreSQL
+integration checks re-reading the exact immutable `Prepared` row
+after simulated restart and rejection of SQL mutations.
+
+**Still not finished (#124):** joining the above two readers into a
+server-owned OS/SQL coordinator that holds the POSIX no-overwrite
+quarantine fence through the final post-rename physical check and
+short source-locked terminal SQL commit; writing an independently
+verified append-only `Isolated` receipt+event and reconciling process
+crashes/replay/concurrent replicas. No public API or background worker
+may call a filesystem move on the strength of these read-only results.
+`RecoveryRequired` is immutable and never re-admitted here. A
+separate, independently reviewed generation-history authorization
+belongs to #121, without remote GitHub writes.
