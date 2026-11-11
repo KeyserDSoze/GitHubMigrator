@@ -54,15 +54,14 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                 "LaterCheckpointMirrorOrphanIsolationDisabled");
         GitIncrementalLaterCheckpointMirrorStagingIntegrity
             .VerifyOfflineCandidate(stage, durable);
-        (decision.Decision ==
+        if (decision.Decision ==
             GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
-                .ApprovedForIsolationReview
-                ? (Action)(() =>
-                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
-                        .VerifyForPhysicalIsolation(decision, inspection))
-                : () =>
-                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
-                        .Verify(decision, inspection))();
+                .ApprovedForIsolationReview)
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                .VerifyForPhysicalIsolation(decision, inspection);
+        else
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                .Verify(decision, inspection);
         if (decision.Decision !=
                 GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
                     .ApprovedForIsolationReview ||
@@ -150,15 +149,14 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
 
         GitIncrementalLaterCheckpointMirrorStagingIntegrity
             .VerifyOfflineCandidate(stage, durable);
-        (decision.Decision ==
+        if (decision.Decision ==
             GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
-                .ApprovedForIsolationReview
-                ? (Action)(() =>
-                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
-                        .VerifyForPhysicalIsolation(decision, inspection))
-                : () =>
-                    GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
-                        .Verify(decision, inspection))();
+                .ApprovedForIsolationReview)
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                .VerifyForPhysicalIsolation(decision, inspection);
+        else
+            GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
+                .Verify(decision, inspection);
         if (decision.Decision !=
                 GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
                     .ApprovedForIsolationReview ||
