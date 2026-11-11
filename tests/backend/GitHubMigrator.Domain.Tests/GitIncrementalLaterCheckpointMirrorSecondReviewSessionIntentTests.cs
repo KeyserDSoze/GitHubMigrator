@@ -49,18 +49,23 @@ public sealed class GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntent
     public void Session_nonce_actor_scope_and_decision_are_all_cryptographically_bound()
     {
         var x = Valid();
-        var integrity = GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntentIntegrity
-            .Seal;
-        var changedSession = integrity(x.PhysicalMirrorId, x.SecondReviewerId,
+        GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntent Seal(
+            Guid mirror, Guid actor, string decision, string digest,
+            Guid session, Guid nonce, DateTimeOffset issued,
+            DateTimeOffset reviewed, DateTimeOffset consumed) =>
+            GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntentIntegrity
+                .Seal(mirror, actor, decision, digest, session, nonce,
+                    issued, reviewed, consumed);
+        var changedSession = Seal(x.PhysicalMirrorId, x.SecondReviewerId,
             x.Decision, x.ReviewEvidenceSha256, Guid.NewGuid(), x.DecisionNonce,
             x.IssuedAtUtc, x.ReviewedAtUtc, x.ConsumedAtUtc);
-        var changedNonce = integrity(x.PhysicalMirrorId, x.SecondReviewerId,
+        var changedNonce = Seal(x.PhysicalMirrorId, x.SecondReviewerId,
             x.Decision, x.ReviewEvidenceSha256, x.ReviewSessionId, Guid.NewGuid(),
             x.IssuedAtUtc, x.ReviewedAtUtc, x.ConsumedAtUtc);
-        var changedActor = integrity(x.PhysicalMirrorId, Guid.NewGuid(),
+        var changedActor = Seal(x.PhysicalMirrorId, Guid.NewGuid(),
             x.Decision, x.ReviewEvidenceSha256, x.ReviewSessionId, x.DecisionNonce,
             x.IssuedAtUtc, x.ReviewedAtUtc, x.ConsumedAtUtc);
-        var rejected = integrity(x.PhysicalMirrorId, x.SecondReviewerId,
+        var rejected = Seal(x.PhysicalMirrorId, x.SecondReviewerId,
             GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
                 .RejectedForIndependentReview, x.ReviewEvidenceSha256,
             x.ReviewSessionId, x.DecisionNonce,
