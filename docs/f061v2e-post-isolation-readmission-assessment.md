@@ -649,3 +649,24 @@ the second review, matching event and session/nonce/mirror consumption
 in ONE DB-clock-governed transaction. No `RecoveryRequired` lease,
 new generation, physical import or GitHub write is authorized. The
 three mutation triggers remain DENY ALL.
+
+
+### #128/#131: isolate negative PG17 assertions by forged mirror UUID
+
+Completed [CI 43093654395](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/43093654395)
+revealed a further independent PostgreSQL fixture assertion failure:
+`F061v2e_generation_assessment_schema_is_immutable_and_requires_isolation`
+expected a globally empty `git_later_checkpoint_mirror_generation_assessments`
+table, but the **shared real database** already contained a legitimate
+assessment from the real SHA1/SHA256 test. The fake SQL INSERT itself
+correctly raised PostgreSQL exception; the unscoped post-assertion
+was incorrect. The negative test now uses one fresh
+`forgedMirrorId` in both attempted INSERT and post-condition:
+**zero rows for exactly that forged mirror**. It does not remove valid
+rows, filter or skip a test, alter production SQL, or weaken the
+isolation/event uniqueness guards. This fix is independent of
+[#131](https://github.com/KeyserDSoze/GitHubMigrator/issues/131):
+the two long SHA1/SHA256 `failAfterImport` branches still encounter
+real PostgreSQL clock-side 5-minute F-031/lease expiry even when
+the TestServer wall-clock was bounded; test fixture segmentation
+is still required, with strict production freshness untouched.

@@ -331,6 +331,10 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
         // A synthetic SHA and a guessed proposed generation cannot
         // directly register a reviewed re-admission against a missing
         // physical isolation. No lease or original journal is altered.
+        // Other real SHA1/SHA256 physical tests intentionally write
+        // legitimate assessments in this SHARED PostgreSQL fixture:
+        // check only the forged mirror's UUID, not global table emptiness.
+        var forgedMirrorId = Guid.NewGuid();
         var fake = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
             db.Database.ExecuteSqlInterpolatedAsync($"""
                 INSERT INTO
@@ -349,7 +353,7 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                         object_set_sha256, object_count,
                         source_reviewed_at_utc, assessed_at_utc,
                         evidence_sha256)
-                VALUES ({Guid.NewGuid()}, {Guid.NewGuid()},
+                VALUES ({forgedMirrorId}, {Guid.NewGuid()},
                     {Guid.NewGuid()}, {Guid.NewGuid()}, {1},
                     {Guid.NewGuid()}, {Guid.NewGuid()}, {1L}, {2L},
                     {new string('a',64)}, {new string('b',64)},
@@ -366,9 +370,10 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             Npgsql.PostgresErrorCodes.RaiseException,
             Npgsql.PostgresErrorCodes.ForeignKeyViolation
         });
-        Assert.Equal(0L, await db.Database.SqlQueryRaw<long>("""
+        Assert.Equal(0L, await db.Database.SqlQuery<long>($"""
             SELECT count(*)::bigint AS "Value"
             FROM git_later_checkpoint_mirror_generation_assessments
+            WHERE mirror_id = {forgedMirrorId}
             """).SingleAsync());
     }
 
