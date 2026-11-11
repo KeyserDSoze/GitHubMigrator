@@ -493,9 +493,21 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         // #123: the historical #122 human approval remains verifiable
         // after a NEW physical/SQL inspection timestamp. It signs the
         // stable candidate, not the wall-clock time of a later read.
-        var rereadInspection = inspection with {
-            InspectedAtUtc = reviewedAt.AddSeconds(15)
-        };
+        var rereadInspection =
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity.Seal(
+                stage, durable, inspection.WorkerId, inspection.LeaseToken,
+                inspection.LeaseGeneration, inspection.FailureCode,
+                inspection.QuarantinedAtUtc, inspection.LeaseEventCount,
+                inspection.RenewedEventCount,
+                inspection.LeaseEventHistorySha256, observed,
+                reviewedAt.AddSeconds(15));
+        Assert.NotEqual(inspection.EvidenceSha256,
+            rereadInspection.EvidenceSha256);
+        Assert.Equal(
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                .ReviewCandidateSha256(inspection),
+            GitIncrementalLaterCheckpointMirrorRecoveryInspectionIntegrity
+                .ReviewCandidateSha256(rereadInspection));
         var preparedAt = reviewedAt.AddSeconds(16);
         var prepared =
             GitIncrementalLaterCheckpointMirrorIsolationIntentIntegrity.Seal(
