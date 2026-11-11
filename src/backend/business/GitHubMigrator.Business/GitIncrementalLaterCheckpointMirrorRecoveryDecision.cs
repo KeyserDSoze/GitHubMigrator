@@ -92,6 +92,29 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
             throw Refused();
     }
 
+    // The original independent reviewer may have signed the physical
+    // snapshot minutes or days before a fresh double-fsck at isolation
+    // time. Do not require a NEW reviewer signature after every physical
+    // observation. Accept either the exact historical inspection seal
+    // or a later inspection of the SAME stable candidate, lease and
+    // checked graph. This is only integrity validation, never an
+    // authorization to move or write files without a SQL coordinator.
+    public static void VerifyForPhysicalIsolation(
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision reviewed,
+        GitIncrementalLaterCheckpointMirrorRecoveryInspection inspected)
+    {
+        if (reviewed is null || inspected is null)
+            throw Refused();
+        if (inspected.InspectedAtUtc <= reviewed.ReviewedAtUtc)
+        {
+            Verify(reviewed, inspected);
+            if (reviewed.Decision != ApprovedForIsolationReview)
+                throw Refused();
+        }
+        else
+            VerifyHistoricalForIsolationIntent(reviewed, inspected);
+    }
+
     // A #122 decision is immutable history. A later source-locked
     // inspection has a NEW observation timestamp: do not attempt to
     // verify the historical decision by pretending its reviewer
