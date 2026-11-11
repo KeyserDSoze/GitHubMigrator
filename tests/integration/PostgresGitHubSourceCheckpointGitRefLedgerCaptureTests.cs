@@ -2301,9 +2301,32 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     var sealedMarker =
                                         await File.ReadAllBytesAsync(
                                             quarantinedMarker);
+                                    // A legitimate kernel rename + marker
+                                    // has an actual, verified crash-state
+                                    // classification even before SQL INSERT.
+                                    Assert.Equal(
+                                        LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                                            .PreparedIsolatedIntact,
+                                        await localSession.InspectPreparedPathsAsync(
+                                            pendingHistory.Stage,
+                                            pendingHistory.DurableBundle,
+                                            pendingHistory.ExpectedInspection,
+                                            pendingHistory.HumanDecision,
+                                            pendingHistory.PreparedIntent,
+                                            default));
                                     await File.WriteAllTextAsync(
                                         quarantinedMarker,
                                         "forged-review-or-prepared-intent");
+                                    Assert.Equal(
+                                        LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                                            .PreparedIsolatedUntrusted,
+                                        await localSession.InspectPreparedPathsAsync(
+                                            pendingHistory.Stage,
+                                            pendingHistory.DurableBundle,
+                                            pendingHistory.ExpectedInspection,
+                                            pendingHistory.HumanDecision,
+                                            pendingHistory.PreparedIntent,
+                                            default));
                                     var markerDenied = await Assert.ThrowsAsync<
                                         GitSourceSnapshotMirrorException>(() =>
                                         localSession.WithVerifiedIsolationAsync(
@@ -2326,6 +2349,16 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             """).SingleAsync());
                                     await File.WriteAllBytesAsync(
                                         quarantinedMarker, sealedMarker);
+                                    Assert.Equal(
+                                        LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
+                                            .PreparedIsolatedIntact,
+                                        await localSession.InspectPreparedPathsAsync(
+                                            pendingHistory.Stage,
+                                            pendingHistory.DurableBundle,
+                                            pendingHistory.ExpectedInspection,
+                                            pendingHistory.HumanDecision,
+                                            pendingHistory.PreparedIntent,
+                                            default));
                                 }
                                 var isolation = new
                                     PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordinator(
