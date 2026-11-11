@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using GitHubMigrator.Business;
 
 namespace GitHubMigrator.Infrastructure.GitObjects;
@@ -204,6 +205,100 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
         }
     }
 
+    // The original bare Git root carries a durable, EXACT Prepared
+    // intent marker before the rename. An outsider-created quarantine
+    // path with the same graph/ref SHA but no matching marker is NOT a
+    // recoverable prior OS operation. The marker is NOT a secret or a
+    // recovery capability, only a causal link to SQL journal history.
+    private const string IntentMarkerFileName =
+        "agic-f061v2-reviewed-isolation-intent";
+    private const int OpenDirectoryFlags = 0x10000 | 0x80000; // Linux O_DIRECTORY|O_CLOEXEC
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true,
+        CharSet = CharSet.Ansi)]
+    private static extern int OpenDirectoryDescriptor(
+        string path, int flags);
+
+    [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
+    private static extern int FsyncDescriptor(int fd);
+
+    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+    private static extern int CloseDescriptor(int fd);
+
+    private static void SyncDirectory(string directory)
+    {
+        if (!OperatingSystem.IsLinux())
+            throw new IOException("F-061v2 directory fsync requires Linux");
+        var fd = OpenDirectoryDescriptor(directory, OpenDirectoryFlags);
+        if (fd < 0)
+            throw new IOException("F-061v2 directory open/fsync unavailable");
+        try
+        {
+            if (FsyncDescriptor(fd) != 0)
+                throw new IOException("F-061v2 directory fsync failed");
+        }
+        finally
+        {
+            _ = CloseDescriptor(fd);
+        }
+    }
+
+    private static byte[] IntentMarker(
+        GitIncrementalLaterCheckpointMirrorIsolationIntent prepared,
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision reviewed) =>
+        Encoding.ASCII.GetBytes(
+            "f061v2-physical-source-isolation-intent-v1\\n" +
+            prepared.IntentSha256 + "\\n" + reviewed.EvidenceSha256 + "\\n");
+
+    private static void CheckIntentMarker(
+        string directory,
+        GitIncrementalLaterCheckpointMirrorIsolationIntent intent,
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision reviewed)
+    {
+        var marker = Path.Combine(directory, IntentMarkerFileName);
+        var entry = new FileInfo(marker);
+        if (!entry.Exists || entry.LinkTarget is not null ||
+            (entry.Attributes & FileAttributes.ReparsePoint) != 0 ||
+            entry.Length != IntentMarker(intent, reviewed).Length ||
+            !File.ReadAllBytes(marker).AsSpan().SequenceEqual(
+                IntentMarker(intent, reviewed)))
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorIsolationMarkerInvalid");
+    }
+
+    private static async Task PrepareIntentMarkerAsync(
+        string directory,
+        GitIncrementalLaterCheckpointMirrorIsolationIntent intent,
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision reviewed,
+        CancellationToken ct)
+    {
+        var name = Path.Combine(directory, IntentMarkerFileName);
+        if (File.Exists(name) ||
+            new FileInfo(name).LinkTarget is not null)
+        {
+            CheckIntentMarker(directory, intent, reviewed);
+            return; // Idempotent restart AFTER mark, BEFORE rename.
+        }
+        var contents = IntentMarker(intent, reviewed);
+        try
+        {
+            await using (var file = new FileStream(name, FileMode.CreateNew,
+                FileAccess.Write, FileShare.None, 4096,
+                FileOptions.WriteThrough))
+            {
+                await file.WriteAsync(contents, ct);
+                file.Flush(flushToDisk: true);
+            }
+        }
+        catch (IOException)
+        {
+            throw new GitSourceSnapshotMirrorException(
+                "LaterCheckpointMirrorIsolationMarkerInvalid");
+        }
+        SyncDirectory(directory);
+        CheckIntentMarker(directory, intent, reviewed);
+    }
+
     // #124: the only server-owned physical/SQL trust bridge. Every input
     // is re-sealed against the source-locked Prepared reader; NO caller
     // filename is accepted, and no destination GitHub API is invoked.
@@ -300,11 +395,20 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                     physical.ObjectCount != prepared.ObjectCount)
                     throw new GitSourceSnapshotMirrorException(
                         "LaterCheckpointMirrorIsolationOriginalChanged");
+                // Write+fdatasync the intent marker, then fsync the
+                // directory entry BEFORE renaming this exact graph.
+                // This makes post-crash isolated-only reconciliation
+                // reject a foreign lookalike and survive host restart.
+                await PrepareIntentMarkerAsync(original,
+                    prepared, decision, ct);
                 ct.ThrowIfCancellationRequested();
                 try
                 {
                     // No fallback to an overwriting POSIX rename(2).
                     MoveDirectoryWithoutReplacement(original, isolated);
+                    // Persist the parent directory entry before the SQL
+                    // event can claim a durable quarantined OS outcome.
+                    SyncDirectory(root);
                 }
                 catch (IOException)
                 {
@@ -324,6 +428,10 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                 new DirectoryInfo(isolated).LinkTarget is not null)
                 throw new GitSourceSnapshotMirrorException(
                     "LaterCheckpointMirrorIsolationPathsChanged");
+            // Required EVEN for already-isolated after a crash.
+            // No marker => no trusted causal link to this Prepared
+            // SQL intent, regardless of an otherwise matching SHA.
+            CheckIntentMarker(isolated, prepared, decision);
             (int Count, string Digest) first;
             (int Count, string Digest) second;
             try
