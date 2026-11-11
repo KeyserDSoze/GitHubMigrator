@@ -235,11 +235,13 @@ public sealed class ApiHarness : IAsyncLifetime
         Assert.True(added.Succeeded, string.Join(", ", added.Errors.Select(x => x.Code)));
     }
 
-    public async Task<string> LoginAsync(string name, string password)
+    public async Task<string> LoginAsync(
+        string name, string password, bool forceFresh = false)
     {
         // Reuse each real-login token across independent endpoint checks. The API login
         // limiter is intentionally only 8/minute; tests must not inadvertently exhaust it.
-        if (_issuedTokens.TryGetValue(name, out var existing)) return existing;
+        if (!forceFresh && _issuedTokens.TryGetValue(name, out var existing))
+            return existing;
         using var response = await Client.PostAsJsonAsync("/api/auth/login", new { username = name, password });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());

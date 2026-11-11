@@ -298,10 +298,24 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             .InitializeAsync(harness.Host.Services);
         var shaPredicate = await db.Database.SqlQueryRaw<long>("""
             SELECT CASE WHEN
-                repeat('a',64) ~ '^[0-9a-f]{64}$'
+                repeat('a',64) ~ '^[0-9a-f]{{64}}
                 AND NOT (repeat('a',63) ~ '^[0-9a-f]{64}$')
                 AND NOT (repeat('a',65) ~ '^[0-9a-f]{64}$')
                 AND NOT (repeat('z',64) ~ '^[0-9a-f]{64}$')
+            THEN 1::bigint ELSE 0::bigint END AS "Value"
+            
+                AND NOT (repeat('a',63) ~ '^[0-9a-f]{{64}})
+                AND NOT (repeat('a',65) ~ '^[0-9a-f]{64}$')
+                AND NOT (repeat('z',64) ~ '^[0-9a-f]{64}$')
+            THEN 1::bigint ELSE 0::bigint END AS "Value"
+            )
+                AND NOT (repeat('a',65) ~ '^[0-9a-f]{{64}})
+                AND NOT (repeat('z',64) ~ '^[0-9a-f]{64}$')
+            THEN 1::bigint ELSE 0::bigint END AS "Value"
+            )
+                AND NOT (repeat('z',64) ~ '^[0-9a-f]{{64}})
+            THEN 1::bigint ELSE 0::bigint END AS "Value"
+            )
             THEN 1::bigint ELSE 0::bigint END AS "Value"
             """).SingleAsync();
         Assert.Equal(1L, shaPredicate);
@@ -887,7 +901,9 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                 Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
 
             var renewed = await separate.LoginAsync(
-                separate.SuperadminName, ApiHarness.SuperadminPassword);
+                separate.SuperadminName, ApiHarness.SuperadminPassword,
+                forceFresh: true);
+            Assert.NotEqual(token, renewed);
             using (var restored = await Send(separate.Client,
                 HttpMethod.Get, url, renewed))
                 Assert.Equal(HttpStatusCode.Conflict, restored.StatusCode);
