@@ -172,3 +172,23 @@ prove bearer anti-replay or create an authenticated second-review event.
 The two #129 deny-all SQL review triggers remain installed. A future
 writer must independently lock and recheck the source, latest assessment,
 JWT/reviewer identity and POSIX path **within its own fenced transaction**.
+
+
+### #129: live identity revocation on second-review candidate
+
+In addition to the JWT `PasswordChanged` and `superadmin` middleware,
+the **read-only** second-review candidate checks its actor against the
+*current ASP.NET Identity account* **before and after** the SQL/POSIX
+inspection: current superadmin role, no mandatory password change or
+lockout, unchanged security stamp and at most five minutes since the
+login that minted its review session ID. Tokens minted before this
+feature are deliberately unsuitable for this sensitive candidate.
+Revoking the role or rotating the security stamp immediately invalidates
+an otherwise unexpired token for this route. TestServer tests cover
+fresh reviewer token, rotated-stamp rejection and revoked-role rejection,
+without contacting any provider. This is **NOT one-shot JWT replay
+protection**: the per-login session ID can be reused for read-only GET.
+A future durable second-review writer must atomically consume a unique
+session/decision nonce under its own source+POSIX+PostgreSQL lock and
+revalidate the actor in the same decision path; none of that authority
+is enabled here.

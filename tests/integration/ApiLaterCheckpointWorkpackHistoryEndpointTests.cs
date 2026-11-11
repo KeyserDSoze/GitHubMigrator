@@ -799,6 +799,61 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             denied.Code);
     }
 
+    [Fact]
+    public async Task F061v2e_second_reviewer_token_checks_current_account_stamp_and_role()
+    {
+        // Isolated host: rotating security stamp or removing the role
+        // must revoke the candidate privilege immediately, not after
+        // the ordinary signed JWT's 30-minute expiry. No filesystem
+        // or GitHub provider access is enabled in this test.
+        var separate = new ApiHarness();
+        try
+        {
+            await separate.InitializeAsync();
+            var url = "/api/incremental-preparations/" + Guid.NewGuid() +
+                "/operation-plans/" + Guid.NewGuid() +
+                "/source-sync-checkpoints/" + Guid.NewGuid() +
+                "/mirror-recovery/second-review/candidate" +
+                "?targetObservationId=" + Guid.NewGuid() +
+                "&workpackId=" + Guid.NewGuid() +
+                "&originalBundleActorId=" + Guid.NewGuid() +
+                "&sourceRepositoryId=repo-1" +
+                "&expectedTargetReceiptSha256=" + new string('a', 64);
+            var token = await separate.LoginAsync(
+                separate.SuperadminName, ApiHarness.SuperadminPassword);
+            var before = separate.Calls.Count;
+            using (var initial = await Send(separate.Client,
+                HttpMethod.Get, url, token))
+                Assert.Equal(HttpStatusCode.Conflict, initial.StatusCode);
+
+            await using var scope = separate.Host.Services.CreateAsyncScope();
+            var users = scope.ServiceProvider.GetRequiredService<
+                Microsoft.AspNetCore.Identity.UserManager<ApplicationUser>>();
+            var account = await users.FindByNameAsync(separate.SuperadminName)
+                ?? throw new InvalidOperationException("superadmin missing");
+            Assert.True((await users.UpdateSecurityStampAsync(account)).Succeeded);
+            using (var revoked = await Send(separate.Client,
+                HttpMethod.Get, url, token))
+                Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
+
+            var renewed = await separate.LoginAsync(
+                separate.SuperadminName, ApiHarness.SuperadminPassword);
+            using (var restored = await Send(separate.Client,
+                HttpMethod.Get, url, renewed))
+                Assert.Equal(HttpStatusCode.Conflict, restored.StatusCode);
+            Assert.True((await users.RemoveFromRoleAsync(
+                account, "superadmin")).Succeeded);
+            using (var noRole = await Send(separate.Client,
+                HttpMethod.Get, url, renewed))
+                Assert.Equal(HttpStatusCode.Unauthorized, noRole.StatusCode);
+            Assert.Equal(before, separate.Calls.Count);
+        }
+        finally
+        {
+            await separate.DisposeAsync();
+        }
+    }
+
     private static string Root() =>
         "/api/incremental-preparations/" + Guid.NewGuid() +
         "/operation-plans/" + Guid.NewGuid() +

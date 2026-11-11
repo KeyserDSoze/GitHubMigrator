@@ -265,6 +265,8 @@ builder.Services.AddScoped<
             clock: sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped<
     PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector>();
+builder.Services.AddScoped<
+    GitIncrementalLaterCheckpointMirrorSecondReviewActorPreflight>();
 // #120: dedicated local-only F-060v2 importer, separated from the
 // historic baseline GitHubTrustedRemoteRead path. Both this import and
 // its worker need independent OFF-by-default feature switches.

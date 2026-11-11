@@ -64,9 +64,10 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             string? expectedTargetReceiptSha256,
             ClaimsPrincipal user,
             PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector inspector,
+            GitIncrementalLaterCheckpointMirrorSecondReviewActorPreflight actorPreflight,
             CancellationToken ct) => await GuardAsync(async () =>
         {
-            var secondReviewerId = Actor(user);
+            var secondReviewerId = await actorPreflight.RequireAsync(user);
             var checkedAssessment = await inspector.ReadAssessedAsync(
                 id, planId, checkpointId, targetObservationId, workpackId,
                 sourceRepositoryId ?? "",
@@ -77,6 +78,12 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
                 secondReviewerId == x.OriginalWorkerId)
                 throw new GitSourceSnapshotMirrorException(
                     "LaterCheckpointMirrorSecondReviewIndependentReviewerRequired");
+            // A current superadmin may lose their role or have their
+            // security stamp rotated during a long double Git fsck.
+            // Revalidate identity before returning even a read-only
+            // candidate. This still does NOT make a durable CAS.
+            if (await actorPreflight.RequireAsync(user) != secondReviewerId)
+                throw new UnauthorizedAccessException();
 
             // No original F-061 lease token, local directory path,
             // reviewer access token, or bearer credential in response.
