@@ -277,6 +277,30 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
         Assert.Equal(4L, guards);
         Assert.Equal(1L, reviewFk);
         Assert.Equal(0L, legacyFk);
+        // #124: when upgrading an existing PREPARED-only database,
+        // not just on a fresh CREATE TABLE, all new post-move
+        // provenance columns and the dedicated CHECK must exist.
+        var receiptColumns = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM information_schema.columns
+            WHERE table_name =
+                'git_later_checkpoint_mirror_isolation_receipts'
+                AND column_name IN (
+                    'original_worker_id', 'original_lease_token',
+                    'original_generation', 'bundle_sha256',
+                    'bundle_bytes', 'reconciled_existing_quarantine')
+                AND is_nullable = 'NO'
+            """).SingleAsync();
+        var upgradedConstraint = await db.Database.SqlQueryRaw<long>("""
+            SELECT count(*)::bigint AS "Value"
+            FROM pg_constraint
+            WHERE conrelid =
+                'git_later_checkpoint_mirror_isolation_receipts'::regclass
+                AND conname = 'ck_f061v2_isolation_receipt_provenance_v2'
+                AND contype = 'c'
+            """).SingleAsync();
+        Assert.Equal(6L, receiptColumns);
+        Assert.Equal(1L, upgradedConstraint);
         var flags = await db.Database.SqlQueryRaw<long>("""
             SELECT count(*)::bigint AS "Value"
             FROM information_schema.columns
