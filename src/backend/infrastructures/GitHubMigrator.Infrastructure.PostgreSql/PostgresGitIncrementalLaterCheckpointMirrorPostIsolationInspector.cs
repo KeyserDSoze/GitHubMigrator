@@ -98,17 +98,26 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
             string sourceRepositoryId, string expectedTargetReceiptSha256,
             Guid originalBundleActorId, CancellationToken ct)
     {
-        var physical = await ReadAsync(preparationId, planId, checkpointId,
-            targetObservationId, workpackId, sourceRepositoryId,
-            expectedTargetReceiptSha256, originalBundleActorId, ct);
+        if (!options.Enabled)
+            throw Refused("LaterCheckpointMirrorPostIsolationInspectorDisabled");
+        var before = await ReadSqlAsync(preparationId, planId,
+            checkpointId, targetObservationId, workpackId,
+            sourceRepositoryId, expectedTargetReceiptSha256,
+            originalBundleActorId, ct);
 
-        // The read-only physical audit has completed under the F-060
-        // POSIX root lock. Independently refresh the complete source-first
-        // SQL history and historical Isolated receipt before inspecting
-        // the #127 generation assessment. This is NOT one atomic CAS.
+        // The second source-first SQL read and exact Assessed/Isolated
+        // digest recheck now run inside the SAME F-060 root/process
+        // lock as the current two-pass Git audit. There is NO SQL
+        // transaction spanning Git subprocesses, and NO write/CAS.
+        return await physical.WithVerifiedQuarantineAsync(
+            before.Snapshot.Stage, before.Snapshot.DurableBundle,
+            before.Snapshot.ExpectedInspection, before.Snapshot.HumanDecision,
+            before.Snapshot.PreparedIntent, async lockedCt =>
+        {
         var current = await ReadSqlAsync(preparationId, planId, checkpointId,
             targetObservationId, workpackId, sourceRepositoryId,
-            expectedTargetReceiptSha256, originalBundleActorId, ct);
+            expectedTargetReceiptSha256, originalBundleActorId, lockedCt);
+        var physical = ConfirmUnchanged(before, current, IsolatedIntact);
         var stage = current.Snapshot.Stage;
         var durable = current.Snapshot.DurableBundle;
         var isolated = current.Isolated;
@@ -204,6 +213,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
         return new(physical, assessed.EvidenceSha256,
             assessed.SuggestedNextGeneration,
             assessed.SourceReviewedAtUtc, assessed.AssessedAtUtc);
+        }, ct);
     }
 
     public async Task<GitIncrementalLaterCheckpointMirrorPostIsolationInspection>
@@ -237,6 +247,17 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
         var after = await ReadSqlAsync(preparationId, planId, checkpointId,
             targetObservationId, workpackId, sourceRepositoryId,
             expectedTargetReceiptSha256, originalBundleActorId, ct);
+        return ConfirmUnchanged(before, after, state);
+    }
+
+    private GitIncrementalLaterCheckpointMirrorPostIsolationInspection
+        ConfirmUnchanged(
+            (GitIncrementalLaterCheckpointMirrorPreparedSnapshot Snapshot,
+             GitIncrementalLaterCheckpointMirrorRecordedIsolationReceipt Isolated) before,
+            (GitIncrementalLaterCheckpointMirrorPreparedSnapshot Snapshot,
+             GitIncrementalLaterCheckpointMirrorRecordedIsolationReceipt Isolated) after,
+            string state)
+    {
         var first = before.Snapshot;
         var last = after.Snapshot;
         if (before.Isolated != after.Isolated ||

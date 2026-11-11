@@ -3030,6 +3030,43 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         'Assessed',
                                         {generationAssessment.AssessedAtUtc})
                                     """);
+                                // #129: the locked physical/SQL handoff
+                                // MUST NOT invoke the source callback if
+                                // the actual quarantined marker is forged.
+                                // Restore exact bytes for subsequent audit.
+                                var lockedAuditMarker = Path.Combine(
+                                    physicalMirror.VerifiedMirrorRoot,
+                                    isolated.IsolationDirectoryName,
+                                    "agic-f061v2-reviewed-isolation-intent");
+                                var lockedAuditMarkerBytes =
+                                    await File.ReadAllBytesAsync(lockedAuditMarker);
+                                try
+                                {
+                                    await File.WriteAllTextAsync(
+                                        lockedAuditMarker, "foreign-intent");
+                                    var callbacksOnTamper = 0;
+                                    await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                        localSession.WithVerifiedQuarantineAsync(
+                                            completedSource.Stage,
+                                            completedSource.DurableBundle,
+                                            completedSource.ExpectedInspection,
+                                            completedSource.HumanDecision,
+                                            completedSource.PreparedIntent,
+                                            token =>
+                                            {
+                                                Interlocked.Increment(
+                                                    ref callbacksOnTamper);
+                                                return Task.FromResult("untrusted");
+                                            }, default));
+                                    Assert.Equal(0, callbacksOnTamper);
+                                }
+                                finally
+                                {
+                                    await File.WriteAllBytesAsync(
+                                        lockedAuditMarker,
+                                        lockedAuditMarkerBytes);
+                                }
                                 // #129: trusted completed #127
                                 // assessment is now joined to its real
                                 // Assessed event and domain SHA, then

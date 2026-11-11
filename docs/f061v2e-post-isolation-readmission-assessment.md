@@ -192,3 +192,28 @@ A future durable second-review writer must atomically consume a unique
 session/decision nonce under its own source+POSIX+PostgreSQL lock and
 revalidate the actor in the same decision path; none of that authority
 is enabled here.
+
+
+### #129: POSIX lock remains held through the final SQL assessment read
+
+The second-review candidate now calls the new read-only
+`WithVerifiedQuarantineAsync` physical interface instead of relying on
+a POSIX audit that releases its lock before the final SQL check. The
+source-first SQL history is read **before** acquiring the filesystem
+lock; under the shared F-060 POSIX process/root lock the physical layer
+validates exact quarantine-only paths and a matching durable Prepared
+marker, SHA1/SHA256 object/ref closure with two complete Git fsck passes,
+and immutable bundle bytes. Only then is the callback invoked to
+**re-read source-first PostgreSQL history, validate the immutable Isolated
+receipt and #127 Assessed row/event, and re-seal the original domain SHA
+while the POSIX lock remains held**. No SQL transaction spans a Git
+subprocess, no original path is renamed, no lease/worker/generation is
+claimed, and the callback performs no mutation. Direct physical tests
+verify that a forged marker prevents callback execution altogether.
+
+This closes a cooperating-process TOCTOU gap for read-only assessment,
+but **is not yet a durable second-review decision/CAS** and does not
+prevent arbitrary hostile filesystem writers from bypassing our locks.
+#129 still needs independent one-time human review authorization and
+append-only guarded SQL, with three-replica race/nonce tests. The original
+F-061 `RecoveryRequired` lease is terminal and never modified here.

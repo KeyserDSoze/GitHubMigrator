@@ -41,4 +41,17 @@ public interface IGitIncrementalLaterCheckpointMirrorPostIsolationPathAudit
         GitIncrementalLaterCheckpointMirrorRecoveryDecision decision,
         GitIncrementalLaterCheckpointMirrorIsolationIntent intent,
         CancellationToken ct);
+
+    // #129: only after two full quarantined Git fsck/ref/OID passes,
+    // with exact Prepared marker and bundle bytes, under the shared
+    // F-060 POSIX root/process lock. Final SQL read runs INSIDE lock.
+    // Unlike the isolation session this method never moves any path.
+    Task<TResult> WithVerifiedQuarantineAsync<TResult>(
+        GitIncrementalLaterCheckpointMirrorStagingPlan stage,
+        GitIncrementalLaterCheckpointBundleReceipt durable,
+        GitIncrementalLaterCheckpointMirrorRecoveryInspection inspection,
+        GitIncrementalLaterCheckpointMirrorRecoveryDecision decision,
+        GitIncrementalLaterCheckpointMirrorIsolationIntent intent,
+        Func<CancellationToken, Task<TResult>> readSql,
+        CancellationToken ct);
 }
