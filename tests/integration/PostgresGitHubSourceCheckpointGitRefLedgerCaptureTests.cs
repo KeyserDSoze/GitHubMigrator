@@ -2252,6 +2252,11 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             PostgresGitIncrementalLaterCheckpointMirrorAdmissionPreflight>(),
                                         auditScope.ServiceProvider.GetRequiredService<
                                             PostgresGitIncrementalLaterCheckpointMirrorLeaseStore>());
+                                var freshPrepared = await latestReader.ReadAsync(
+                                    run.Id, plan.Id, later.Id,
+                                    observationId, first.WorkpackId,
+                                    "repo-1", targetReceipt.EvidenceSha256,
+                                    candidate.RequestedBy, default);
                                 var localSession = new
                                     LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
                                         physicalMirror!.BundleRoot,
@@ -2259,11 +2264,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         enabled: true);
                                 if (oidLength == 40)
                                 {
-                                    var pendingHistory = await latestReader.ReadAsync(
-                                        run.Id, plan.Id, later.Id,
-                                        observationId, first.WorkpackId,
-                                        "repo-1", targetReceipt.EvidenceSha256,
-                                        candidate.RequestedBy, default);
+                                    var pendingHistory = freshPrepared;
                                     var crash = await Assert.ThrowsAsync<
                                         InvalidOperationException>(() =>
                                         localSession.WithVerifiedIsolationAsync(
@@ -2308,7 +2309,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     isolated.ReconciledExistingQuarantine);
                                 Assert.Equal(humanDecision.EvidenceSha256,
                                     isolated.RecoveryDecisionSha256);
-                                Assert.Equal(prepared.IntentSha256,
+                                Assert.Equal(freshPrepared.PreparedIntent.IntentSha256,
                                     isolated.PreparedIntentSha256);
                                 Assert.Equal(diagnostic.ObjectSetSha256,
                                     isolated.ObjectSetSha256);
@@ -2332,7 +2333,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         FROM git_later_checkpoint_mirror_isolation_receipts
                                         WHERE mirror_id = {staging.PhysicalMirrorId}
                                             AND evidence_sha256 = {isolated.EvidenceSha256}
-                                            AND intent_sha256 = {prepared.IntentSha256}
+                                            AND intent_sha256 = {freshPrepared.PreparedIntent.IntentSha256}
                                             AND original_worker_id = {diagnostic.WorkerId}
                                             AND original_lease_token = {diagnostic.LeaseToken}
                                             AND original_generation = {diagnostic.LeaseGeneration}
