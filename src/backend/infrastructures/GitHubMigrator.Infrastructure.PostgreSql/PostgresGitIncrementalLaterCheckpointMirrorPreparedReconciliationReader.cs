@@ -181,6 +181,19 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
             if (confirmedVerified != 0)
                 throw Refused("LaterCheckpointMirrorIsolationReconciliationAlreadyVerified");
 
+            // An already-finalized journal is not a prepared operation
+            // to replay. Future inspection of completed quarantine
+            // evidence is a separate read-only endpoint, not a
+            // permission to repeat the filesystem rename.
+            var recorded = await db.Database.SqlQuery<long>($"""
+                SELECT count(*)::bigint AS "Value"
+                FROM git_later_checkpoint_mirror_isolation_receipts
+                WHERE mirror_id = {stage.PhysicalMirrorId}
+                    OR workpack_id = {stage.WorkpackId}
+                """).SingleAsync(ct);
+            if (recorded != 0)
+                throw Refused("LaterCheckpointMirrorIsolationReconciliationAlreadyRecorded");
+
             var events = await db.Database.SqlQuery<
                 PostgresGitIncrementalLaterCheckpointMirrorRecoveryInspector.EventRow>($"""
                 SELECT id AS "Id", generation AS "Generation",
