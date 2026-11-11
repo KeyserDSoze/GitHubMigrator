@@ -23,6 +23,13 @@ public sealed record GitIncrementalLaterCheckpointMirrorPostIsolationInspection(
     bool CanMaterialize, bool CanPush, bool CanRetry,
     bool CanDispatch, bool MigrationComplete);
 
+// #129: server-derived, source+POSIX-checked #127 assessment.
+// A durable audit input, NEVER a second human review or lease capability.
+public sealed record GitIncrementalLaterCheckpointMirrorAssessedIsolationInspection(
+    GitIncrementalLaterCheckpointMirrorPostIsolationInspection Inspection,
+    string AssessmentEvidenceSha256, long SuggestedNextGeneration,
+    DateTimeOffset SourceReviewedAtUtc, DateTimeOffset AssessedAtUtc);
+
 public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector(
     AppDbContext db,
     GitIncrementalLaterCheckpointMirrorPostIsolationInspectionOptions options,
@@ -70,6 +77,133 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInsp
                 ReconciledExistingQuarantine, RecordedAtUtc, EvidenceSha256,
                 true, CanReAdmit, CanMaterialize, CanPush, CanRetry,
                 CanDispatch, MigrationComplete);
+    }
+
+    private sealed class AssessmentRow
+    {
+        public string EvidenceSha256 { get; set; } = "";
+        public long SuggestedNextGeneration { get; set; }
+        public DateTimeOffset SourceReviewedAtUtc { get; set; }
+        public DateTimeOffset AssessedAtUtc { get; set; }
+    }
+
+    // A second-human review candidate MUST be anchored to an existing,
+    // immutable #127 Assessed row AND event. Merely having a quarantined
+    // directory and a self-sealed SHA is not sufficient. This function
+    // never INSERTs, creates an F-061 generation or authorizes recovery.
+    public async Task<GitIncrementalLaterCheckpointMirrorAssessedIsolationInspection>
+        ReadAssessedAsync(
+            Guid preparationId, Guid planId, Guid checkpointId,
+            Guid targetObservationId, Guid workpackId,
+            string sourceRepositoryId, string expectedTargetReceiptSha256,
+            Guid originalBundleActorId, CancellationToken ct)
+    {
+        var physical = await ReadAsync(preparationId, planId, checkpointId,
+            targetObservationId, workpackId, sourceRepositoryId,
+            expectedTargetReceiptSha256, originalBundleActorId, ct);
+
+        // The read-only physical audit has completed under the F-060
+        // POSIX root lock. Independently refresh the complete source-first
+        // SQL history and historical Isolated receipt before inspecting
+        // the #127 generation assessment. This is NOT one atomic CAS.
+        var current = await ReadSqlAsync(preparationId, planId, checkpointId,
+            targetObservationId, workpackId, sourceRepositoryId,
+            expectedTargetReceiptSha256, originalBundleActorId, ct);
+        var stage = current.Snapshot.Stage;
+        var durable = current.Snapshot.DurableBundle;
+        var isolated = current.Isolated;
+        if (physical.PhysicalMirrorId != stage.PhysicalMirrorId ||
+            physical.WorkpackId != stage.WorkpackId ||
+            physical.CheckpointId != stage.CheckpointId ||
+            physical.SourceSnapshotId != stage.SourceSnapshotId ||
+            physical.StagingEvidenceSha256 != stage.EvidenceSha256 ||
+            physical.IsolationReceiptSha256 != isolated.EvidenceSha256 ||
+            physical.FirstReviewSha256 != isolated.RecoveryDecisionSha256 ||
+            physical.PreparedIntentSha256 != isolated.PreparedIntentSha256 ||
+            physical.ObjectSetSha256 != isolated.ObjectSetSha256 ||
+            physical.ObjectCount != isolated.ObjectCount)
+            throw Refused("LaterCheckpointMirrorPostIsolationSourceChanged");
+
+        var assessed = await db.Database.SqlQuery<AssessmentRow>($"""
+            SELECT a.evidence_sha256 AS "EvidenceSha256",
+                a.suggested_next_generation AS "SuggestedNextGeneration",
+                a.source_reviewed_at_utc AS "SourceReviewedAtUtc",
+                a.assessed_at_utc AS "AssessedAtUtc"
+            FROM git_later_checkpoint_mirror_generation_assessments a
+            JOIN git_later_checkpoint_mirror_generation_assessment_events e
+                ON e.mirror_id = a.mirror_id
+                AND e.evidence_sha256 = a.evidence_sha256
+                AND e.type = 'Assessed'
+                AND e.occurred_at_utc = a.assessed_at_utc
+            WHERE a.mirror_id = {stage.PhysicalMirrorId}
+                AND a.workpack_id = {stage.WorkpackId}
+                AND a.checkpoint_id = {stage.CheckpointId}
+                AND a.source_snapshot_id = {stage.SourceSnapshotId}
+                AND a.evidence_version = 1
+                AND a.original_worker_id = {isolated.OriginalWorkerId}
+                AND a.original_lease_token = {isolated.OriginalLeaseToken}
+                AND a.original_generation = {isolated.OriginalGeneration}
+                AND a.suggested_next_generation = a.original_generation + 1
+                AND a.staging_evidence_sha256 = {stage.EvidenceSha256}
+                AND a.source_full_ref_proof_sha256 =
+                    {stage.SourceFullRefProofSha256}
+                AND a.source_ref_set_sha256 = {stage.SourceRefSetSha256}
+                AND a.target_receipt_sha256 = {stage.TargetReceiptSha256}
+                AND a.bundle_sha256 = {durable.BundleSha256}
+                AND a.bundle_bytes = {durable.BundleBytes}
+                AND a.isolation_receipt_sha256 = {isolated.EvidenceSha256}
+                AND a.recovery_decision_sha256 =
+                    {isolated.RecoveryDecisionSha256}
+                AND a.prepared_intent_sha256 =
+                    {isolated.PreparedIntentSha256}
+                AND a.isolation_directory_name =
+                    {isolated.IsolationDirectoryName}
+                AND a.object_set_sha256 = {isolated.ObjectSetSha256}
+                AND a.object_count = {isolated.ObjectCount}
+                AND NOT a.durable_readmission_approved
+                AND NOT a.can_readmit AND NOT a.can_materialize
+                AND NOT a.can_push AND NOT a.can_retry
+                AND NOT a.can_dispatch AND NOT a.migration_complete
+            """).SingleOrDefaultAsync(ct)
+            ?? throw Refused("LaterCheckpointMirrorSecondReviewAssessmentMissing");
+
+        // Rebuild the *domain-separated* SHA from the trusted source
+        // and recorded DB timestamps rather than accepting any guessed
+        // SHA or actor ID from an HTTP query. An FK/check alone cannot
+        // establish a genuine #127 assessment.
+        GitIncrementalLaterCheckpointMirrorReadmissionAssessment sealedValue;
+        try
+        {
+            var sourceRead =
+                GitIncrementalLaterCheckpointMirrorAdmissionIntegrity.Seal(
+                    stage, durable, assessed.SourceReviewedAtUtc);
+            sealedValue =
+                GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity.Seal(
+                    stage, durable, isolated, sourceRead,
+                    assessed.AssessedAtUtc);
+        }
+        catch (GitSourceSnapshotMirrorException)
+        {
+            throw Refused("LaterCheckpointMirrorSecondReviewAssessmentInvalid");
+        }
+
+        if (sealedValue.EvidenceSha256 != assessed.EvidenceSha256 ||
+            sealedValue.SuggestedNextGeneration !=
+                assessed.SuggestedNextGeneration)
+            throw Refused("LaterCheckpointMirrorSecondReviewAssessmentInvalid");
+
+        // A human must inspect a RECENT source review, not approve a
+        // historic #127 SHA months later. This is a non-authorizing
+        // time check; a real writer must re-check using DB time under
+        // the source and POSIX locks and use replay-proof JWT identity.
+        var now = clock.GetUtcNow();
+        if (now - assessed.AssessedAtUtc > TimeSpan.FromMinutes(2) ||
+            assessed.AssessedAtUtc - now > TimeSpan.FromMinutes(2))
+            throw Refused("LaterCheckpointMirrorSecondReviewAssessmentExpired");
+
+        return new(physical, assessed.EvidenceSha256,
+            assessed.SuggestedNextGeneration,
+            assessed.SourceReviewedAtUtc, assessed.AssessedAtUtc);
     }
 
     public async Task<GitIncrementalLaterCheckpointMirrorPostIsolationInspection>

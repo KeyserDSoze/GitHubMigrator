@@ -67,10 +67,11 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             CancellationToken ct) => await GuardAsync(async () =>
         {
             var secondReviewerId = Actor(user);
-            var x = await inspector.ReadAsync(id, planId, checkpointId,
-                targetObservationId, workpackId, sourceRepositoryId ?? "",
-                expectedTargetReceiptSha256 ?? "",
-                originalBundleActorId, ct);
+            var checkedAssessment = await inspector.ReadAssessedAsync(
+                id, planId, checkpointId, targetObservationId, workpackId,
+                sourceRepositoryId ?? "",
+                expectedTargetReceiptSha256 ?? "", originalBundleActorId, ct);
+            var x = checkedAssessment.Inspection;
             if (secondReviewerId == x.FirstReviewerId ||
                 secondReviewerId == x.OriginalBundleActorId ||
                 secondReviewerId == x.OriginalWorkerId)
@@ -86,7 +87,12 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
                 x.StagingEvidenceSha256, x.IsolationReceiptSha256,
                 x.FirstReviewSha256, x.PreparedIntentSha256,
                 x.ObjectSetSha256, x.ObjectCount, x.PhysicalState,
-                x.ObservedAtUtc, independentReviewerRequired = true,
+                x.ObservedAtUtc,
+                checkedAssessment.AssessmentEvidenceSha256,
+                checkedAssessment.SuggestedNextGeneration,
+                checkedAssessment.SourceReviewedAtUtc,
+                checkedAssessment.AssessedAtUtc,
+                independentReviewerRequired = true,
                 durableSecondReviewPersisted = false,
                 canReAdmit = false, canMaterialize = false,
                 canPush = false, canRetry = false, canDispatch = false,

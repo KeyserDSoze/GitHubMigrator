@@ -145,3 +145,30 @@ successful authenticated candidate remains non-authorizing and can go
 stale immediately; completing #129 still requires SQL+POSIX-fenced
 persisted independent human decision, replay/race guards, and real
 Git/PostgreSQL security acceptance.
+
+
+### #129: durable #127 Assessed prerequisite for second-review GET
+
+The authenticated `GET .../mirror-recovery/second-review/candidate`
+now calls `PostIsolationInspector.ReadAssessedAsync`, not the less
+restrictive general physical diagnostic. After live F-091/F-097/F-031
+source-first PostgreSQL reads and the double-fsck POSIX quarantine
+inspection, it requires a **durable #127 generation-assessment row and its
+matching immutable `Assessed` event**. Their original F-061 failed
+worker/token/generation, F-035 bundle, original source refs, target
+receipt, Prepared/Isolated SHA, object closure and bounded future-generation
+hint must all match the current source. The domain-specific #126 digest is
+reconstructed from the trusted SQL timestamps and full current historical
+source/physical receipts. An absent, mismatched or expired (two-minute)
+assessment is refused. The non-authorizing candidate response includes
+`assessmentEvidenceSha256`, `suggestedNextGeneration` (hint only) and
+review times, **never** a new lease/permission.
+
+The SHA1/SHA256 real-Git PostgreSQL fixture verifies that a fully isolated
+mirror without a completed `Assessed` audit event is refused, then accepts
+an exact row/event whose digest re-seals against real evidence. The
+source+POSIX+SQL observations are STILL NOT one atomic CAS and do not
+prove bearer anti-replay or create an authenticated second-review event.
+The two #129 deny-all SQL review triggers remain installed. A future
+writer must independently lock and recheck the source, latest assessment,
+JWT/reviewer identity and POSIX path **within its own fenced transaction**.

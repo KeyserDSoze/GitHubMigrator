@@ -3003,6 +3003,22 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         {generationAssessment.AssessedAtUtc},
                                         {generationAssessment.EvidenceSha256})
                                     """);
+                                // #129: without the #127 persisted
+                                // row AND its matching immutable Assessed
+                                // event, a second-human GET candidate must
+                                // fail closed even after a successful real
+                                // POSIX-locked quarantine audit.
+                                Assert.Equal(
+                                    "LaterCheckpointMirrorSecondReviewAssessmentMissing",
+                                    (await Assert.ThrowsAsync<
+                                        GitSourceSnapshotMirrorException>(() =>
+                                        postIsolation.ReadAssessedAsync(
+                                            run.Id, plan.Id, later.Id,
+                                            observationId, first.WorkpackId,
+                                            "repo-1",
+                                            targetReceipt.EvidenceSha256,
+                                            candidate.RequestedBy,
+                                            default))).Code);
                                 await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
                                     INSERT INTO
                                         git_later_checkpoint_mirror_generation_assessment_events (
@@ -3014,6 +3030,29 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         'Assessed',
                                         {generationAssessment.AssessedAtUtc})
                                     """);
+                                // #129: trusted completed #127
+                                // assessment is now joined to its real
+                                // Assessed event and domain SHA, then
+                                // rechecked against live source/target
+                                // SQL and dual-fsck physical quarantine.
+                                var assessedIsolation =
+                                    await postIsolation.ReadAssessedAsync(
+                                        run.Id, plan.Id, later.Id,
+                                        observationId, first.WorkpackId,
+                                        "repo-1",
+                                        targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, default);
+                                Assert.Equal(generationAssessment.EvidenceSha256,
+                                    assessedIsolation.AssessmentEvidenceSha256);
+                                Assert.Equal(
+                                    generationAssessment.SuggestedNextGeneration,
+                                    assessedIsolation.SuggestedNextGeneration);
+                                Assert.Equal(generationAssessment.AssessedAtUtc,
+                                    assessedIsolation.AssessedAtUtc);
+                                Assert.False(
+                                    assessedIsolation.Inspection.CanReAdmit ||
+                                    assessedIsolation.Inspection.CanPush ||
+                                    assessedIsolation.Inspection.MigrationComplete);
                                 Assert.Equal(1L, await verifiedDb.Database
                                     .SqlQuery<long>($"""
                                         SELECT count(*)::bigint AS "Value"
