@@ -2438,6 +2438,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     // Losers must observe only the original
                                     // completed receipt, never a second
                                     // rename, new lease or SQL event.
+                                    // Bound the distributed contender test:
+                                    // an unexpected PostgreSQL advisory-lock
+                                    // or POSIX-root deadlock must FAIL this
+                                    // quality gate, not hold CI indefinitely.
+                                    using var replicaDeadline =
+                                        new CancellationTokenSource(
+                                            TimeSpan.FromMinutes(3));
                                     var go = new TaskCompletionSource(
                                         TaskCreationOptions.RunContinuationsAsynchronously);
                                     var replicas = Enumerable.Range(0, 3)
@@ -2479,7 +2486,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                                     observationId, first.WorkpackId,
                                                     "repo-1",
                                                     targetReceipt.EvidenceSha256,
-                                                    candidate.RequestedBy, default);
+                                                    candidate.RequestedBy,
+                                                    replicaDeadline.Token);
                                             }
                                             catch (GitSourceSnapshotMirrorException ex)
                                                 when (ex.Code is
@@ -2490,7 +2498,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             }
                                         }).ToArray();
                                     go.SetResult();
-                                    var replies = await Task.WhenAll(replicas);
+                                    var replies = await Task.WhenAll(replicas)
+                                        .WaitAsync(replicaDeadline.Token);
                                     Assert.Single(replies.Where(x => x is not null));
                                     isolated = replies.Single(x => x is not null)!;
                                 }
