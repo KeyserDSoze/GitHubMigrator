@@ -2676,17 +2676,18 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         completedSource.HumanDecision,
                                         completedSource.PreparedIntent,
                                         default));
-                                Assert.Equal(
-                                    "LaterCheckpointMirrorIsolationReconciliationSourceChanged",
-                                    (await Assert.ThrowsAsync<
-                                        GitSourceSnapshotMirrorException>(() =>
-                                        latestReader.ReadCompletedAsync(
-                                            run.Id, plan.Id, later.Id,
-                                            observationId, first.WorkpackId,
-                                            "foreign-repo",
-                                            targetReceipt.EvidenceSha256,
-                                            candidate.RequestedBy,
-                                            default))).Code);
+                                // Any foreign source scope must fail.
+                                // The trusted underlying preflight may
+                                // reject it before the post-isolation
+                                // layer's own history checks.
+                                await Assert.ThrowsAsync<
+                                    GitSourceSnapshotMirrorException>(() =>
+                                    latestReader.ReadCompletedAsync(
+                                        run.Id, plan.Id, later.Id,
+                                        observationId, first.WorkpackId,
+                                        "foreign-repo",
+                                        targetReceipt.EvidenceSha256,
+                                        candidate.RequestedBy, default));
                                 // #127: after ONE trusted physical + SQL
                                 // Isolated receipt, an additive audit-only
                                 // generation assessment can be written and

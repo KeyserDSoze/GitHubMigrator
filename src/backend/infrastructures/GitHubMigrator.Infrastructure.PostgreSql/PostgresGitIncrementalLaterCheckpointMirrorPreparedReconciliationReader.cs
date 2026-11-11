@@ -111,7 +111,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
         ReadCoreAsync(preparationId, planId, checkpointId,
             targetObservationId, workpackId, sourceRepositoryId,
             expectedTargetReceiptSha256, originalBundleActorId,
-            requireRecordedIsolation: false, ct);
+            requireRecordedIsolation: false, ct: ct);
 
     // Does NOT inspect disk, authorize a reviewer, grant generation
     // ownership or invoke a physical rename. Callers must separately
@@ -125,7 +125,7 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
         ReadCoreAsync(preparationId, planId, checkpointId,
             targetObservationId, workpackId, sourceRepositoryId,
             expectedTargetReceiptSha256, originalBundleActorId,
-            requireRecordedIsolation: true, ct);
+            requireRecordedIsolation: true, ct: ct);
 
     private async Task<GitIncrementalLaterCheckpointMirrorPreparedSnapshot>
         ReadCoreAsync(
@@ -229,6 +229,28 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
                 var completed = await db.Database.SqlQuery<long>($"""
                     SELECT count(*)::bigint AS "Value"
                     FROM git_later_checkpoint_mirror_isolation_receipts r
+                    JOIN git_later_checkpoint_mirror_isolation_intents i
+                        ON i.mirror_id = r.mirror_id
+                        AND i.intent_sha256 = r.intent_sha256
+                        AND i.recovery_decision_sha256 =
+                            r.recovery_decision_sha256
+                        AND i.original_worker_id = r.original_worker_id
+                        AND i.original_lease_token = r.original_lease_token
+                        AND i.original_generation = r.original_generation
+                        AND i.isolation_directory_name =
+                            r.isolation_directory_name
+                        AND i.object_set_sha256 =
+                            r.physically_verified_object_sha256
+                        AND i.object_count =
+                            r.physically_verified_object_count
+                    JOIN git_later_checkpoint_mirror_recovery_decisions d
+                        ON d.mirror_id = r.mirror_id
+                        AND d.evidence_sha256 = r.recovery_decision_sha256
+                        AND d.decision = 'ApprovedForIsolationReview'
+                        AND d.original_worker_id = r.original_worker_id
+                        AND d.original_lease_token = r.original_lease_token
+                        AND d.original_lease_generation =
+                            r.original_generation
                     JOIN git_later_checkpoint_mirror_isolation_receipt_events e
                         ON e.mirror_id = r.mirror_id
                         AND e.type = 'Isolated'
