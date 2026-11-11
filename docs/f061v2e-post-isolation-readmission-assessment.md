@@ -670,3 +670,24 @@ the two long SHA1/SHA256 `failAfterImport` branches still encounter
 real PostgreSQL clock-side 5-minute F-031/lease expiry even when
 the TestServer wall-clock was bounded; test fixture segmentation
 is still required, with strict production freshness untouched.
+
+
+### #130: bind database-clock/readiness preflight to explicit PostgreSQL schemas
+
+The read-only session readiness guard queries
+`public.git_later_checkpoint_mirror_second_review_session_consumptions`
+and calls `pg_catalog.clock_timestamp()` through
+`pg_catalog.date_trunc(...)`. Neither the real journal lookup nor
+the database clock depends on a connection's mutable `search_path`.
+A real PostgreSQL17 integration test starts a transaction, sets
+`SET LOCAL search_path TO pg_catalog` (excluding `public`), and
+checks that the exact session/nonce/mirror readiness read still
+completes using the database clock. The temporary transaction is
+rolled back; it does not create, consume or authorize a session.
+
+The strict non-authorizing boundary is unchanged: all three review,
+event and one-use consumption tables still DENY ALL mutation;
+the future source-first verified, authenticated atomic writer
+is not implemented. #131's long SHA1/SHA256 failAfterImport
+fixture still needs to complete within the original F-031 real
+PostgreSQL-clock freshness interval without weakening runtime checks.
