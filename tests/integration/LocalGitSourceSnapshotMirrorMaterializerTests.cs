@@ -817,14 +817,14 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
         var marker = Path.Combine(original,
             "agic-f061v2-reviewed-isolation-intent");
         // The fixture simulates an exact already-persisted marker.
-        // Newlines must be real LF bytes, not literal backslash+n:
-        // the server rejects even graph-identical incorrectly marked
-        // directories. If requested, simulate kernel rename without
-        // calling fsync(parent), then restart the trusted physical path.
+        // Preserve the v1 production marker's literal backslash+n
+        // delimiters. Changing these bytes to LF without versioning
+        // would wrongly orphan already-fsynced PREPARED operations.
+        // Optionally simulate kernel rename without fsync(parent).
         var contents = System.Text.Encoding.ASCII.GetBytes(
-            "f061v2-physical-source-isolation-intent-v1\n" +
-            prepared.IntentSha256 + "\n" +
-            decision.EvidenceSha256 + "\n");
+            "f061v2-physical-source-isolation-intent-v1\\n" +
+            prepared.IntentSha256 + "\\n" +
+            decision.EvidenceSha256 + "\\n");
         await using (var file = new FileStream(marker,
             FileMode.CreateNew, FileAccess.Write, FileShare.None,
             4096, FileOptions.WriteThrough))

@@ -281,6 +281,9 @@ public sealed class LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator(
         }
     }
 
+    // v1 was written using literal backslash+n separators. Preserve
+    // these EXACT persisted bytes for crash replay: changing to LF
+    // requires an explicit, versioned migration of marker history.
     private static byte[] IntentMarker(
         GitIncrementalLaterCheckpointMirrorIsolationIntent prepared,
         GitIncrementalLaterCheckpointMirrorRecoveryDecision reviewed) =>
