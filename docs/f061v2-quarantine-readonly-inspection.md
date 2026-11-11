@@ -1,6 +1,9 @@
 # F-061v2 quarantined local mirror inspection (issue #121)
 
-Status: **internal read-only diagnostic implemented, pending full CI**.
+Status: **internal read-only diagnostics, immutable human review and
+PREPARED journal, plus a separately gated physical-to-SQL terminal
+quarantine coordinator are implemented on main; latest full CI is still
+pending**. This does NOT implement F-061 generation re-admission.
 The broader [#121](https://github.com/KeyserDSoze/GitHubMigrator/issues/121)
 still owns explicit reviewer authorization, securely segregating orphans
 and generation-fenced re-admission. Work happens directly on `main`.
@@ -105,21 +108,22 @@ a real source checkpoint and F-035v2 bundle. Cases include:
 All CI job results must be checked before treating these cases as
 verified.
 
-## Not yet implemented
+## What is still not implemented
 
-The **next** #121 steps need a separate, authenticated, role-checked
-reviewer decision with an immutable audit record and a new
-schema/lease-generation model. The current F-061v2 trigger deliberately
-forbids rewriting the token/worker/generation of a terminal lease.
+Issue #122 already provides independently authenticated, immutable
+reviewer decisions; #123/#124 now provide a separately gated
+no-overwrite physical quarantine and a source-locked, immutable
+terminal SQL isolation receipt/event. These operations do **not**
+release the original F-061v2 `RecoveryRequired` lease.
 
-A future recovery writer must first prove source currentness and
-checkpoint F-031 review *again under the source lock*, then isolate
-an orphan in a distinct no-overwrite physical path under POSIX file
-lock, and obtain independently reviewed new-generation authority.
-It must not mutate/erase the existing Verified evidence or automatically
-retry from a matching self-sealed SHA. No F-095v3 ancestry, destination
-push, dispatch, retry, remote Git or migration completion is granted
-by this inspector. Keep #121/#115/#100/#96/#92 open.
+The remaining #121 scope is a **separate human-approved re-admission
+with append-only new generation/worker/token history**. The existing
+F-061v2 trigger deliberately forbids rewriting a terminal lease.
+No generation-fenced re-admission or F-095v3 ancestry authority is
+implemented. Do not restore `UUID.git`, auto-retry, push, dispatch,
+send remote Git or set migration completion based on a quarantined
+directory or the terminal isolation receipt. Keep #121/#115/#100/
+#96/#92 open until their separate acceptance and full CI verification.
 
 
 ## #122: immutable independent superadmin review (no recovery action)
@@ -188,14 +192,17 @@ terminal lease/Verified triggers. No F-095v3 ancestry, GitHub
 push/retry/dispatch or migration-complete authority is added here.
 
 
-## #123: local physical no-overwrite orphan isolation primitive (NOT wired)
+## #123: legacy offline isolation primitive (separate from trusted coordinator)
 
 A separate component,
 `LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator`,
-now implements only the **offline filesystem operation**, independently
-disabled by default, and deliberately **not registered in DI, hosted
-workers or HTTP routes**. It is NOT yet a production recovery
-coordinator. No input path/refspec/OID is accepted, only the
+provides an independently disabled-by-default **offline filesystem
+operation**. That older local-only `IsolateAsync` primitive is not
+itself an SQL writer and does not authorize recovery. A **separate,
+default-OFF DI-registered trusted coordinator and physical session**
+now exist, described in the #124 section below. Neither is exposed
+by an HTTP route or hosted/background worker. No input path/refspec/
+OID is accepted, only the
 independently sealed later F-091/F-097b staging, immutable F-035v2
 bundle, current quarantine inspection and exact #122 reviewed
 decision `ApprovedForIsolationReview`.
@@ -237,14 +244,14 @@ quarantine name. Crucially,
 `CanDispatch=false` and `MigrationComplete=false`. It is a
 **non-authorizing local witness, not a SQL recovery receipt**.
 
-The next #123 step still requires an independently trusted SQL
-coordinator: live **source-first** lock, authenticated reread of the
-immutable #122 human reviewer and latest F-091/F-097b/F-031/F-035v2,
-pre-registered crash-safe physical isolation intent, actual POSIX
-operation, post-move recovery reconciliation and immutable SQL
-isolation evidence. This must prevent the filesystem rename from
-being interpreted as an F-061 new-generation license even if
-PostgreSQL fails between the move and final audit commit.
+The separate #124 trusted SQL coordinator now does the live
+**source-first** reread of #122 reviewer and latest F-091/F-097b/
+F-031/F-035v2, crash-safe pre-move isolation intent, POSIX
+no-overwrite operation, dual Git closure check, post-move PostgreSQL
+isolation receipt/event and crash reconciliation. **This does not
+give the older offline `IsolateAsync` return value SQL authority.**
+All of these operations still prohibit an F-061 new generation,
+including when PostgreSQL fails after the kernel move.
 
 A separate read-only `AuditIsolatedAsync` now supports
 diagnosing a crash **after** the atomic directory move but **before**
@@ -305,15 +312,17 @@ Only then does it atomically write a versioned domain-separated SHA-256
 still exists or a `UUID.DECISION_SHA.quarantine.git` directory has
 appeared. It never means the filesystem was moved, and it cannot grant
 a new F-061 generation or authorize any GitHub destination operation.
-The isolation receipt tables are installed as strict schema boundaries,
-but **no trusted post-move SQL writer or isolation coordinator is connected
-yet**. Physical no-overwrite rename remains separately OFF and outside DI.
-The remaining #123 acceptance is to establish a crash-safe source-locked
-coordinator that invokes the POSIX-locked no-replace move, re-audits the
-quarantined bytes, commits one immutable isolated receipt+event, and
-reconciles a crash between OS and DB without accepting an unapproved
-path, false Verified or prior generation. Re-admission/new generation
-remains separately reviewed under #121; no remote GitHub writes.
+The separate #124 default-OFF internal SQL writer is now DI-registered
+along with its independently gated physical session. It requires
+actual on-disk Git and F-035 bundle proof under the same F-060 POSIX
+root lock before it records the single immutable `Isolated` receipt
+and audit event. A crash between the kernel rename and final SQL commit
+can be reconciled only by re-reading the same source-locked `Prepared`
+and reviewer history and freshly auditing the exact quarantined Git
+graph and durable intent marker. Its receipt is evidence of physical
+segregation **only**, not of `Verified`, re-admission or a new
+generation. The final 4/4 PostgreSQL CI and additional adversarial
+checks remain acceptance gates; no remote GitHub writes.
 
 
 ## #124: PREPARED → filesystem crash-state inspection (read-only phase)
@@ -347,11 +356,19 @@ fully server-derived. It verifies the sealed expected root, UUID.bundle
 SHA+bytes and actual Git SHA1/SHA256 ref/OID closure **twice** while
 the same process/POSIX root lock used by the F-060 importer is held.
 It distinguishes:
-- `PreparedOriginalIntact`: original `UUID.git` alone exists and
-  matches the exact reviewed graph (no rename yet).
+- `PreparedOriginalIntact`: original `UUID.git` alone exists,
+  matches the exact reviewed graph and has either no pre-rename
+  marker or the exact durable reviewed intent marker.
+- `PreparedOriginalUntrusted`: original `UUID.git` still exists
+  but its pre-rename marker is partial, forged, dangling or otherwise
+  mismatches immutable `Prepared` + #122 reviewer history.
 - `PreparedIsolatedIntact`: deterministic quarantine directory
-  alone exists and its graph matches (possible crash after rename,
-  still **not** a durable SQL receipt).
+  alone exists, its graph matches **and** its fsynced causality
+  marker agrees with the reviewed intent (possible crash after
+  rename, still **not** a durable SQL receipt).
+- `PreparedIsolatedUntrusted`: original `UUID.git` is absent but
+  a byte-identical foreign/legacy quarantine has no valid causality
+  marker. Matching Git graph SHA alone is insufficient.
 - `PreparedBothPresent`, `PreparedBothMissing`: unresolved collisions/
   disappearances. No unlink, overwrite or automatic reimport.
 - `PreparedOriginalCorrupt`, `PreparedIsolatedCorrupt`: source or
@@ -364,16 +381,17 @@ fresh physical inspection of a historical reviewer decision. PostgreSQL
 integration checks re-reading the exact immutable `Prepared` row
 after simulated restart and rejection of SQL mutations.
 
-**Still not finished (#124):** joining the above two readers into a
-server-owned OS/SQL coordinator that holds the POSIX no-overwrite
-quarantine fence through the final post-rename physical check and
-short source-locked terminal SQL commit; writing an independently
-verified append-only `Isolated` receipt+event and reconciling process
-crashes/replay/concurrent replicas. No public API or background worker
-may call a filesystem move on the strength of these read-only results.
-`RecoveryRequired` is immutable and never re-admitted here. A
-separate, independently reviewed generation-history authorization
-belongs to #121, without remote GitHub writes.
+**Implemented but not yet accepted (#124):** the independent
+source-first OS/SQL coordinator holds the F-060 process/POSIX
+no-overwrite quarantine fence across the post-rename double-fsck,
+source rechecks and short immutable `Isolated` receipt+event SQL
+transaction. PostgreSQL17 integration tests now cover real SHA-1
+crash/restart and SHA-256 independent three-replica contention.
+They require a completed **4/4 CI on the final main SHA**; canceled
+intermediate workflows are not passes. There is no public API or
+hosted worker for this coordinator. The source `RecoveryRequired`
+lease remains terminal; separately reviewed generation-history
+re-admission still belongs to #121.
 
 
 ## #124: optional trusted physical-to-SQL isolation coordinator
@@ -480,3 +498,30 @@ cryptographic defense against a fully privileged host attacker
 who can change both the database and all filesystem contents.
 The SQL receipt still does not authorize a new generation, a
 GitHub destination push or migration completion.
+
+### Cancellation, contested writes and CI bounds
+
+The physical session checks cancellation after its **second** Git
+closure/fsck and final F-035 bundle read, immediately before invoking
+the immutable SQL writer. A canceled handoff leaves the exact
+reviewed quarantine bytes and `Prepared` evidence untouched:
+the SQL callback is not invoked and **no `Isolated` event is created**.
+A later explicitly invoked coordinator must re-verify the complete
+source, reviewer/intent, marker and Git graph.
+
+Integration tests use real SHA-1 and SHA-256 local Git object formats,
+including an original path with a forged marker before rename,
+a quarantined path with a forged/missing marker after rename,
+crash-after-rename/before-commit reconciliation, cancellation at the
+physical/SQL boundary and three independent PostgreSQL contexts racing
+to record the same terminal event. The three-replica test has a
+**three-minute cancellation deadline** to fail if an advisory/POSIX
+lock deadlock occurs, instead of silently hanging CI. These are
+test requirements and code paths, **not proof of a green PostgreSQL
+run** until the final workflow completes all four quality gates.
+
+Issue #125 preserves exactly four gates while canceling older
+superseded runs on the same GitHub ref. A canceled PostgreSQL job is
+not evidence that #123 or #124 passed. Isolation remains disabled by
+default, and #121's separate generation-fenced re-admission remains
+unimplemented.
