@@ -58,7 +58,11 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorIsolationCoordina
                 if (expected.PreparedIntent != reread.PreparedIntent ||
                     expected.HumanDecision != reread.HumanDecision ||
                     expected.DurableBundle != reread.DurableBundle ||
-                    expected.Stage != reread.Stage ||
+                    expected.Stage with {
+                        SourceRefs = reread.Stage.SourceRefs
+                    } != reread.Stage ||
+                    !expected.Stage.SourceRefs.SequenceEqual(
+                        reread.Stage.SourceRefs) ||
                     expected.ExpectedInspection != reread.ExpectedInspection)
                     throw Refused("LaterCheckpointMirrorIsolationCoordinatorHistoryChanged");
                 return await CommitLockedAsync(reread, proof,
