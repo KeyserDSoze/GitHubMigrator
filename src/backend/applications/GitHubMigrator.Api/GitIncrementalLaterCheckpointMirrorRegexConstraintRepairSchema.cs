@@ -2,8 +2,10 @@ using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 
 // #128: idempotent repair of the historical F-061 CHECK expressions
-// serialized from NON-interpolated C# raw SQL as {{64}} (instead of
-// PostgreSQL's {64}). No row/lease/event is modified, and only the
+// stored in PostgreSQL as {{64}} by other execution paths. EF Core
+// ExecuteSqlRawAsync applies composite formatting even to non-interpolated
+// C# raw strings: {{{{64}}}} sends {{64}} and {{64}} sends {64}.
+// No row/lease/event is modified, and only the
 // exact F-061 CHECK constraints are affected. Existing NOT VALID
 // status is preserved by pg_get_constraintdef in the replacement.
 public static class GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSchema
@@ -38,7 +40,7 @@ public static class GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSche
                             'git_later_checkpoint_mirror_generation_assessments'::regclass,
                             'git_later_checkpoint_mirror_generation_assessment_events'::regclass)
                         AND position(
-                            '{{64}}' in pg_get_constraintdef(c.oid)) > 0
+                            '{{{{64}}}}' in pg_get_constraintdef(c.oid)) > 0
                 LOOP
                     -- The DO block is one PostgreSQL transaction; if an
                     -- upgraded CHECK cannot be created, the preceding
@@ -50,7 +52,7 @@ public static class GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSche
                     EXECUTE format(
                         'ALTER TABLE %s ADD CONSTRAINT %I %s',
                         existing.table_name, existing.constraint_name,
-                        replace(existing.definition, '{{64}}', '{64}'));
+                        replace(existing.definition, '{{{{64}}}}', '{{64}}'));
                 END LOOP;
             END $f061v2_sha_regex_fix$;
             """, ct);

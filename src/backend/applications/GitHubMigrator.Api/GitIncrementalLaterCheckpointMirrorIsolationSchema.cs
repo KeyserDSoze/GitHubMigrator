@@ -12,6 +12,8 @@ public static class GitIncrementalLaterCheckpointMirrorIsolationSchema
     {
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        // EF Core ExecuteSqlRawAsync applies composite formatting to raw C# string literals:
+        // doubled {{64}} reaches PostgreSQL as the correct {64} regex quantifier.
         await db.Database.ExecuteSqlRawAsync("""
             CREATE TABLE IF NOT EXISTS
                 git_later_checkpoint_mirror_isolation_intents (
@@ -49,12 +51,12 @@ public static class GitIncrementalLaterCheckpointMirrorIsolationSchema
                     AND original_lease_token !=
                         '00000000-0000-0000-0000-000000000000'::uuid
                     AND original_generation BETWEEN 1 AND 2000
-                    AND recovery_decision_sha256 ~ '^[0-9a-f]{64}$'
-                    AND inspection_sha256 ~ '^[0-9a-f]{64}$'
-                    AND lease_event_history_sha256 ~ '^[0-9a-f]{64}$'
-                    AND staging_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                    AND object_set_sha256 ~ '^[0-9a-f]{64}$'
-                    AND intent_sha256 ~ '^[0-9a-f]{64}$'
+                    AND recovery_decision_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND inspection_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND lease_event_history_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND staging_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND object_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND intent_sha256 ~ '^[0-9a-f]{{64}}$'
                     AND object_count BETWEEN 1 AND 200000
                     AND isolation_directory_name =
                         replace(mirror_id::text,'-','') || '.' ||
@@ -75,7 +77,7 @@ public static class GitIncrementalLaterCheckpointMirrorIsolationSchema
                 occurred_at_utc timestamptz NOT NULL,
                 CONSTRAINT ck_f061v2_isolation_intent_event_safe CHECK (
                     type = 'Prepared'
-                    AND intent_sha256 ~ '^[0-9a-f]{64}$'
+                    AND intent_sha256 ~ '^[0-9a-f]{{64}}$'
                 )
             );
             CREATE TABLE IF NOT EXISTS
@@ -108,18 +110,18 @@ public static class GitIncrementalLaterCheckpointMirrorIsolationSchema
                 can_dispatch boolean NOT NULL DEFAULT false,
                 migration_complete boolean NOT NULL DEFAULT false,
                 CONSTRAINT ck_f061v2_isolation_receipt_safe CHECK (
-                    intent_sha256 ~ '^[0-9a-f]{64}$'
-                    AND recovery_decision_sha256 ~ '^[0-9a-f]{64}$'
+                    intent_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND recovery_decision_sha256 ~ '^[0-9a-f]{{64}}$'
                     AND original_worker_id !=
                         '00000000-0000-0000-0000-000000000000'::uuid
                     AND original_lease_token !=
                         '00000000-0000-0000-0000-000000000000'::uuid
                     AND original_generation BETWEEN 1 AND 2000
-                    AND bundle_sha256 ~ '^[0-9a-f]{64}$'
+                    AND bundle_sha256 ~ '^[0-9a-f]{{64}}$'
                     AND bundle_bytes BETWEEN 1 AND 536870912
-                    AND offline_receipt_sha256 ~ '^[0-9a-f]{64}$'
-                    AND physically_verified_object_sha256 ~ '^[0-9a-f]{64}$'
-                    AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                    AND offline_receipt_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND physically_verified_object_sha256 ~ '^[0-9a-f]{{64}}$'
+                    AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                     AND physically_verified_object_count BETWEEN 1 AND 200000
                     AND isolated_at_utc <= recorded_at_utc
                     AND NOT can_readmit AND NOT can_materialize
@@ -158,7 +160,7 @@ public static class GitIncrementalLaterCheckpointMirrorIsolationSchema
                         AND original_lease_token !=
                             '00000000-0000-0000-0000-000000000000'::uuid
                         AND original_generation BETWEEN 1 AND 2000
-                        AND bundle_sha256 ~ '^[0-9a-f]{64}$'
+                        AND bundle_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND bundle_bytes BETWEEN 1 AND 536870912
                         AND reconciled_existing_quarantine IS NOT NULL
                     );
@@ -175,7 +177,7 @@ public static class GitIncrementalLaterCheckpointMirrorIsolationSchema
                 occurred_at_utc timestamptz NOT NULL,
                 CONSTRAINT ck_f061v2_isolation_receipt_event_safe CHECK (
                     type = 'Isolated'
-                    AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                    AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                 )
             );
 

@@ -10,6 +10,8 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema
     {
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        // EF Core ExecuteSqlRawAsync applies composite formatting to raw C# string literals:
+        // doubled {{64}} reaches PostgreSQL as the correct {64} regex quantifier.
         await db.Database.ExecuteSqlRawAsync("""
             CREATE TABLE IF NOT EXISTS
                 git_later_checkpoint_mirror_recovery_decisions (
@@ -76,12 +78,12 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema
                         AND reviewer_id != original_worker_id
                         AND original_lease_generation BETWEEN 1 AND 2000
                         AND decision IN ('ApprovedForIsolationReview','Rejected')
-                        AND inspection_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND lease_event_history_sha256 ~ '^[0-9a-f]{64}$'
-                        AND staging_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND inspection_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND lease_event_history_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND staging_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND (object_set_sha256 IS NULL OR
-                            object_set_sha256 ~ '^[0-9a-f]{64}$')
+                            object_set_sha256 ~ '^[0-9a-f]{{64}}$')
                         AND (decision != 'ApprovedForIsolationReview' OR
                             object_set_sha256 IS NOT NULL)
                         AND NOT can_readmit AND NOT can_materialize

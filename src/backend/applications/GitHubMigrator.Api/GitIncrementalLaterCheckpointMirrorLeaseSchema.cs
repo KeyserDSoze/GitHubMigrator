@@ -11,6 +11,8 @@ public static class GitIncrementalLaterCheckpointMirrorLeaseSchema
     {
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        // EF Core ExecuteSqlRawAsync applies composite formatting to raw C# string literals:
+        // doubled {{64}} reaches PostgreSQL as the correct {64} regex quantifier.
         await db.Database.ExecuteSqlRawAsync("""
             CREATE TABLE IF NOT EXISTS git_later_checkpoint_mirror_leases (
                 mirror_id uuid PRIMARY KEY,
@@ -98,13 +100,13 @@ public static class GitIncrementalLaterCheckpointMirrorLeaseSchema
                         mirror_id != '00000000-0000-0000-0000-000000000000'::uuid
                         AND workpack_id != '00000000-0000-0000-0000-000000000000'::uuid
                         AND length(source_repository_id) BETWEEN 1 AND 256
-                        AND staging_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND source_full_ref_proof_sha256 ~ '^[0-9a-f]{64}$'
-                        AND source_ref_set_sha256 ~ '^[0-9a-f]{64}$'
-                        AND workpack_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND bundle_evidence_sha256 ~ '^[0-9a-f]{64}$'
-                        AND bundle_sha256 ~ '^[0-9a-f]{64}$'
-                        AND target_receipt_sha256 ~ '^[0-9a-f]{64}$'
+                        AND staging_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND source_full_ref_proof_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND source_ref_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND workpack_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND bundle_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND bundle_sha256 ~ '^[0-9a-f]{{64}}$'
+                        AND target_receipt_sha256 ~ '^[0-9a-f]{{64}}$'
                         AND lease_token != '00000000-0000-0000-0000-000000000000'::uuid
                         AND worker_id != '00000000-0000-0000-0000-000000000000'::uuid
                         AND original_bundle_actor_id !=
@@ -135,8 +137,8 @@ public static class GitIncrementalLaterCheckpointMirrorLeaseSchema
                                 AND NOT has_verified_local_objects)
                             OR (state='Verified'
                                 AND lease_until_utc IS NULL
-                                AND object_set_sha256 ~ '^[0-9a-f]{64}$'
-                                AND mirror_proof_sha256 ~ '^[0-9a-f]{64}$'
+                                AND object_set_sha256 ~ '^[0-9a-f]{{64}}$'
+                                AND mirror_proof_sha256 ~ '^[0-9a-f]{{64}}$'
                                 AND object_count BETWEEN 1 AND 200000
                                 AND verified_at_utc IS NOT NULL
                                 AND failure_code IS NULL
@@ -158,7 +160,7 @@ public static class GitIncrementalLaterCheckpointMirrorLeaseSchema
                         AND worker_id !=
                             '00000000-0000-0000-0000-000000000000'::uuid
                         AND type IN ('Acquired','Renewed','Quarantined','Verified')
-                        AND staging_evidence_sha256 ~ '^[0-9a-f]{64}$'
+                        AND staging_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
                     );
                 END IF;
             END $later_f061v2_checks$;
