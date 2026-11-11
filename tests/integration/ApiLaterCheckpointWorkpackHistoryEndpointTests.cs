@@ -747,7 +747,10 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
         // a C# reimplementation or a string-only pg_constraint search.
         // LIKE INCLUDING CONSTRAINTS copies the actual CHECKs and
         // NOT NULL; INCLUDING DEFAULTS keeps immutable false flags.
-        // It does NOT copy the parent FKs or any trusted writer.
+        // INCLUDING INDEXES copies the actual global one-use session
+        // PRIMARY KEY and the UNIQUE nonce / mirror fences. A TEMP
+        // table does NOT copy parent FKs or mutation triggers; the
+        // real journal remains DENY-ALL and is tested separately.
         // The production session table must remain DENY-ALL.
         await using var scope = harness.Host.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -759,6 +762,7 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                 CREATE TEMP TABLE f061_second_review_session_probe (
                     LIKE git_later_checkpoint_mirror_second_review_session_consumptions
                         INCLUDING DEFAULTS INCLUDING CONSTRAINTS
+                        INCLUDING INDEXES
                 ) ON COMMIT DROP
                 """);
 
@@ -793,7 +797,20 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                     )
                     """);
 
-            await Insert(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+            // The production journal has a global session PK, a
+            // separate nonce UNIQUE and a separate mirror UNIQUE.
+            // These must all be preserved on the real PG17 probe.
+            Assert.Equal(3L, await db.Database.SqlQueryRaw<long>("""
+                SELECT count(*)::bigint AS "Value"
+                FROM pg_index
+                WHERE indrelid =
+                    'pg_temp.f061_second_review_session_probe'::regclass
+                    AND indisunique AND indisvalid
+                """).SingleAsync());
+            var firstSession = Guid.NewGuid();
+            var firstMirror = Guid.NewGuid();
+            var firstNonce = Guid.NewGuid();
+            await Insert(firstSession, firstMirror, firstNonce,
                 sha, intentSha, issued, reviewed, consumed, expires);
             Assert.Equal(1L, await db.Database.SqlQueryRaw<long>("""
                 SELECT count(*)::bigint AS "Value"
@@ -804,15 +821,15 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                 Guid session, Guid mirror, Guid nonce,
                 string reviewSha, string sessionSha,
                 DateTimeOffset issuedAt, DateTimeOffset reviewedAt,
-                DateTimeOffset consumedAt, DateTimeOffset expiresAt)
+                DateTimeOffset consumedAt, DateTimeOffset expiresAt,
+                string expectedSqlState = Npgsql.PostgresErrorCodes.CheckViolation)
             {
                 await tx.CreateSavepointAsync("bad_session");
                 var error = await Assert.ThrowsAsync<Npgsql.PostgresException>(
                     () => Insert(session, mirror, nonce, reviewSha,
                         sessionSha, issuedAt, reviewedAt,
                         consumedAt, expiresAt));
-                Assert.Equal(Npgsql.PostgresErrorCodes.CheckViolation,
-                    error.SqlState);
+                Assert.Equal(expectedSqlState, error.SqlState);
                 await tx.RollbackToSavepointAsync("bad_session");
                 await tx.ReleaseSavepointAsync("bad_session");
             }
@@ -846,7 +863,22 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
                 sha, intentSha, issued, reviewed, consumed,
                 expires.AddTicks(10));
 
-            // One accepted probe, zero accepted forged probes.
+            // Replay of the *same login* with a DIFFERENT nonce,
+            // replay of the nonce with another login, and attempted
+            // second review of the SAME mirror must each fail the
+            // real PostgreSQL UNIQUE index (SQLSTATE 23505).
+            await Rejected(firstSession, Guid.NewGuid(), Guid.NewGuid(),
+                sha, intentSha, issued, reviewed, consumed, expires,
+                Npgsql.PostgresErrorCodes.UniqueViolation);
+            await Rejected(Guid.NewGuid(), Guid.NewGuid(), firstNonce,
+                sha, intentSha, issued, reviewed, consumed, expires,
+                Npgsql.PostgresErrorCodes.UniqueViolation);
+            await Rejected(Guid.NewGuid(), firstMirror, Guid.NewGuid(),
+                sha, intentSha, issued, reviewed, consumed, expires,
+                Npgsql.PostgresErrorCodes.UniqueViolation);
+
+            // Only the first canonical tuple is present, despite
+            // failed CHECK and UNIQUE attempts with SQL savepoints.
             Assert.Equal(1L, await db.Database.SqlQueryRaw<long>("""
                 SELECT count(*)::bigint AS "Value"
                 FROM pg_temp.f061_second_review_session_probe

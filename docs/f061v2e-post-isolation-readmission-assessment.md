@@ -554,3 +554,24 @@ generation/lease or GitHub destination action is enabled. The probe
 tests SQL CHECK enforcement, **not** an authenticated atomic writer or
 the complete FK/physical replay chain; #130 remains open until the
 full writer and its SHA1/SHA256/three-replica race acceptance.
+
+
+### #130: execute global session/nonce/mirror UNIQUE replay fences in PG17
+
+The real PostgreSQL17 negative-consumption test now clones the **actual
+three unique indexes** as well as installed CHECKs/defaults into its
+transactional temporary probe. It verifies all three unique indexes are
+installed and valid, then commits one canonical tuple to the probe
+transaction. Independent attempted replays of the same JWT login
+session with a different nonce, the same decision nonce with a
+different session, and the same quarantined mirror with both IDs
+changed each must fail with PostgreSQL SQLSTATE `23505`; every
+constraint failure uses a SAVEPOINT and leaves exactly the original
+tuple. Malformed SHA, timestamps and forbidden duplicate IDs continue
+to reject with SQLSTATE `23514` as distinct CHECK violations.
+
+The test separately attempts a raw write to the real review-session
+journal and requires the unconditional DENY-ALL trigger. This proves
+database one-use indexes are operative, **not** that a real authenticated
+writer or a three-replica physical Git race exists. No recovery approval,
+lease re-admission or GitHub push has been enabled.
