@@ -576,7 +576,7 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
             unmarked.Code);
         Assert.Equal(
             LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
-                .PreparedIsolatedIntact,
+                .PreparedIsolatedUntrusted,
             await mover.InspectPreparedPathsAsync(stage, durable,
                 rereadInspection, decision, prepared, default));
         var reread = await mover.AuditIsolatedAsync(
@@ -694,9 +694,12 @@ public sealed class LocalGitSourceSnapshotMirrorMaterializerTests
                     decision, default))).Code);
         Assert.False(Directory.Exists(original));
         Assert.True(Directory.Exists(isolated));
+        // An unmarked mirror stays UNTRUSTED even when its graph
+        // subsequently becomes corrupt. It must never be labeled a
+        // verified completed isolation by the read-only diagnostic.
         Assert.Equal(
             LocalGitIncrementalLaterCheckpointMirrorOrphanIsolator
-                .PreparedIsolatedCorrupt,
+                .PreparedIsolatedUntrusted,
             await mover.InspectPreparedPathsAsync(stage, durable,
                 rereadInspection, decision, prepared, default));
         // A crash with neither path is not a completed move. Neither
