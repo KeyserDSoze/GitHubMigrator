@@ -369,3 +369,29 @@ when a fixed GET timestamp is replayed into this read-only
 verification, reject expired timestamp, and preserve all flags
 false. JWT TestServer tests cover 401/403/409 default-disabled
 preflight and verify no provider transport is called.
+
+### #129: complete source-ref and physical object-closure FK on second review
+
+Second-review rows already had a 13-field FK to the immutable
+generation assessment for failed worker/token/generation, source
+snapshot, F-031 target and first human decision. That link alone
+did **not** bind every independent source/Git provenance column
+present on both tables. An additive, idempotent **8-field FK**
+now additionally binds the same mirror to the exact F-097
+full-ref proof SHA, source ref-set SHA, F-035 bundle SHA, Prepared
+intent SHA, physical Git object-set SHA and count, and original
+source-reviewed UTC timestamp of the #127 Assessed row.
+
+PostgreSQL does not allow a second-review row that merely
+names the same mirror and correct lease but substitutes another
+valid-looking source refs, bundle, Prepared marker or object graph.
+A matching parent UNIQUE index is installed idempotently.
+The real SHA1/SHA256 Git/PostgreSQL17 fixture verifies the
+8-column FK references the parent assessment, is validated,
+and that its unique index is valid; it also checks required
+source/physical mapping column names.
+
+All three F-061v2e independent-review SQL tables remain
+unconditionally DENY-ALL on INSERT/UPDATE/DELETE. Neither
+FK nor index is authorization for a decision, review session
+consumption, new generation, lease, filesystem write or push.

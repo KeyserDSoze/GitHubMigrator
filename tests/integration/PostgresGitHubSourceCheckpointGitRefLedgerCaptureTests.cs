@@ -2976,6 +2976,60 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             AND i.indisunique AND i.indisvalid
                                         """).SingleAsync());
 
+                                // #129: exact immutable assessment ancestry
+                                // also protects ALL original source ref
+                                // and object-closure hashes, bundle,
+                                // Prepared marker and source-read time.
+                                // A future SQL writer cannot smuggle a
+                                // foreign-but-valid physical proof under
+                                // the same mirror and original lease.
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM pg_constraint c
+                                        WHERE c.conname =
+                                            'fk_f061v2e_second_review_object_scope'
+                                            AND c.conrelid =
+                                                'git_later_checkpoint_mirror_second_reviews'::regclass
+                                            AND c.confrelid =
+                                                'git_later_checkpoint_mirror_generation_assessments'::regclass
+                                            AND c.contype = 'f'
+                                            AND cardinality(c.conkey) = 8
+                                            AND cardinality(c.confkey) = 8
+                                            AND c.convalidated
+                                        """).SingleAsync());
+                                var objectScopeFk = await verifiedDb.Database
+                                    .SqlQuery<string>($"""
+                                        SELECT pg_get_constraintdef(c.oid)
+                                            AS "Value"
+                                        FROM pg_constraint c
+                                        WHERE c.conname =
+                                            'fk_f061v2e_second_review_object_scope'
+                                            AND c.conrelid =
+                                                'git_later_checkpoint_mirror_second_reviews'::regclass
+                                        """).SingleAsync();
+                                Assert.Contains("source_full_ref_proof_sha256",
+                                    objectScopeFk);
+                                Assert.Contains("source_ref_set_sha256",
+                                    objectScopeFk);
+                                Assert.Contains("prepared_intent_sha256",
+                                    objectScopeFk);
+                                Assert.Contains("object_set_sha256",
+                                    objectScopeFk);
+                                Assert.Contains("object_count",
+                                    objectScopeFk);
+                                Assert.Contains("source_reviewed_at_utc",
+                                    objectScopeFk);
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM pg_index i
+                                        JOIN pg_class t ON t.oid = i.indexrelid
+                                        WHERE t.relname =
+                                            'uq_f061v2e_assessment_review_object_scope'
+                                            AND i.indisunique AND i.indisvalid
+                                        """).SingleAsync());
+
                                 // #129: even if a future protected SQL
                                 // writer is enabled, a foreign event
                                 // cannot point at a matching mirror

@@ -197,6 +197,47 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                 END IF;
             END $f061v2e_review_generation_fk$;
 
+            -- #129: the first 13-field FK intentionally binds the
+            -- original worker/lease/generation, target and first human
+            -- decision. This second additive, exact-scope FK ALSO
+            -- binds physical Git object-closure, full source ref
+            -- proof, original bundle and Prepared marker, together
+            -- with the original Assessed source-read timestamp.
+            -- Neither constraint grants any write permission.
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                uq_f061v2e_assessment_review_object_scope ON
+                git_later_checkpoint_mirror_generation_assessments (
+                    mirror_id, source_full_ref_proof_sha256,
+                    source_ref_set_sha256, bundle_sha256,
+                    prepared_intent_sha256, object_set_sha256,
+                    object_count, source_reviewed_at_utc);
+
+            DO $f061v2e_review_object_scope$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname =
+                        'fk_f061v2e_second_review_object_scope'
+                    AND conrelid =
+                        'git_later_checkpoint_mirror_second_reviews'::regclass
+                ) THEN
+                    ALTER TABLE git_later_checkpoint_mirror_second_reviews
+                    ADD CONSTRAINT
+                        fk_f061v2e_second_review_object_scope
+                    FOREIGN KEY (
+                        mirror_id, source_full_ref_proof_sha256,
+                        source_ref_set_sha256, bundle_sha256,
+                        prepared_intent_sha256, object_set_sha256,
+                        object_count, source_reviewed_at_utc)
+                    REFERENCES git_later_checkpoint_mirror_generation_assessments (
+                        mirror_id, source_full_ref_proof_sha256,
+                        source_ref_set_sha256, bundle_sha256,
+                        prepared_intent_sha256, object_set_sha256,
+                        object_count, source_reviewed_at_utc)
+                    ON DELETE RESTRICT;
+                END IF;
+            END $f061v2e_review_object_scope$;
+
             -- #129: future one-shot authenticated review session
             -- consumption. The PK fences a login session globally,
             -- a unique mirror fences second decisions per mirror, and
