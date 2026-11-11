@@ -488,3 +488,25 @@ changes a `RecoveryRequired` lease or authorizes a GitHub write.
 The actual atomic PostgreSQL-clock writer, three-replica races,
 SHA-1/SHA-256 physical verification and final four-gate acceptance
 are still required.
+
+
+### #130: audit journal binds future session-intent SHA provenance
+
+The global one-use second-review session-consumption journal now
+has `session_intent_evidence_sha256 varchar(64) NOT NULL`, matching
+the existing non-authorizing, domain-separated `SessionIntentIntegrity`
+SHA. An idempotent additive ALTER installs the column on prior
+default-DENY databases, and a separately versioned validated
+`ck_f061v2e_second_review_session_intent_sha_v3` CHECK requires
+exactly 64 lowercase hex characters. The real PostgreSQL17
+SHA-1/SHA-256 fixture asserts the column's NOT NULL contract and
+installed CHECK; the early EF composite-format guard covers **65**
+SQL SHA regexes rather than 64.
+
+This provides a future audit field, **not** a session consumption or
+authorization. A SHA's syntax alone cannot establish authenticated
+second-human consent; the eventual writer MUST verify current Identity
+and domain digest under the source-first PostgreSQL DB-clock and F-060
+POSIX locks and commit review+event+session in one atomic transaction.
+All review/event/session tables retain unconditional DENY-ALL triggers.
+No lease, generation, physical import or GitHub write is enabled.

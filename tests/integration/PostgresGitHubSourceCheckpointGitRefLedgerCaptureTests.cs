@@ -2950,6 +2950,39 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 Assert.Contains("'^[0-9a-f]{64}$'",
                                     sessionScopeV2);
 
+                                // #130: store the domain-sealed,
+                                // non-authorizing login-session intent
+                                // digest in the durable session journal.
+                                // The additive column must be NOT NULL
+                                // even on idempotent schema bootstraps.
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM information_schema.columns
+                                        WHERE table_name =
+                                            'git_later_checkpoint_mirror_second_review_session_consumptions'
+                                            AND column_name =
+                                                'session_intent_evidence_sha256'
+                                            AND is_nullable = 'NO'
+                                        """).SingleAsync());
+                                var sessionIntentShaConstraint =
+                                    await verifiedDb.Database
+                                        .SqlQuery<string>($"""
+                                            SELECT pg_get_constraintdef(c.oid)
+                                                AS "Value"
+                                            FROM pg_constraint c
+                                            WHERE c.conname =
+                                                'ck_f061v2e_second_review_session_intent_sha_v3'
+                                                AND c.conrelid =
+                                                    'git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                                                AND c.contype = 'c'
+                                                AND c.convalidated
+                                            """).SingleAsync();
+                                Assert.Contains("session_intent_evidence_sha256",
+                                    sessionIntentShaConstraint);
+                                Assert.Contains("'^[0-9a-f]{64}$'",
+                                    sessionIntentShaConstraint);
+
                                 // #129: the review's original terminal
                                 // worker/token/gen and the #127 Assessed
                                 // digest MUST be tied to the SAME source

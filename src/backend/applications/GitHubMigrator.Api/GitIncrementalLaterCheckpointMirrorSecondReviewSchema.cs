@@ -254,6 +254,9 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                 second_reviewer_id uuid NOT NULL,
                 decision varchar(40) NOT NULL,
                 review_evidence_sha256 varchar(64) NOT NULL,
+                -- #130: preserves the exact domain-sealed one-use
+                -- session intent, never a bearer authorization.
+                session_intent_evidence_sha256 varchar(64) NOT NULL,
                 reviewed_at_utc timestamptz NOT NULL,
                 issued_at_utc timestamptz NOT NULL,
                 consumed_at_utc timestamptz NOT NULL,
@@ -319,6 +322,35 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                     );
                 END IF;
             END $f061v2e_session_scope_v2$;
+
+            -- #130: additive provenance column and CHECK for
+            -- installations bootstrapped before intent sealing existed.
+            -- Existing second-review session tables have DENY-ALL
+            -- triggers; no previously authorized session rows exist.
+            -- Do not invent a default/fabricated intent hash.
+            ALTER TABLE
+                git_later_checkpoint_mirror_second_review_session_consumptions
+            ADD COLUMN IF NOT EXISTS
+                session_intent_evidence_sha256 varchar(64) NOT NULL;
+
+            DO $f061v2e_session_intent_sha_v3$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname =
+                        'ck_f061v2e_second_review_session_intent_sha_v3'
+                        AND conrelid =
+                            'git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                ) THEN
+                    ALTER TABLE
+                        git_later_checkpoint_mirror_second_review_session_consumptions
+                    ADD CONSTRAINT
+                        ck_f061v2e_second_review_session_intent_sha_v3
+                    CHECK (
+                        session_intent_evidence_sha256 ~ '^[0-9a-f]{{64}}$'
+                    );
+                END IF;
+            END $f061v2e_session_intent_sha_v3$;
 
             -- A proposed second reviewer is NOT a verified JWT actor.
             -- No insert (even with matching SHA) can claim a review
