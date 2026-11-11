@@ -5,6 +5,13 @@ using System.Text;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.AspNetCore.Identity;
 
+// #129: a token's short-lived session is SERVER-validated against
+// current Identity before use. A session is not authorization to
+// persist a decision: the future writer must consume it exactly once
+// together with its immutable review/event in ONE PostgreSQL tx.
+public sealed record GitIncrementalLaterCheckpointMirrorReviewerSession(
+    Guid ActorId, Guid SessionId, DateTimeOffset IssuedAtUtc);
+
 // #129: revalidate the CURRENT identity store, not just the signed,
 // potentially stale JWT role/password_changed claims. Read-only guard
 // before AND after the POSIX-locked physical inspection. A session ID
@@ -13,7 +20,11 @@ public sealed class GitIncrementalLaterCheckpointMirrorSecondReviewActorPrefligh
     UserManager<ApplicationUser> users,
     TimeProvider clock)
 {
-    public async Task<Guid> RequireAsync(ClaimsPrincipal principal)
+    public async Task<Guid> RequireAsync(ClaimsPrincipal principal) =>
+        (await RequireSessionAsync(principal)).ActorId;
+
+    public async Task<GitIncrementalLaterCheckpointMirrorReviewerSession>
+        RequireSessionAsync(ClaimsPrincipal principal)
     {
         if (principal.Identity?.IsAuthenticated != true ||
             !Guid.TryParse(principal.FindFirstValue(
@@ -60,6 +71,7 @@ public sealed class GitIncrementalLaterCheckpointMirrorSecondReviewActorPrefligh
         if (expected.Length != actual.Length ||
             !CryptographicOperations.FixedTimeEquals(expected, actual))
             throw new UnauthorizedAccessException();
-        return actor;
+        return new GitIncrementalLaterCheckpointMirrorReviewerSession(
+            actor, sessionId, issued);
     }
 }

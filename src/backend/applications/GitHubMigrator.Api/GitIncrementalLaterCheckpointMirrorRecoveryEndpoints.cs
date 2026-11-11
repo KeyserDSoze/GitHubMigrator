@@ -67,7 +67,8 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             GitIncrementalLaterCheckpointMirrorSecondReviewActorPreflight actorPreflight,
             CancellationToken ct) => await GuardAsync(async () =>
         {
-            var secondReviewerId = await actorPreflight.RequireAsync(user);
+            var reviewerSession = await actorPreflight.RequireSessionAsync(user);
+            var secondReviewerId = reviewerSession.ActorId;
             var checkedAssessment = await inspector.ReadAssessedAsync(
                 id, planId, checkpointId, targetObservationId, workpackId,
                 sourceRepositoryId ?? "",
@@ -83,7 +84,8 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             // security stamp rotated during a long double Git fsck.
             // Revalidate identity before returning even a read-only
             // candidate. This still does NOT make a durable CAS.
-            if (await actorPreflight.RequireAsync(user) != secondReviewerId)
+            if (await actorPreflight.RequireSessionAsync(user) !=
+                reviewerSession)
                 throw new UnauthorizedAccessException();
 
             // No original F-061 lease token, local directory path,

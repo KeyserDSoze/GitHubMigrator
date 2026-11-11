@@ -302,3 +302,37 @@ writer, one-use nonce, new generation, import or push.
 Real SHA1/SHA256 Git/PostgreSQL17 tests check the installed
 13-column FK, its parent relation, column mappings and valid
 unique index in addition to the existing deny-all guards.
+
+### #129 future one-use reviewer session consumption: DENY-ALL foundation
+
+A distinct login minted by `JwtIssuer` carries the signed
+`f061_review_session_id`, `f061_review_issued_at` and current
+security-stamp witness. The preflight now returns an internal
+`GitIncrementalLaterCheckpointMirrorReviewerSession` with
+actor ID, session ID and issuance time after checking the
+**current ASP.NET Identity account**; the GET revalidates the exact
+same session after physical inspection. Neither session ID nor
+stamp is exposed in the GET's JSON response.
+
+The additive `git_later_checkpoint_mirror_second_review_session_consumptions`
+table establishes a GLOBAL session-ID primary key (a login cannot
+commit two reviews), UNIQUE mirror ID (one second decision per mirror),
+and UNIQUE server-side decision nonce. A five-column FK binds
+mirror, review SHA, reviewer, decision and review timestamp to
+the exact immutable second-review row. SQL CHECKs require
+issued <= reviewed <= consumed < issued + 5 minutes, reviewed
+within two minutes of consumption, and permanently false
+re-admit/materialize/push/retry/dispatch/completion flags.
+
+The table's new trigger **unconditionally denies ALL INSERT,
+UPDATE and DELETE**, reusing the existing review deny function.
+The original review and event tables remain DENY-ALL too. No
+nonce is consumed, no decision recorded and no writer, lease or
+remote action is enabled in this slice. A future POST writer must
+atomically write review + immutable event + one-use session
+consumption under the current source/target and POSIX locks,
+then prove three-replica single-winner and restart/replay behavior.
+The real SHA1/SHA256 PG17/Git test checks installed PK/UNIQUE
+and exact FK, rejects raw SQL session INSERT, and verifies all
+three tables remain empty. No additional EF raw SQL regexes
+were introduced in this bootstrap.

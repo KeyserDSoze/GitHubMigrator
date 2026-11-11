@@ -197,6 +197,63 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                 END IF;
             END $f061v2e_review_generation_fk$;
 
+            -- #129: future one-shot authenticated review session
+            -- consumption. The PK fences a login session globally,
+            -- a unique mirror fences second decisions per mirror, and
+            -- a unique decision nonce fences cross-session replay.
+            -- The five-field FK pins this consumption to the EXACT
+            -- second-human review SHA/actor/decision/timestamp.
+            -- With the deny-all trigger below, no actor can persist
+            -- a consumption or review at present; no writer exists.
+            CREATE TABLE IF NOT EXISTS
+                git_later_checkpoint_mirror_second_review_session_consumptions (
+                review_session_id uuid PRIMARY KEY,
+                mirror_id uuid NOT NULL UNIQUE,
+                decision_nonce uuid NOT NULL UNIQUE,
+                second_reviewer_id uuid NOT NULL,
+                decision varchar(40) NOT NULL,
+                review_evidence_sha256 varchar(64) NOT NULL,
+                reviewed_at_utc timestamptz NOT NULL,
+                issued_at_utc timestamptz NOT NULL,
+                consumed_at_utc timestamptz NOT NULL,
+                expires_at_utc timestamptz NOT NULL,
+                can_readmit boolean NOT NULL DEFAULT false,
+                can_materialize boolean NOT NULL DEFAULT false,
+                can_push boolean NOT NULL DEFAULT false,
+                can_retry boolean NOT NULL DEFAULT false,
+                can_dispatch boolean NOT NULL DEFAULT false,
+                migration_complete boolean NOT NULL DEFAULT false,
+                CONSTRAINT ck_f061v2e_second_review_session_safe CHECK (
+                    review_session_id <>
+                        '00000000-0000-0000-0000-000000000000'::uuid
+                    AND decision_nonce <>
+                        '00000000-0000-0000-0000-000000000000'::uuid
+                    AND second_reviewer_id <>
+                        '00000000-0000-0000-0000-000000000000'::uuid
+                    AND decision IN ('ApprovedForIndependentReview',
+                        'RejectedForIndependentReview')
+                    AND issued_at_utc <= reviewed_at_utc
+                    AND reviewed_at_utc <= consumed_at_utc
+                    AND consumed_at_utc < expires_at_utc
+                    AND expires_at_utc =
+                        issued_at_utc + interval '5 minutes'
+                    AND consumed_at_utc - reviewed_at_utc <=
+                        interval '2 minutes'
+                    AND NOT can_readmit AND NOT can_materialize
+                    AND NOT can_push AND NOT can_retry
+                    AND NOT can_dispatch AND NOT migration_complete
+                ),
+                CONSTRAINT fk_f061v2e_second_review_session_exact_decision
+                    FOREIGN KEY (
+                        mirror_id, review_evidence_sha256,
+                        second_reviewer_id, decision, reviewed_at_utc)
+                    REFERENCES
+                        git_later_checkpoint_mirror_second_reviews (
+                            mirror_id, evidence_sha256,
+                            second_reviewer_id, decision, reviewed_at_utc)
+                    ON DELETE RESTRICT
+            );
+
             -- A proposed second reviewer is NOT a verified JWT actor.
             -- No insert (even with matching SHA) can claim a review
             -- before a future protected, source-first and POSIX-locked
@@ -231,6 +288,17 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                     CREATE TRIGGER trg_f061v2e_second_review_event_closed
                     BEFORE INSERT OR UPDATE OR DELETE ON
                         git_later_checkpoint_mirror_second_review_events
+                    FOR EACH ROW EXECUTE FUNCTION
+                        git_later_checkpoint_mirror_second_review_deny();
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgrelid =
+                        'git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                    AND tgname = 'trg_f061v2e_second_review_session_closed'
+                ) THEN
+                    CREATE TRIGGER trg_f061v2e_second_review_session_closed
+                    BEFORE INSERT OR UPDATE OR DELETE ON
+                        git_later_checkpoint_mirror_second_review_session_consumptions
                     FOR EACH ROW EXECUTE FUNCTION
                         git_later_checkpoint_mirror_second_review_deny();
                 END IF;

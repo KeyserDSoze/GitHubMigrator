@@ -2917,13 +2917,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             'ck_f061v2e_second_review_event_safe')
                                             AND contype = 'c'
                                         """).SingleAsync());
-                                Assert.Equal(2L, await verifiedDb.Database
+                                Assert.Equal(3L, await verifiedDb.Database
                                     .SqlQuery<long>($"""
                                         SELECT count(*)::bigint AS "Value"
                                         FROM pg_trigger
                                         WHERE tgname IN (
                                             'trg_f061v2e_second_review_closed',
-                                            'trg_f061v2e_second_review_event_closed')
+                                            'trg_f061v2e_second_review_event_closed',
+                                            'trg_f061v2e_second_review_session_closed')
                                             AND NOT tgisinternal
                                         """).SingleAsync());
                                 // #129: the review's original terminal
@@ -3040,6 +3041,46 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     .SqlQuery<long>($"""
                                         SELECT count(*)::bigint AS "Value"
                                         FROM git_later_checkpoint_mirror_second_review_events
+                                        """).SingleAsync());
+                                // The session PRIMARY KEY is globally
+                                // unique (not scoped to one mirror);
+                                // nonce and mirror each have a separate
+                                // uniqueness fence. Exact FK and time
+                                // windows would apply to a future
+                                // privileged single-transaction writer.
+                                Assert.Equal(3L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM pg_constraint
+                                        WHERE conrelid =
+                                            'git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                                            AND contype IN ('p', 'u')
+                                        """).SingleAsync());
+                                Assert.Equal(1L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM pg_constraint
+                                        WHERE conname =
+                                            'fk_f061v2e_second_review_session_exact_decision'
+                                            AND conrelid =
+                                                'git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                                            AND contype = 'f'
+                                            AND cardinality(conkey) = 5
+                                        """).SingleAsync());
+                                Assert.Equal(
+                                    Npgsql.PostgresErrorCodes.RaiseException,
+                                    (await Assert.ThrowsAsync<Npgsql.PostgresException>(
+                                        () => verifiedDb.Database
+                                            .ExecuteSqlInterpolatedAsync($"""
+                                                INSERT INTO
+                                                    git_later_checkpoint_mirror_second_review_session_consumptions
+                                                    (review_session_id)
+                                                VALUES ({Guid.NewGuid()})
+                                                """))).SqlState);
+                                Assert.Equal(0L, await verifiedDb.Database
+                                    .SqlQuery<long>($"""
+                                        SELECT count(*)::bigint AS "Value"
+                                        FROM git_later_checkpoint_mirror_second_review_session_consumptions
                                         """).SingleAsync());
                                 await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
                                     INSERT INTO
