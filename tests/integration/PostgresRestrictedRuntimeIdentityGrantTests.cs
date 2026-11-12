@@ -274,6 +274,35 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     $"REVOKE SELECT ON public.migration_connection_secrets FROM {login}");
             }
 
+            // Grant drift is not limited to secrets. The pilot runtime
+            // is intentionally READ-ONLY on connection metadata and
+            // immutable discovery snapshots. POST-bootsrap DML grants
+            // must fail the real startup guard even before any SQL
+            // mutation is attempted by an API route.
+            foreach (var readOnlyTable in new[] {
+                "migration_connections", "migration_discoveries"
+            })
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT UPDATE ON public.{readOnlyTable} TO {login}");
+                try
+                {
+                    await using var overGranted = new AppDbContext(
+                        new DbContextOptionsBuilder<AppDbContext>()
+                            .UseNpgsql(connection.ConnectionString).Options);
+                    var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                        () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                            overGranted));
+                    Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                        refused.Message);
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"REVOKE UPDATE ON public.{readOnlyTable} FROM {login}");
+                }
+            }
+
             // A clean new connection must pass after each prohibited
             // grant is rolled back. Recovered privileges are not a
             // reason to skip the normal restricted HTTP login tests.

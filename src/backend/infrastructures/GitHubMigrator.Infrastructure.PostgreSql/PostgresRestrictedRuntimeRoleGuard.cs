@@ -91,6 +91,19 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 AND NOT pg_catalog.has_table_privilege(
                     role.rolname, 'public.migration_connection_secrets',
                     'SELECT, INSERT, UPDATE, DELETE')
+                -- This phase grants only read-only source discovery and
+                -- metadata column listing. A later unauthorized DML
+                -- grant would otherwise permit a restricted login to
+                -- overwrite source inventory or connection metadata,
+                -- even when the original provisioning script was safe.
+                AND pg_catalog.to_regclass(
+                    'public.migration_discoveries') IS NOT NULL
+                AND NOT pg_catalog.has_table_privilege(
+                    role.rolname, 'public.migration_connections',
+                    'INSERT, UPDATE, DELETE')
+                AND NOT pg_catalog.has_table_privilege(
+                    role.rolname, 'public.migration_discoveries',
+                    'INSERT, UPDATE, DELETE')
                 AND (SELECT count(*) FROM protected) = 3
                 AND (SELECT count(*) FROM protected_triggers) = 3
                 AND NOT EXISTS (
@@ -117,7 +130,8 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 "unchanged session identity and " +
                 "three exact enabled F-061 review DML triggers, " +
                 "and no access to connection secret references or " +
-                "encrypted provider credentials. " +
+                "encrypted provider credentials, or unauthorized " +
+                "writes to connection/discovery metadata. " +
                 "Use privileged schema bootstrap " +
                 "separately; never reuse its credentials for the API.");
     }

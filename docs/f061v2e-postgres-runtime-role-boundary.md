@@ -256,3 +256,26 @@ This is a **start-time validation**, not continuous PostgreSQL grant
 monitoring. Administrators must prevent role/ACL changes while an API
 process is running and rotate/restart on credential or grant changes.
 It does not enable #130's three-row second-human writer.
+
+## #133: metadata/discovery DML grant drift blocks runtime startup
+
+In the current **read-only** pilot the runtime guard now requires that
+`migration_discoveries` exists and that the connected runtime LOGIN
+has **no effective INSERT, UPDATE or DELETE** on either
+`migration_connections` or `migration_discoveries`. This covers
+unauthorized post-provisioning role grants that could overwrite
+connection metadata or an immutable source inventory, even if the
+operator script originally completed successfully.
+
+The independent real PG17 smoke test grants `UPDATE` temporarily
+to each table **after** the approved Identity/connection/discovery
+permissions are installed, checks that the actual runtime-only
+startup guard refuses both, then revokes the test-only grants and
+proves the restricted login can proceed to authenticated read-only
+HTTP requests. None of the actual application metadata or discovery
+rows is modified, and F-061 second-review journals remain deny-all.
+
+Any future write-capable application role must have a separately
+reviewed owner/grant policy and an authorization redesign; this
+pilot's intentionally strict runtime-only guard must not be bypassed
+simply to enable additional CRUD endpoints.
