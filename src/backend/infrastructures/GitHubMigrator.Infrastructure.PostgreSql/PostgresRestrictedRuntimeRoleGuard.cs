@@ -7,6 +7,8 @@ namespace GitHubMigrator.Infrastructure.PostgreSql;
 // This checks the ACTUAL database session role and installed triggers;
 // no JWT claim, client-set GUC, API header or connection-string flag can
 // spoof catalog privileges. It does not provision grants or enable #130.
+// SESSION_USER must match CURRENT_USER, so SET ROLE cannot disguise
+// the connection's original privileged login.
 public static class PostgresRestrictedRuntimeRoleGuard
 {
     public static async Task RequireSafeAsync(
@@ -32,6 +34,12 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
                 WHERE NOT t.tgisinternal
                   AND t.tgenabled IN ('O', 'A')
+                  -- Same-named triggers redirected to another function
+                  -- or protecting only one DML verb are insufficient.
+                  AND t.tgfoid =
+                      'public.git_later_checkpoint_mirror_second_review_deny()'::regprocedure
+                  -- ROW(1) + BEFORE(2) + INSERT(4) + DELETE(8) + UPDATE(16).
+                  AND (t.tgtype::integer & 31) = 31
                   AND (
                       (c.relname = 'git_later_checkpoint_mirror_second_reviews'
                        AND t.tgname = 'trg_f061v2e_second_review_closed')
@@ -44,7 +52,8 @@ public static class PostgresRestrictedRuntimeRoleGuard
                   )
             )
             SELECT (
-                NOT role.rolsuper AND NOT role.rolcreatedb
+                CURRENT_USER = SESSION_USER
+                AND NOT role.rolsuper AND NOT role.rolcreatedb
                 AND NOT role.rolcreaterole AND NOT role.rolreplication
                 AND NOT role.rolbypassrls
                 AND NOT pg_catalog.has_database_privilege(
@@ -73,14 +82,15 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 )
             ) AS "Value"
             FROM pg_catalog.pg_roles role
-            WHERE role.rolname = CURRENT_USER
+            WHERE role.rolname = SESSION_USER
             """).SingleOrDefaultAsync(ct);
         if (!isRestricted)
             throw new InvalidOperationException(
                 "PostgreSqlRuntimeRoleNotRestricted: runtime-only startup " +
                 "requires an independently provisioned non-owner, " +
-                "non-superuser login and all three enabled F-061 review " +
-                "mutation-denial triggers. Use privileged schema bootstrap " +
+                "non-superuser login, unchanged session identity and " +
+                "three exact enabled F-061 review DML triggers. " +
+                "Use privileged schema bootstrap " +
                 "separately; never reuse its credentials for the API.");
     }
 }

@@ -55,6 +55,23 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests
             "NOREPLICATION NOBYPASSRLS");
         try
         {
+            // A bootstrap superuser can SET LOCAL ROLE to a restricted
+            // current_user. Reject it because the original session_user
+            // still holds privileged credentials.
+            await using (var impersonation =
+                await owner.Database.BeginTransactionAsync())
+            {
+                await owner.Database.ExecuteSqlRawAsync($"SET LOCAL ROLE {login}");
+                Assert.Equal(login,
+                    await owner.Database.SqlQueryRaw<string>("""
+                        SELECT CURRENT_USER AS "Value"
+                        """).SingleAsync());
+                var rejected = await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(owner));
+                Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                    rejected.Message);
+                await impersonation.RollbackAsync();
+            }
             await using (var caller = new NpgsqlConnection(connection.ConnectionString))
             {
                 await caller.OpenAsync();

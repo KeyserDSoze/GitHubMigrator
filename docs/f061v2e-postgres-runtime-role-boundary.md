@@ -12,7 +12,14 @@ This is a **default-off, fail-closed startup path**, not a deployed least-privil
 - ownership/membership of the database, any F-061 second-review journal table or its deny trigger function;
 - `CREATE` permission on the database or the `public` schema;
 - any `INSERT`, `UPDATE` or `DELETE` privilege on the three F-061 second-review tables;
-- missing F-061 review/event/session tables or a missing/disabled DENY-ALL trigger.
+- missing F-061 review/event/session tables or a missing/disabled DENY-ALL trigger;
+- an impersonated `CURRENT_USER` that differs from the authenticated `SESSION_USER` (e.g. `SET ROLE` from a superuser session);
+- a same-named trigger redirected to another function or lacking a row-level BEFORE INSERT/UPDATE/DELETE event mask.
+
+The guard is a startup precondition, **not** a defense against an administrator
+who controls the database or a superuser credential. Keep privileged
+bootstrap secrets entirely out of the runtime process; `SET ROLE` is
+not a substitute for separate authentication.
 
 The guard queries PostgreSQL system catalogs and effective privileges—not user-supplied headers, claims, custom GUCs or cached role names. It does **not** grant normal application CRUD privileges to the restricted login and does not promise that every endpoint is functional. An operator still needs an audited non-superuser role provisioning and grants migration before switching an actual deployment. The runtime account must have only independently reviewed permissions on the *other* application tables, sequences and Identity relations; blanket grants on the F-061 journal tables are forbidden.
 
