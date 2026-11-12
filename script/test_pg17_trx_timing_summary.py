@@ -81,6 +81,43 @@ class TrxTimingSummaryTests(unittest.TestCase):
                 self.assertNotIn("secret", err.getvalue())
                 self.assertFalse(output.exists())
 
+
+    def test_untrusted_outcome_is_never_copied_into_json_or_ci_stdout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "forged.trx"
+            path.write_text(FIXTURE.replace(
+                'outcome="Passed"', 'outcome="password=secret_token"', 1
+            ), encoding="utf-8")
+            data = summarize_trx(path)
+            self.assertEqual(data["outcomes"], {
+                "Failed": 1, "Other": 1, "Passed": 1
+            })
+            output = Path(directory) / "safe-summary.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(main([str(path), "--output", str(output)]), 0)
+            published = output.read_text(encoding="utf-8") + stdout.getvalue()
+            self.assertNotIn("secret_token", published)
+            self.assertNotIn("password=", published)
+
+    def test_missing_or_unbounded_duration_fails_not_zero_fills(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bad-duration.trx"
+            output = Path(directory) / "safe-summary.json"
+            for altered in (
+                FIXTURE.replace(' duration="00:00:05.125"', "", 1),
+                FIXTURE.replace('00:00:05.125', '999999999999:00:00', 1),
+                FIXTURE.replace('00:00:05.125', '169:00:00', 1),
+            ):
+                path.write_text(altered, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    summarize_trx(path)
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    self.assertEqual(main([str(path), "--output", str(output)]), 1)
+                self.assertFalse(output.exists())
+                self.assertNotIn("bad-duration.trx", stderr.getvalue())
+
     def test_rejects_zero_cases_and_invalid_top(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "empty.trx"

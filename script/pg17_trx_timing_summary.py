@@ -17,7 +17,14 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
-_SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+# Never print or persist an arbitrary TRX outcome (which can contain secrets).
+_SAFE_OUTCOMES = frozenset({
+    "Passed", "Failed", "NotExecuted", "Inconclusive", "Timeout", "Aborted",
+    "Error", "Warning", "NotRunnable", "Pending", "InProgress",
+    "Disconnected", "Completed",
+})
+_MAX_DURATION_SECONDS = Decimal(7 * 24 * 60 * 60)
 _TIME = re.compile(r"^(\d+):([0-5]\d):([0-5]\d)(?:\.(\d{1,9}))?$")
 
 
@@ -44,8 +51,12 @@ def _seconds(raw: str) -> Decimal:
     if found is None:
         raise ValueError("Unrecognized TRX duration format")
     hours, minutes, seconds, fraction = found.groups()
+    # Ignore malformed/unbounded values instead of manufacturing false timings
+    # or overflowing numeric conversion of attacker-controlled XML fields.
+    if len(hours) > 3:
+        raise ValueError("TRX duration exceeds safety limit")
     try:
-        return (
+        measured = (
             Decimal(hours) * 3600
             + Decimal(minutes) * 60
             + Decimal(seconds)
@@ -53,6 +64,9 @@ def _seconds(raw: str) -> Decimal:
         )
     except InvalidOperation as error:
         raise ValueError("Invalid TRX duration") from error
+    if measured > _MAX_DURATION_SECONDS:
+        raise ValueError("TRX duration exceeds safety limit")
+    return measured
 
 
 def summarize_trx(xml_path: Path, top: int = 15) -> dict:
@@ -71,9 +85,12 @@ def summarize_trx(xml_path: Path, top: int = 15) -> dict:
         if _tag(result.tag) != "UnitTestResult":
             continue
         total += 1
-        outcomes[result.attrib.get("outcome", "Unknown")] += 1
+        outcome = result.attrib.get("outcome", "")
+        outcomes[outcome if outcome in _SAFE_OUTCOMES else "Other"] += 1
         method = definitions.get(result.attrib.get("testId", ""), "unknown_test")
-        groups[method].append(_seconds(result.attrib.get("duration", "00:00:00")))
+        # A missing duration is not a zero-second test. Refuse to report
+        # incomplete measurements as valid, especially after 4/4 success.
+        groups[method].append(_seconds(result.attrib.get("duration", "")))
     if total == 0:
         raise ValueError("TRX has no UnitTestResult entries")
     slowest = sorted(
