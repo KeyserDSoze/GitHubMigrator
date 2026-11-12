@@ -1,4 +1,9 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -82,6 +87,87 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 new DbContextOptionsBuilder<AppDbContext>()
                     .UseNpgsql(connection.ConnectionString).Options))
                 await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(runtimeDb);
+
+            // REAL ASP.NET host with this separately authenticated PG17
+            // runtime LOGIN. The production Program executes RuntimeOnly,
+            // not Identity/DDL bootstrap. The existing superadmin account
+            // was created by the earlier privileged harness bootstrap.
+            // This assembly explicitly disables xUnit parallelization;
+            // always restore the process env in finally.
+            var priorDb = Environment.GetEnvironmentVariable(
+                "ConnectionStrings__PostgreSql");
+            var priorRuntime = Environment.GetEnvironmentVariable(
+                "PostgreSql__RuntimeOnly");
+            var priorBootstrap = Environment.GetEnvironmentVariable(
+                "PostgreSql__BootstrapOnly");
+            try
+            {
+                Environment.SetEnvironmentVariable(
+                    "ConnectionStrings__PostgreSql", connection.ConnectionString);
+                Environment.SetEnvironmentVariable("PostgreSql__RuntimeOnly", "true");
+                Environment.SetEnvironmentVariable("PostgreSql__BootstrapOnly", "false");
+                using var limitedHost = new WebApplicationFactory<Program>()
+                    .WithWebHostBuilder(builder =>
+                        builder.UseEnvironment("Development"));
+                using var limitedClient = limitedHost.CreateClient();
+                using (var health = await limitedClient.GetAsync("/api/health"))
+                    Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+                using (var ready = await limitedClient.GetAsync("/api/ready"))
+                    Assert.Equal(HttpStatusCode.OK, ready.StatusCode);
+                using var auth = await limitedClient.PostAsJsonAsync(
+                    "/api/auth/login",
+                    new {
+                        username = harness.SuperadminName,
+                        password = ApiHarness.SuperadminPassword
+                    });
+                Assert.Equal(HttpStatusCode.OK, auth.StatusCode);
+                using var json = JsonDocument.Parse(
+                    await auth.Content.ReadAsStringAsync());
+                Assert.Equal(harness.SuperadminName,
+                    json.RootElement.GetProperty("username").GetString());
+                Assert.Equal("superadmin",
+                    json.RootElement.GetProperty("role").GetString());
+                Assert.False(string.IsNullOrWhiteSpace(
+                    json.RootElement.GetProperty("accessToken").GetString()));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(
+                    "ConnectionStrings__PostgreSql", priorDb);
+                Environment.SetEnvironmentVariable(
+                    "PostgreSql__RuntimeOnly", priorRuntime);
+                Environment.SetEnvironmentVariable(
+                    "PostgreSql__BootstrapOnly", priorBootstrap);
+            }
+
+            // Even after receiving scoped Identity SELECT/UPDATE, role
+            // membership (and hence SET ROLE) must fail the runtime
+            // startup guard. The probe role grants no additional rights:
+            // the forbidden authority is the ability to switch roles.
+            var group = "f061_group_" + Guid.NewGuid().ToString("N");
+            await db.Database.ExecuteSqlRawAsync(
+                $"CREATE ROLE {group} NOLOGIN");
+            try
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT {group} TO {login}");
+                await using var impersonableDb = new AppDbContext(
+                    new DbContextOptionsBuilder<AppDbContext>()
+                        .UseNpgsql(connection.ConnectionString).Options);
+                var deniedMembership =
+                    await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                        PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                            impersonableDb));
+                Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                    deniedMembership.Message);
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"REVOKE {group} FROM {login}");
+                await db.Database.ExecuteSqlRawAsync(
+                    $"DROP ROLE IF EXISTS {group}");
+            }
 
             foreach (var table in new[] {
                 "git_later_checkpoint_mirror_second_reviews",

@@ -13,6 +13,7 @@ This is a **default-off, fail-closed startup path**, not a deployed least-privil
 **Runtime phase** (`PostgreSql__RuntimeOnly=true` in environment): skips **all** in-process Identity seeding, EF schema creation/repair and migration initializers. Instead, startup runs `PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync` on the actual `AppDbContext` connection, before `app.Run()`. It rejects the process with `PostgreSqlRuntimeRoleNotRestricted` if PostgreSQL reports:
 
 - the login is a superuser, can create roles/databases, replicate or bypass RLS;
+- the login has INHERIT enabled, is not a LOGIN role, or has ANY role membership that could be activated with `SET ROLE`;
 - ownership/membership of the database, any F-061 second-review journal table or its deny trigger function;
 - `CREATE` permission on the database or the `public` schema;
 - any `INSERT`, `UPDATE` or `DELETE` privilege on the three F-061 second-review tables;
@@ -80,3 +81,24 @@ startup guard. Future work must grant explicitly reviewed DML on other
 API relations and verify end-to-end HTTP functionality under a
 separately authenticated runtime-only host. **No writer for #130 is
 enabled**.
+
+## Verified real runtime HTTP host (PG17)
+
+The current CI regression now starts a **second real ASP.NET Core host**
+with `PostgreSql__RuntimeOnly=true`, using the separately authenticated
+ephemeral LOGIN after the exact Identity-only grants have been applied.
+It verifies `/api/health`, `/api/ready` and a real
+`POST /api/auth/login` for the pre-existing superadmin account,
+including issuance of a JWT with the correct role. The privileged
+bootstrap test host is used only to create the account and to provision
+the disposable LOGIN. The restricted host does not run schema/Identity
+bootstrap and its database credentials are restored immediately after
+the request. A further real PG17 assertion refuses a runtime LOGIN
+that has any role membership (even a NOLOGIN group without grants),
+so `NOINHERIT` cannot conceal later `SET ROLE` escalation.
+
+This proves only the initial **Identity/authentication HTTP slice**.
+It does not grant or test general source discovery, plan editing, source
+checkpoint or GitHub migration CRUD in a restricted application role;
+all three F-061 review journals still deny mutation. #130 remains
+independently blocked until an authenticated, atomic three-row writer.

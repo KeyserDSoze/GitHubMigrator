@@ -56,6 +56,15 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 AND NOT role.rolsuper AND NOT role.rolcreatedb
                 AND NOT role.rolcreaterole AND NOT role.rolreplication
                 AND NOT role.rolbypassrls
+                -- NOINHERIT is necessary but not sufficient. A login
+                -- member could still SET ROLE into an elevated group,
+                -- even though the initial CURRENT_USER passes the
+                -- ordinary table/grant checks. Disallow ALL memberships.
+                AND role.rolcanlogin AND NOT role.rolinherit
+                AND NOT EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_auth_members memberships
+                    WHERE memberships.member = role.oid
+                )
                 AND NOT pg_catalog.has_database_privilege(
                     CURRENT_USER, CURRENT_DATABASE(), 'CREATE')
                 AND NOT pg_catalog.has_schema_privilege(
@@ -88,7 +97,8 @@ public static class PostgresRestrictedRuntimeRoleGuard
             throw new InvalidOperationException(
                 "PostgreSqlRuntimeRoleNotRestricted: runtime-only startup " +
                 "requires an independently provisioned non-owner, " +
-                "non-superuser login, unchanged session identity and " +
+                "non-superuser NOINHERIT login with no role memberships, " +
+                "unchanged session identity and " +
                 "three exact enabled F-061 review DML triggers. " +
                 "Use privileged schema bootstrap " +
                 "separately; never reuse its credentials for the API.");
