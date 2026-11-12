@@ -88,10 +88,28 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
             // #133 incremental read-only capability; NO INSERT/UPDATE/
             // DELETE of connection records, credential-table access, or
             // provider calls for restricted runtime connections listing.
-            Assert.True(await Scalar<bool>("""
+            Assert.False(await Scalar<bool>("""
                 SELECT pg_catalog.has_table_privilege(
                     CURRENT_USER, 'public.migration_connections', 'SELECT')
                 """));
+            Assert.True(await Scalar<bool>("""
+                SELECT pg_catalog.has_column_privilege(
+                    CURRENT_USER, 'public.migration_connections', 'name', 'SELECT')
+                """));
+            Assert.False(await Scalar<bool>("""
+                SELECT pg_catalog.has_column_privilege(
+                    CURRENT_USER, 'public.migration_connections', 'secret_reference', 'SELECT')
+                """));
+            // Direct SQL must be unable to retrieve the credential
+            // reference even though the HTTP admin list remains usable.
+            await using (var forbiddenColumn = new NpgsqlCommand(
+                "SELECT secret_reference FROM public.migration_connections LIMIT 0",
+                caller))
+            {
+                var denied = await Assert.ThrowsAsync<PostgresException>(
+                    () => forbiddenColumn.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+            }
             Assert.False(await Scalar<bool>("""
                 SELECT pg_catalog.has_table_privilege(
                     CURRENT_USER, 'public.migration_connections', 'INSERT,UPDATE,DELETE')

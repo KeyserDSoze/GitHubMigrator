@@ -105,9 +105,14 @@ independently blocked until an authenticated, atomic three-row writer.
 
 ## Explicit admin connection listing (read only)
 
-The same reviewed pilot SQL now grants **SELECT only** on the existing
-`public.migration_connections` relation, in addition to Identity
-SELECT/UPDATE. This supports the existing, authenticated
+The same reviewed pilot SQL now grants **column-level SELECT only**
+on the explicitly allowlisted public metadata fields of
+`public.migration_connections`, in addition to Identity SELECT/UPDATE.
+It revokes any earlier table-wide SELECT pilot grant on that relation
+before issuing the narrowed permissions. In particular,
+`secret_reference` cannot be retrieved **even through direct SQL**
+as the runtime login; `PostgresConnectionRepository.ListAsync` now
+projects only those same allowlisted columns. This supports the existing, authenticated
 `GET /api/connections` admin/superadmin route. The API's response DTO
 omits `secret_reference`, and the connection row contains a *reference*,
 not the provider PAT (which resides in a separate encrypted store).
@@ -162,3 +167,15 @@ and review bootstrap/DDL reapplication across deployments.
 The runtime-only login must never possess this owner role, its
 credentials or membership. Additional per-relation application grants
 and full restricted HTTP CRUD verification remain in #133.
+
+### PostgreSQL SQL-level credential-reference regression
+
+The real PG17 restricted-login test asserts that the role has NO
+table-wide `migration_connections` SELECT, can SELECT the specifically
+granted `name` column, cannot SELECT the `secret_reference` column
+(`42501`), and still receives the authorized, sanitised HTTP
+`GET /api/connections` list. The original full-record `GetAsync`
+path deliberately requires a different, separately reviewed privilege;
+this scoped pilot does not grant access to validation, verification,
+token rotation, creation or deletion APIs. No encrypted secret payload
+or lookup reference reaches the restricted SQL session.

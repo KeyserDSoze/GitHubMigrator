@@ -133,7 +133,16 @@ BEGIN
     IF pg_catalog.to_regclass('public.migration_connections') IS NULL THEN
         RAISE EXCEPTION 'Required migration_connections relation absent';
     END IF;
+    -- Column-level permission excludes secret_reference even from
+    -- direct SQL by the restricted login (not merely from HTTP JSON).
+    -- Revoke the previously issued table-wide pilot SELECT before
+    -- applying least privilege. Repeated executions are idempotent.
     EXECUTE pg_catalog.format(
-        'GRANT SELECT ON TABLE public.migration_connections TO %I',
+        'REVOKE SELECT ON TABLE public.migration_connections FROM %I',
+        runtime_name);
+    EXECUTE pg_catalog.format(
+        'GRANT SELECT (id, name, provider_key, direction, organization, ' ||
+        'created_at_utc, validated_at_utc, validation_code, authenticated_as, ' ||
+        'permission_assessment) ON TABLE public.migration_connections TO %I',
         runtime_name);
 END $f061_runtime_identity_grants$;

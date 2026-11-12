@@ -30,9 +30,34 @@ public sealed class EncryptedSecretRecord
 
 public sealed class PostgresConnectionRepository(AppDbContext db) : IConnectionRepository
 {
-    public async Task<IReadOnlyList<MigrationConnection>> ListAsync(CancellationToken ct) =>
-        (await db.Connections.AsNoTracking().OrderBy(x => x.CreatedAtUtc).ToListAsync(ct))
-            .Select(Map).ToArray();
+    // The public admin inventory does not need the credential-store
+    // lookup key. Project only explicitly allowlisted columns in SQL:
+    // runtime-only logins intentionally have NO SELECT privilege on
+    // migration_connections.secret_reference. GetAsync retains the
+    // full protected record for separately authorized workflows.
+    public async Task<IReadOnlyList<MigrationConnection>> ListAsync(CancellationToken ct)
+    {
+        var rows = await db.Connections.AsNoTracking()
+            .OrderBy(x => x.CreatedAtUtc)
+            .Select(x => new
+            {
+                x.Id,
+                x.Name,
+                x.ProviderKey,
+                x.Direction,
+                x.Organization,
+                x.CreatedAtUtc,
+                x.ValidatedAtUtc,
+                x.ValidationCode,
+                x.AuthenticatedAs,
+                x.PermissionAssessment
+            }).ToListAsync(ct);
+        return rows.Select(x => new MigrationConnection(
+            x.Id, x.Name, x.ProviderKey, x.Direction, x.Organization,
+            SecretReference: string.Empty,
+            x.CreatedAtUtc, x.ValidatedAtUtc, x.ValidationCode,
+            x.AuthenticatedAs, x.PermissionAssessment)).ToArray();
+    }
 
     public async Task<MigrationConnection?> GetAsync(Guid id, CancellationToken ct)
     {
