@@ -264,6 +264,25 @@ BEGIN
         RAISE EXCEPTION
             'F-061 runtime grant pilot detected existing secret or write privileges';
     END IF;
+    -- #137: executable SECURITY DEFINER routines run with their owner's
+    -- privileges, which can bypass a read-only caller's SQL ACLs.
+    -- PostgreSQL normally grants function EXECUTE to PUBLIC by default;
+    -- reject any effective EXECUTE grant (direct or PUBLIC) in user
+    -- schemas. This pilot has no narrowly approved definer writer.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_proc routine
+        JOIN pg_catalog.pg_namespace ns
+          ON ns.oid = routine.pronamespace
+        WHERE routine.prosecdef
+          AND ns.nspname <> 'information_schema'
+          AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
+          AND pg_catalog.has_function_privilege(
+              runtime_name, routine.oid, 'EXECUTE')
+    ) THEN
+        RAISE EXCEPTION
+            'F-061 runtime grant pilot detected executable SECURITY DEFINER routine';
+    END IF;
     -- Sequences are a separate SQL privilege class: USAGE permits
     -- nextval and UPDATE permits setval. Neither is safe for this
     -- read-only pilot, even when the table DML audit was clean.

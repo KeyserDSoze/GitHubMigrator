@@ -448,6 +448,74 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     $"DROP MATERIALIZED VIEW IF EXISTS public.{auditMatview}");
             }
 
+            // #137: a separately authenticated NOSUPERUSER login must
+            // not inherit a privileged function's owner rights through
+            // the default PUBLIC EXECUTE privilege, nor through a later
+            // explicit EXECUTE grant. The disposable function is harmless
+            // and is NEVER called; only catalog privileges are inspected.
+            var definerName = "f061_pilot_definer_" +
+                Guid.NewGuid().ToString("N");
+            await db.Database.ExecuteSqlRawAsync(
+                $"CREATE FUNCTION public.{definerName}() " +
+                "RETURNS integer LANGUAGE sql SECURITY DEFINER " +
+                "SET search_path = pg_catalog AS 'SELECT 1'");
+            try
+            {
+                foreach (var grantee in new[] { "PUBLIC", login })
+                {
+                    // PostgreSQL17 grants EXECUTE to PUBLIC by default
+                    // on a new function. Remove that default after the
+                    // first negative probe; the second grant must prove
+                    // a direct ACL is independently rejected.
+                    if (grantee == login)
+                        await db.Database.ExecuteSqlRawAsync(
+                            $"GRANT EXECUTE ON FUNCTION public.{definerName}() TO {login}");
+                    try
+                    {
+                        await using (var drifted = new AppDbContext(
+                            new DbContextOptionsBuilder<AppDbContext>()
+                                .UseNpgsql(connection.ConnectionString).Options))
+                        {
+                            var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                                () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                    drifted));
+                            Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                                refused.Message);
+                        }
+
+                        await using var tx = await db.Database.BeginTransactionAsync();
+                        await db.Database.ExecuteSqlInterpolatedAsync(
+                            $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                        await using var command = db.Database.GetDbConnection()
+                            .CreateCommand();
+                        command.Transaction = tx.GetDbTransaction();
+                        command.CommandText = sql;
+                        var rejected = await Assert.ThrowsAsync<PostgresException>(
+                            () => command.ExecuteNonQueryAsync());
+                        Assert.Equal("P0001", rejected.SqlState);
+                        Assert.Contains("executable SECURITY DEFINER routine",
+                            rejected.MessageText);
+                    }
+                    finally
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            $"REVOKE EXECUTE ON FUNCTION public.{definerName}() FROM {grantee}");
+                    }
+                }
+
+                // Removing both grants restores the original restricted
+                // runtime startup gate; no function is executed.
+                await using (var clean = new AppDbContext(
+                    new DbContextOptionsBuilder<AppDbContext>()
+                        .UseNpgsql(connection.ConnectionString).Options))
+                    await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(clean);
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"DROP FUNCTION IF EXISTS public.{definerName}()");
+            }
+
             // The operator's successful initial grants are not a
             // permanent credential boundary. A later superuser grant
             // must cause the REAL runtime startup guard to refuse

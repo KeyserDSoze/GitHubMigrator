@@ -415,3 +415,32 @@ Test-only PUBLIC grants are revoked in `finally`, after which the
 existing restricted-runtime positive HTTP test still runs. No
 maintenance, foreign-key DDL, journal write or schema change to the
 production SQL contract occurs.
+
+### #137: callable SECURITY DEFINER routines are forbidden in this pilot
+
+PostgreSQL grants EXECUTE on newly created functions to PUBLIC by
+default. A SECURITY DEFINER routine runs with its *owner's* SQL rights,
+not with the caller's ordinary read-only table/schema grants. Therefore,
+a startup ACL check that only scans tables, schemas and sequences would
+miss this privilege-escalation path.
+
+For the default-OFF read-only restricted runtime pilot, **no SECURITY
+DEFINER routine is allowlisted at all**. The real startup catalog check
+and separately invoked privileged provisioning SQL inspect user-schema
+`pg_proc.prosecdef` together with the connected runtime LOGIN's
+effective `has_function_privilege(..., 'EXECUTE')`, including PUBLIC
+default EXECUTE. System schemas (`pg_*` and `information_schema`)
+are deliberately excluded from this application-level policy.
+A future reviewed, fixed-search_path and narrowly GRANTed
+SECURITY DEFINER writer must be designed independently under #130;
+it must not be enabled by bypassing this read-only gate.
+
+The real PostgreSQL17 restricted-LOGIN test creates a disposable,
+superuser-owned but harmless constant-returning SECURITY DEFINER
+function. The normal PostgreSQL default PUBLIC EXECUTE grant must make
+**both** checks fail; the test revokes it, grants direct EXECUTE solely
+to the disposable LOGIN, and again requires both checks to fail. It
+then revokes all temporary privileges, confirms restricted startup
+succeeds, and drops the function in a finally clause. **No call to
+the definer function and no protected F-061 write is ever attempted.**
+Full exact-main 4/4 CI is mandatory before closing #137.

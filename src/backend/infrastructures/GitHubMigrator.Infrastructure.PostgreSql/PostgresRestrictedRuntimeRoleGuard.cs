@@ -181,6 +181,22 @@ public static class PostgresRestrictedRuntimeRoleGuard
                           )
                       )
                 )
+                -- #137: the owner of a SECURITY DEFINER routine can be
+                -- privileged even when the caller's relation/DDL grants
+                -- are clean. This pilot has no allowlisted definer
+                -- entrypoint; reject effective EXECUTE, including PUBLIC
+                -- default grants, on all non-system routines.
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_proc routine
+                    JOIN pg_catalog.pg_namespace ns
+                      ON ns.oid = routine.pronamespace
+                    WHERE routine.prosecdef
+                      AND ns.nspname <> 'information_schema'
+                      AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
+                      AND pg_catalog.has_function_privilege(
+                          role.rolname, routine.oid, 'EXECUTE')
+                )
                 -- A sequence can be advanced or reset via USAGE/UPDATE
                 -- without INSERT/UPDATE/DELETE permission on its table.
                 -- This runtime-only pilot does not need writable sequences.
@@ -229,7 +245,8 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 "and no access to connection secret references or " +
                 "encrypted provider credentials, or unauthorized " +
                 "writes to connection/discovery metadata or any " +
-                "non-Identity user table/column or writable sequence. " +
+                "non-Identity user table/column, writable sequence " +
+                "or executable user-schema SECURITY DEFINER routine. " +
                 "Use privileged schema bootstrap " +
                 "separately; never reuse its credentials for the API.");
     }
