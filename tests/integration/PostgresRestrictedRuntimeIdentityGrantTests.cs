@@ -407,7 +407,7 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
             foreach (var (relation, column, grantee) in new[]
             {
                 ("public.migration_discoveries", "id", login),
-                ("public.\\\"AspNetUsers\\\"", "\\\"Id\\\"", "PUBLIC")
+                ("public.\"AspNetUsers\"", "\"Id\"", "PUBLIC")
             })
             {
                 await db.Database.ExecuteSqlRawAsync(
