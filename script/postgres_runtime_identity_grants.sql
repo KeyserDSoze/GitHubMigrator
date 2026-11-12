@@ -201,4 +201,55 @@ BEGIN
     THEN
         RAISE EXCEPTION 'F-061 runtime grant pilot detected existing secret or write privileges';
     END IF;
+    -- Fail closed on pre-existing DML elsewhere in the runtime DB.
+    -- A GRANT UPDATE(repositories_json), unlike table-wide UPDATE,
+    -- otherwise escapes has_table_privilege checks. Do not normalize
+    -- dangerous pre-existing access: abort the grant transaction.
+    -- The narrowly scoped AspNetUsers UPDATE is the ONLY permitted
+    -- writable user relation in this read-only pilot.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class writable
+        JOIN pg_catalog.pg_namespace ns
+          ON ns.oid = writable.relnamespace
+        WHERE writable.relkind IN ('r', 'p', 'v', 'f')
+          AND ns.nspname <> 'information_schema'
+          AND ns.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+          AND (
+              (
+                  ns.nspname = 'public'
+                  AND writable.relname = 'AspNetUsers'
+                  AND (
+                      pg_catalog.has_table_privilege(
+                          runtime_name, writable.oid, 'INSERT, DELETE')
+                      OR EXISTS (
+                          SELECT 1 FROM pg_catalog.pg_attribute a
+                          WHERE a.attrelid = writable.oid
+                            AND a.attnum > 0 AND NOT a.attisdropped
+                            AND pg_catalog.has_column_privilege(
+                                runtime_name, writable.oid, a.attname, 'INSERT')
+                      )
+                  )
+              )
+              OR (
+                  NOT (ns.nspname = 'public' AND
+                       writable.relname = 'AspNetUsers')
+                  AND (
+                      pg_catalog.has_table_privilege(
+                          runtime_name, writable.oid, 'INSERT, UPDATE, DELETE')
+                      OR EXISTS (
+                          SELECT 1 FROM pg_catalog.pg_attribute a
+                          WHERE a.attrelid = writable.oid
+                            AND a.attnum > 0 AND NOT a.attisdropped
+                            AND pg_catalog.has_column_privilege(
+                                runtime_name, writable.oid,
+                                a.attname, 'INSERT, UPDATE')
+                      )
+                  )
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'F-061 runtime grant pilot detected existing secret or write privileges';
+    END IF;
 END $f061_runtime_identity_grants$;

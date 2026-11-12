@@ -279,3 +279,29 @@ Any future write-capable application role must have a separately
 reviewed owner/grant policy and an authorization redesign; this
 pilot's intentionally strict runtime-only guard must not be bypassed
 simply to enable additional CRUD endpoints.
+
+## #133: global write-privilege fence for the current read-only pilot
+
+The runtime-only login is not allowed arbitrary DML outside the
+original Identity `AspNetUsers` UPDATE grant. The startup guard and
+the separately executed operator grant SQL now scan the real PostgreSQL
+catalog of **non-system user tables, views, and foreign tables** for
+effective INSERT/UPDATE/DELETE. They check both **table** privileges
+and **individual-column INSERT/UPDATE grants**, which table-level
+`has_table_privilege` does not detect on its own. On `AspNetUsers`
+itself, UPDATE remains permitted but INSERT/DELETE are rejected.
+
+This blocks privilege drift even on unrelated application tables such
+as `migration_plan_drafts`. The real PostgreSQL17 smoke temporarily
+grants full-table UPDATE and then column-only UPDATE of
+`migration_plan_drafts.repositories_json`, plus DELETE on
+`AspNetUsers`, and requires the runtime startup to refuse each
+before restoring grants. No sample plan draft or Identity account is
+modified. The operator script rejects comparable pre-existing
+privileges in its own atomic installation transaction.
+
+The restriction is **specific to the current read-only deployment
+pilot**. It is not a complete privilege policy for a future
+write-enabled migration API. Such a role must be designed and tested
+separately rather than weakening the fail-closed checks or using the
+bootstrap superuser as an ordinary runtime credential.

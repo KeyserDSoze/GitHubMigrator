@@ -104,6 +104,64 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 AND NOT pg_catalog.has_table_privilege(
                     role.rolname, 'public.migration_discoveries',
                     'INSERT, UPDATE, DELETE')
+                -- This is an intentionally READ-ONLY runtime pilot:
+                -- PostgreSQL's has_table_privilege ignores a separate
+                -- GRANT UPDATE(one_column). Inspect both table AND
+                -- per-column permissions on every user relation, not
+                -- only explicitly named connection/discovery tables.
+                -- The sole DML exception is Identity AspNetUsers UPDATE
+                -- (password/lockout/security-stamp lifecycle).
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_class writable
+                    JOIN pg_catalog.pg_namespace ns
+                      ON ns.oid = writable.relnamespace
+                    WHERE writable.relkind IN ('r', 'p', 'v', 'f')
+                      AND ns.nspname <> 'information_schema'
+                      AND ns.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                      AND (
+                          (
+                              ns.nspname = 'public'
+                              AND writable.relname = 'AspNetUsers'
+                              AND (
+                                  pg_catalog.has_table_privilege(
+                                      role.rolname, writable.oid,
+                                      'INSERT, DELETE')
+                                  OR EXISTS (
+                                      SELECT 1
+                                      FROM pg_catalog.pg_attribute a
+                                      WHERE a.attrelid = writable.oid
+                                        AND a.attnum > 0
+                                        AND NOT a.attisdropped
+                                        AND pg_catalog.has_column_privilege(
+                                            role.rolname, writable.oid,
+                                            a.attname, 'INSERT')
+                                  )
+                              )
+                          )
+                          OR (
+                              NOT (
+                                  ns.nspname = 'public'
+                                  AND writable.relname = 'AspNetUsers'
+                              )
+                              AND (
+                                  pg_catalog.has_table_privilege(
+                                      role.rolname, writable.oid,
+                                      'INSERT, UPDATE, DELETE')
+                                  OR EXISTS (
+                                      SELECT 1
+                                      FROM pg_catalog.pg_attribute a
+                                      WHERE a.attrelid = writable.oid
+                                        AND a.attnum > 0
+                                        AND NOT a.attisdropped
+                                        AND pg_catalog.has_column_privilege(
+                                            role.rolname, writable.oid,
+                                            a.attname, 'INSERT, UPDATE')
+                                  )
+                              )
+                          )
+                      )
+                )
                 AND (SELECT count(*) FROM protected) = 3
                 AND (SELECT count(*) FROM protected_triggers) = 3
                 AND NOT EXISTS (
@@ -131,7 +189,8 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 "three exact enabled F-061 review DML triggers, " +
                 "and no access to connection secret references or " +
                 "encrypted provider credentials, or unauthorized " +
-                "writes to connection/discovery metadata. " +
+                "writes to connection/discovery metadata or any " +
+                "non-Identity user table/column. " +
                 "Use privileged schema bootstrap " +
                 "separately; never reuse its credentials for the API.");
     }

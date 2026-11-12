@@ -303,6 +303,37 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 }
             }
 
+            // These other live API relations were never allowlisted
+            // for DML in the restricted pilot. No data is modified:
+            // each GRANT is held only for the negative startup test,
+            // then revoked even if the assertion fails.
+            foreach (var privilege in new[] {
+                ("UPDATE", "UPDATE", "public.migration_plan_drafts"),
+                ("UPDATE (repositories_json)", "UPDATE (repositories_json)",
+                    "public.migration_plan_drafts"),
+                ("DELETE", "DELETE", "public.\\\"AspNetUsers\\\"")
+            })
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT {privilege.Item1} ON {privilege.Item3} TO {login}");
+                try
+                {
+                    await using var overGranted = new AppDbContext(
+                        new DbContextOptionsBuilder<AppDbContext>()
+                            .UseNpgsql(connection.ConnectionString).Options);
+                    var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                        () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                            overGranted));
+                    Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                        refused.Message);
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"REVOKE {privilege.Item2} ON {privilege.Item3} FROM {login}");
+                }
+            }
+
             // A clean new connection must pass after each prohibited
             // grant is rolled back. Recovered privileges are not a
             // reason to skip the normal restricted HTTP login tests.
