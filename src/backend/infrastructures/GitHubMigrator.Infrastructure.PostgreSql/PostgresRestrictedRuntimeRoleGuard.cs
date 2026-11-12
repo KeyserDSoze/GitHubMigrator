@@ -67,8 +67,18 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 )
                 AND NOT pg_catalog.has_database_privilege(
                     CURRENT_USER, CURRENT_DATABASE(), 'CREATE')
-                AND NOT pg_catalog.has_schema_privilege(
-                    CURRENT_USER, 'public', 'CREATE')
+                -- A separately granted CREATE on any other user schema
+                -- also grants runtime DDL capability. Check effective
+                -- privileges across ALL non-system schemas, including
+                -- PUBLIC grants and schemas created after provisioning.
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_namespace user_schema
+                    WHERE user_schema.nspname <> 'information_schema'
+                      AND pg_catalog.left(user_schema.nspname, 3) <> 'pg_'
+                      AND pg_catalog.has_schema_privilege(
+                          role.rolname, user_schema.oid, 'CREATE')
+                )
                 AND NOT EXISTS (
                     SELECT 1 FROM pg_catalog.pg_database d
                     WHERE d.datname = CURRENT_DATABASE()

@@ -288,6 +288,60 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     $"DROP SEQUENCE IF EXISTS public.{auditSequence}");
             }
 
+            // #135: a separate schema can be created by the bootstrap
+            // operator AFTER the original Identity grants. Its CREATE
+            // privilege is still DDL authority, even though neither the
+            // database nor public schema grants CREATE. The guard and
+            // exact deployment SQL must reject direct and PUBLIC grants.
+            var driftSchema = "f061_runtime_schema_" +
+                Guid.NewGuid().ToString("N");
+            await db.Database.ExecuteSqlRawAsync(
+                $"CREATE SCHEMA {driftSchema}");
+            try
+            {
+                foreach (var grantee in new[] { login, "PUBLIC" })
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"GRANT CREATE ON SCHEMA {driftSchema} TO {grantee}");
+                    try
+                    {
+                        await using (var drifted = new AppDbContext(
+                            new DbContextOptionsBuilder<AppDbContext>()
+                                .UseNpgsql(connection.ConnectionString).Options))
+                        {
+                            var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                                () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                    drifted));
+                            Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                                refused.Message);
+                        }
+
+                        await using var tx = await db.Database.BeginTransactionAsync();
+                        await db.Database.ExecuteSqlInterpolatedAsync(
+                            $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                        await using var command = db.Database.GetDbConnection()
+                            .CreateCommand();
+                        command.Transaction = tx.GetDbTransaction();
+                        command.CommandText = sql;
+                        var rejected = await Assert.ThrowsAsync<PostgresException>(
+                            () => command.ExecuteNonQueryAsync());
+                        Assert.Equal("P0001", rejected.SqlState);
+                        Assert.Contains("excessive inherited/DDL privileges",
+                            rejected.MessageText);
+                    }
+                    finally
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            $"REVOKE CREATE ON SCHEMA {driftSchema} FROM {grantee}");
+                    }
+                }
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"DROP SCHEMA IF EXISTS {driftSchema}");
+            }
+
             // The operator's successful initial grants are not a
             // permanent credential boundary. A later superuser grant
             // must cause the REAL runtime startup guard to refuse

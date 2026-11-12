@@ -39,8 +39,14 @@ BEGIN
        ) OR
        pg_catalog.has_database_privilege(
            runtime_name, CURRENT_DATABASE(), 'CREATE') OR
-       pg_catalog.has_schema_privilege(
-           runtime_name, 'public', 'CREATE') THEN
+       EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_namespace user_schema
+           WHERE user_schema.nspname <> 'information_schema'
+             AND pg_catalog.left(user_schema.nspname, 3) <> 'pg_'
+             AND pg_catalog.has_schema_privilege(
+                 runtime_name, user_schema.oid, 'CREATE')
+       ) THEN
         RAISE EXCEPTION 'F-061 runtime role has excessive inherited/DDL privileges';
     END IF;
 

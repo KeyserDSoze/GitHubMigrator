@@ -347,3 +347,22 @@ relying on unspecified predicate evaluation order. This does not relax
 USAGE/UPDATE denial or any protected F-061 table trigger. The existing
 real-PG17 separated-role smoke must prove this on the final main commit;
 a canceled or previously failed job is not acceptance.
+
+### #135: unrestricted CREATE on another user schema is forbidden
+
+The restricted `PostgreSql__RuntimeOnly=true` SQL pilot must refuse
+**effective `CREATE` on every non-system schema**, not merely `public`:
+a separately granted schema privilege permits DDL even without
+`CREATE` on the database. Both the startup catalog guard and the
+one-shot privileged grant script inspect `pg_namespace` and effective
+`has_schema_privilege(role, schema_oid, 'CREATE')` for all user schemas.
+This also catches rights granted to `PUBLIC` and privilege drift
+*after* provisioning. No migration-object CREATE, ownership, or
+`SECURITY DEFINER` privilege is granted.
+
+The real PG17 regression creates a disposable additional schema and
+checks direct-runtime and `PUBLIC` CREATE drift against both codepaths;
+it revokes and drops test-only objects. All existing F-061 review
+DENY-ALL triggers, no-writer setting, Identity-only UPDATE exception
+and destination-send authority flags remain unchanged. This is a
+default-off pilot; **not** production migration CRUD provisioning.
