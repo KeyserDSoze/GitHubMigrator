@@ -228,6 +228,20 @@ BEGIN
               -- REFERENCES permits FKs: neither is read-only access.
               pg_catalog.has_table_privilege(
                   runtime_name, writable.oid, 'TRUNCATE, TRIGGER, MAINTAIN, REFERENCES')
+              -- REFERENCES may be granted on a single column without
+              -- a table-level grant. The protected F-061 journals and
+              -- the otherwise UPDATE-allowlisted Identity table must
+              -- also reject this separate owner-privileged FK path.
+              OR EXISTS (
+                  SELECT 1
+                  FROM pg_catalog.pg_attribute column_acl
+                  WHERE column_acl.attrelid = writable.oid
+                    AND column_acl.attnum > 0
+                    AND NOT column_acl.attisdropped
+                    AND pg_catalog.has_column_privilege(
+                        runtime_name, writable.oid,
+                        column_acl.attname, 'REFERENCES')
+              )
               OR (
                   ns.nspname = 'public'
                   AND writable.relname = 'AspNetUsers'

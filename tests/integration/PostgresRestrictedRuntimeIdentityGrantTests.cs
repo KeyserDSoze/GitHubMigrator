@@ -399,6 +399,50 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 }
             }
 
+            // #136: PostgreSQL REFERENCES(column) grants do not
+            // imply a table-level REFERENCES grant. Check direct
+            // grants on immutable source metadata and PUBLIC grants
+            // against the otherwise UPDATE-allowlisted AspNetUsers.
+            // No foreign key is created by either negative probe.
+            foreach (var (relation, column, grantee) in new[]
+            {
+                ("public.migration_discoveries", "id", login),
+                ("public.\\\"AspNetUsers\\\"", "\\\"Id\\\"", "PUBLIC")
+            })
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT REFERENCES ({column}) ON TABLE {relation} TO {grantee}");
+                try
+                {
+                    await using (var drifted = new AppDbContext(
+                        new DbContextOptionsBuilder<AppDbContext>()
+                            .UseNpgsql(connection.ConnectionString).Options))
+                    {
+                        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                            () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                drifted));
+                        Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                            refused.Message);
+                    }
+
+                    await using var tx = await db.Database.BeginTransactionAsync();
+                    await db.Database.ExecuteSqlInterpolatedAsync(
+                        $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                    await using var command = db.Database.GetDbConnection()
+                        .CreateCommand();
+                    command.Transaction = tx.GetDbTransaction();
+                    command.CommandText = sql;
+                    var rejected = await Assert.ThrowsAsync<PostgresException>(
+                        () => command.ExecuteNonQueryAsync());
+                    Assert.Equal("P0001", rejected.SqlState);
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"REVOKE REFERENCES ({column}) ON TABLE {relation} FROM {grantee}");
+                }
+            }
+
             // #136: PostgreSQL17 materialized views use pg_class
             // relkind='m' and can be refreshed by MAINTAIN without
             // ordinary table DML. Verify drift on that relation kind,

@@ -139,6 +139,21 @@ public static class PostgresRestrictedRuntimeRoleGuard
                           -- Neither belongs to this read-only pilot.
                           pg_catalog.has_table_privilege(
                               role.rolname, writable.oid, 'TRUNCATE, TRIGGER, MAINTAIN, REFERENCES')
+                          -- Table privileges do not reveal an independent
+                          -- REFERENCES(one_column) GRANT; a malicious
+                          -- FK can execute with the referenced owner's
+                          -- privileges. The AspNetUsers UPDATE exception
+                          -- must not exempt column REFERENCES either.
+                          OR EXISTS (
+                              SELECT 1
+                              FROM pg_catalog.pg_attribute column_acl
+                              WHERE column_acl.attrelid = writable.oid
+                                AND column_acl.attnum > 0
+                                AND NOT column_acl.attisdropped
+                                AND pg_catalog.has_column_privilege(
+                                    role.rolname, writable.oid,
+                                    column_acl.attname, 'REFERENCES')
+                          )
                           OR (
                               ns.nspname = 'public'
                               AND writable.relname = 'AspNetUsers'

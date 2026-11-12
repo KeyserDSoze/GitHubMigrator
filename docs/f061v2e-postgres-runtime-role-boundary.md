@@ -444,3 +444,20 @@ then revokes all temporary privileges, confirms restricted startup
 succeeds, and drops the function in a finally clause. **No call to
 the definer function and no protected F-061 write is ever attempted.**
 Full exact-main 4/4 CI is mandatory before closing #137.
+
+#### #136: independent column-level REFERENCES grants
+
+The global relation ACL scan must not rely solely on
+`has_table_privilege(..., 'REFERENCES')`: PostgreSQL17 also supports
+`GRANT REFERENCES (column)`, which does not imply a table-level
+`REFERENCES` grant. Both independently implemented guards now scan
+all non-dropped user-relation columns for effective REFERENCES with
+`has_column_privilege`, even on `AspNetUsers` where **only**
+ordinary UPDATE is allowed.
+
+Real PostgreSQL17 negative probes temporarily GRANT column-level
+REFERENCES to the restricted LOGIN on `migration_discoveries.id`
+and via PUBLIC on `"AspNetUsers"."Id"`, require both startup and
+operator SQL to reject, and REVOKE each temporary grant in `finally`.
+No FK, schema edit, protected journal write, remote GitHub operation
+or additional runtime role privilege is introduced.
