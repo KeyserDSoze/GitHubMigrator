@@ -168,6 +168,81 @@ class TrxTimingSummaryTests(unittest.TestCase):
             self.assertIn("SHA-1 phase=1", published)
             self.assertIn("SHA-256 phase=1", published)
 
+    def test_full_pg17_f097_coverage_gate_enforces_real_theory_matrix(self):
+        # Both Git formats, every independent post-move phase, all 23
+        # physical cases and complete name parsing are requirements of
+        # the existing full green PG17 gate. Keep this synthetic,
+        # credential-free test independent from the DB/Git fixtures.
+        method = ("F097c4c0c_authenticated_http_review_of_real_"
+                  "later_checkpoint_is_immutable")
+        klass = ("GitHubMigrator.Integration.Tests."
+                 "PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests")
+        rows = [
+            (40 if index % 2 == 0 else 64, (index // 2) % 6)
+            for index in range(24)
+        ]
+        def make_trx(cases):
+            entries = "".join(
+                f'<UnitTestResult testId="physical" outcome="Passed" '
+                f'duration="00:00:01" testName="{klass}.{method}'
+                f'(oidLength: {algorithm}, postMovePhase: {phase})" />'
+                for algorithm, phase in cases
+            )
+            return (f'<TestRun><TestDefinitions><UnitTest id="physical">'
+                    f'<TestMethod className="{klass}" name="{method}" />'
+                    f'</UnitTest></TestDefinitions><Results>{entries}'
+                    f'</Results></TestRun>')
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.trx"
+            output = Path(directory) / "safe-summary.json"
+            gate = [str(source), "--output", str(output),
+                    "--require-f097-physical-coverage"]
+            source.write_text(make_trx(rows), encoding="utf-8")
+            self.assertEqual(main(gate), 0)
+            report = summarize_trx(source)
+            self.assertEqual(report["f097_review_cases"], 24)
+            self.assertEqual(report["f097_profiled_cases"], 24)
+            self.assertEqual(len(report["f097_phase_profiles"]), 12)
+            output.unlink()
+
+            # Removing one whole phase from the baseline matrix is not
+            # acceptable even when at least 23 cases still execute.
+            missing_phase = [
+                (64, 4) if case == (64, 5) else case
+                for case in rows
+            ]
+            self.assertEqual(len(missing_phase), 24)
+            source.write_text(make_trx(missing_phase), encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(main(gate), 1)
+            self.assertFalse(output.exists())
+
+            # A superficially healthy 23-case run is also incomplete if
+            # the exporter renames even ONE case without updating the
+            # strict profile parser. The previous silent [] regression
+            # must be a hard CI failure, never an empty green report.
+            damaged = make_trx(rows)
+            damaged = damaged.replace(
+                f"{klass}.{method}(oidLength: 40, postMovePhase: 0)",
+                f"Other.Namespace.{klass}.{method}(oidLength: 40, postMovePhase: 0)",
+                1,
+            )
+            source.write_text(damaged, encoding="utf-8")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(main(gate), 1)
+            self.assertIn("profile incomplete", err.getvalue())
+            self.assertNotIn("Other.Namespace", err.getvalue())
+            self.assertFalse(output.exists())
+
+            # A true full-run filter accidentally omitting the F-097
+            # method altogether must fail rather than report success.
+            source.write_text(FIXTURE, encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(main(gate), 1)
+            self.assertFalse(output.exists())
+
     def test_missing_allowed_only_when_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "missing.trx"

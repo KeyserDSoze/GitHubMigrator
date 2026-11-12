@@ -119,6 +119,7 @@ def summarize_trx(xml_path: Path, top: int = 15) -> dict:
     profiles: dict[tuple[str, int], list[tuple[Decimal, str]]] = defaultdict(list)
     outcomes: Counter[str] = Counter()
     total = 0
+    f097_review_cases = 0
     for result in root.iter():
         if _tag(result.tag) != "UnitTestResult":
             continue
@@ -127,6 +128,8 @@ def summarize_trx(xml_path: Path, top: int = 15) -> dict:
         safe_outcome = outcome if outcome in _SAFE_OUTCOMES else "Other"
         outcomes[safe_outcome] += 1
         method = definitions.get(result.attrib.get("testId", ""), "unknown_test")
+        if method == _F097_METHOD:
+            f097_review_cases += 1
         # A missing duration is not a zero-second test. Refuse to report
         # incomplete measurements as valid, especially after 4/4 success.
         duration = _seconds(result.attrib.get("duration", ""))
@@ -173,6 +176,10 @@ def summarize_trx(xml_path: Path, top: int = 15) -> dict:
         "methods": len(groups),
         "slowest_methods": slowest[:top],
         "f097_phase_profiles": f097_profiles,
+        "f097_review_cases": f097_review_cases,
+        "f097_profiled_cases": sum(
+            len(items) for items in profiles.values()
+        ),
         "note": "Sum of measured test-case durations, not workflow wall time",
     }
 
@@ -183,6 +190,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--top", type=int, default=15)
     parser.add_argument("--allow-missing", action="store_true")
+    # Success-only full CI gate: require the original 23 physical cases,
+    # both Git object formats and all six post-move phases per format.
+    # Reject silent partial profiles when the TRX exporter evolves.
+    parser.add_argument("--require-f097-physical-coverage", action="store_true")
     args = parser.parse_args(argv)
     if not args.trx.is_file():
         if args.allow_missing:
@@ -196,6 +207,27 @@ def main(argv: list[str] | None = None) -> int:
         # Never print source text or potentially sensitive XML diagnostics.
         print(f"TRX timing analysis failed ({type(error).__name__}).", file=sys.stderr)
         return 1
+    if args.require_f097_physical_coverage:
+        # This extra check is only enabled for the completed successful,
+        # unfiltered PG17 CI step. A failed/early-aborted run can still
+        # emit its partial timing report for triage.
+        actual = {
+            (entry["algorithm"], entry["post_move_phase"])
+            for entry in report["f097_phase_profiles"]
+        }
+        expected = {
+            (algorithm, phase)
+            for algorithm in ("SHA-1", "SHA-256")
+            for phase in range(6)
+        }
+        if (report["f097_review_cases"] < 23
+                or report["f097_profiled_cases"] != report["f097_review_cases"]
+                or not expected.issubset(actual)):
+            # Fixed wording only: do not echo untrusted names,
+            # parameters, source paths, OIDs or test arguments.
+            print("PostgreSQL17 F-097 physical test coverage/profile incomplete.",
+                  file=sys.stderr)
+            return 1
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8"

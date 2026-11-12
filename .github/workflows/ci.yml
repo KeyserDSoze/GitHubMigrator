@@ -168,7 +168,8 @@ jobs:
             # If the full suite succeeded, a missing TRX is a CI defect.
             python3 script/pg17_trx_timing_summary.py \
               tests/integration/TestResults/postgres17-integration.trx \
-              --output tests/integration/TestResults/postgres17-duration-summary.json
+              --output tests/integration/TestResults/postgres17-duration-summary.json \
+              --require-f097-physical-coverage
           else
             # On early failures the full integration test may never run.
             # Existing partial TRX (when present) still gets summarized.
