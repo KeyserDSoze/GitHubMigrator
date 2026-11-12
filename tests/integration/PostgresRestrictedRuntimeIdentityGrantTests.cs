@@ -229,6 +229,59 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     .UseNpgsql(connection.ConnectionString).Options))
                 await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(runtimeDb);
 
+            // The operator's successful initial grants are not a
+            // permanent credential boundary. A later superuser grant
+            // must cause the REAL runtime startup guard to refuse
+            // the existing otherwise-safe, independently authenticated
+            // login. Revoke only each disposable test grant in finally.
+            await db.Database.ExecuteSqlRawAsync(
+                $"GRANT SELECT (secret_reference) ON " +
+                $"public.migration_connections TO {login}");
+            try
+            {
+                await using var overGranted = new AppDbContext(
+                    new DbContextOptionsBuilder<AppDbContext>()
+                        .UseNpgsql(connection.ConnectionString).Options);
+                var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                        overGranted));
+                Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                    refused.Message);
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"REVOKE SELECT (secret_reference) ON " +
+                    $"public.migration_connections FROM {login}");
+            }
+
+            await db.Database.ExecuteSqlRawAsync(
+                $"GRANT SELECT ON public.migration_connection_secrets TO {login}");
+            try
+            {
+                await using var overGranted = new AppDbContext(
+                    new DbContextOptionsBuilder<AppDbContext>()
+                        .UseNpgsql(connection.ConnectionString).Options);
+                var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                        overGranted));
+                Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                    refused.Message);
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"REVOKE SELECT ON public.migration_connection_secrets FROM {login}");
+            }
+
+            // A clean new connection must pass after each prohibited
+            // grant is rolled back. Recovered privileges are not a
+            // reason to skip the normal restricted HTTP login tests.
+            await using (var restoredDb = new AppDbContext(
+                new DbContextOptionsBuilder<AppDbContext>()
+                    .UseNpgsql(connection.ConnectionString).Options))
+                await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(restoredDb);
+
             // REAL ASP.NET host with this separately authenticated PG17
             // runtime LOGIN. The production Program executes RuntimeOnly,
             // not Identity/DDL bootstrap. The existing superadmin account

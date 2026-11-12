@@ -75,6 +75,22 @@ public static class PostgresRestrictedRuntimeRoleGuard
                       AND pg_catalog.pg_has_role(
                           role.rolname, d.datdba, 'MEMBER')
                 )
+                -- #133: check ACTUAL effective SQL privileges again at
+                -- every runtime-only startup. An account provisioned
+                -- safely yesterday may have been over-granted later.
+                -- The operator script is not a permanent authorization
+                -- barrier, and table-level REVOKE does not necessarily
+                -- clear a separate column-level secret GRANT.
+                AND pg_catalog.to_regclass(
+                    'public.migration_connections') IS NOT NULL
+                AND pg_catalog.to_regclass(
+                    'public.migration_connection_secrets') IS NOT NULL
+                AND NOT pg_catalog.has_column_privilege(
+                    role.rolname, 'public.migration_connections',
+                    'secret_reference', 'SELECT')
+                AND NOT pg_catalog.has_table_privilege(
+                    role.rolname, 'public.migration_connection_secrets',
+                    'SELECT, INSERT, UPDATE, DELETE')
                 AND (SELECT count(*) FROM protected) = 3
                 AND (SELECT count(*) FROM protected_triggers) = 3
                 AND NOT EXISTS (
@@ -99,7 +115,9 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 "requires an independently provisioned non-owner, " +
                 "non-superuser NOINHERIT login with no role memberships, " +
                 "unchanged session identity and " +
-                "three exact enabled F-061 review DML triggers. " +
+                "three exact enabled F-061 review DML triggers, " +
+                "and no access to connection secret references or " +
+                "encrypted provider credentials. " +
                 "Use privileged schema bootstrap " +
                 "separately; never reuse its credentials for the API.");
     }

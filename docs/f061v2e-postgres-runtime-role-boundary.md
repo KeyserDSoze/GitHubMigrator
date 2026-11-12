@@ -231,3 +231,28 @@ smoke remains valid. This operator check applies to the intentionally
 narrow **read-only pilot**, not the eventual full application role with
 separately reviewed business write capabilities. No privilege or
 F-061 journal mutation is introduced by this verification.
+
+## Fail-closed runtime startup against post-provisioning privilege drift
+
+The `PostgresRestrictedRuntimeRoleGuard` checks real PostgreSQL
+catalog **effective privileges on each `RuntimeOnly` startup**, not
+just the initial grants operator script. It refuses a runtime LOGIN if
+`migration_connections.secret_reference` is SELECT-readable (including
+column-level grants), if the encrypted
+`migration_connection_secrets` store permits any SELECT/INSERT/UPDATE/
+DELETE, or if either required secret-related relation is absent.
+No role switch, bootstrap-superuser credential, owner membership or
+disabled F-061 review journal trigger is allowed.
+
+A real PostgreSQL17 integration regression now first provisions the
+restricted LOGIN correctly, then temporarily grants each forbidden
+secret-reference and encrypted-store SELECT **after** provisioning.
+The actual startup guard must refuse both even though the account
+otherwise passes every role and journal-fence check. Each temporary
+grant is revoked, and only then may the independent restricted API host
+start and complete the normal authenticated HTTP tests.
+
+This is a **start-time validation**, not continuous PostgreSQL grant
+monitoring. Administrators must prevent role/ACL changes while an API
+process is running and rotate/restart on credential or grant changes.
+It does not enable #130's three-row second-human writer.
