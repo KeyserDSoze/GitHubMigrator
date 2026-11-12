@@ -150,6 +150,28 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
         budget.CancelAfter(TimeSpan.FromSeconds(12));
         try
         {
+            // Fail-fast *before* nested F-031 and F-035 readers
+            // attempt blocking source-first advisory locks. The source
+            // identity comes from the persisted plan, never the caller.
+            // This probe is a short SQL transaction and is released
+            // BEFORE the independent, fully validating source reads.
+            // It grants no authority: ReadCoreAsync still performs
+            // its full locked source/plan/lease proof after the probe.
+            var plan = await db.IncrementalOperationPlans.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id == planId &&
+                    x.PreparationId == preparationId, budget.Token);
+            if (plan is not null && plan.SourceConnectionId != Guid.Empty)
+            {
+                await using var probe = await db.Database.BeginTransactionAsync(
+                    IsolationLevel.ReadCommitted, budget.Token);
+                if (!await leaseStore.TryLockAsync(
+                    plan.SourceConnectionId, planId, budget.Token))
+                    throw Refused("LaterCheckpointMirrorPostIsolationSourceBusy");
+                // Explicit rollback releases BOTH advisory transaction
+                // locks, including a partially acquired source lock.
+                await probe.RollbackAsync(budget.Token);
+            }
+
             return await ReadCoreAsync(preparationId, planId,
                 checkpointId, targetObservationId, workpackId,
                 sourceRepositoryId, expectedTargetReceiptSha256,

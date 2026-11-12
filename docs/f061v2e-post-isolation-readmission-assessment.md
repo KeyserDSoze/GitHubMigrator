@@ -750,3 +750,30 @@ but cannot admit an untrusted mirror, extend F-031 TTL, or allow
 a stale second-review writer. The normal completed-reader path is
 unchanged. This is a bounded fail-closed behavior, not a claim of
 instantaneous nonblocking across independent readers.
+
+
+### #131: early nonblocking source/plan lock probe under held POSIX root
+
+The prior 12-second linked read budget is a **fail-closed fallback**, not
+an efficient way to discover a source lock already held when the caller
+holds the F-060 shared POSIX root. `ReadCompletedAsync(failIfSourceBusy:true)`
+now looks up the trusted, persisted preparation+plan's
+`source_connection_id`, acquires **only** a short PostgreSQL
+`READ COMMITTED` transaction, and attempts both source-first and
+plan-second `pg_try_advisory_xact_lock` using the existing lease-store
+lock keys. Busy source/plan refuses immediately with the existing
+`LaterCheckpointMirrorPostIsolationSourceBusy` code. Both locks are
+explicitly rolled back before returning to normal preflight.
+
+This preliminary check is **not** a reusable successful proof or a
+TOCTOU authorization. The reader still repeats all F-091/F-097b/
+F-031/F-035v2 immutable source checks, then its final source-first
+locked verification and reread after probe release. If a writer acquires
+a lock in that gap, the 12-second source-read budget still guarantees
+failure closed (the caller's cancellation remains distinct).
+The real PostgreSQL SHA-1/256 adversarial test retains the independent
+connection holding the source advisory lock and now also asserts
+the refusal completes **under ten seconds**, before the caller's
+30-second timeout. No production five-minute provenance TTL, actual
+Git fsck, review journal mutation trigger or re-admission lease
+permission was modified.

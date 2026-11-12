@@ -3455,6 +3455,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     using var failFastDeadline =
                                         new CancellationTokenSource(
                                             TimeSpan.FromSeconds(30));
+                                    var sourceBusyTimer = Stopwatch.StartNew();
                                     Assert.Equal(
                                         "LaterCheckpointMirrorPostIsolationSourceBusy",
                                         (await Assert.ThrowsAsync<
@@ -3467,9 +3468,15 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                                 candidate.RequestedBy,
                                                 failFastDeadline.Token,
                                                 failIfSourceBusy: true))).Code);
-                                    // The internal 12s reader budget,
-                                    // never this outer 30s caller token,
-                                    // must terminate source-lock contention.
+                                    // The early PostgreSQL try-lock probe
+                                    // must refuse without running nested
+                                    // blocking F-031 source readers. The
+                                    // original 12s read-wide cancellation
+                                    // stays as a backstop for lock races.
+                                    Assert.True(sourceBusyTimer.Elapsed <
+                                        TimeSpan.FromSeconds(10),
+                                        "Source-busy preflight waited for a " +
+                                        "blocking nested F-031 SQL read");
                                     Assert.False(failFastDeadline
                                         .IsCancellationRequested);
                                     await heldSource.RollbackAsync();
