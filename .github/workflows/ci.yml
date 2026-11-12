@@ -144,6 +144,7 @@ jobs:
             --results-directory tests/integration/TestResults \
             --logger "trx;LogFileName=pg17-runtime-role-smoke.trx"
       - name: Verify ASP.NET API + PostgreSQL persistence, security and concurrency
+        id: full-pg17
         env:
           GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
         # #132: retain complete, per-case xUnit durations as a TRX artifact,
@@ -160,11 +161,22 @@ jobs:
       # above stays unfiltered; even failed runs publish the TRX artifact.
       - name: Summarize full PostgreSQL17 per-method durations
         if: always()
+        env:
+          FULL_PG17_OUTCOME: ${{ steps.full-pg17.outcome }}
         run: |
-          python3 script/pg17_trx_timing_summary.py \
-            tests/integration/TestResults/postgres17-integration.trx \
-            --output tests/integration/TestResults/postgres17-duration-summary.json \
-            --allow-missing
+          if [ "$FULL_PG17_OUTCOME" = "success" ]; then
+            # If the full suite succeeded, a missing TRX is a CI defect.
+            python3 script/pg17_trx_timing_summary.py \
+              tests/integration/TestResults/postgres17-integration.trx \
+              --output tests/integration/TestResults/postgres17-duration-summary.json
+          else
+            # On early failures the full integration test may never run.
+            # Existing partial TRX (when present) still gets summarized.
+            python3 script/pg17_trx_timing_summary.py \
+              tests/integration/TestResults/postgres17-integration.trx \
+              --output tests/integration/TestResults/postgres17-duration-summary.json \
+              --allow-missing
+          fi
       - name: Upload PostgreSQL integration coverage and TRX timings
         if: always()
         uses: actions/upload-artifact@v4
