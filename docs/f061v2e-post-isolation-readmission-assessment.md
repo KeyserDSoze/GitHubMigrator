@@ -836,3 +836,18 @@ PostgreSQL F-031 five-minute freshness, open mutation triggers,
 create or renew an F-061 lease, or authorize second-human review.
 It must be verified with actual latest-main PG17 integration; an
 archived canceled run is diagnostic, NOT a green quality gate.
+
+
+### #131: post-isolation real SHA1/SHA256 checks split into five fresh provenance epochs (2026-11-12)
+
+The completed, **failed** main [CI 43128396672](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/43128396672) ran 491 real PostgreSQL17 tests: 489 passed, two post-import SHA1/SHA256 restart variants failed after about five minutes. They passed real kernel/POSIX isolation and source checks at F-031 ages of approximately 224s (SHA1) and 246s (SHA256); a subsequent trusted source-first read encountered the original PostgreSQL-clock expiration. This is a **real failed run**, not a canceled validation. The saved F-031 target observation *and* independently validated destination connection both have separate strict five-minute database-clock checks in `RequireLiveLockedAsync`. Freezing an application `TimeProvider` does not move the database clock.
+
+The original 15 theory rows (13 standard plus 2 distinct pre-move adversarial SHA1/SHA256 cases) are retained. The two formerly monolithic post-import rows are expanded into **five SHA1 and five SHA256 fresh independent F-014/F-091/F-097/F-031/F-035 provenance/real-Git epochs**, giving 23 rows total without changing the production five-minute TTL or source/target trust policy:
+
+1. Full post-Isolated source replay, physical double-fsck and marker-forgery refusal, followed by restoration and a genuine fresh inspection.
+2. Historical first-human review binding, exact immutable second-review FK/CHECK schema and refusal when a persisted Assessed row has no matching audit event.
+3. Real source+POSIX reviewed Assessed positive, independent second reviewer and exact fixed-time preview/session+nonce replay without persistence.
+4. Fresh Assessed positive plus stale three-minute review timestamp refusal.
+5. Separate physical callback denial on marker forgery, PostgreSQL advisory-lock fail-fast contention, immutable assessment/isolation SQL denials and refusal to reacquire the original `RecoveryRequired` generation.
+
+Each case builds a *new* real source proof and latest target observation, not an altered/extended existing row. All previously asserted real Git SHA1/SHA256 fsck, quarantined source graph, three-replica SHA256 isolation race, historical review SHA, original terminal lease/false authority flags, foreign SQL mutation and replay remain exercised. An early return ends only its designated independent regression slice, after its assertions; it does not mock PostgreSQL time, skip the integration job, skip real Git, or enable any production reviewer writer. The expected additional PG17 test runtime is intentional to avoid letting one test scenario outlive its authoritative five-minute observation window. **A fresh complete 4/4 green run on the resulting main commit, including actual PostgreSQL17, is still required before closing #131/#128/#125 and dependent issues.**

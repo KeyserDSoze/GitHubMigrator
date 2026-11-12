@@ -436,28 +436,47 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
     // The reviewer identity comes from JWT claims, even when the caller
     // tries to smuggle two different actor UUIDs into the JSON request.
     [Theory]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected, false, false, false, false, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, true, false, false, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false, false, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, true, false, false)]
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false, false, false, 0)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, false, false, false, false, false, false, false, 0)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.Rejected, false, false, false, false, false, false, false, 0)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false, false, false, 0)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, false, false, false, false, false, 0)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, true, false, false, false, false, false, 0)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, false, false, 0)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, false, false, 0)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false, false, false, 0)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, true, false, false, false, 0)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, true, false, false, 0)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 1)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 1)]
     // #131: separate fresh F-031 source epochs for adversarial
     // pre-isolation denial and post-isolation physical review.
-    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, true)]
-    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, true)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, true, 0)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, true, 0)]
+    // #131: independently scoped post-isolation/second-human PG17 epochs.
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 2)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 2)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 3)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 3)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 4)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 4)]
+    [InlineData(40, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 5)]
+    [InlineData(64, GitCheckpointTargetHumanReviewStates.ApprovedForObservation, true, false, true, false, false, true, false, 5)]
     public async Task F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_immutable(
         int oidLength, string decision, bool verifyPhysical,
         bool corruptPhysical, bool runWorker, bool failWorker,
-        bool fenceWorker, bool failAfterImport, bool preMoveOnly)
+        bool fenceWorker, bool failAfterImport, bool preMoveOnly,
+        int postMovePhase)
     {
+        // #131: the original 13 cases and two pre-move cases remain.
+        // Five independent post-isolation SHA1/SHA256 epochs now exercise
+        // (1) physical/marker and source, (2) missing Assessed event,
+        // (3) fixed actor/session replay, (4) stale preview denial,
+        // (5) advisory-lock/mutation/replay. No DB-clock/TTL override.
+        if (failAfterImport && !preMoveOnly)
+            Assert.InRange(postMovePhase, 1, 5);
+        else
+            Assert.Equal(0, postMovePhase);
         // #131: per-phase real-source TTL budget for long Git tests.
         // Diagnostic-only: no skip, altered clock, SQL or Git shortcut.
         var phaseTimer = Stopwatch.StartNew();
@@ -468,7 +487,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                 : (DateTimeOffset.UtcNow - observedAtUtc.Value)
                     .TotalSeconds.ToString("F1",
                         System.Globalization.CultureInfo.InvariantCulture);
-            output.WriteLine($"#131 SHA{oidLength} {stage}: " +
+            output.WriteLine($"#131 SHA{oidLength} postMovePhase={postMovePhase} {stage}: " +
                 $"elapsed={phaseTimer.Elapsed.TotalSeconds:F1}s; " +
                 $"F031-real-age={age}s");
         }
@@ -2740,6 +2759,12 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             AND evidence_sha256 = {isolated.EvidenceSha256}
                                             AND type = 'Isolated'
                                         """).SingleAsync());
+                                // #131: separate physical SQL read, review, and
+                                // append-only adversarial epochs. Each new
+                                // F-031 observation gets its genuine DB TTL.
+                                var completedSource = freshPrepared;
+                                if (postMovePhase is 1 or 2)
+                                {
                                 // #129: source-first post-Isolated
                                 // reader requires the immutable SQL receipt
                                 // AND exact event, without allowing the
@@ -2756,7 +2781,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             candidate.RequestedBy,
                                             default))).Code);
                                 Phase("post-isolation SQL read starts", targetReceipt.ObservedAtUtc);
-                                var completedSource = await latestReader
+                                completedSource = await latestReader
                                     .ReadCompletedAsync(
                                         run.Id, plan.Id, later.Id,
                                         observationId, first.WorkpackId,
@@ -2790,6 +2815,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         "foreign-repo",
                                         targetReceipt.EvidenceSha256,
                                         candidate.RequestedBy, default));
+                                }
                                 // #129: source-first SQL/physical bridge
                                 // reads exact Isolated/decision/Prepared
                                 // history before and after REAL POSIX
@@ -2798,6 +2824,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     PostgresGitIncrementalLaterCheckpointMirrorPostIsolationInspector(
                                         verifiedDb, new(true), latestReader,
                                         localSession, TimeProvider.System);
+                                if (postMovePhase == 1)
+                                {
                                 Assert.Equal(
                                     "LaterCheckpointMirrorPostIsolationInspectorDisabled",
                                     (await Assert.ThrowsAsync<
@@ -2892,6 +2920,10 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     physicalMirror.VerifiedMirrorRoot,
                                     staging.PhysicalMirrorId.ToString("N") +
                                         ".git")));
+                                    // Retain real re-audit/marker tamper and
+                                    // restart proof in this fresh epoch.
+                                    return;
+                                }
                                 // #127: after ONE trusted physical + SQL
                                 // Isolated receipt, an additive audit-only
                                 // generation assessment can be written and
@@ -3418,6 +3450,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         {generationAssessment.AssessedAtUtc},
                                         {generationAssessment.EvidenceSha256})
                                     """);
+                                if (postMovePhase == 2)
+                                {
                                 // #129: without the #127 persisted
                                 // row AND its matching immutable Assessed
                                 // event, a second-human GET candidate must
@@ -3434,6 +3468,10 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             targetReceipt.EvidenceSha256,
                                             candidate.RequestedBy,
                                             default))).Code);
+                                    // Negative missing-event source and
+                                    // physical audit in its own F-031 epoch.
+                                    return;
+                                }
                                 await verifiedDb.Database.ExecuteSqlInterpolatedAsync($"""
                                     INSERT INTO
                                         git_later_checkpoint_mirror_generation_assessment_events (
@@ -3445,6 +3483,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         'Assessed',
                                         {generationAssessment.AssessedAtUtc})
                                     """);
+                                if (postMovePhase == 5)
+                                {
                                 // #129: the locked physical/SQL handoff
                                 // MUST NOT invoke the source callback if
                                 // the actual quarantined marker is forged.
@@ -3528,6 +3568,9 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         .IsCancellationRequested);
                                     await heldSource.RollbackAsync();
                                 }
+                                }
+                                if (postMovePhase is 3 or 4)
+                                {
                                 // #129: trusted completed #127
                                 // assessment is now joined to its real
                                 // Assessed event and domain SHA, then
@@ -3562,6 +3605,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     assessedIsolation.SuggestedNextGeneration);
                                 Assert.Equal(generationAssessment.AssessedAtUtc,
                                     assessedIsolation.AssessedAtUtc);
+                                if (postMovePhase == 3)
+                                {
                                 // A submitted fixed GET timestamp must
                                 // re-seal to the *same* actor-bound SHA,
                                 // after repeating all live source/SQL
@@ -3590,6 +3635,9 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     fixedPreview.RejectedPreviewEvidenceSha256);
                                 Assert.False(fixedPreview.Inspection
                                     .DurableSecondReviewPersisted);
+                                }
+                                else
+                                {
                                 Assert.Equal(
                                     "LaterCheckpointMirrorSecondReviewPreflightExpired",
                                     (await Assert.ThrowsAsync<
@@ -3610,10 +3658,14 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                                 decisionNonce:
                                                     Guid.NewGuid()))).Code);
 
+                                }
                                 Assert.False(
                                     assessedIsolation.Inspection.CanReAdmit ||
                                     assessedIsolation.Inspection.CanPush ||
                                     assessedIsolation.Inspection.MigrationComplete);
+                                    // No protected writer or session used.
+                                    return;
+                                }
                                 Assert.Equal(1L, await verifiedDb.Database
                                     .SqlQuery<long>($"""
                                         SELECT count(*)::bigint AS "Value"
@@ -3770,6 +3822,9 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         FROM git_later_checkpoint_mirror_verified_evidence
                                         WHERE mirror_id = {staging.PhysicalMirrorId}
                                         """).SingleAsync());
+                                // Mutation/lock/replay negatives are covered
+                                // in the fifth separately fresh epoch.
+                                return;
                             }
                         }
                         else
