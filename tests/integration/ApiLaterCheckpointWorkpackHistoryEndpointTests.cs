@@ -1191,9 +1191,40 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             var token = await separate.LoginAsync(
                 separate.SuperadminName, ApiHarness.SuperadminPassword);
             var before = separate.Calls.Count;
+            // Exercise the same current-Identity revocation gate through
+            // BOTH the GET preview and POST one-use session preflight.
+            // The physical inspector remains OFF: a valid reviewer can
+            // only receive a non-authorizing conflict, never a decision.
+            var preflightRoute = url[..url.IndexOf(
+                "/candidate", StringComparison.Ordinal)] + "/preflight";
+            async Task<HttpResponseMessage> SendPreflightAsync(string bearer)
+            {
+                var requestBody =
+                    new LaterCheckpointMirrorSecondReviewPreflightRequest(
+                        Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                        "repo-1", new string('a', 64),
+                        new string('b', 64), new string('c', 64),
+                        GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                            .ApprovedForIndependentReview,
+                        DateTimeOffset.FromUnixTimeMilliseconds(
+                            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
+                        Guid.NewGuid());
+                using var message = new HttpRequestMessage(
+                    HttpMethod.Post, preflightRoute)
+                {
+                    Content = System.Net.Http.Json.JsonContent.Create(requestBody)
+                };
+                message.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", bearer);
+                return await separate.Client.SendAsync(message);
+            }
+
             using (var initial = await Send(separate.Client,
                 HttpMethod.Get, url, token))
                 Assert.Equal(HttpStatusCode.Conflict, initial.StatusCode);
+            using (var initialPreflight = await SendPreflightAsync(token))
+                Assert.Equal(HttpStatusCode.Conflict,
+                    initialPreflight.StatusCode);
 
             await using var scope = separate.Host.Services.CreateAsyncScope();
             var users = scope.ServiceProvider.GetRequiredService<
@@ -1204,6 +1235,9 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             using (var revoked = await Send(separate.Client,
                 HttpMethod.Get, url, token))
                 Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
+            using (var revokedPreflight = await SendPreflightAsync(token))
+                Assert.Equal(HttpStatusCode.Unauthorized,
+                    revokedPreflight.StatusCode);
 
             var renewed = await separate.LoginAsync(
                 separate.SuperadminName, ApiHarness.SuperadminPassword,
@@ -1212,11 +1246,17 @@ public sealed class ApiLaterCheckpointWorkpackHistoryEndpointTests(
             using (var restored = await Send(separate.Client,
                 HttpMethod.Get, url, renewed))
                 Assert.Equal(HttpStatusCode.Conflict, restored.StatusCode);
+            using (var restoredPreflight = await SendPreflightAsync(renewed))
+                Assert.Equal(HttpStatusCode.Conflict,
+                    restoredPreflight.StatusCode);
             Assert.True((await users.RemoveFromRoleAsync(
                 account, "superadmin")).Succeeded);
             using (var noRole = await Send(separate.Client,
                 HttpMethod.Get, url, renewed))
                 Assert.Equal(HttpStatusCode.Unauthorized, noRole.StatusCode);
+            using (var noRolePreflight = await SendPreflightAsync(renewed))
+                Assert.Equal(HttpStatusCode.Unauthorized,
+                    noRolePreflight.StatusCode);
             Assert.Equal(before, separate.Calls.Count);
         }
         finally
