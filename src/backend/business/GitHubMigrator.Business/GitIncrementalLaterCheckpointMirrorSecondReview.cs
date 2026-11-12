@@ -52,8 +52,19 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
         {
             GitIncrementalLaterCheckpointMirrorReadmissionAssessmentIntegrity
                 .Verify(assessment, stage, durable, isolated, sourceRead);
+            // A first-human decision was sealed against the ORIGINAL
+            // recovery inspection. The post-Isolated source-first
+            // reader reconstructs a later, independently checked
+            // inspection with a DIFFERENT inspection timestamp, but
+            // exactly the same immutable worker/lease/graph and
+            // review-candidate SHA. Do not falsely re-seal the old
+            // decision as if the human reviewed this later timestamp.
+            // The existing physical-isolation verification accepts
+            // either the original exact inspection OR a later
+            // independently checked equivalent, with all original
+            // decision hashes and reviewer independence preserved.
             GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity
-                .Verify(firstReview, firstInspection);
+                .VerifyForPhysicalIsolation(firstReview, firstInspection);
         }
         catch (GitSourceSnapshotMirrorException)
         {

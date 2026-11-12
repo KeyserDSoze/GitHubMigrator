@@ -2924,6 +2924,52 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     secondReview, staging, committed, isolated,
                                     generationSourceRead, generationAssessment,
                                     diagnostic, humanDecision);
+                                // #131: a post-isolation *restarted*
+                                // reader reconstructs the first review's
+                                // stable graph at a later inspected-at
+                                // timestamp. The first human did NOT sign
+                                // that new timestamp; strict original
+                                // sealing must still be accepted through
+                                // historical, immutable candidate checks,
+                                // never by fabricating a new first review.
+                                var historicalSecondReview =
+                                    GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                        .Seal(staging, committed, isolated,
+                                            generationSourceRead,
+                                            generationAssessment,
+                                            completedSource.ExpectedInspection,
+                                            humanDecision, secondReviewer,
+                                            GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                                .ApprovedForIndependentReview,
+                                            secondReview.ReviewedAtUtc);
+                                Assert.Equal(secondReview.EvidenceSha256,
+                                    historicalSecondReview.EvidenceSha256);
+                                GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                    .Verify(historicalSecondReview,
+                                        staging, committed, isolated,
+                                        generationSourceRead,
+                                        generationAssessment,
+                                        completedSource.ExpectedInspection,
+                                        humanDecision);
+                                // A newer inspection must not let a
+                                // forged first-human reviewer or SHA
+                                // pass as valid historical evidence.
+                                Assert.Equal(
+                                    "LaterCheckpointMirrorSecondReviewInvalid",
+                                    Assert.Throws<GitSourceSnapshotMirrorException>(
+                                        () =>
+                                            GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                                .Seal(staging, committed,
+                                                    isolated, generationSourceRead,
+                                                    generationAssessment,
+                                                    completedSource.ExpectedInspection,
+                                                    humanDecision with {
+                                                        ReviewerId = secondReviewer
+                                                    }, secondReviewer,
+                                                    GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity
+                                                        .ApprovedForIndependentReview,
+                                                    secondReview.ReviewedAtUtc))
+                                    .Code);
                                 Assert.Equal(reviewerId, secondReview.FirstReviewerId);
                                 Assert.Equal(secondReviewer, secondReview.SecondReviewerId);
                                 Assert.Equal(generationAssessment.EvidenceSha256,

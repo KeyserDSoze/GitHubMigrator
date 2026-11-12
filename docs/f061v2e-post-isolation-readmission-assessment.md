@@ -777,3 +777,35 @@ the refusal completes **under ten seconds**, before the caller's
 30-second timeout. No production five-minute provenance TTL, actual
 Git fsck, review journal mutation trigger or re-admission lease
 permission was modified.
+
+
+### #131: verify independently reconstructed first-review history, not its new timestamp
+
+Canceled [PG17 CI 43122040258](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/43122040258)
+has archived logs from an actual failing SHA1 `failAfterImport=true`
+case. The scenario reached real POSIX isolation with an F-031 proof
+age of 145 seconds and successful post-isolation source audit at
+178 seconds, then failed inside
+`GitIncrementalLaterCheckpointMirrorSecondReviewIntegrity.Seal`
+while verifying the *old* first-human review against the **later
+restart-reconstructed** `ExpectedInspection`. The old call to
+`GitIncrementalLaterCheckpointMirrorRecoveryDecisionIntegrity.Verify`
+re-sealed the original human decision as if its reviewed-at timestamp
+belonged to the new physical inspection, and therefore rejected
+perfectly matching immutable historical evidence.
+
+The second-review candidate now uses the existing domain
+`VerifyForPhysicalIsolation`, which preserves **strict original
+inspection verification** when the inspection was the one the
+human originally reviewed, and calls
+`VerifyHistoricalForIsolationIntent` when the source-locked reader
+has a later timestamp with the **same** immutable first reviewer,
+signed decision digest, lease token/generation, staging and Git object
+graph/first-review candidate SHA. This does not forgive a changed
+source, forged first reviewer, new graph or quarantine marker.
+The SHA1/SHA256 PG17 scenario now checks that the original and
+restart-reconstructed inspection produce the *same* non-authorizing
+second review digest, while an impersonated historical reviewer is
+rejected. No persisted second decision, lease, new generation,
+GitHub push or re-admission is enabled. The SQL immutable journals
+still DENY ALL writes.
