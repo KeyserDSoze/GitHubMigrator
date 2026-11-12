@@ -122,7 +122,9 @@ BEGIN
         JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND NOT t.tgisinternal
-          AND t.tgenabled IN ('O', 'A')
+          -- #143: fail closed if any DENY-ALL trigger is still
+          -- origin-only, replica-only or disabled.
+          AND t.tgenabled = 'A'
           AND (t.tgtype::integer & 31) = 31
           AND t.tgfoid =
               'public.git_later_checkpoint_mirror_second_review_deny()'::regprocedure

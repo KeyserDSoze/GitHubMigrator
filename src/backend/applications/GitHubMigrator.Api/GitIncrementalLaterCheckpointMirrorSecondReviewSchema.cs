@@ -433,6 +433,17 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewSchema
                         git_later_checkpoint_mirror_second_review_deny();
                 END IF;
             END $f061v2e_review_triggers$;
+            -- #143: a default origin-only trigger does NOT fire when
+            -- a privileged session has session_replication_role=replica.
+            -- Both initial install and rerun/repair must guarantee the
+            -- unconditional DENY-ALL journal trigger fires in every
+            -- PostgreSQL replication mode. No review writer is installed.
+            ALTER TABLE public.git_later_checkpoint_mirror_second_reviews
+                ENABLE ALWAYS TRIGGER trg_f061v2e_second_review_closed;
+            ALTER TABLE public.git_later_checkpoint_mirror_second_review_events
+                ENABLE ALWAYS TRIGGER trg_f061v2e_second_review_event_closed;
+            ALTER TABLE public.git_later_checkpoint_mirror_second_review_session_consumptions
+                ENABLE ALWAYS TRIGGER trg_f061v2e_second_review_session_closed;
             """, ct);
     }
 }

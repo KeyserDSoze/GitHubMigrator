@@ -229,6 +229,75 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     .UseNpgsql(connection.ConnectionString).Options))
                 await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(runtimeDb);
 
+            // #143: exact F-061 journal trigger modes are part of the
+            // SQL safety contract, not merely trigger names/functions.
+            // Default origin-only mode is unsafe under a privileged
+            // session_replication_role=replica. This test only changes
+            // the catalog firing mode briefly; it NEVER enters replica
+            // mode or executes a protected journal mutation.
+            Assert.Equal(3L, await db.Database.SqlQueryRaw<long>("""
+                SELECT count(*)::bigint AS "Value"
+                FROM pg_catalog.pg_trigger t
+                JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public'
+                  AND t.tgenabled = 'A'
+                  AND NOT t.tgisinternal
+                  AND t.tgfoid =
+                      'public.git_later_checkpoint_mirror_second_review_deny()'::regprocedure
+                  AND (t.tgtype::integer & 31) = 31
+                  AND (
+                    (c.relname = 'git_later_checkpoint_mirror_second_reviews'
+                     AND t.tgname = 'trg_f061v2e_second_review_closed')
+                    OR (c.relname = 'git_later_checkpoint_mirror_second_review_events'
+                     AND t.tgname = 'trg_f061v2e_second_review_event_closed')
+                    OR (c.relname = 'git_later_checkpoint_mirror_second_review_session_consumptions'
+                     AND t.tgname = 'trg_f061v2e_second_review_session_closed')
+                  )
+                """).SingleAsync());
+
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE public.git_later_checkpoint_mirror_second_reviews
+                ENABLE TRIGGER trg_f061v2e_second_review_closed
+                """);
+            try
+            {
+                await using (var unsafeMode = new AppDbContext(
+                    new DbContextOptionsBuilder<AppDbContext>()
+                        .UseNpgsql(connection.ConnectionString).Options))
+                {
+                    var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                        () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                            unsafeMode));
+                    Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                        refused.Message);
+                }
+
+                await using var tx = await db.Database.BeginTransactionAsync();
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                await using var command = db.Database.GetDbConnection()
+                    .CreateCommand();
+                command.Transaction = tx.GetDbTransaction();
+                command.CommandText = sql;
+                var rejected = await Assert.ThrowsAsync<PostgresException>(
+                    () => command.ExecuteNonQueryAsync());
+                Assert.Equal("P0001", rejected.SqlState);
+                Assert.Contains("journal fences are incomplete",
+                    rejected.MessageText);
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync("""
+                    ALTER TABLE public.git_later_checkpoint_mirror_second_reviews
+                    ENABLE ALWAYS TRIGGER trg_f061v2e_second_review_closed
+                    """);
+            }
+            await using (var safeMode = new AppDbContext(
+                new DbContextOptionsBuilder<AppDbContext>()
+                    .UseNpgsql(connection.ConnectionString).Options))
+                await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(safeMode);
+
             // #134: table DML checks alone do not catch TRUNCATE
             // (no DELETE row trigger), TRIGGER or writable sequences.
             // Exercise both the exact one-shot operator SQL and the

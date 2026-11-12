@@ -33,7 +33,10 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 JOIN protected c ON c.oid = t.tgrelid
                 JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
                 WHERE NOT t.tgisinternal
-                  AND t.tgenabled IN ('O', 'A')
+                  -- #143: a merely origin-enabled ('O') trigger can be
+                  -- bypassed when session_replication_role=replica.
+                  -- All three journals must fire in EVERY mode.
+                  AND t.tgenabled = 'A'
                   -- Same-named triggers redirected to another function
                   -- or protecting only one DML verb are insufficient.
                   AND t.tgfoid =

@@ -621,3 +621,34 @@ writer/remote migration capability.
 See PostgreSQL17 documentation for
 `pg_parameter_acl`, `has_parameter_privilege`, and
 `session_replication_role`.
+
+### #143: DENY-ALL triggers always active in every replication mode
+
+The three F-061v2e decision, event and session-consumption journal
+triggers initially used PostgreSQL's ordinary `CREATE TRIGGER` mode
+(`pg_trigger.tgenabled='O'`). Such triggers fire in the normal
+`origin`/`local` modes but not when a privileged session switches
+to `session_replication_role=replica`. The #142 parameter-ACL
+restriction remains necessary, but a **second independent barrier**
+is warranted on immutable security journals. Per PostgreSQL17
+`ALTER TABLE ... ENABLE ALWAYS TRIGGER`, `tgenabled='A'`
+ensures the trigger also fires in `replica`.
+
+The privileged idempotent F-061 schema bootstrap now explicitly
+`ENABLE ALWAYS` all three exact DENY-ALL triggers after their
+create-if-absent statements. This upgrades existing origin-only
+installations on the next separately trusted bootstrap pass without
+altering the DENY-ALL function, granting DML, mutating any journal or
+authorizing a #130 writer. The independently executed runtime startup,
+runtime grants provisioning and NOLOGIN owner provisioning scripts
+now require `tgenabled='A'` for each of the exact three functions/
+trigger/table pairs, in addition to their existing BEFORE/ROW/all
+three DML bitmask and function-OID checks.
+
+The real PostgreSQL17 restricted-LOGIN smoke asserts the catalog has
+exactly three ALWAYS-enabled journal triggers, briefly changes only
+one disposable-test-service trigger to ordinary `ENABLE TRIGGER`
+(without entering replica mode or writing a journal), verifies both
+independent runtime/one-shot provisioning checks reject the unsafe
+mode, restores `ENABLE ALWAYS` in `finally`, and proves clean
+recovery. The #142 privileged-parameter-ACL guard remains active.
