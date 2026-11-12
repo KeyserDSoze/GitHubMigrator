@@ -133,6 +133,29 @@ BEGIN
     IF pg_catalog.to_regclass('public.migration_connections') IS NULL THEN
         RAISE EXCEPTION 'Required migration_connections relation absent';
     END IF;
+    -- A previous explicit GRANT SELECT(secret_reference) can live
+    -- in pg_attribute.attacl, independently of table-wide relacl.
+    -- Reject it BEFORE attempting any REVOKE/GRANT normalization: the
+    -- subsequent effective-privilege check alone cannot prove what
+    -- was installed before this isolated operator transaction.
+    -- 0::oid is PUBLIC; both direct recipient and PUBLIC grants
+    -- violate the read-only inventory policy even if a later
+    -- REVOKE would happen to clear them.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_attribute a
+        CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) ace
+        WHERE a.attrelid =
+            'public.migration_connections'::pg_catalog.regclass
+          AND a.attname = 'secret_reference'
+          AND NOT a.attisdropped
+          AND ace.privilege_type = 'SELECT'
+          AND ace.grantee IN (runtime_user.oid, 0::oid)
+    ) THEN
+        RAISE EXCEPTION
+            'F-061 runtime grant pilot detected existing secret or write privileges';
+    END IF;
+
     -- Column-level permission excludes secret_reference even from
     -- direct SQL by the restricted login (not merely from HTTP JSON).
     -- Revoke the previously issued table-wide pilot SELECT before
