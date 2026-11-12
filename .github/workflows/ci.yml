@@ -125,6 +125,8 @@ jobs:
           dotnet-version: 10.0.x
       - name: Verify F-061 bootstrap SQL formatting before integration
         run: python3 script/check_f061_sql_format.py
+      - name: Verify safe TRX timing summarizer
+        run: python3 -m unittest discover -s script -p 'test_pg17_trx_timing_summary.py'
       # #132: fail fast on permission/owner/runtime-host regressions
       # before the expensive ~55-minute real SHA1/SHA256 Git suite.
       # A second UNFILTERED dotnet test below still runs EVERY PG17 case.
@@ -153,6 +155,16 @@ jobs:
             --results-directory tests/integration/TestResults \
             --logger "trx;LogFileName=postgres17-integration.trx" \
             --collect:"XPlat Code Coverage"
+      # #132: no source Git ref/OID, local paths, raw test output or
+      # parameter values leave this aggregate report. Full test execution
+      # above stays unfiltered; even failed runs publish the TRX artifact.
+      - name: Summarize full PostgreSQL17 per-method durations
+        if: always()
+        run: |
+          python3 script/pg17_trx_timing_summary.py \
+            tests/integration/TestResults/postgres17-integration.trx \
+            --output tests/integration/TestResults/postgres17-duration-summary.json \
+            --allow-missing
       - name: Upload PostgreSQL integration coverage and TRX timings
         if: always()
         uses: actions/upload-artifact@v4
