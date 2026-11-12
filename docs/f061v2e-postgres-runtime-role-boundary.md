@@ -122,3 +122,43 @@ checks anonymous `GET /api/connections` is 401 and authenticated
 `GET /api/connections` returns the two existing test connection IDs
 without raw source/target tokens or `secretReference` values. No remote
 provider calls or migration execution are part of this read-only scope.
+
+## #133: dedicated NOLOGIN owner for immutable F-061 second reviews
+
+The optional [operator SQL](../../script/postgres_f061_second_review_owner.sql)
+and [one-shot wrapper](../../script/provision_postgres_f061_second_review_owner.sh)
+now support an **independent, passwordless NOLOGIN owner** for precisely the
+three second-review, event, and one-use session consumption tables and
+their shared DENY-ALL trigger function. This is not a runtime login or
+the future decision writer. It must run after the privileged schema
+bootstrap, on the trusted superuser session, and before switching the
+API to `PostgreSql__RuntimeOnly=true`.
+
+The operator supplies `GITHUBMIGRATOR_F061_OWNER_ROLE` (safe lower-case
+PostgreSQL role name) and the protected libpq bootstrap connection.
+The wrapper executes `psql -X --single-transaction`; the SQL checks
+`CURRENT_USER=SESSION_USER` and `rolsuper`, the exact three existing
+ordinary tables and enabled row-level BEFORE INSERT/UPDATE/DELETE
+triggers bound to the real deny function, then creates the NOLOGIN
+NOINHERIT role if absent or verifies that a preexisting role has no
+superuser, DDL, replication or RLS-bypass powers and no incoming or
+outgoing memberships. Only then does it atomically transfer the
+three table owners and deny-function owner and revoke all
+`PUBLIC` table and trigger-function privileges. Repeated runs are
+idempotent. It does **not** transfer ownership of the original
+F-061 terminal lease or any other app/Identity source table.
+
+The new real PG17 test executes the exact SQL **twice** for a disposable
+NOLOGIN owner, confirms all three table owners and the deny-function
+owner, checks a separately authenticated NOSUPERUSER LOGIN still passes
+the restricted-role guard but is refused direct journal INSERT and
+`SET ROLE` to the protected owner, then restores the prior object
+owners and drops test-only roles. No producer of second-human review
+decisions is installed; no new immutable generation is minted.
+
+**Caution:** `ALTER OWNER` is an administrative schema mutation.
+Run as an isolated one-shot migration with a fresh database backup,
+and review bootstrap/DDL reapplication across deployments.
+The runtime-only login must never possess this owner role, its
+credentials or membership. Additional per-relation application grants
+and full restricted HTTP CRUD verification remain in #133.
