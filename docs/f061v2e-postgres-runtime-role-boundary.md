@@ -179,3 +179,31 @@ path deliberately requires a different, separately reviewed privilege;
 this scoped pilot does not grant access to validation, verification,
 token rotation, creation or deletion APIs. No encrypted secret payload
 or lookup reference reaches the restricted SQL session.
+
+## Read-only immutable source discovery on the restricted host
+
+The separate SQL-role pilot now grants `SELECT` on the existing
+`public.migration_discoveries` relation, to support existing admin-only
+`GET /api/discoveries` and `GET /api/discoveries/{id}`. The canonical
+discovery-domain contract contains no PAT, cookie, authorization header,
+credential URL or secret reference. The PostgreSQL login receives no
+`INSERT/UPDATE/DELETE` on that relation and no grants on worker jobs,
+checkpoint pages, encrypted credential storage, F-061 journal tables,
+source materialization or outbound GitHub APIs. In PG17 an independently
+authenticated restricted runtime host reads an immutable, bootstrap-seeded
+discovery snapshot by its ID, verifies source ID/JSON consistency and
+checks unauthenticated listing is HTTP 401. Direct SQL INSERT is denied
+with 42501; creating/discovering new inventories remains out of scope.
+
+## #132: fail-fast real PG17 role-boundary smoke before the entire gate
+
+GitHub Actions now runs the three existing restricted-role, isolated
+NOLOGIN-owner and HTTP-auth integration test classes **first**, on the
+same real PostgreSQL17 service, producing its own `pg17-runtime-role-smoke.trx`.
+If a new permission mistake fails, the pipeline fails before the
+~55-minute Git physical ancestry theories. **After smoke success**, the
+original `dotnet test` command still runs *all* integration cases,
+including every SHA1/SHA256 scenario, with its own complete TRX and
+code coverage. This reduces time-to-feedback for regressions without
+dropping or shortening any accepted test. It does not yet reduce the
+wall-clock of a successful full PG17 job.

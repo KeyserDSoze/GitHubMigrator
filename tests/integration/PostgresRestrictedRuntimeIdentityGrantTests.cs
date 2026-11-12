@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using GitHubMigrator.Infrastructure.PostgreSql;
+using GitHubMigrator.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +33,7 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
             AppContext.BaseDirectory, "postgres_runtime_identity_grants.sql");
         var sql = await File.ReadAllTextAsync(sqlPath);
         Assert.Contains("GRANT SELECT ON TABLE", sql);
+        var discoveryId = Guid.NewGuid();
 
         await db.Database.ExecuteSqlRawAsync(
             $"CREATE ROLE {login} LOGIN PASSWORD '{password}' " +
@@ -39,6 +41,32 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
             "NOREPLICATION NOBYPASSRLS");
         try
         {
+            // A known, immutable and credential-free source inventory
+            // is committed only by the PRIVILEGED test bootstrap. The
+            // independent runtime LOGIN below has no INSERT permission.
+            var now = DateTimeOffset.UtcNow;
+            await new PostgresDiscoveryRepository(db).SaveAsync(
+                new DiscoveryInventory
+                {
+                    Id = discoveryId,
+                    ConnectionId = harness.SourceConnectionId,
+                    SourceProvider = "azure-devops-services",
+                    Organization = "az-org",
+                    CollectedAtUtc = now,
+                    Snapshot = new DiscoverySnapshot
+                    {
+                        SnapshotId = discoveryId,
+                        SourceSystem = SourceSystemKind.AzureDevOpsServices,
+                        CollectedAt = now,
+                        Projects = [], Identities = [], AccessGrants = []
+                    },
+                    Refs = [],
+                    Issues = [],
+                    Completeness = DiscoveryCompleteness.Partial,
+                    IdentitiesComplete = false,
+                    PermissionsComplete = false
+                }, default);
+
             // psql's production wrapper uses --single-transaction plus
             // SET LOCAL; reproduce that atomic contract with the same SQL.
             for (var attempt = 0; attempt < 2; attempt++)
@@ -114,6 +142,21 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 SELECT pg_catalog.has_table_privilege(
                     CURRENT_USER, 'public.migration_connections', 'INSERT,UPDATE,DELETE')
                 """));
+            Assert.True(await Scalar<bool>("""
+                SELECT pg_catalog.has_table_privilege(
+                    CURRENT_USER, 'public.migration_discoveries', 'SELECT')
+                """));
+            Assert.False(await Scalar<bool>("""
+                SELECT pg_catalog.has_table_privilege(
+                    CURRENT_USER, 'public.migration_discoveries', 'INSERT,UPDATE,DELETE')
+                """));
+            await using (var forbiddenDiscoveryWrite = new NpgsqlCommand(
+                "INSERT INTO public.migration_discoveries DEFAULT VALUES", caller))
+            {
+                var denied = await Assert.ThrowsAsync<PostgresException>(
+                    () => forbiddenDiscoveryWrite.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+            }
             Assert.False(await Scalar<bool>("""
                 SELECT pg_catalog.has_table_privilege(
                     CURRENT_USER, 'public."AspNetUsers"', 'DELETE')
@@ -202,6 +245,47 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 Assert.DoesNotContain(ApiHarness.TargetToken, content);
                 Assert.DoesNotContain("secretReference", content,
                     StringComparison.OrdinalIgnoreCase);
+
+                // The separately authenticated restricted host reads an
+                // existing immutable source snapshot; it does NOT run
+                // discovery/provider jobs or hold any source credential.
+                using (var anonymousDiscoveries =
+                    await limitedClient.GetAsync("/api/discoveries"))
+                    Assert.Equal(HttpStatusCode.Unauthorized,
+                        anonymousDiscoveries.StatusCode);
+                using var discoveriesRequest = new HttpRequestMessage(
+                    HttpMethod.Get, "/api/discoveries");
+                discoveriesRequest.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", accessToken);
+                using var discoveriesList =
+                    await limitedClient.SendAsync(discoveriesRequest);
+                Assert.Equal(HttpStatusCode.OK, discoveriesList.StatusCode);
+                using (var summaries = JsonDocument.Parse(
+                    await discoveriesList.Content.ReadAsStringAsync()))
+                    Assert.Equal(JsonValueKind.Array,
+                        summaries.RootElement.ValueKind);
+
+                using var exactDiscoveryRequest = new HttpRequestMessage(
+                    HttpMethod.Get, $"/api/discoveries/{discoveryId}");
+                exactDiscoveryRequest.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", accessToken);
+                using var exactDiscoveryResponse =
+                    await limitedClient.SendAsync(exactDiscoveryRequest);
+                Assert.Equal(HttpStatusCode.OK,
+                    exactDiscoveryResponse.StatusCode);
+                var exactDiscoveryBody =
+                    await exactDiscoveryResponse.Content.ReadAsStringAsync();
+                using (var exactDiscovery = JsonDocument.Parse(exactDiscoveryBody))
+                {
+                    Assert.Equal(discoveryId,
+                        exactDiscovery.RootElement.GetProperty("id").GetGuid());
+                    Assert.Equal(harness.SourceConnectionId,
+                        exactDiscovery.RootElement.GetProperty("connectionId").GetGuid());
+                }
+                Assert.DoesNotContain(ApiHarness.SourceToken,
+                    exactDiscoveryBody);
+                Assert.DoesNotContain(ApiHarness.TargetToken,
+                    exactDiscoveryBody);
             }
             finally
             {
@@ -267,6 +351,10 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
         }
         finally
         {
+            // Only the test-owned immutable discovery row is deleted by
+            // the separate privileged bootstrap context, never runtime.
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"DELETE FROM public.migration_discoveries WHERE id = {discoveryId}");
             // Remove test-only GRANT dependencies before deleting LOGIN.
             // No application tables or normal platform users are deleted.
             await db.Database.ExecuteSqlRawAsync($"DROP OWNED BY {login}");

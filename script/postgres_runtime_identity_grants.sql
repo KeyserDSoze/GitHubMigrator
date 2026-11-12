@@ -145,4 +145,16 @@ BEGIN
         'created_at_utc, validated_at_utc, validation_code, authenticated_as, ' ||
         'permission_assessment) ON TABLE public.migration_connections TO %I',
         runtime_name);
+
+    -- Read-only source discovery inventory is allowed for authenticated
+    -- existing admin GET /api/discoveries and GET /{id} endpoints. The
+    -- discovery domain contract excludes PAT/cookies/credential URLs.
+    -- No grant on discovery checkpoints, unreviewed observations,
+    -- encrypted secrets, write jobs, F-061 journals or worker leases.
+    IF pg_catalog.to_regclass('public.migration_discoveries') IS NULL THEN
+        RAISE EXCEPTION 'Required migration_discoveries relation absent';
+    END IF;
+    EXECUTE pg_catalog.format(
+        'GRANT SELECT ON TABLE public.migration_discoveries TO %I',
+        runtime_name);
 END $f061_runtime_identity_grants$;

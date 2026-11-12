@@ -121,6 +121,20 @@ jobs:
           dotnet-version: 10.0.x
       - name: Verify F-061 bootstrap SQL formatting before integration
         run: python3 script/check_f061_sql_format.py
+      # #132: fail fast on permission/owner/runtime-host regressions
+      # before the expensive ~55-minute real SHA1/SHA256 Git suite.
+      # A second UNFILTERED dotnet test below still runs EVERY PG17 case.
+      # This smoke job runs on the same disposable PG17 service and its
+      # role/owner integration tests clean up test-only grants and roles.
+      - name: Smoke PostgreSQL role separation and restricted runtime HTTP
+        env:
+          GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
+        run: |
+          dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj \
+            --verbosity normal \
+            --filter "FullyQualifiedName~PostgresRestrictedRuntimeIdentityGrantTests|FullyQualifiedName~PostgresF061SecondReviewOwnerBoundaryTests|FullyQualifiedName~PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests" \
+            --results-directory tests/integration/TestResults \
+            --logger "trx;LogFileName=pg17-runtime-role-smoke.trx"
       - name: Verify ASP.NET API + PostgreSQL persistence, security and concurrency
         env:
           GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
