@@ -652,3 +652,20 @@ one disposable-test-service trigger to ordinary `ENABLE TRIGGER`
 independent runtime/one-shot provisioning checks reject the unsafe
 mode, restores `ENABLE ALWAYS` in `finally`, and proves clean
 recovery. The #142 privileged-parameter-ACL guard remains active.
+
+#### #143: independent NOLOGIN owner script must reject all three trigger downgrades
+
+The real PostgreSQL17 `PostgresF061SecondReviewOwnerBoundaryTests`
+now independently executes the **exact** privileged
+`script/postgres_f061_second_review_owner.sql` under a separate
+transaction for each of the three protected journal trigger names
+after temporarily changing its firing mode from `ALWAYS` to normal
+`origin`. Each one must abort with PostgreSQL `P0001` and the
+explicit F-061 deny-all-fence error. The DDL is kept uncommitted and
+rolled back on every case, so no actual CI database loses its
+`ALWAYS` guard and no owner role can persist from a failed run.
+The previously existing idempotent positive test then executes the
+owner script twice, verifies the dedicated `NOLOGIN` role owns
+the exact three journals and deny function, and now also requires
+that all three triggers remain `ALWAYS` enabled.
+No session enters replica mode or inserts a protected journal row.

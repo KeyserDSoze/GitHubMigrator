@@ -40,6 +40,49 @@ public sealed class PostgresF061SecondReviewOwnerBoundaryTests(
         Assert.NotEqual(ownerName, originalOwner);
         try
         {
+            // #143: independently test the THIRD security boundary,
+            // the exact privileged NOLOGIN owner operator. The other
+            // two SQL guards are exercised by the restricted-runtime
+            // suite. PostgreSQL's ordinary ENABLE TRIGGER gives 'O',
+            // which can be skipped in replica sessions. The owner
+            // migration must refuse each of the three individual
+            // downgraded journal triggers, never silently normalize it.
+            // Every downgrade is uncommitted and rolled back, so other
+            // PG17 integration contexts never observe weakened fences.
+            foreach (var (table, trigger) in new[]
+            {
+                ("git_later_checkpoint_mirror_second_reviews",
+                    "trg_f061v2e_second_review_closed"),
+                ("git_later_checkpoint_mirror_second_review_events",
+                    "trg_f061v2e_second_review_event_closed"),
+                ("git_later_checkpoint_mirror_second_review_session_consumptions",
+                    "trg_f061v2e_second_review_session_closed")
+            })
+            {
+                await using var negative = await db.Database.BeginTransactionAsync();
+                await db.Database.ExecuteSqlRawAsync(
+                    $"ALTER TABLE public.{table} ENABLE TRIGGER {trigger}");
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"SELECT pg_catalog.set_config('githubmigrator.f061_review_owner', {ownerName}, true)");
+                await using var command = db.Database.GetDbConnection()
+                    .CreateCommand();
+                command.Transaction = negative.GetDbTransaction();
+                command.CommandText = sql;
+                var refused = await Assert.ThrowsAsync<PostgresException>(
+                    () => command.ExecuteNonQueryAsync());
+                Assert.Equal("P0001", refused.SqlState);
+                Assert.Contains("F-061 deny-all trigger fences incomplete",
+                    refused.MessageText);
+                await negative.RollbackAsync();
+            }
+            // The abort never installs even an inert owner principal.
+            Assert.False(await db.Database.SqlQueryRaw<bool>($"""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_roles
+                    WHERE rolname = '{ownerName}'
+                ) AS "Value"
+                """).SingleAsync());
+
             for (var i = 0; i < 2; i++)
             {
                 await using var tx = await db.Database.BeginTransactionAsync();
@@ -74,6 +117,19 @@ public sealed class PostgresF061SecondReviewOwnerBoundaryTests(
                        FROM pg_catalog.pg_proc p
                        WHERE p.oid =
                          'public.git_later_checkpoint_mirror_second_review_deny()'::regprocedure)
+                  AND (SELECT count(*) = 3
+                       FROM pg_catalog.pg_trigger t
+                       JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                       WHERE c.oid IN (
+                         'public.git_later_checkpoint_mirror_second_reviews'::regclass,
+                         'public.git_later_checkpoint_mirror_second_review_events'::regclass,
+                         'public.git_later_checkpoint_mirror_second_review_session_consumptions'::regclass
+                       )
+                       AND NOT t.tgisinternal
+                       AND t.tgenabled = 'A'
+                       AND t.tgfoid =
+                         'public.git_later_checkpoint_mirror_second_review_deny()'::regprocedure
+                       AND (t.tgtype::integer & 31) = 31)
                   AS "Value"
                 """).SingleAsync();
             Assert.True(validated);
