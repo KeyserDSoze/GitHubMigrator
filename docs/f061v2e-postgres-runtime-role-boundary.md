@@ -71,7 +71,12 @@ fallback, broad grants, automatic patch or second-human writer is added.
 The real disposable PG17 test asserts the default operator rejection,
 temporarily revokes PUBLIC TEMP, tests clean Identity and read-only
 HTTP, then separately injects direct LOGIN/PUBLIC TEMP drift to
-require rejection by **both** independent guards. The test restores
+require rejection by **both** independent guards. A real separately
+authenticated LOGIN SQL statement `CREATE TEMP TABLE` must also fail
+with SQLSTATE 42501 after trusted test-only revocation; database
+`CONNECT` remains available and the existing restricted HTTP
+Identity/connection/discovery checks still work. No temporary table is
+created by the negative test. The test restores
 the original database ACL in `finally` and changes no production DB.
 Reference: https://www.postgresql.org/docs/17/ddl-priv.html.
 

@@ -209,6 +209,23 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     CURRENT_USER, CURRENT_DATABASE(), 'TEMPORARY')
                 """;
             Assert.False(await Scalar<bool>(temporaryPrivilege));
+            // #144: prove the database ACL actually enforces the
+            // no-temporary-DDL rule for the distinct authenticated LOGIN.
+            // PostgreSQL rejects this statement before creating any
+            // object. Never create a temporary table during this test.
+            Assert.True(await Scalar<bool>("""
+                SELECT pg_catalog.has_database_privilege(
+                    CURRENT_USER, CURRENT_DATABASE(), 'CONNECT')
+                """));
+            await using (var forbiddenTemp = new NpgsqlCommand(
+                "CREATE TEMP TABLE f061_runtime_temp_forbidden (probe integer)",
+                caller))
+            {
+                var denied = await Assert.ThrowsAsync<PostgresException>(
+                    () => forbiddenTemp.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege,
+                    denied.SqlState);
+            }
             Assert.True(await Scalar<bool>("""
                 SELECT pg_catalog.has_table_privilege(
                     CURRENT_USER, 'public."AspNetUsers"', 'SELECT')
