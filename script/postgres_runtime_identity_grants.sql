@@ -264,11 +264,17 @@ BEGIN
         FROM pg_catalog.pg_class sequence_relation
         JOIN pg_catalog.pg_namespace ns
           ON ns.oid = sequence_relation.relnamespace
-        WHERE sequence_relation.relkind = 'S'
-          AND ns.nspname <> 'information_schema'
-          AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
-          AND pg_catalog.has_sequence_privilege(
-              runtime_name, sequence_relation.oid, 'USAGE, UPDATE')
+        -- Do not assume WHERE predicate order: pg_catalog may evaluate
+        -- the privilege function against a non-sequence TOAST table
+        -- (SQLSTATE 42809). CASE gates the call by actual relkind.
+        WHERE CASE
+            WHEN sequence_relation.relkind = 'S'
+              AND ns.nspname <> 'information_schema'
+              AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
+            THEN pg_catalog.has_sequence_privilege(
+                runtime_name, sequence_relation.oid, 'USAGE, UPDATE')
+            ELSE false
+        END
     ) THEN
         RAISE EXCEPTION
             'F-061 runtime grant pilot detected writable sequence privileges';

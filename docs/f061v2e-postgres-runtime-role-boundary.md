@@ -332,3 +332,18 @@ and no #130 writer or recovery authority is enabled.
 These fences define only this narrowly scoped read-only runtime role.
 A future write-capable role needs an independently reviewed permission
 model; a complete final-main 4/4 CI result is still required for #134.
+
+
+### #134 PG17 smoke correction: sequence catalog predicate evaluation
+
+The first real PostgreSQL17 CI smoke after introducing sequence privilege
+checks (run 43249592069) failed SQLSTATE **42809**, because PostgreSQL
+can evaluate `has_sequence_privilege` for a non-sequence TOAST catalog
+row even when an independent `WHERE relkind = 'S'` predicate appears
+first. Both the runtime-only SQL guard and the one-shot operator script
+now use an explicit `CASE WHEN relkind = 'S' ... THEN
+has_sequence_privilege(...) ELSE false END` barrier, rather than
+relying on unspecified predicate evaluation order. This does not relax
+USAGE/UPDATE denial or any protected F-061 table trigger. The existing
+real-PG17 separated-role smoke must prove this on the final main commit;
+a canceled or previously failed job is not acceptance.

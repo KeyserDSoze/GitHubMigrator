@@ -176,11 +176,17 @@ public static class PostgresRestrictedRuntimeRoleGuard
                     FROM pg_catalog.pg_class sequence_relation
                     JOIN pg_catalog.pg_namespace ns
                       ON ns.oid = sequence_relation.relnamespace
-                    WHERE sequence_relation.relkind = 'S'
-                      AND ns.nspname <> 'information_schema'
-                      AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
-                      AND pg_catalog.has_sequence_privilege(
-                          role.rolname, sequence_relation.oid, 'USAGE, UPDATE')
+                    -- PostgreSQL may reorder independent WHERE predicates;
+                    -- has_sequence_privilege() throws SQLSTATE 42809 on
+                    -- TOAST tables. CASE must guard the function itself.
+                    WHERE CASE
+                        WHEN sequence_relation.relkind = 'S'
+                          AND ns.nspname <> 'information_schema'
+                          AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
+                        THEN pg_catalog.has_sequence_privilege(
+                            role.rolname, sequence_relation.oid, 'USAGE, UPDATE')
+                        ELSE false
+                    END
                 )
                 AND (SELECT count(*) FROM protected) = 3
                 AND (SELECT count(*) FROM protected_triggers) = 3
