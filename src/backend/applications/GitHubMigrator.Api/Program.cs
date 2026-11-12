@@ -23,6 +23,12 @@ using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// #133: one-shot schema bootstrap and long-lived restricted API hosting
+// are intentionally independent modes. Never permit both in one process.
+var postgresStartupMode = PostgresDatabaseStartupModeSelector.Resolve(
+    builder.Configuration.GetValue<bool>("PostgreSql:RuntimeOnly"),
+    builder.Configuration.GetValue<bool>("PostgreSql:BootstrapOnly"));
+
 var connectionString = builder.Configuration.GetConnectionString("PostgreSql")
     ?? throw new InvalidOperationException("ConnectionStrings:PostgreSql is required.");
 var signingKey = builder.Configuration["Jwt:SigningKey"]
@@ -862,7 +868,7 @@ app.UseAuthorization();
 // Legacy bootstrap mode stays the default until deployments provision
 // both independent credentials, grants and the schema separately.
 // RuntimeOnly never disables the mandatory F-061 second-review SQL fences.
-if (!builder.Configuration.GetValue("PostgreSql:RuntimeOnly", false))
+if (postgresStartupMode != PostgresDatabaseStartupMode.RuntimeOnly)
 {
     await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Environment, app.Logger);
     await GitTransferWorkpackSchema.InitializeAsync(app.Services);
@@ -925,6 +931,17 @@ else
     await using var runtimeScope = app.Services.CreateAsyncScope();
     await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
         runtimeScope.ServiceProvider.GetRequiredService<AppDbContext>());
+}
+
+// #133: the privileged bootstrap process must never start serving API
+// routes or launch background workers. It exits after all ordered
+// idempotent schemas and the Identity bootstrap are fully installed.
+// The separately provisioned restricted login starts with RuntimeOnly.
+if (postgresStartupMode == PostgresDatabaseStartupMode.BootstrapOnly)
+{
+    app.Logger.LogInformation(
+        "PostgreSQL schema bootstrap completed; exiting without serving HTTP.");
+    return;
 }
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
