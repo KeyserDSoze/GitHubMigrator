@@ -400,3 +400,18 @@ runtime LOGIN, requires both independently implemented SQL guards to
 refuse, then revokes the grant and drops the view. It never executes
 REFRESH, modifies business data, or weakens the journal's DENY-ALL
 triggers.
+
+#### #136: effective PUBLIC grants verified with real PG17
+
+The same independently authenticated NOINHERIT runtime LOGIN must fail
+both the actual startup guard and the exact operator provisioning SQL
+if `MAINTAIN` is granted to `PUBLIC` on
+`public.migration_discoveries` or `REFERENCES` is granted to
+`PUBLIC` on Identity `public."AspNetUsers"`. These are two
+additional real PG17 negative grant-drift probes: neither privilege
+is safe merely because the role has no direct ACL entry; the
+`AspNetUsers` UPDATE exception must never include REFERENCES.
+Test-only PUBLIC grants are revoked in `finally`, after which the
+existing restricted-runtime positive HTTP test still runs. No
+maintenance, foreign-key DDL, journal write or schema change to the
+production SQL contract occurs.

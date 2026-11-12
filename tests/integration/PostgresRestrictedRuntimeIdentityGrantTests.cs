@@ -353,6 +353,52 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
             }
 
 
+            // #136: PostgreSQL privilege evaluation includes ACLs
+            // granted to PUBLIC. A harmless direct-login negative
+            // probe alone does not prove PUBLIC grant drift is caught.
+            // In particular, AspNetUsers UPDATE is allowlisted but its
+            // REFERENCES permission must NEVER be allowlisted.
+            foreach (var (privilege, relation) in new[]
+            {
+                ("MAINTAIN", "public.migration_discoveries"),
+                ("REFERENCES", "public.\"AspNetUsers\"")
+            })
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT {privilege} ON TABLE {relation} TO PUBLIC");
+                try
+                {
+                    await using (var drifted = new AppDbContext(
+                        new DbContextOptionsBuilder<AppDbContext>()
+                            .UseNpgsql(connection.ConnectionString).Options))
+                    {
+                        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                            () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                drifted));
+                        Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                            refused.Message);
+                    }
+
+                    // The separately invoked operator SQL is a second
+                    // independently implemented permission guard.
+                    await using var tx = await db.Database.BeginTransactionAsync();
+                    await db.Database.ExecuteSqlInterpolatedAsync(
+                        $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                    await using var command = db.Database.GetDbConnection()
+                        .CreateCommand();
+                    command.Transaction = tx.GetDbTransaction();
+                    command.CommandText = sql;
+                    var rejected = await Assert.ThrowsAsync<PostgresException>(
+                        () => command.ExecuteNonQueryAsync());
+                    Assert.Equal("P0001", rejected.SqlState);
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"REVOKE {privilege} ON TABLE {relation} FROM PUBLIC");
+                }
+            }
+
             // #136: PostgreSQL17 materialized views use pg_class
             // relkind='m' and can be refreshed by MAINTAIN without
             // ordinary table DML. Verify drift on that relation kind,
