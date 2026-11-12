@@ -124,8 +124,16 @@ jobs:
       - name: Verify ASP.NET API + PostgreSQL persistence, security and concurrency
         env:
           GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
-        run: dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj --verbosity normal --collect:"XPlat Code Coverage"
-      - name: Upload PostgreSQL integration coverage
+        # #132: retain complete, per-case xUnit durations as a TRX artifact,
+        # including failed runs. Keep ALL real PG17 tests and coverage.
+        # The explicit results directory matches the artifact upload glob.
+        run: |
+          dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj \
+            --verbosity normal \
+            --results-directory tests/integration/TestResults \
+            --logger "trx;LogFileName=postgres17-integration.trx" \
+            --collect:"XPlat Code Coverage"
+      - name: Upload PostgreSQL integration coverage and TRX timings
         if: always()
         uses: actions/upload-artifact@v4
         with:
