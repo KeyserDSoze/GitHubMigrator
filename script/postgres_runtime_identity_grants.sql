@@ -83,6 +83,26 @@ BEGIN
             'F-061 runtime grant pilot detected future-object default privileges';
     END IF;
 
+    -- #142: parameter grants are cluster-wide and escape ordinary
+    -- table/DDL/role checks. GRANT SET on session_replication_role can
+    -- suppress origin-only DENY-ALL triggers, while GRANT ALTER SYSTEM
+    -- allows changing server settings. The bootstrap session must also
+    -- stay in normal origin mode. Do not REVOKE unsafe ACLs silently.
+    IF pg_catalog.current_setting('session_replication_role') <> 'origin'
+       OR EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_parameter_acl parameter_acl
+           CROSS JOIN LATERAL pg_catalog.aclexplode(
+               parameter_acl.paracl) parameter_grant
+           WHERE parameter_grant.grantee IN (
+               0::oid, runtime_user.oid)
+             AND parameter_grant.privilege_type IN (
+                 'SET', 'ALTER SYSTEM')
+       ) THEN
+        RAISE EXCEPTION
+            'F-061 runtime grant pilot detected privileged parameter grants';
+    END IF;
+
     -- An allowlisted Identity pilot MUST NOT run before all three
     -- immutable second-human review tables and their exactly scoped,
     -- enabled DENY-ALL trigger function have been installed.

@@ -111,6 +111,26 @@ public static class PostgresRestrictedRuntimeRoleGuard
                           )
                       )
                 )
+                -- #142: PostgreSQL17 GRANT SET ON PARAMETER
+                -- session_replication_role can disable origin-only
+                -- DML triggers (including F-061 DENY-ALL journals)
+                -- without any ALTER TABLE or elevated role membership.
+                -- ALTER SYSTEM is independently dangerous. Reject any
+                -- explicit parameter SET / ALTER SYSTEM ACL to LOGIN
+                -- or PUBLIC; pg_parameter_acl is cluster-wide.
+                -- Also fail closed if this session arrived already in
+                -- replica/local mode from server/role configuration.
+                AND pg_catalog.current_setting(
+                    'session_replication_role') = 'origin'
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_parameter_acl parameter_acl
+                    CROSS JOIN LATERAL pg_catalog.aclexplode(
+                        parameter_acl.paracl) parameter_grant
+                    WHERE parameter_grant.grantee IN (0::oid, role.oid)
+                      AND parameter_grant.privilege_type IN (
+                          'SET', 'ALTER SYSTEM')
+                )
                 AND NOT EXISTS (
                     SELECT 1 FROM pg_catalog.pg_database d
                     WHERE d.datname = CURRENT_DATABASE()

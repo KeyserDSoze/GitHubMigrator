@@ -585,3 +585,39 @@ test-only defaults in `finally`, removes schema USAGE, drops the
 disposable schema, and verifies clean startup after cleanup. There
 is no change to actual production default ACLs or F-061
 DENY-ALL journal triggers.
+
+### #142: deny privileged configuration ACLs and replica-trigger suppression
+
+PostgreSQL17 supports `GRANT SET ON PARAMETER` and
+`GRANT ALTER SYSTEM ON PARAMETER` independently of user roles,
+relation privileges, schema CREATE, sequence ACLs and future-object
+defaults. Notably, a non-superuser with `SET` on
+`session_replication_role` can select `replica`: this suppresses
+normally enabled, origin-only triggers. That includes the three
+F-061 second-human decision journal mutation DENY-ALL triggers, which
+are currently enabled only in origin mode. A granted `ALTER SYSTEM`
+permission can change server-wide settings without ordinary DDL.
+
+The real restricted LOGIN startup guard now requires
+`session_replication_role='origin'` and checks the cluster-shared
+`pg_catalog.pg_parameter_acl` using `aclexplode`. It refuses any
+explicit SET or ALTER SYSTEM parameter ACL granted to either the
+restricted LOGIN or `PUBLIC`, not just one named parameter. The
+independently executed privileged operator SQL checks the same
+effective ACL recipients and the operator session's origin mode,
+failing its entire provisioning transaction rather than silently
+revoking unsafe grants.
+
+Real PG17 isolated-service integration negatives grant `SET` on
+`session_replication_role` to the LOGIN and to `PUBLIC`, then
+independently `ALTER SYSTEM` to LOGIN. Both guards must reject and
+`P0001` must be raised by the exact operator SQL. Each test-only
+cluster-wide grant is revoked in `finally`, followed by a positive
+clean startup. Neither test nor production ever SETs
+`session_replication_role=replica`, changes server configuration,
+disables a trigger, grants any application write right or creates a
+writer/remote migration capability.
+
+See PostgreSQL17 documentation for
+`pg_parameter_acl`, `has_parameter_privilege`, and
+`session_replication_role`.
