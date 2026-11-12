@@ -653,6 +653,65 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     $"DROP SCHEMA IF EXISTS {routineSchema}");
             }
 
+            // #138: neither the runtime catalog guard nor provisioning
+            // may silently treat a *new* connection metadata column as
+            // approved just because it is not named secret_reference.
+            // The separate restricted LOGIN receives only a temporary
+            // column-scoped SELECT grant; no source data is queried.
+            var extraMetadataColumn = "f061_unreviewed_" +
+                Guid.NewGuid().ToString("N");
+            await db.Database.ExecuteSqlRawAsync(
+                $"ALTER TABLE public.migration_connections " +
+                $"ADD COLUMN {extraMetadataColumn} text");
+            try
+            {
+                foreach (var grantee in new[] { login, "PUBLIC" })
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"GRANT SELECT ({extraMetadataColumn}) " +
+                        $"ON TABLE public.migration_connections TO {grantee}");
+                    try
+                    {
+                        await using (var drifted = new AppDbContext(
+                            new DbContextOptionsBuilder<AppDbContext>()
+                                .UseNpgsql(connection.ConnectionString).Options))
+                        {
+                            var refused = await Assert.ThrowsAsync<
+                                InvalidOperationException>(() =>
+                                PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                    drifted));
+                            Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                                refused.Message);
+                        }
+
+                        await using var tx = await db.Database.BeginTransactionAsync();
+                        await db.Database.ExecuteSqlInterpolatedAsync(
+                            $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                        await using var command = db.Database.GetDbConnection()
+                            .CreateCommand();
+                        command.Transaction = tx.GetDbTransaction();
+                        command.CommandText = sql;
+                        var rejected = await Assert.ThrowsAsync<PostgresException>(
+                            () => command.ExecuteNonQueryAsync());
+                        Assert.Equal("P0001", rejected.SqlState);
+                        Assert.Contains("unreviewed metadata column",
+                            rejected.MessageText);
+                    }
+                    finally
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            $"REVOKE SELECT ({extraMetadataColumn}) " +
+                            $"ON TABLE public.migration_connections FROM {grantee}");
+                    }
+                }
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"ALTER TABLE public.migration_connections " +
+                    $"DROP COLUMN IF EXISTS {extraMetadataColumn}");
+            }
+
             // #138: the read-only pilot also must reject SELECT on
             // unreviewed relations. SQL owner-privileged views can
             // reveal columns that the caller cannot read directly.

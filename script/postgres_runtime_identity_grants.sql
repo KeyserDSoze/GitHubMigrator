@@ -175,6 +175,32 @@ BEGIN
         'permission_assessment) ON TABLE public.migration_connections TO %I',
         runtime_name);
 
+    -- #138: protect against future, not-yet-reviewed additions to
+    -- migration_connections. A standalone GRANT SELECT(new_column) may
+    -- survive table-level REVOKE and grants on the ten approved metadata
+    -- fields. Reject *effective* SELECT on every other column, including
+    -- PUBLIC permissions, even when no secret_reference ACL is present.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_attribute metadata_column
+        WHERE metadata_column.attrelid =
+            'public.migration_connections'::pg_catalog.regclass
+          AND metadata_column.attnum > 0
+          AND NOT metadata_column.attisdropped
+          AND metadata_column.attname NOT IN (
+              'id', 'name', 'provider_key', 'direction',
+            'organization', 'created_at_utc', 'validated_at_utc',
+            'validation_code', 'authenticated_as',
+            'permission_assessment'
+          )
+          AND pg_catalog.has_column_privilege(
+              runtime_name, metadata_column.attrelid,
+              metadata_column.attname, 'SELECT')
+    ) THEN
+        RAISE EXCEPTION
+            'F-061 runtime grant pilot detected unreviewed metadata column';
+    END IF;
+
     -- Read-only source discovery inventory is allowed for authenticated
     -- existing admin GET /api/discoveries and GET /{id} endpoints. The
     -- discovery domain contract excludes PAT/cookies/credential URLs.

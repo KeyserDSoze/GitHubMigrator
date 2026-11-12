@@ -98,6 +98,28 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 AND NOT pg_catalog.has_column_privilege(
                     role.rolname, 'public.migration_connections',
                     'secret_reference', 'SELECT')
+                -- #138: keep the exact approved metadata-column
+                -- allowlist, not merely the one known secret column.
+                -- Future columns added by a privileged migration must
+                -- never become readable via independent SELECT(column)
+                -- ACLs (including PUBLIC) without explicit review.
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_attribute metadata_column
+                    WHERE metadata_column.attrelid =
+                        'public.migration_connections'::pg_catalog.regclass
+                      AND metadata_column.attnum > 0
+                      AND NOT metadata_column.attisdropped
+                      AND metadata_column.attname NOT IN (
+                          'id', 'name', 'provider_key', 'direction',
+                          'organization', 'created_at_utc', 'validated_at_utc',
+                          'validation_code', 'authenticated_as',
+                          'permission_assessment'
+                      )
+                      AND pg_catalog.has_column_privilege(
+                          role.rolname, metadata_column.attrelid,
+                          metadata_column.attname, 'SELECT')
+                )
                 AND NOT pg_catalog.has_table_privilege(
                     role.rolname, 'public.migration_connection_secrets',
                     'SELECT, INSERT, UPDATE, DELETE')

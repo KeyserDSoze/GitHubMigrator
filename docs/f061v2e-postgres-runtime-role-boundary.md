@@ -507,3 +507,28 @@ on assertion failure. No actual secret data is read and no protected
 F-061 second-review journal or source lease is mutated.
 This is a scoped read-only pilot restriction—not a full migration
 runtime CRUD provisioning nor a #130 writer authorization.
+
+#### #138: fail closed on future connection metadata columns
+
+A future bootstrap migration may add new columns to
+`public.migration_connections`. Denying only the existing
+`secret_reference` column would not prevent a separate
+`GRANT SELECT(new_column)`, or one granted through `PUBLIC`, from
+leaking newly added sensitive data. Both the real runtime guard and
+the exact independently invoked operator provisioning transaction
+now enumerate all non-dropped user columns and deny effective
+`SELECT` outside **exactly ten** approved metadata columns:
+`id`, `name`, `provider_key`, `direction`, `organization`,
+`created_at_utc`, `validated_at_utc`, `validation_code`,
+`authenticated_as`, `permission_assessment`. The existing
+explicit `secret_reference` and encrypted credential-store checks
+remain as independent guards.
+
+The real PostgreSQL17 independent-LOGIN test creates a harmless,
+disposable metadata column with the normal privileged bootstrap role.
+It grants only `SELECT(new_column)`, first to the restricted LOGIN
+and then to `PUBLIC`, requiring both independent SQL security checks
+to refuse. The grants are revoked in `finally`; the temporary
+column is dropped in an outer `finally`. No source credential
+value is read or modified; the pilot remains default OFF, and the
+clean positive authenticated HTTP test continues unchanged.
