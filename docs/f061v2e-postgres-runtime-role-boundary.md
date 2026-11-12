@@ -102,3 +102,23 @@ It does not grant or test general source discovery, plan editing, source
 checkpoint or GitHub migration CRUD in a restricted application role;
 all three F-061 review journals still deny mutation. #130 remains
 independently blocked until an authenticated, atomic three-row writer.
+
+## Explicit admin connection listing (read only)
+
+The same reviewed pilot SQL now grants **SELECT only** on the existing
+`public.migration_connections` relation, in addition to Identity
+SELECT/UPDATE. This supports the existing, authenticated
+`GET /api/connections` admin/superadmin route. The API's response DTO
+omits `secret_reference`, and the connection row contains a *reference*,
+not the provider PAT (which resides in a separate encrypted store).
+The restricted PostgreSQL login intentionally has no SELECT or write
+grant on the encrypted credential table, and no INSERT/UPDATE/DELETE on
+`migration_connections`; `POST /api/connections`, credential
+rotation, verification and removal remain outside this grant pilot.
+
+The PostgreSQL17 integration test checks real SQL SELECT and negative DML
+permissions, then logs in to an independently restricted ASP.NET host,
+checks anonymous `GET /api/connections` is 401 and authenticated
+`GET /api/connections` returns the two existing test connection IDs
+without raw source/target tokens or `secretReference` values. No remote
+provider calls or migration execution are part of this read-only scope.

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
@@ -84,6 +85,17 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 SELECT pg_catalog.has_table_privilege(
                     CURRENT_USER, 'public."AspNetUsers"', 'UPDATE')
                 """));
+            // #133 incremental read-only capability; NO INSERT/UPDATE/
+            // DELETE of connection records, credential-table access, or
+            // provider calls for restricted runtime connections listing.
+            Assert.True(await Scalar<bool>("""
+                SELECT pg_catalog.has_table_privilege(
+                    CURRENT_USER, 'public.migration_connections', 'SELECT')
+                """));
+            Assert.False(await Scalar<bool>("""
+                SELECT pg_catalog.has_table_privilege(
+                    CURRENT_USER, 'public.migration_connections', 'INSERT,UPDATE,DELETE')
+                """));
             Assert.False(await Scalar<bool>("""
                 SELECT pg_catalog.has_table_privilege(
                     CURRENT_USER, 'public."AspNetUsers"', 'DELETE')
@@ -140,8 +152,38 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     json.RootElement.GetProperty("username").GetString());
                 Assert.Equal("superadmin",
                     json.RootElement.GetProperty("role").GetString());
-                Assert.False(string.IsNullOrWhiteSpace(
-                    json.RootElement.GetProperty("accessToken").GetString()));
+                var accessToken =
+                    json.RootElement.GetProperty("accessToken").GetString();
+                Assert.False(string.IsNullOrWhiteSpace(accessToken));
+
+                // The full production policy checks the JWT and the
+                // password-changed admin/superadmin role, then the real
+                // PostgresConnectionRepository queries migration_connections
+                // through the scoped restricted LOGIN (not bootstrap DB).
+                using (var anonymousConnections =
+                    await limitedClient.GetAsync("/api/connections"))
+                    Assert.Equal(HttpStatusCode.Unauthorized,
+                        anonymousConnections.StatusCode);
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Get, "/api/connections");
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", accessToken);
+                using var listing = await limitedClient.SendAsync(request);
+                Assert.Equal(HttpStatusCode.OK, listing.StatusCode);
+                var content = await listing.Content.ReadAsStringAsync();
+                using var result = JsonDocument.Parse(content);
+                Assert.Equal(JsonValueKind.Array,
+                    result.RootElement.ValueKind);
+                var connectionIds = result.RootElement
+                    .EnumerateArray()
+                    .Select(item => item.GetProperty("id").GetGuid())
+                    .ToHashSet();
+                Assert.Contains(harness.SourceConnectionId, connectionIds);
+                Assert.Contains(harness.DestinationConnectionId, connectionIds);
+                Assert.DoesNotContain(ApiHarness.SourceToken, content);
+                Assert.DoesNotContain(ApiHarness.TargetToken, content);
+                Assert.DoesNotContain("secretReference", content,
+                    StringComparison.OrdinalIgnoreCase);
             }
             finally
             {

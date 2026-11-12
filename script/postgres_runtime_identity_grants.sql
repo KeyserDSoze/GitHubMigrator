@@ -124,4 +124,16 @@ BEGIN
     EXECUTE pg_catalog.format(
         'GRANT UPDATE ON TABLE public."AspNetUsers" TO %I',
         runtime_name);
+
+    -- One additional, strictly read-only API use-case:
+    -- admin GET /api/connections. No PAT is stored in this relation;
+    -- SecretReference is an internal pointer, omitted from HTTP DTO.
+    -- No credential-store read, new connection, verification, rotation,
+    -- migration worker or remote provider operations are authorized.
+    IF pg_catalog.to_regclass('public.migration_connections') IS NULL THEN
+        RAISE EXCEPTION 'Required migration_connections relation absent';
+    END IF;
+    EXECUTE pg_catalog.format(
+        'GRANT SELECT ON TABLE public.migration_connections TO %I',
+        runtime_name);
 END $f061_runtime_identity_grants$;
