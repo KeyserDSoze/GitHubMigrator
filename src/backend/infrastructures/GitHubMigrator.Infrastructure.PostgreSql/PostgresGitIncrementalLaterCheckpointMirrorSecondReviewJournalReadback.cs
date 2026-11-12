@@ -8,6 +8,8 @@ namespace GitHubMigrator.Infrastructure.PostgreSql;
 // re-admission, authorization or operations are enabled by this class.
 // Never trust caller-sealed digests alone: the immutable three-row
 // journal must exist with exact matching review/event/session evidence.
+// The original bundle actor is witnessed by the first immutable human
+// decision, NOT by adding an unsealed field to the v1 review digest.
 // A future writer MUST perform live Identity + physical-Git re-audits,
 // source-first locking and its own atomic one-winner SQL transaction.
 public sealed class PostgresGitIncrementalLaterCheckpointMirrorSecondReviewJournalReadback(
@@ -31,6 +33,31 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorSecondReviewJourn
             SELECT EXISTS (
                 SELECT 1
                 FROM public.git_later_checkpoint_mirror_second_reviews r
+                -- The v1 second-review candidate deliberately does NOT
+                -- carry OriginalBundleActorId, but the stored review does.
+                -- Bind it to the independently recorded FIRST human
+                -- decision instead of trusting a made-up caller field.
+                JOIN public.git_later_checkpoint_mirror_recovery_decisions first
+                  ON first.mirror_id = r.mirror_id
+                 AND first.workpack_id = r.workpack_id
+                 AND first.checkpoint_id = r.checkpoint_id
+                 AND first.source_snapshot_id = r.source_snapshot_id
+                 AND first.reviewer_id = r.first_reviewer_id
+                 AND first.original_bundle_actor_id =
+                     r.original_bundle_actor_id
+                 AND first.original_worker_id = r.original_worker_id
+                 AND first.original_lease_token = r.original_lease_token
+                 AND first.original_lease_generation = r.original_generation
+                 AND first.staging_evidence_sha256 = r.staging_evidence_sha256
+                 AND first.evidence_sha256 = r.first_decision_sha256
+                 AND first.decision = 'ApprovedForIsolationReview'
+                 AND first.reviewed_at_utc <= r.reviewed_at_utc
+                 AND r.second_reviewer_id <> first.original_bundle_actor_id
+                 AND r.second_reviewer_id <> first.reviewer_id
+                 AND r.second_reviewer_id <> first.original_worker_id
+                 AND NOT first.can_readmit AND NOT first.can_materialize
+                 AND NOT first.can_push AND NOT first.can_retry
+                 AND NOT first.can_dispatch AND NOT first.migration_complete
                 JOIN public.git_later_checkpoint_mirror_second_review_events e
                   ON e.mirror_id = r.mirror_id
                  AND e.second_reviewer_id = r.second_reviewer_id

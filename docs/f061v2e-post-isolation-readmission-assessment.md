@@ -879,3 +879,27 @@ consumption, Git/lease operations or authorization**. A future
 source-first/POSIX/Identity-fenced, one-winner transactional writer
 must separately authenticate, re-audit and commit all three rows before
 the readback can become true. No current client SHA is authority.
+
+### #130 historical bundle-actor cross-check (read-only)
+
+The v1 non-authorizing second-review domain candidate intentionally does
+**not** contain an `OriginalBundleActorId` field. Instead the SQL
+second-review row stores this immutable actor and the earlier first-human
+`git_later_checkpoint_mirror_recovery_decisions` relation is the
+independent witness. The one-statement readback now additionally JOINs
+that **original immutable first decision**, requiring the exact
+mirror/workpack/checkpoint/source snapshot, first reviewer, original
+bundle actor/failed worker/lease/generation, staging hash, first-human
+decision SHA, approved-for-isolation historical decision and
+non-authorizing flags. It also enforces that the second reviewer differs
+from that original bundle actor, first reviewer and worker. A forged
+actor or unrelated first decision cannot be accepted merely because a
+client proposed a matching second-review digest. This changes neither
+the v1 candidate seal/hash nor any existing SQL constraint or trigger.
+
+The PostgreSQL17 regression adds a well-formed candidate with a
+substituted `FirstDecisionSha256`, which can only return a negative
+historical result. No new write path, committed journal fixture,
+reviewer authentication or physical source validation is implied; #130
+still requires a real source-first writer before any positive receipt
+can exist.

@@ -83,6 +83,16 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorSecondReviewJourn
         // presence of a well-formed self-sealed candidate proves nothing.
         Assert.False(await reader.HasExactNonAuthorizingThreeRowReceiptAsync(
             candidate));
+        // The historic first-human actor/SHA is an independent SQL
+        // witness; a caller changing first-decision SHA must never turn
+        // an otherwise well-formed proposal into a committed journal.
+        var spoofedFirstDecision = candidate with {
+            Review = candidate.Review with {
+                FirstDecisionSha256 = new string('b', 64)
+            }
+        };
+        Assert.False(await reader.HasExactNonAuthorizingThreeRowReceiptAsync(
+            spoofedFirstDecision));
         var changedEvent = candidate with {
             EventEvidenceSha256 = new string('b', 64)
         };
