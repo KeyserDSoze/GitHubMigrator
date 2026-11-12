@@ -92,7 +92,7 @@ BEGIN
     ] LOOP
         IF pg_catalog.has_table_privilege(
             runtime_name, pg_catalog.format('public.%I', protected_table),
-            'INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER') THEN
+            'INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, MAINTAIN, REFERENCES') THEN
             RAISE EXCEPTION 'F-061 protected journal grants already excessive';
         END IF;
     END LOOP;
@@ -224,8 +224,10 @@ BEGIN
           AND (
               -- Independent TRUNCATE bypasses row DELETE triggers;
               -- never normalize a previously granted TRIGGER privilege.
+              -- PG17 MAINTAIN permits locks/REINDEX/REFRESH and
+              -- REFERENCES permits FKs: neither is read-only access.
               pg_catalog.has_table_privilege(
-                  runtime_name, writable.oid, 'TRUNCATE, TRIGGER')
+                  runtime_name, writable.oid, 'TRUNCATE, TRIGGER, MAINTAIN, REFERENCES')
               OR (
                   ns.nspname = 'public'
                   AND writable.relname = 'AspNetUsers'

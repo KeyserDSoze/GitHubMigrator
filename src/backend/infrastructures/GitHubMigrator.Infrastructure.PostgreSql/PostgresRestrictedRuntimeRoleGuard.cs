@@ -134,8 +134,11 @@ public static class PostgresRestrictedRuntimeRoleGuard
                           -- TRUNCATE bypasses DELETE row triggers, including
                           -- the F-061 second-review journal DENY-ALL triggers.
                           -- TRIGGER may alter behavior without table DML.
+                          -- PostgreSQL17 MAINTAIN permits relation locks,
+                          -- REINDEX and REFRESH; REFERENCES permits FKs.
+                          -- Neither belongs to this read-only pilot.
                           pg_catalog.has_table_privilege(
-                              role.rolname, writable.oid, 'TRUNCATE, TRIGGER')
+                              role.rolname, writable.oid, 'TRUNCATE, TRIGGER, MAINTAIN, REFERENCES')
                           OR (
                               ns.nspname = 'public'
                               AND writable.relname = 'AspNetUsers'
@@ -205,7 +208,7 @@ public static class PostgresRestrictedRuntimeRoleGuard
                     WHERE pg_catalog.pg_has_role(
                         role.rolname, c.relowner, 'MEMBER')
                        OR pg_catalog.has_table_privilege(
-                        role.rolname, c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER')
+                        role.rolname, c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, MAINTAIN, REFERENCES')
                 )
                 AND NOT EXISTS (
                     SELECT 1 FROM protected_triggers t

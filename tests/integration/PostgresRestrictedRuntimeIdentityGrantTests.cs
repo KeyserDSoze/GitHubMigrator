@@ -245,6 +245,16 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                         "public.git_later_checkpoint_mirror_second_reviews"),
                     ("TRUNCATE", "TABLE", "public.\"AspNetUsers\""),
                     ("TRIGGER", "TABLE", "public.migration_discoveries"),
+                    // #136: privileges without DML still permit real
+                    // maintenance, exclusive locks or new foreign keys.
+                    // Probe a normal read-only table and the protected
+                    // journal, without invoking any of those operations.
+                    ("MAINTAIN", "TABLE", "public.migration_discoveries"),
+                    ("REFERENCES", "TABLE", "public.migration_discoveries"),
+                    ("MAINTAIN", "TABLE",
+                        "public.git_later_checkpoint_mirror_second_reviews"),
+                    ("REFERENCES", "TABLE",
+                        "public.git_later_checkpoint_mirror_second_reviews"),
                     ("USAGE", "SEQUENCE", $"public.{auditSequence}"),
                     ("UPDATE", "SEQUENCE", $"public.{auditSequence}")
                 })

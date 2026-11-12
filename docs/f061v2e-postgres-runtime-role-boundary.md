@@ -366,3 +366,26 @@ it revokes and drops test-only objects. All existing F-061 review
 DENY-ALL triggers, no-writer setting, Identity-only UPDATE exception
 and destination-send authority flags remain unchanged. This is a
 default-off pilot; **not** production migration CRUD provisioning.
+
+### #136: refuse MAINTAIN and REFERENCES even without table DML
+
+In PostgreSQL17, a role with effective `MAINTAIN` on a relation can
+execute `VACUUM`, `ANALYZE`, `CLUSTER`, `REINDEX`,
+`REFRESH MATERIALIZED VIEW` and `LOCK TABLE`. Separately, a
+`REFERENCES` privilege can support foreign-key definitions.
+The restricted default-OFF Identity/discovery runtime pilot requires
+neither capability. Both the actual startup SQL role guard and the
+one-shot operator SQL now refuse **effective `MAINTAIN` and
+`REFERENCES` on any user relation**, including Identity and the three
+DENY-ALL protected second-human journals, while keeping all existing
+DML/TRUNCATE/TRIGGER/sequence/CREATE/secret checks. This policy covers
+privileges granted directly or via `PUBLIC`.
+
+The existing real independent-LOGIN PG17 grant-drift smoke tests now
+include each privilege on a read-only discovery table and a protected
+journal. The test never invokes maintenance commands, creates a
+foreign key or mutates journal data; every temporary grant is revoked
+in a `finally` clause. The positive post-revocation restricted host
+probe remains unchanged. This scope is documented under issue #136;
+it **does not grant a writer, enable a remote push, or supersede**
+#130/#133. Exact-main completed 4/4 CI is still required for closure.
