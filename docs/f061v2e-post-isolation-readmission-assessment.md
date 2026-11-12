@@ -851,3 +851,31 @@ The original 15 theory rows (13 standard plus 2 distinct pre-move adversarial SH
 5. Separate physical callback denial on marker forgery, PostgreSQL advisory-lock fail-fast contention, immutable assessment/isolation SQL denials and refusal to reacquire the original `RecoveryRequired` generation.
 
 Each case builds a *new* real source proof and latest target observation, not an altered/extended existing row. All previously asserted real Git SHA1/SHA256 fsck, quarantined source graph, three-replica SHA256 isolation race, historical review SHA, original terminal lease/false authority flags, foreign SQL mutation and replay remain exercised. An early return ends only its designated independent regression slice, after its assertions; it does not mock PostgreSQL time, skip the integration job, skip real Git, or enable any production reviewer writer. The expected additional PG17 test runtime is intentional to avoid letting one test scenario outlive its authoritative five-minute observation window. **A fresh complete 4/4 green run on the resulting main commit, including actual PostgreSQL17, is still required before closing #131/#128/#125 and dependent issues.**
+
+## #130: read-only three-row journal receipt, never an authorization
+
+An independently testable PostgreSQL adapter now exposes
+`PostgresGitIncrementalLaterCheckpointMirrorSecondReviewJournalReadback
+.HasExactNonAuthorizingThreeRowReceiptAsync`. It rejects malformed
+journal tuples using existing domain integrity and runs **one parameterized
+PostgreSQL SELECT/EXISTS statement** that joins the exact immutable
+second-human review, matching audit event, and consumed one-use session
+record. It compares the full SQL-stored review/source/evidence/generation
+scope, reviewer and decision, issued/review/consumed/expiry timestamps,
+decision nonce, session-intent hash, matching event witness and **all six
+false authority flags in both review and consumption**. This is one
+read-consistent statement, not three separate check-then-act queries.
+The immutable candidate's `durable_second_review_persisted` stays
+false, per its domain SHA and SQL CHECK, even when a future verified
+three-row journal fact could be reported separately.
+
+The real PG17 regression exercises both independently proposed approval
+and rejection and verifies neither can be declared committed in today's
+DENY-ALL schema. Tampered event evidence or an altered sealed session ID
+is refused by the domain integrity check before any SQL read. **This
+component is not registered as an API endpoint and does not perform
+authentication, re-admission, trigger bypass, SQL mutation, nonce
+consumption, Git/lease operations or authorization**. A future
+source-first/POSIX/Identity-fenced, one-winner transactional writer
+must separately authenticate, re-audit and commit all three rows before
+the readback can become true. No current client SHA is authority.
