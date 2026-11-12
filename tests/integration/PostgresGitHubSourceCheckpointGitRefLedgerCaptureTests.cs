@@ -2712,6 +2712,59 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         candidate.RequestedBy, default);
                                 }
                                 Phase("POSIX isolation committed", targetReceipt.ObservedAtUtc);
+                                // #139: a genuine F-031/target receipt may
+                                // expire during multi-replica POSIX/Git work.
+                                // Only a real PostgreSQL clock expiry can make
+                                // a live-context refusal expected. No lease,
+                                // observation, SQL role, or timestamp is widened.
+                                async Task AssertExpiredContextStillQuarantinedAsync(
+                                    string checkpoint)
+                                {
+                                    var nowInDb = await verifiedDb.Database
+                                        .SqlQueryRaw<DateTimeOffset>(
+                                            "SELECT pg_catalog.clock_timestamp() AS \"Value\"")
+                                        .SingleAsync();
+                                    var destValidatedAt = await verifiedDb.Connections
+                                        .AsNoTracking()
+                                        .Where(c => c.Id == plan.DestinationConnectionId)
+                                        .Select(c => c.ValidatedAtUtc)
+                                        .SingleAsync();
+                                    Assert.True(
+                                        nowInDb - targetReceipt.ObservedAtUtc >=
+                                            TimeSpan.FromMinutes(5)
+                                        || (destValidatedAt is not null &&
+                                            nowInDb - destValidatedAt.Value >=
+                                                TimeSpan.FromMinutes(5)),
+                                        "F-061 context declined while DB-clock " +
+                                        "target/destination proof was still fresh: " +
+                                        checkpoint);
+                                    Assert.Equal("RecoveryRequired",
+                                        await verifiedDb.Database.SqlQuery<string>($"""
+                                            SELECT state AS "Value"
+                                            FROM git_later_checkpoint_mirror_leases
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """).SingleAsync());
+                                    Assert.Equal(0L,
+                                        await verifiedDb.Database.SqlQuery<long>($"""
+                                            SELECT count(*)::bigint AS "Value"
+                                            FROM git_later_checkpoint_mirror_verified_evidence
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """).SingleAsync());
+                                    Assert.Equal(1L,
+                                        await verifiedDb.Database.SqlQuery<long>($"""
+                                            SELECT count(*)::bigint AS "Value"
+                                            FROM git_later_checkpoint_mirror_isolation_receipts
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """).SingleAsync());
+                                    Assert.Equal(0L,
+                                        await verifiedDb.Database.SqlQuery<long>($"""
+                                            SELECT count(*)::bigint AS "Value"
+                                            FROM git_later_checkpoint_mirror_second_reviews
+                                            WHERE mirror_id = {staging.PhysicalMirrorId}
+                                            """).SingleAsync());
+                                    Phase("real source freshness denied at " + checkpoint,
+                                        targetReceipt.ObservedAtUtc);
+                                }
                                 Assert.True(isolated.DurableIsolationRecorded);
                                 Assert.Equal(oidLength == 40,
                                     isolated.ReconciledExistingQuarantine);
@@ -2781,12 +2834,23 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             candidate.RequestedBy,
                                             default))).Code);
                                 Phase("post-isolation SQL read starts", targetReceipt.ObservedAtUtc);
-                                completedSource = await latestReader
-                                    .ReadCompletedAsync(
-                                        run.Id, plan.Id, later.Id,
-                                        observationId, first.WorkpackId,
-                                        "repo-1", targetReceipt.EvidenceSha256,
-                                        candidate.RequestedBy, default);
+                                try
+                                {
+                                    completedSource = await latestReader
+                                        .ReadCompletedAsync(
+                                            run.Id, plan.Id, later.Id,
+                                            observationId, first.WorkpackId,
+                                            "repo-1", targetReceipt.EvidenceSha256,
+                                            candidate.RequestedBy, default);
+                                }
+                                catch (GitSourceSnapshotMirrorException ex)
+                                    when (ex.Code ==
+                                        "LaterCheckpointMirrorLeaseContextChanged")
+                                {
+                                    await AssertExpiredContextStillQuarantinedAsync(
+                                        "completed isolation SQL read");
+                                    return;
+                                }
                                 Assert.Equal(freshPrepared.PreparedIntent,
                                     completedSource.PreparedIntent);
                                 Assert.Equal(humanDecision,
@@ -2825,6 +2889,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                         verifiedDb, new(true), latestReader,
                                         localSession, TimeProvider.System);
                                 if (postMovePhase == 1)
+                                {
+                                try
                                 {
                                 Assert.Equal(
                                     "LaterCheckpointMirrorPostIsolationInspectorDisabled",
@@ -2891,9 +2957,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 {
                                     await File.WriteAllTextAsync(committedMarker,
                                         "forged-second-review-marker");
-                                    Assert.Equal(
-                                        "LaterCheckpointMirrorPostIsolationPhysicalUntrusted",
-                                        (await Assert.ThrowsAsync<
+                                    var physicalDenial = (await Assert.ThrowsAsync<
                                             GitSourceSnapshotMirrorException>(() =>
                                             postIsolation.ReadAsync(
                                                 run.Id, plan.Id, later.Id,
@@ -2901,7 +2965,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                                 "repo-1",
                                                 targetReceipt.EvidenceSha256,
                                                 candidate.RequestedBy,
-                                                default))).Code);
+                                                default))).Code;
+                                if (physicalDenial == "LaterCheckpointMirrorLeaseContextChanged")
+                                {
+                                    await AssertExpiredContextStillQuarantinedAsync("forged marker audit");
+                                    return;
+                                }
+                                Assert.Equal("LaterCheckpointMirrorPostIsolationPhysicalUntrusted", physicalDenial);
                                 }
                                 finally
                                 {
@@ -2923,6 +2993,15 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     // Retain real re-audit/marker tamper and
                                     // restart proof in this fresh epoch.
                                     return;
+                                }
+                                catch (GitSourceSnapshotMirrorException ex)
+                                    when (ex.Code ==
+                                        "LaterCheckpointMirrorLeaseContextChanged")
+                                {
+                                    await AssertExpiredContextStillQuarantinedAsync(
+                                        "post-isolation physical read");
+                                    return;
+                                }
                                 }
                                 // #127: after ONE trusted physical + SQL
                                 // Isolated receipt, an additive audit-only
@@ -3457,9 +3536,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 // event, a second-human GET candidate must
                                 // fail closed even after a successful real
                                 // POSIX-locked quarantine audit.
-                                Assert.Equal(
-                                    "LaterCheckpointMirrorSecondReviewAssessmentMissing",
-                                    (await Assert.ThrowsAsync<
+                                var assessmentDenial = (await Assert.ThrowsAsync<
                                         GitSourceSnapshotMirrorException>(() =>
                                         postIsolation.ReadAssessedAsync(
                                             run.Id, plan.Id, later.Id,
@@ -3467,7 +3544,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                             "repo-1",
                                             targetReceipt.EvidenceSha256,
                                             candidate.RequestedBy,
-                                            default))).Code);
+                                            default))).Code;
+                                if (assessmentDenial == "LaterCheckpointMirrorLeaseContextChanged")
+                                {
+                                    await AssertExpiredContextStillQuarantinedAsync("missing assessed event");
+                                    return;
+                                }
+                                Assert.Equal("LaterCheckpointMirrorSecondReviewAssessmentMissing", assessmentDenial);
                                     // Negative missing-event source and
                                     // physical audit in its own F-031 epoch.
                                     return;
@@ -3571,6 +3654,8 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 }
                                 if (postMovePhase is 3 or 4)
                                 {
+                                try
+                                {
                                 // #129: trusted completed #127
                                 // assessment is now joined to its real
                                 // Assessed event and domain SHA, then
@@ -3638,9 +3723,7 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                 }
                                 else
                                 {
-                                Assert.Equal(
-                                    "LaterCheckpointMirrorSecondReviewPreflightExpired",
-                                    (await Assert.ThrowsAsync<
+                                var previewDenial = (await Assert.ThrowsAsync<
                                         GitSourceSnapshotMirrorException>(() =>
                                             postIsolation.ReadAssessedAsync(
                                                 run.Id, plan.Id, later.Id,
@@ -3656,7 +3739,13 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                                 authenticatedReviewSessionId:
                                                     Guid.NewGuid(),
                                                 decisionNonce:
-                                                    Guid.NewGuid()))).Code);
+                                                    Guid.NewGuid()))).Code;
+                                if (previewDenial == "LaterCheckpointMirrorLeaseContextChanged")
+                                {
+                                    await AssertExpiredContextStillQuarantinedAsync("expired review preflight");
+                                    return;
+                                }
+                                Assert.Equal("LaterCheckpointMirrorSecondReviewPreflightExpired", previewDenial);
 
                                 }
                                 Assert.False(
@@ -3665,6 +3754,15 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     assessedIsolation.Inspection.MigrationComplete);
                                     // No protected writer or session used.
                                     return;
+                                }
+                                catch (GitSourceSnapshotMirrorException ex)
+                                    when (ex.Code ==
+                                        "LaterCheckpointMirrorLeaseContextChanged")
+                                {
+                                    await AssertExpiredContextStillQuarantinedAsync(
+                                        "assessed review physical recheck");
+                                    return;
+                                }
                                 }
                                 Assert.Equal(1L, await verifiedDb.Database
                                     .SqlQuery<long>($"""
