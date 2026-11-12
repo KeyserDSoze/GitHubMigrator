@@ -340,6 +340,86 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     $"DROP SEQUENCE IF EXISTS public.{auditSequence}");
             }
 
+            // #141: ALTER DEFAULT PRIVILEGES grants on FUTURE objects
+            // do not appear in existing table/sequence ACLs. The role
+            // can initially be clean, yet a later privileged migration
+            // can create a readable or writable table/sequence without
+            // explicit GRANT. Prove refusal BEFORE creating an object.
+            // Use a disposable schema to avoid changing global defaults
+            // on the shared PostgreSQL17 test bootstrap.
+            var futureSchema = "f061_future_acl_" +
+                Guid.NewGuid().ToString("N");
+            await db.Database.ExecuteSqlRawAsync(
+                $"CREATE SCHEMA {futureSchema}");
+            try
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT USAGE ON SCHEMA {futureSchema} TO {login}");
+                try
+                {
+                    foreach (var (objectClass, privilege, grantee) in new[]
+                    {
+                        ("TABLES", "SELECT", "PUBLIC"),
+                        ("TABLES", "INSERT", login),
+                        ("TABLES", "MAINTAIN", "PUBLIC"),
+                        ("SEQUENCES", "SELECT", login),
+                        ("SEQUENCES", "UPDATE", "PUBLIC")
+                    })
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            $"ALTER DEFAULT PRIVILEGES IN SCHEMA {futureSchema} " +
+                            $"GRANT {privilege} ON {objectClass} TO {grantee}");
+                        try
+                        {
+                            await using (var drifted = new AppDbContext(
+                                new DbContextOptionsBuilder<AppDbContext>()
+                                    .UseNpgsql(connection.ConnectionString).Options))
+                            {
+                                var refused = await Assert.ThrowsAsync<
+                                    InvalidOperationException>(() =>
+                                    PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                        drifted));
+                                Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                                    refused.Message);
+                            }
+
+                            await using var tx = await db.Database.BeginTransactionAsync();
+                            await db.Database.ExecuteSqlInterpolatedAsync(
+                                $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                            await using var command = db.Database.GetDbConnection()
+                                .CreateCommand();
+                            command.Transaction = tx.GetDbTransaction();
+                            command.CommandText = sql;
+                            var rejected = await Assert.ThrowsAsync<PostgresException>(
+                                () => command.ExecuteNonQueryAsync());
+                            Assert.Equal("P0001", rejected.SqlState);
+                            Assert.Contains("future-object default privileges",
+                                rejected.MessageText);
+                        }
+                        finally
+                        {
+                            await db.Database.ExecuteSqlRawAsync(
+                                $"ALTER DEFAULT PRIVILEGES IN SCHEMA {futureSchema} " +
+                                $"REVOKE {privilege} ON {objectClass} FROM {grantee}");
+                        }
+                    }
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"REVOKE USAGE ON SCHEMA {futureSchema} FROM {login}");
+                }
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"DROP SCHEMA IF EXISTS {futureSchema}");
+            }
+            await using (var cleanDefaultAcl = new AppDbContext(
+                new DbContextOptionsBuilder<AppDbContext>()
+                    .UseNpgsql(connection.ConnectionString).Options))
+                await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(cleanDefaultAcl);
+
             // #135: a separate schema can be created by the bootstrap
             // operator AFTER the original Identity grants. Its CREATE
             // privilege is still DDL authority, even though neither the

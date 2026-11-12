@@ -50,6 +50,39 @@ BEGIN
         RAISE EXCEPTION 'F-061 runtime role has excessive inherited/DDL privileges';
     END IF;
 
+    -- #141: default ACLs grant rights on FUTURE schema objects which
+    -- do not appear in the current pg_class / pg_attribute scans.
+    -- PostgreSQL's built-in PUBLIC EXECUTE for routines is not treated
+    -- as a table/sequence grant; SECURITY DEFINER execution remains
+    -- separately forbidden when the actual routine exists.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_default_acl defaults
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+            defaults.defaclacl) future_grant
+        WHERE future_grant.grantee IN (0::oid, runtime_user.oid)
+          AND (
+              (
+                  defaults.defaclobjtype = 'r'
+                  AND future_grant.privilege_type IN (
+                      'SELECT', 'INSERT', 'UPDATE', 'DELETE',
+                      'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN')
+              )
+              OR (
+                  defaults.defaclobjtype = 'S'
+                  AND future_grant.privilege_type IN (
+                      'USAGE', 'SELECT', 'UPDATE')
+              )
+              OR (
+                  defaults.defaclobjtype = 'n'
+                  AND future_grant.privilege_type = 'CREATE'
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'F-061 runtime grant pilot detected future-object default privileges';
+    END IF;
+
     -- An allowlisted Identity pilot MUST NOT run before all three
     -- immutable second-human review tables and their exactly scoped,
     -- enabled DENY-ALL trigger function have been installed.

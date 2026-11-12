@@ -553,3 +553,35 @@ direct `SELECT` and `PUBLIC SELECT` against one disposable sequence
 and verifies refusal in both guards, with REVOKE in `finally`.
 No sequence value is read, advanced or reset, and there is **no**
 production grant change, source readmission or new writer capability.
+
+### #141: future-object ACLs must never silently bypass the runtime pilot
+
+PostgreSQL17's `pg_default_acl` stores privileges installed by
+`ALTER DEFAULT PRIVILEGES`, including entries applied to **future**
+tables/views, sequences and schemas. They are not reflected in the
+privilege catalogs of relations that already exist; they take effect
+only when a privileged owner creates a later object. Consequently,
+merely checking all existing tables and sequences would not prevent
+the restricted runtime from reading or changing a future object with
+preinstalled direct or `PUBLIC` grants between process restarts.
+
+The real startup guard and the independently run privileged operator
+provisioning SQL reject default ACLs that give the runtime LOGIN or
+`PUBLIC` any TABLES permission (including SELECT, MAINTAIN and
+DML), any SEQUENCES permission (USAGE, SELECT, UPDATE), or CREATE
+on future SCHEMAS. Both global and per-schema catalog entries are
+checked with `pg_catalog.pg_default_acl` and `aclexplode`. The normal
+built-in `PUBLIC EXECUTE` permission on functions is not confused
+with these default table/sequence/schema grants: user-schema
+`SECURITY DEFINER` routines are separately forbidden when they
+actually exist under #137. No future definer writer is authorized.
+
+The real PostgreSQL17 independently authenticated NOINHERIT LOGIN
+test creates a temporary second user schema with USAGE only. It
+installs table SELECT/INSERT/MAINTAIN and sequence SELECT/UPDATE
+**default grants without creating a single protected relation**,
+tests both startup and exact operator SQL refusal, revokes the
+test-only defaults in `finally`, removes schema USAGE, drops the
+disposable schema, and verifies clean startup after cleanup. There
+is no change to actual production default ACLs or F-061
+DENY-ALL journal triggers.

@@ -79,6 +79,38 @@ public static class PostgresRestrictedRuntimeRoleGuard
                       AND pg_catalog.has_schema_privilege(
                           role.rolname, user_schema.oid, 'CREATE')
                 )
+                -- #141: PostgreSQL ALTER DEFAULT PRIVILEGES may pregrant
+                -- rights on FUTURE tables/views and sequences. Existing
+                -- pg_class/pg_attribute checks cannot see those yet.
+                -- Fail closed even when no future object has been created.
+                -- Default PUBLIC EXECUTE on ordinary functions is distinct:
+                -- existing callable SECURITY DEFINER routines are already
+                -- refused above; do not ban PostgreSQL's builtin default.
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_default_acl defaults
+                    CROSS JOIN LATERAL pg_catalog.aclexplode(
+                        defaults.defaclacl) future_grant
+                    WHERE future_grant.grantee IN (0::oid, role.oid)
+                      AND (
+                          (
+                              defaults.defaclobjtype = 'r'
+                              AND future_grant.privilege_type IN (
+                                  'SELECT', 'INSERT', 'UPDATE', 'DELETE',
+                                  'TRUNCATE', 'REFERENCES', 'TRIGGER',
+                                  'MAINTAIN')
+                          )
+                          OR (
+                              defaults.defaclobjtype = 'S'
+                              AND future_grant.privilege_type IN (
+                                  'USAGE', 'SELECT', 'UPDATE')
+                          )
+                          OR (
+                              defaults.defaclobjtype = 'n'
+                              AND future_grant.privilege_type = 'CREATE'
+                          )
+                      )
+                )
                 AND NOT EXISTS (
                     SELECT 1 FROM pg_catalog.pg_database d
                     WHERE d.datname = CURRENT_DATABASE()
