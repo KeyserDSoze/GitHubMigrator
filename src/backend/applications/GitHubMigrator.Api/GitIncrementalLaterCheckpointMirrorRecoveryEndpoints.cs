@@ -222,6 +222,14 @@ public static class GitIncrementalLaterCheckpointMirrorRecoveryEndpoints
             GitIncrementalLaterCheckpointMirrorSecondReviewSessionIntentIntegrity
                 .Verify(sessionIntent);
 
+            // #130: the final PostgreSQL-clock/replay read happens AFTER
+            // the first post-fsck Identity recheck. Role removal, account
+            // lockout or security-stamp rotation during that last query
+            // must still refuse even this non-authorizing preflight.
+            // This is NOT a durable session consumption or SQL CAS.
+            if (await actorPreflight.RequireSessionAsync(user) != reviewer)
+                throw new UnauthorizedAccessException();
+
             return Results.Ok(new {
                 preflightMatched = true,
                 reviewPreviewEvidenceSha256 = selected,
