@@ -857,61 +857,75 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
-await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Environment, app.Logger);
-await GitTransferWorkpackSchema.InitializeAsync(app.Services);
-await GitSourceBundleSchema.InitializeAsync(app.Services);
-await GitHubImportReadinessSchema.InitializeAsync(app.Services);
-await GitHubImportIntentSchema.InitializeAsync(app.Services);
-await GitImportRehearsalSchema.InitializeAsync(app.Services);
-await GitHubRemoteRefFenceSchema.InitializeAsync(app.Services);
-await GitHubAppWriteScopeSchema.InitializeAsync(app.Services);
-await GitHubTargetPreviewLeaseSchema.InitializeAsync(app.Services);
-await GitHubTransferAttemptSchema.InitializeAsync(app.Services);
-await GitSandboxDispatchSchema.InitializeAsync(app.Services);
-await GitHubRemoteSandboxFenceSchema.InitializeAsync(app.Services);
-await GitHubRemoteTestGrantSchema.InitializeAsync(app.Services);
-await GitHubRemoteAppPreflightEvidenceSchema.InitializeAsync(app.Services);
-await GitHubRemoteReadbackSchema.InitializeAsync(app.Services);
-await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
-// F-078 has an FK to F-055: never initialize this before the hazard table.
-await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
-await GitHubRemoteSandboxDispatchIntentSchema.InitializeAsync(app.Services);
-await GitHubRemoteSandboxDispatchConfirmationSchema.InitializeAsync(app.Services);
-await GitHubRemoteSandboxPreSendBarrierSchema.InitializeAsync(app.Services);
-await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
-await GitHubRemotePostSendRecoverySchema.InitializeAsync(app.Services);
-await GitHubRemoteTypedRecoveryBaselineSchema.InitializeAsync(app.Services);
-await GitHubSourceSyncCheckpointSchema.InitializeAsync(app.Services);
-await GitHubSourceCheckpointGitRefLedgerSchema.InitializeAsync(app.Services);
-await GitIncrementalCheckpointWorkpackSchema.InitializeAsync(app.Services);
-await GitCheckpointTargetHumanReviewSchema.InitializeAsync(app.Services);
-await GitCheckpointTargetObservationSchema.InitializeAsync(app.Services);
-await GitIncrementalLaterCheckpointWorkpackSchema.InitializeAsync(app.Services);
-await GitIncrementalLaterCheckpointBundleEvidenceSchema.InitializeAsync(app.Services);
-await GitIncrementalLaterCheckpointBundleLeaseSchema.InitializeAsync(app.Services);
-// #118 installs constraint-only F-061v2 tables; does not enable workers.
-await GitIncrementalLaterCheckpointMirrorLeaseSchema.InitializeAsync(app.Services);
-// #119 installs only write-blocked physical Verified evidence tables.
-await GitIncrementalLaterCheckpointMirrorVerifiedSchema.InitializeAsync(app.Services);
-// #122: additive immutable reviewed-intent SQL; no recovery authority.
-await GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema.InitializeAsync(app.Services);
-// #123: constraint-only pre-move isolation intent and post-move journal;
-// NOT a source-lock coordinator, filesystem actor, new lease or HTTP route.
-await GitIncrementalLaterCheckpointMirrorIsolationSchema.InitializeAsync(app.Services);
-// #127 installs audit-only generation assessment lineage after isolation.
-// It never mints worker/token or reopens the original RecoveryRequired lease.
-await GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchema
-    .InitializeAsync(app.Services);
-// #129: empty, DB-enforced write-disabled second-review journals only.
-await GitIncrementalLaterCheckpointMirrorSecondReviewSchema
-    .InitializeAsync(app.Services);
-// #128: AFTER all F-061 DDL, repair any previously installed CHECKs
-// with doubled regex bounds from non-interpolated SQL raw strings.
-await GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSchema
-    .InitializeAsync(app.Services);
-await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
-await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
-await AzureGitFetchJobSchema.InitializeAsync(app.Services);
+// #133: an explicitly provisioned, least-privilege application login
+// must not run CREATE/ALTER/Identity bootstrap on every API restart.
+// Legacy bootstrap mode stays the default until deployments provision
+// both independent credentials, grants and the schema separately.
+// RuntimeOnly never disables the mandatory F-061 second-review SQL fences.
+if (!builder.Configuration.GetValue("PostgreSql:RuntimeOnly", false))
+{
+    await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Environment, app.Logger);
+    await GitTransferWorkpackSchema.InitializeAsync(app.Services);
+    await GitSourceBundleSchema.InitializeAsync(app.Services);
+    await GitHubImportReadinessSchema.InitializeAsync(app.Services);
+    await GitHubImportIntentSchema.InitializeAsync(app.Services);
+    await GitImportRehearsalSchema.InitializeAsync(app.Services);
+    await GitHubRemoteRefFenceSchema.InitializeAsync(app.Services);
+    await GitHubAppWriteScopeSchema.InitializeAsync(app.Services);
+    await GitHubTargetPreviewLeaseSchema.InitializeAsync(app.Services);
+    await GitHubTransferAttemptSchema.InitializeAsync(app.Services);
+    await GitSandboxDispatchSchema.InitializeAsync(app.Services);
+    await GitHubRemoteSandboxFenceSchema.InitializeAsync(app.Services);
+    await GitHubRemoteTestGrantSchema.InitializeAsync(app.Services);
+    await GitHubRemoteAppPreflightEvidenceSchema.InitializeAsync(app.Services);
+    await GitHubRemoteReadbackSchema.InitializeAsync(app.Services);
+    await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
+    // F-078 has an FK to F-055: never initialize this before the hazard table.
+    await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
+    await GitHubRemoteSandboxDispatchIntentSchema.InitializeAsync(app.Services);
+    await GitHubRemoteSandboxDispatchConfirmationSchema.InitializeAsync(app.Services);
+    await GitHubRemoteSandboxPreSendBarrierSchema.InitializeAsync(app.Services);
+    await GitHubRemoteObjectReconciliationSchema.InitializeAsync(app.Services);
+    await GitHubRemotePostSendRecoverySchema.InitializeAsync(app.Services);
+    await GitHubRemoteTypedRecoveryBaselineSchema.InitializeAsync(app.Services);
+    await GitHubSourceSyncCheckpointSchema.InitializeAsync(app.Services);
+    await GitHubSourceCheckpointGitRefLedgerSchema.InitializeAsync(app.Services);
+    await GitIncrementalCheckpointWorkpackSchema.InitializeAsync(app.Services);
+    await GitCheckpointTargetHumanReviewSchema.InitializeAsync(app.Services);
+    await GitCheckpointTargetObservationSchema.InitializeAsync(app.Services);
+    await GitIncrementalLaterCheckpointWorkpackSchema.InitializeAsync(app.Services);
+    await GitIncrementalLaterCheckpointBundleEvidenceSchema.InitializeAsync(app.Services);
+    await GitIncrementalLaterCheckpointBundleLeaseSchema.InitializeAsync(app.Services);
+    // #118 installs constraint-only F-061v2 tables; does not enable workers.
+    await GitIncrementalLaterCheckpointMirrorLeaseSchema.InitializeAsync(app.Services);
+    // #119 installs only write-blocked physical Verified evidence tables.
+    await GitIncrementalLaterCheckpointMirrorVerifiedSchema.InitializeAsync(app.Services);
+    // #122: additive immutable reviewed-intent SQL; no recovery authority.
+    await GitIncrementalLaterCheckpointMirrorRecoveryDecisionSchema.InitializeAsync(app.Services);
+    // #123: constraint-only pre-move isolation intent and post-move journal;
+    // NOT a source-lock coordinator, filesystem actor, new lease or HTTP route.
+    await GitIncrementalLaterCheckpointMirrorIsolationSchema.InitializeAsync(app.Services);
+    // #127 installs audit-only generation assessment lineage after isolation.
+    // It never mints worker/token or reopens the original RecoveryRequired lease.
+    await GitIncrementalLaterCheckpointMirrorGenerationAssessmentSchema
+        .InitializeAsync(app.Services);
+    // #129: empty, DB-enforced write-disabled second-review journals only.
+    await GitIncrementalLaterCheckpointMirrorSecondReviewSchema
+        .InitializeAsync(app.Services);
+    // #128: AFTER all F-061 DDL, repair any previously installed CHECKs
+    // with doubled regex bounds from non-interpolated SQL raw strings.
+    await GitIncrementalLaterCheckpointMirrorRegexConstraintRepairSchema
+        .InitializeAsync(app.Services);
+    await GitIncrementalAncestryLedgerSchema.InitializeAsync(app.Services);
+    await GitSourceMirrorLifecycleSchema.InitializeAsync(app.Services);
+    await AzureGitFetchJobSchema.InitializeAsync(app.Services);
+}
+else
+{
+    await using var runtimeScope = app.Services.CreateAsyncScope();
+    await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+        runtimeScope.ServiceProvider.GetRequiredService<AppDbContext>());
+}
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", service = "GitHubMigrator.Api" }));
 app.MapGet("/api/ready", async Task<IResult> (AppDbContext db, CancellationToken ct) =>

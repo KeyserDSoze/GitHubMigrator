@@ -29,6 +29,12 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests
         // supply an explicit distinct schema-setup role instead.
         Assert.True(isBootstrapSuperuser,
             "#133 fixture must explicitly distinguish bootstrap and runtime DB roles");
+        // Runtime-only API startup must refuse this SAME privileged
+        // bootstrap account even when every deny-all trigger exists.
+        var bootstrapRejected = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(owner));
+        Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+            bootstrapRejected.Message);
 
         var login = "f061_review_probe_" + Guid.NewGuid().ToString("N");
         var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
@@ -82,6 +88,15 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests
                         'public.git_later_checkpoint_mirror_second_reviews',
                         'INSERT, UPDATE, DELETE')
                     """)));
+
+                // The opt-in runtime-only guard checks the real role,
+                // protected SQL owners/grants and all installed immutable
+                // trigger identities. No login role switch or bootstrap.
+                await using (var restrictedDb = new AppDbContext(
+                    new DbContextOptionsBuilder<AppDbContext>()
+                        .UseNpgsql(connection.ConnectionString).Options))
+                    await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                        restrictedDb);
 
                 await Denied("""
                     INSERT INTO public.git_later_checkpoint_mirror_second_reviews
