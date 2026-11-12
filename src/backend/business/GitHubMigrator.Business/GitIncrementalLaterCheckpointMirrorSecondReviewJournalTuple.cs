@@ -46,10 +46,8 @@ public static class GitIncrementalLaterCheckpointMirrorSecondReviewJournalTupleI
             review.PhysicalMirrorId == Guid.Empty ||
             review.SecondReviewerId == Guid.Empty ||
             review.FirstReviewerId == Guid.Empty ||
-            review.OriginalBundleActorId == Guid.Empty ||
             review.OriginalWorkerId == Guid.Empty ||
             review.SecondReviewerId == review.FirstReviewerId ||
-            review.SecondReviewerId == review.OriginalBundleActorId ||
             review.SecondReviewerId == review.OriginalWorkerId ||
             review.OriginalGeneration is < 1 or > 1999 ||
             review.SuggestedNextGeneration != review.OriginalGeneration + 1 ||
