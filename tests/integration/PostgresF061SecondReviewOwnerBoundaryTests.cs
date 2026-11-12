@@ -35,11 +35,33 @@ public sealed class PostgresF061SecondReviewOwnerBoundaryTests(
             WHERE c.oid =
                 'public.git_later_checkpoint_mirror_second_reviews'::regclass
             """).SingleAsync();
+        // #144: the reusable PG17 service database grants database
+        // TEMPORARY to PUBLIC by default. The runtime-only security
+        // guard now correctly rejects it, so provision the disposable
+        // CI database explicitly rather than weakening the guard.
+        // Snapshot the exact original PUBLIC grant for restoration.
+        var databaseName = new NpgsqlConnectionStringBuilder(
+            db.Database.GetDbConnection().ConnectionString).Database;
+        var databaseIdentifier = "\"" + databaseName.Replace("\"", "\"\"") + "\"";
+        var publicHadTemporary = await db.Database.SqlQueryRaw<bool>("""
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_database d
+                CROSS JOIN LATERAL pg_catalog.aclexplode(
+                    COALESCE(d.datacl, pg_catalog.acldefault('d', d.datdba))) acl
+                WHERE d.datname = CURRENT_DATABASE()
+                  AND acl.grantee = 0::oid
+                  AND acl.privilege_type = 'TEMPORARY'
+            ) AS "Value"
+            """).SingleAsync();
         // The shared ephemeral CI database is bootstrapped as superuser;
         // use a fresh, independent NOLOGIN principal, not SET ROLE.
         Assert.NotEqual(ownerName, originalOwner);
         try
         {
+            // Test-only privilege provisioning: never silently modify
+            // PUBLIC ACLs in an actual shared/production environment.
+            await db.Database.ExecuteSqlRawAsync(
+                $"REVOKE TEMPORARY ON DATABASE {databaseIdentifier} FROM PUBLIC");
             // #143: independently test the THIRD security boundary,
             // the exact privileged NOLOGIN owner operator. The other
             // two SQL guards are exercised by the restricted-runtime
@@ -176,17 +198,28 @@ public sealed class PostgresF061SecondReviewOwnerBoundaryTests(
         }
         finally
         {
-            // Only change back the exact three fixtures + deny function
-            // before dropping the disposable NOLOGIN owner. In a failed
-            // transaction the original owner is already unchanged.
-            foreach (var name in JournalTables)
+            try
+            {
+                // Only change back the exact three fixtures + deny function
+                // before dropping the disposable NOLOGIN owner. In a failed
+                // transaction the original owner is already unchanged.
+                foreach (var name in JournalTables)
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"ALTER TABLE public.{name} OWNER TO {originalOwner}");
                 await db.Database.ExecuteSqlRawAsync(
-                    $"ALTER TABLE public.{name} OWNER TO {originalOwner}");
-            await db.Database.ExecuteSqlRawAsync(
-                $"ALTER FUNCTION public.git_later_checkpoint_mirror_second_review_deny() " +
-                $"OWNER TO {originalOwner}");
-            await db.Database.ExecuteSqlRawAsync(
-                $"DROP ROLE IF EXISTS {ownerName}");
+                    $"ALTER FUNCTION public.git_later_checkpoint_mirror_second_review_deny() " +
+                    $"OWNER TO {originalOwner}");
+                await db.Database.ExecuteSqlRawAsync(
+                    $"DROP ROLE IF EXISTS {ownerName}");
+            }
+            finally
+            {
+                // Even a cleanup failure must not strand the shared CI
+                // test database with its PUBLIC ACL silently changed.
+                if (publicHadTemporary)
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"GRANT TEMPORARY ON DATABASE {databaseIdentifier} TO PUBLIC");
+            }
         }
     }
 }

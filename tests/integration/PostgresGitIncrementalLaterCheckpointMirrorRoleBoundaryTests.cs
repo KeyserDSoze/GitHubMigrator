@@ -36,6 +36,24 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests
         Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
             bootstrapRejected.Message);
 
+        // #144: the isolated PostgreSQL17 CI database starts with a
+        // default PUBLIC TEMPORARY privilege. Remove that privilege
+        // explicitly for this separate-LOGIN runtime guard test only;
+        // later restore the original PUBLIC grant in finally.
+        var databaseName = new NpgsqlConnectionStringBuilder(
+            owner.Database.GetDbConnection().ConnectionString).Database;
+        var databaseIdentifier = "\"" + databaseName.Replace("\"", "\"\"") + "\"";
+        var publicHadTemporary = await owner.Database.SqlQueryRaw<bool>("""
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_database d
+                CROSS JOIN LATERAL pg_catalog.aclexplode(
+                    COALESCE(d.datacl, pg_catalog.acldefault('d', d.datdba))) acl
+                WHERE d.datname = CURRENT_DATABASE()
+                  AND acl.grantee = 0::oid
+                  AND acl.privilege_type = 'TEMPORARY'
+            ) AS "Value"
+            """).SingleAsync();
+
         var login = "f061_review_probe_" + Guid.NewGuid().ToString("N");
         var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
         var connection = new NpgsqlConnectionStringBuilder(
@@ -55,6 +73,8 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests
             "NOREPLICATION NOBYPASSRLS");
         try
         {
+            await owner.Database.ExecuteSqlRawAsync(
+                $"REVOKE TEMPORARY ON DATABASE {databaseIdentifier} FROM PUBLIC");
             // A bootstrap superuser can SET LOCAL ROLE to a restricted
             // current_user. Reject it because the original session_user
             // still holds privileged credentials.
@@ -160,10 +180,19 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests
         }
         finally
         {
-            // Only this disposable test LOGIN is dropped. No user
-            // account, schema, security trigger or F-061 row is changed.
-            await owner.Database.ExecuteSqlRawAsync(
-                $"DROP ROLE IF EXISTS {login}");
+            try
+            {
+                // Only this disposable test LOGIN is dropped. No user
+                // account, schema, security trigger or F-061 row is changed.
+                await owner.Database.ExecuteSqlRawAsync(
+                    $"DROP ROLE IF EXISTS {login}");
+            }
+            finally
+            {
+                if (publicHadTemporary)
+                    await owner.Database.ExecuteSqlRawAsync(
+                        $"GRANT TEMPORARY ON DATABASE {databaseIdentifier} TO PUBLIC");
+            }
         }
     }
 }
