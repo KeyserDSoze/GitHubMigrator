@@ -7,13 +7,17 @@ on:
 permissions:
   contents: read
 
-# Only the latest commit on each ref needs the expensive full
-# PostgreSQL integration suite. Older, superseded runs must not
-# compete for CI resources or be mistaken for the current main gate.
-# Ref-scoping keeps PR checks separate from main checks.
+# #132: never cancel an already RUNNING 55-minute PG17 main gate
+# when the next commit arrives on the sole main branch. Otherwise frequent
+# main-only development can perpetually prevent full 4/4 certification.
+# GitHub Actions concurrency permits at most one active and one pending
+# workflow in this group; a newer push may replace a PENDING run, not
+# terminate the already-running full physical-Git/PG17 tests.
+# Keep cancel-in-progress for PRs so only their current head is tested.
+# Ref-scoping prevents PR checks from blocking main.
 concurrency:
   group: quality-gates-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend:
