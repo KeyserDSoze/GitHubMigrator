@@ -130,13 +130,15 @@ jobs:
       # A second UNFILTERED dotnet test below still runs EVERY PG17 case.
       # This smoke job runs on the same disposable PG17 service and its
       # role/owner integration tests clean up test-only grants and roles.
+      # #130 immutable three-row historical readback is also tested early;
+      # its tests never write a protected F-061 journal or bypass a trigger.
       - name: Smoke PostgreSQL role separation and restricted runtime HTTP
         env:
           GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
         run: |
           dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj \
             --verbosity normal \
-            --filter "FullyQualifiedName~PostgresRestrictedRuntimeIdentityGrantTests|FullyQualifiedName~PostgresF061SecondReviewOwnerBoundaryTests|FullyQualifiedName~PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests" \
+            --filter "FullyQualifiedName~PostgresRestrictedRuntimeIdentityGrantTests|FullyQualifiedName~PostgresF061SecondReviewOwnerBoundaryTests|FullyQualifiedName~PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests|FullyQualifiedName~PostgresGitIncrementalLaterCheckpointMirrorSecondReviewJournalReadbackTests" \
             --results-directory tests/integration/TestResults \
             --logger "trx;LogFileName=pg17-runtime-role-smoke.trx"
       - name: Verify ASP.NET API + PostgreSQL persistence, security and concurrency
