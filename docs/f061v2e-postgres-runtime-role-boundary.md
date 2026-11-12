@@ -15,7 +15,7 @@ This is a **default-off, fail-closed startup path**, not a deployed least-privil
 - the login is a superuser, can create roles/databases, replicate or bypass RLS;
 - the login has INHERIT enabled, is not a LOGIN role, or has ANY role membership that could be activated with `SET ROLE`;
 - ownership/membership of the database, any F-061 second-review journal table or its deny trigger function;
-- `CREATE` permission on the database or the `public` schema;
+- `CREATE` permission on the database or any user schema, **or separate database `TEMPORARY` permission** (including PostgreSQL's default `PUBLIC` grant; #144);
 - any `INSERT`, `UPDATE` or `DELETE` privilege on the three F-061 second-review tables;
 - missing F-061 review/event/session tables or a missing/disabled DENY-ALL trigger;
 - an impersonated `CURRENT_USER` that differs from the authenticated `SESSION_USER` (e.g. `SET ROLE` from a superuser session);
@@ -36,6 +36,44 @@ The guard queries PostgreSQL system catalogs and effective privileges—not user
 - In CI, the separate-login PostgreSQL17 test verifies that the superuser fails the opt-in guard while a distinct restricted principal passes the catalog guard, and that raw SQL inserts/updates/deletes, trigger disabling, `SET ROLE`, forged GUC values and journal event/session inserts are still denied. No filesystem, F-061 generation, remote GitHub push or migration-complete authority is introduced.
 
 **Remaining #133 work:** a reviewed and repeatable schema-owner/bootstrap-role provisioning process, exact least-privilege grants for all existing API relations, genuine runtime end-to-end API tests under that role, and full final-main 4/4 CI verification. One-shot mode separates the *process lifetime* but does not itself provision privileges or grants. #130 independently requires the protected atomic journal writer and concurrent-replay tests.
+
+## #144: database TEMPORARY is a separate, default-PUBLIC privilege
+
+PostgreSQL17 grants `TEMPORARY` on newly created databases to `PUBLIC`
+by default. Revoking `CREATE` on the database or all user schemas **does
+not** revoke the independent ability to create tables in `pg_temp`.
+Both the actual `PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync`
+startup check and the independently run one-shot
+`script/postgres_runtime_identity_grants.sql` now reject any **effective**
+database `TEMPORARY` privilege on the restricted LOGIN, including an
+inherited `PUBLIC` grant. The operator transaction fails before
+normalizing or adding other grants; it never revokes TEMP automatically.
+
+**Required trusted provisioning decision before enabling RuntimeOnly:**
+review whether *every other database user* can safely lose the default
+PUBLIC TEMP privilege. On a **dedicated, explicitly approved** runtime
+database only, an isolated privileged operator may execute:
+
+```sql
+-- Replace the quoted database identifier with the dedicated database.
+-- Do not run this blindly on a shared or production database.
+REVOKE TEMPORARY ON DATABASE "reviewed_dedicated_database" FROM PUBLIC;
+-- Also inspect/revoke any direct TEMPORARY grants to the runtime LOGIN.
+-- Independently verify that has_database_privilege(runtime_login,
+--   current_database(), 'TEMPORARY') is false.
+```
+
+Do not revoke `CONNECT`, change another role's privileges on a shared
+database without its owner's approval, or pass superuser credentials to
+the API runtime. An existing database with default PUBLIC TEMP is
+**intentionally refused** until independently provisioned; no application
+fallback, broad grants, automatic patch or second-human writer is added.
+The real disposable PG17 test asserts the default operator rejection,
+temporarily revokes PUBLIC TEMP, tests clean Identity and read-only
+HTTP, then separately injects direct LOGIN/PUBLIC TEMP drift to
+require rejection by **both** independent guards. The test restores
+the original database ACL in `finally` and changes no production DB.
+Reference: https://www.postgresql.org/docs/17/ddl-priv.html.
 
 ## #133: opt-in SQL Identity-only permission pilot
 

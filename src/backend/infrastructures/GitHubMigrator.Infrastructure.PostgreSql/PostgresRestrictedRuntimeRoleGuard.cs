@@ -70,6 +70,11 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 )
                 AND NOT pg_catalog.has_database_privilege(
                     CURRENT_USER, CURRENT_DATABASE(), 'CREATE')
+                -- #144: database TEMPORARY is independent of CREATE
+                -- and is granted to PUBLIC by PostgreSQL by default.
+                -- Do not let a read-only LOGIN create pg_temp tables.
+                AND NOT pg_catalog.has_database_privilege(
+                    role.rolname, CURRENT_DATABASE(), 'TEMPORARY')
                 -- A separately granted CREATE on any other user schema
                 -- also grants runtime DDL capability. Check effective
                 -- privileges across ALL non-system schemas, including
@@ -365,6 +370,7 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 "non-superuser NOINHERIT login with no role memberships, " +
                 "unchanged session identity and " +
                 "three exact enabled F-061 review DML triggers, " +
+                "no database TEMPORARY (including PUBLIC grants), " +
                 "and no access to connection secret references or " +
                 "encrypted provider credentials, or unauthorized " +
                 "writes to connection/discovery metadata or any " +

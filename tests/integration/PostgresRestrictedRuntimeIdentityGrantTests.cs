@@ -34,6 +34,39 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
         var sql = await File.ReadAllTextAsync(sqlPath);
         Assert.Contains("GRANT SELECT ON TABLE", sql);
         var discoveryId = Guid.NewGuid();
+        var runtimeDatabase = new NpgsqlConnectionStringBuilder(
+            db.Database.GetDbConnection().ConnectionString).Database;
+        // This is the disposable PostgreSQL17 integration database,
+        // never a production database. Quote an operator-owned identifier.
+        var quotedDatabase = "\"" + runtimeDatabase.Replace("\"", "\"\"") + "\"";
+        var publicHadTemporary = await db.Database.SqlQueryRaw<bool>("""
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_database d
+                CROSS JOIN LATERAL pg_catalog.aclexplode(
+                    COALESCE(d.datacl, pg_catalog.acldefault('d', d.datdba))) acl
+                WHERE d.datname = CURRENT_DATABASE()
+                  AND acl.grantee = 0::oid
+                  AND acl.privilege_type = 'TEMPORARY'
+            ) AS "Value"
+            """).SingleAsync();
+
+        // Use the EXACT independent operator SQL, never an inlined
+        // substitute or a weakened ad-hoc privilege assertion.
+        async Task AssertOperatorRejectsTemporaryAsync()
+        {
+            await using var tx = await db.Database.BeginTransactionAsync();
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+            await using var command = db.Database.GetDbConnection()
+                .CreateCommand();
+            command.Transaction = tx.GetDbTransaction();
+            command.CommandText = sql;
+            var rejected = await Assert.ThrowsAsync<PostgresException>(
+                () => command.ExecuteNonQueryAsync());
+            Assert.Equal("P0001", rejected.SqlState);
+            Assert.Contains("excessive inherited/DDL privileges",
+                rejected.MessageText);
+        }
 
         await db.Database.ExecuteSqlRawAsync(
             $"CREATE ROLE {login} LOGIN PASSWORD '{password}' " +
@@ -41,6 +74,17 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
             "NOREPLICATION NOBYPASSRLS");
         try
         {
+            // #144: the official PostgreSQL17 image starts with
+            // database TEMPORARY allowed to PUBLIC, independently of
+            // database/schema CREATE. This initial (unprovisioned)
+            // LOGIN must be rejected by the exact operator transaction.
+            Assert.True(publicHadTemporary);
+            await AssertOperatorRejectsTemporaryAsync();
+            // Only this disposable PG17 test database is changed.
+            // Production/shared DB ACLs require separate operator review.
+            await db.Database.ExecuteSqlRawAsync(
+                $"REVOKE TEMPORARY ON DATABASE {quotedDatabase} FROM PUBLIC");
+
             // A known, immutable and credential-free source inventory
             // is committed only by the PRIVILEGED test bootstrap. The
             // independent runtime LOGIN below has no INSERT permission.
@@ -160,6 +204,11 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 return (T)(await cmd.ExecuteScalarAsync())!;
             }
             Assert.Equal(login, await Scalar<string>("SELECT SESSION_USER"));
+            const string temporaryPrivilege = """
+                SELECT pg_catalog.has_database_privilege(
+                    CURRENT_USER, CURRENT_DATABASE(), 'TEMPORARY')
+                """;
+            Assert.False(await Scalar<bool>(temporaryPrivilege));
             Assert.True(await Scalar<bool>("""
                 SELECT pg_catalog.has_table_privilege(
                     CURRENT_USER, 'public."AspNetUsers"', 'SELECT')
@@ -228,6 +277,40 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 new DbContextOptionsBuilder<AppDbContext>()
                     .UseNpgsql(connection.ConnectionString).Options))
                 await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(runtimeDb);
+
+            // #144: once the independently authenticated role is
+            // safely provisioned, any later TEMPORARY grant to LOGIN
+            // or PUBLIC must fail BOTH distinct guards. Neither grant
+            // creates a temporary table or touches a review journal.
+            foreach (var grantee in new[] { login, "PUBLIC" })
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT TEMPORARY ON DATABASE {quotedDatabase} TO {grantee}");
+                try
+                {
+                    Assert.True(await Scalar<bool>(temporaryPrivilege));
+                    await using (var drifted = new AppDbContext(
+                        new DbContextOptionsBuilder<AppDbContext>()
+                            .UseNpgsql(connection.ConnectionString).Options))
+                    {
+                        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                            () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(drifted));
+                        Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                            refused.Message);
+                    }
+                    await AssertOperatorRejectsTemporaryAsync();
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"REVOKE TEMPORARY ON DATABASE {quotedDatabase} FROM {grantee}");
+                }
+                Assert.False(await Scalar<bool>(temporaryPrivilege));
+            }
+            await using (var cleanTemporary = new AppDbContext(
+                new DbContextOptionsBuilder<AppDbContext>()
+                    .UseNpgsql(connection.ConnectionString).Options))
+                await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(cleanTemporary);
 
             // #143: exact F-061 journal trigger modes are part of the
             // SQL safety contract, not merely trigger names/functions.
@@ -1352,14 +1435,26 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
         }
         finally
         {
-            // Only the test-owned immutable discovery row is deleted by
-            // the separate privileged bootstrap context, never runtime.
-            await db.Database.ExecuteSqlInterpolatedAsync(
-                $"DELETE FROM public.migration_discoveries WHERE id = {discoveryId}");
-            // Remove test-only GRANT dependencies before deleting LOGIN.
-            // No application tables or normal platform users are deleted.
-            await db.Database.ExecuteSqlRawAsync($"DROP OWNED BY {login}");
-            await db.Database.ExecuteSqlRawAsync($"DROP ROLE IF EXISTS {login}");
+            try
+            {
+                // Restore the original PUBLIC database ACL even on test
+                // failure. The disposal contract prevents test-only
+                // permission changes from surviving this fixture.
+                await db.Database.ExecuteSqlRawAsync(
+                    $"REVOKE TEMPORARY ON DATABASE {quotedDatabase} FROM {login}");
+                if (publicHadTemporary)
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"GRANT TEMPORARY ON DATABASE {quotedDatabase} TO PUBLIC");
+            }
+            finally
+            {
+                // Only the test-owned immutable discovery row is deleted by
+                // the separately privileged bootstrap, never runtime.
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"DELETE FROM public.migration_discoveries WHERE id = {discoveryId}");
+                await db.Database.ExecuteSqlRawAsync($"DROP OWNED BY {login}");
+                await db.Database.ExecuteSqlRawAsync($"DROP ROLE IF EXISTS {login}");
+            }
         }
     }
 }

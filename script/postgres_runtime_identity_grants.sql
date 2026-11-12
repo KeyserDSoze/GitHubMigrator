@@ -3,7 +3,9 @@
 -- Requires SET LOCAL githubmigrator.runtime_role = 'pre_created_role'
 -- within the caller's transaction. NO SECURITY DEFINER function,
 -- no role creation, no plaintext password, no automatic permission on
--- future objects. This statement is intentionally not installed in DB.
+-- future objects. The separately provisioned runtime database must
+-- already deny TEMPORARY to this LOGIN (including default PUBLIC access).
+-- This statement is intentionally not installed in DB.
 DO $f061_runtime_identity_grants$
 DECLARE
     runtime_name text :=
@@ -39,6 +41,11 @@ BEGIN
        ) OR
        pg_catalog.has_database_privilege(
            runtime_name, CURRENT_DATABASE(), 'CREATE') OR
+       -- #144: TEMPORARY on a database is separate from CREATE and
+       -- defaults to PUBLIC. Reject effective direct OR PUBLIC grants
+       -- before issuing any Identity/runtime permissions.
+       pg_catalog.has_database_privilege(
+           runtime_name, CURRENT_DATABASE(), 'TEMPORARY') OR
        EXISTS (
            SELECT 1
            FROM pg_catalog.pg_namespace user_schema
