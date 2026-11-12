@@ -229,6 +229,65 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     .UseNpgsql(connection.ConnectionString).Options))
                 await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(runtimeDb);
 
+            // #134: table DML checks alone do not catch TRUNCATE
+            // (no DELETE row trigger), TRIGGER or writable sequences.
+            // Exercise both the exact one-shot operator SQL and the
+            // independent runtime startup guard against real PG17 grants.
+            // Do not actually TRUNCATE any application/Identity data.
+            var auditSequence = "f061_pilot_seq_" + Guid.NewGuid().ToString("N");
+            await db.Database.ExecuteSqlRawAsync(
+                $"CREATE SEQUENCE public.{auditSequence}");
+            try
+            {
+                foreach (var (privilege, kind, relation) in new[]
+                {
+                    ("TRUNCATE", "TABLE",
+                        "public.git_later_checkpoint_mirror_second_reviews"),
+                    ("TRUNCATE", "TABLE", "public.\"AspNetUsers\""),
+                    ("TRIGGER", "TABLE", "public.migration_discoveries"),
+                    ("USAGE", "SEQUENCE", $"public.{auditSequence}"),
+                    ("UPDATE", "SEQUENCE", $"public.{auditSequence}")
+                })
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"GRANT {privilege} ON {kind} {relation} TO {login}");
+                    try
+                    {
+                        await using (var drifted = new AppDbContext(
+                            new DbContextOptionsBuilder<AppDbContext>()
+                                .UseNpgsql(connection.ConnectionString).Options))
+                        {
+                            var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                                () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                    drifted));
+                            Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                                refused.Message);
+                        }
+
+                        await using var tx = await db.Database.BeginTransactionAsync();
+                        await db.Database.ExecuteSqlInterpolatedAsync(
+                            $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                        await using var command = db.Database.GetDbConnection()
+                            .CreateCommand();
+                        command.Transaction = tx.GetDbTransaction();
+                        command.CommandText = sql;
+                        var rejected = await Assert.ThrowsAsync<PostgresException>(
+                            () => command.ExecuteNonQueryAsync());
+                        Assert.Equal("P0001", rejected.SqlState);
+                    }
+                    finally
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            $"REVOKE {privilege} ON {kind} {relation} FROM {login}");
+                    }
+                }
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"DROP SEQUENCE IF EXISTS public.{auditSequence}");
+            }
+
             // The operator's successful initial grants are not a
             // permanent credential boundary. A later superuser grant
             // must cause the REAL runtime startup guard to refuse

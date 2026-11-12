@@ -86,7 +86,7 @@ BEGIN
     ] LOOP
         IF pg_catalog.has_table_privilege(
             runtime_name, pg_catalog.format('public.%I', protected_table),
-            'INSERT, UPDATE, DELETE') THEN
+            'INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER') THEN
             RAISE EXCEPTION 'F-061 protected journal grants already excessive';
         END IF;
     END LOOP;
@@ -216,7 +216,11 @@ BEGIN
           AND ns.nspname <> 'information_schema'
           AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
           AND (
-              (
+              -- Independent TRUNCATE bypasses row DELETE triggers;
+              -- never normalize a previously granted TRIGGER privilege.
+              pg_catalog.has_table_privilege(
+                  runtime_name, writable.oid, 'TRUNCATE, TRIGGER')
+              OR (
                   ns.nspname = 'public'
                   AND writable.relname = 'AspNetUsers'
                   AND (
@@ -251,5 +255,22 @@ BEGIN
     ) THEN
         RAISE EXCEPTION
             'F-061 runtime grant pilot detected existing secret or write privileges';
+    END IF;
+    -- Sequences are a separate SQL privilege class: USAGE permits
+    -- nextval and UPDATE permits setval. Neither is safe for this
+    -- read-only pilot, even when the table DML audit was clean.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class sequence_relation
+        JOIN pg_catalog.pg_namespace ns
+          ON ns.oid = sequence_relation.relnamespace
+        WHERE sequence_relation.relkind = 'S'
+          AND ns.nspname <> 'information_schema'
+          AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
+          AND pg_catalog.has_sequence_privilege(
+              runtime_name, sequence_relation.oid, 'USAGE, UPDATE')
+    ) THEN
+        RAISE EXCEPTION
+            'F-061 runtime grant pilot detected writable sequence privileges';
     END IF;
 END $f061_runtime_identity_grants$;

@@ -110,6 +110,7 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 -- per-column permissions on every user relation, not
                 -- only explicitly named connection/discovery tables.
                 -- The sole DML exception is Identity AspNetUsers UPDATE
+                -- (TRUNCATE/TRIGGER are never allowed, including Identity).
                 -- (password/lockout/security-stamp lifecycle).
                 AND NOT EXISTS (
                     SELECT 1
@@ -120,7 +121,12 @@ public static class PostgresRestrictedRuntimeRoleGuard
                       AND ns.nspname <> 'information_schema'
                       AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
                       AND (
-                          (
+                          -- TRUNCATE bypasses DELETE row triggers, including
+                          -- the F-061 second-review journal DENY-ALL triggers.
+                          -- TRIGGER may alter behavior without table DML.
+                          pg_catalog.has_table_privilege(
+                              role.rolname, writable.oid, 'TRUNCATE, TRIGGER')
+                          OR (
                               ns.nspname = 'public'
                               AND writable.relname = 'AspNetUsers'
                               AND (
@@ -162,6 +168,20 @@ public static class PostgresRestrictedRuntimeRoleGuard
                           )
                       )
                 )
+                -- A sequence can be advanced or reset via USAGE/UPDATE
+                -- without INSERT/UPDATE/DELETE permission on its table.
+                -- This runtime-only pilot does not need writable sequences.
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_class sequence_relation
+                    JOIN pg_catalog.pg_namespace ns
+                      ON ns.oid = sequence_relation.relnamespace
+                    WHERE sequence_relation.relkind = 'S'
+                      AND ns.nspname <> 'information_schema'
+                      AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
+                      AND pg_catalog.has_sequence_privilege(
+                          role.rolname, sequence_relation.oid, 'USAGE, UPDATE')
+                )
                 AND (SELECT count(*) FROM protected) = 3
                 AND (SELECT count(*) FROM protected_triggers) = 3
                 AND NOT EXISTS (
@@ -169,7 +189,7 @@ public static class PostgresRestrictedRuntimeRoleGuard
                     WHERE pg_catalog.pg_has_role(
                         role.rolname, c.relowner, 'MEMBER')
                        OR pg_catalog.has_table_privilege(
-                        role.rolname, c.oid, 'INSERT, UPDATE, DELETE')
+                        role.rolname, c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER')
                 )
                 AND NOT EXISTS (
                     SELECT 1 FROM protected_triggers t
@@ -190,7 +210,7 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 "and no access to connection secret references or " +
                 "encrypted provider credentials, or unauthorized " +
                 "writes to connection/discovery metadata or any " +
-                "non-Identity user table/column. " +
+                "non-Identity user table/column or writable sequence. " +
                 "Use privileged schema bootstrap " +
                 "separately; never reuse its credentials for the API.");
     }

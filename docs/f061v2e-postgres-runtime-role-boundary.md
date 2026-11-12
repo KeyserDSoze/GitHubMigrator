@@ -305,3 +305,30 @@ pilot**. It is not a complete privilege policy for a future
 write-enabled migration API. Such a role must be designed and tested
 separately rather than weakening the fail-closed checks or using the
 bootstrap superuser as an ordinary runtime credential.
+
+## #134: TRUNCATE, TRIGGER and sequence-write privilege drift
+
+The default-OFF PostgreSql__RuntimeOnly read-only pilot must also reject
+SQL permissions that are not covered by INSERT/UPDATE/DELETE checks.
+PostgreSQL TRUNCATE does not fire row-level DELETE triggers, so granting
+it on a protected F-061 journal would defeat the intention of a
+DELETE-only permission scan. Table-level TRIGGER permissions also
+provide an independent way to modify table behavior. The runtime guard
+and one-shot privileged grants SQL therefore fail closed on either
+effective privilege on any non-system user relation, including
+the otherwise UPDATE-allowlisted Identity AspNetUsers table.
+
+A second catalog scan refuses sequence USAGE or UPDATE: those permit
+nextval/setval without table DML grants. The current restricted login
+requires neither permission. Real PostgreSQL17 integration smoke now
+temporarily grants both table privileges (including F-061 and Identity)
+and sequence privileges to a disposable independently authenticated
+LOGIN. It requires both the production runtime-only guard and
+the exact operator SQL transaction to reject each grant, before revoking
+it and continuing with the ordinary HTTP smoke. No application row is
+truncated, no sequence value is advanced, no deny-all trigger is changed,
+and no #130 writer or recovery authority is enabled.
+
+These fences define only this narrowly scoped read-only runtime role.
+A future write-capable role needs an independently reviewed permission
+model; a complete final-main 4/4 CI result is still required for #134.
