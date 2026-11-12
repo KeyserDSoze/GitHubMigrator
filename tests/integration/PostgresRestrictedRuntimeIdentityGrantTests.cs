@@ -653,6 +653,109 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     $"DROP SCHEMA IF EXISTS {routineSchema}");
             }
 
+            // #138: the read-only pilot also must reject SELECT on
+            // unreviewed relations. SQL owner-privileged views can
+            // reveal columns that the caller cannot read directly.
+            // Check both table-wide and column-only ACL drift, then
+            // effective PUBLIC SELECT on a harmless owner-created view.
+            foreach (var privilege in new[]
+            {
+                "SELECT", "SELECT (repositories_json)"
+            })
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT {privilege} ON TABLE " +
+                    $"public.migration_plan_drafts TO {login}");
+                try
+                {
+                    await using (var drifted = new AppDbContext(
+                        new DbContextOptionsBuilder<AppDbContext>()
+                            .UseNpgsql(connection.ConnectionString).Options))
+                    {
+                        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                            () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                drifted));
+                        Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                            refused.Message);
+                    }
+
+                    await using var tx = await db.Database.BeginTransactionAsync();
+                    await db.Database.ExecuteSqlInterpolatedAsync(
+                        $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                    await using var command = db.Database.GetDbConnection()
+                        .CreateCommand();
+                    command.Transaction = tx.GetDbTransaction();
+                    command.CommandText = sql;
+                    var rejected = await Assert.ThrowsAsync<PostgresException>(
+                        () => command.ExecuteNonQueryAsync());
+                    Assert.Equal("P0001", rejected.SqlState);
+                    Assert.Contains("unreviewed SELECT privileges",
+                        rejected.MessageText);
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"REVOKE {privilege} ON TABLE " +
+                        $"public.migration_plan_drafts FROM {login}");
+                }
+            }
+
+            var auditView = "f061_pilot_view_" +
+                Guid.NewGuid().ToString("N");
+            await db.Database.ExecuteSqlRawAsync(
+                $"CREATE VIEW public.{auditView} AS SELECT 1 AS marker");
+            try
+            {
+                foreach (var grantee in new[] { "PUBLIC", login })
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"GRANT SELECT ON TABLE public.{auditView} TO {grantee}");
+                    try
+                    {
+                        await using (var drifted = new AppDbContext(
+                            new DbContextOptionsBuilder<AppDbContext>()
+                                .UseNpgsql(connection.ConnectionString).Options))
+                        {
+                            var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                                () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                    drifted));
+                            Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                                refused.Message);
+                        }
+
+                        await using var tx = await db.Database.BeginTransactionAsync();
+                        await db.Database.ExecuteSqlInterpolatedAsync(
+                            $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                        await using var command = db.Database.GetDbConnection()
+                            .CreateCommand();
+                        command.Transaction = tx.GetDbTransaction();
+                        command.CommandText = sql;
+                        var rejected = await Assert.ThrowsAsync<PostgresException>(
+                            () => command.ExecuteNonQueryAsync());
+                        Assert.Equal("P0001", rejected.SqlState);
+                        Assert.Contains("unreviewed SELECT privileges",
+                            rejected.MessageText);
+                    }
+                    finally
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            $"REVOKE SELECT ON TABLE public.{auditView} FROM {grantee}");
+                    }
+                }
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"DROP VIEW IF EXISTS public.{auditView}");
+            }
+
+            // Revoked grants restore the role before it starts the
+            // real restricted ASP.NET HTTP host below.
+            await using (var cleanRead = new AppDbContext(
+                new DbContextOptionsBuilder<AppDbContext>()
+                    .UseNpgsql(connection.ConnectionString).Options))
+                await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(cleanRead);
+
             // The operator's successful initial grants are not a
             // permanent credential boundary. A later superuser grant
             // must cause the REAL runtime startup guard to refuse

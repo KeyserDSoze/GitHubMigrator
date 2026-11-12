@@ -476,3 +476,34 @@ script fail closed. Revocation must restore the clean runtime startup;
 all grants, the procedure and its schema are removed in `finally`.
 No privileged routine is executed, no journal is written and the
 current read-only runtime-only policy is unchanged.
+
+### #138: fail closed on unreviewed SELECT, including view-owner reads
+
+PostgreSQL17 views normally use the **view owner's** privileges to
+resolve their underlying tables unless explicitly created with
+`security_invoker=true`. A restricted runtime account that cannot
+read a sensitive table directly can still be exposed to its contents
+through an unreviewed owner-privileged view. Table-level DML denial
+does not prevent that read or a separately granted `SELECT(column)`.
+
+For the default-OFF Identity/discovery pilot, both the actual
+startup guard and the independent privileged operator SQL now deny
+effective `SELECT` on every user table, partition, view, materialized
+view and foreign table **except** the seven explicit `AspNet*`
+Identity relations, `migration_discoveries` and the approved
+columns of `migration_connections` in schema `public`.
+The existing `secret_reference` and encrypted credential store
+barriers remain mandatory. The privilege scan uses PostgreSQL17
+`has_any_column_privilege(..., 'SELECT')` to detect both table-wide
+and per-column grants, including ACLs via `PUBLIC`.
+
+The real PostgreSQL17 independent LOGIN test now grants and revokes
+unreviewed table SELECT and column-only SELECT on
+`migration_plan_drafts`, plus direct/PUBLIC SELECT on a disposable
+constant-returning view owned by the isolated privileged test role.
+Both the startup catalog guard and the exact operator SQL must refuse
+each drift; all test-only ACLs and view objects are cleaned up even
+on assertion failure. No actual secret data is read and no protected
+F-061 second-review journal or source lease is mutated.
+This is a scoped read-only pilot restriction—not a full migration
+runtime CRUD provisioning nor a #130 writer authorization.

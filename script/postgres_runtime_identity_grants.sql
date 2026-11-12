@@ -207,6 +207,35 @@ BEGIN
     THEN
         RAISE EXCEPTION 'F-061 runtime grant pilot detected existing secret or write privileges';
     END IF;
+    -- #138: SELECT on a superuser-owned view may expose its owner's
+    -- underlying relation privileges. Only the exact reviewed pilot
+    -- Identity and metadata relations are readable, and the existing
+    -- secret_reference column check above remains mandatory.
+    -- has_any_column_privilege catches SELECT(column) and PUBLIC grants,
+    -- not just whole-table SELECT.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class readable
+        JOIN pg_catalog.pg_namespace schema_ns
+          ON schema_ns.oid = readable.relnamespace
+        WHERE readable.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND schema_ns.nspname <> 'information_schema'
+          AND pg_catalog.left(schema_ns.nspname, 3) <> 'pg_'
+          AND NOT (
+              schema_ns.nspname = 'public'
+              AND readable.relname IN (
+                  'AspNetUsers', 'AspNetRoles', 'AspNetUserRoles',
+                'AspNetUserClaims', 'AspNetUserLogins',
+                'AspNetUserTokens', 'AspNetRoleClaims',
+                'migration_discoveries', 'migration_connections'
+              )
+          )
+          AND pg_catalog.has_any_column_privilege(
+              runtime_name, readable.oid, 'SELECT')
+    ) THEN
+        RAISE EXCEPTION
+            'F-061 runtime grant pilot detected unreviewed SELECT privileges';
+    END IF;
     -- Fail closed on pre-existing DML elsewhere in the runtime DB.
     -- A GRANT UPDATE(repositories_json), unlike table-wide UPDATE,
     -- otherwise escapes has_table_privilege checks. Do not normalize

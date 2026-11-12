@@ -114,6 +114,34 @@ public static class PostgresRestrictedRuntimeRoleGuard
                 AND NOT pg_catalog.has_table_privilege(
                     role.rolname, 'public.migration_discoveries',
                     'INSERT, UPDATE, DELETE')
+                -- #138: even SELECT alone can leak source credentials
+                -- through a superuser-owned view (default view-owner
+                -- base-table privileges). Permit reads only on the
+                -- explicitly reviewed Identity/metadata pilot relations.
+                -- has_any_column_privilege catches both table SELECT
+                -- and independent SELECT(column) grants, including PUBLIC.
+                -- migration_connections secret_reference remains barred
+                -- by the separate per-column check above.
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_class readable
+                    JOIN pg_catalog.pg_namespace schema_ns
+                      ON schema_ns.oid = readable.relnamespace
+                    WHERE readable.relkind IN ('r', 'p', 'v', 'm', 'f')
+                      AND schema_ns.nspname <> 'information_schema'
+                      AND pg_catalog.left(schema_ns.nspname, 3) <> 'pg_'
+                      AND NOT (
+                          schema_ns.nspname = 'public'
+                          AND readable.relname IN (
+                              'AspNetUsers', 'AspNetRoles', 'AspNetUserRoles',
+                          'AspNetUserClaims', 'AspNetUserLogins',
+                          'AspNetUserTokens', 'AspNetRoleClaims',
+                          'migration_discoveries', 'migration_connections'
+                          )
+                      )
+                      AND pg_catalog.has_any_column_privilege(
+                          role.rolname, readable.oid, 'SELECT')
+                )
                 -- This is an intentionally READ-ONLY runtime pilot:
                 -- PostgreSQL's has_table_privilege ignores a separate
                 -- GRANT UPDATE(one_column). Inspect both table AND
