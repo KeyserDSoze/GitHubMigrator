@@ -389,3 +389,14 @@ in a `finally` clause. The positive post-revocation restricted host
 probe remains unchanged. This scope is documented under issue #136;
 it **does not grant a writer, enable a remote push, or supersede**
 #130/#133. Exact-main completed 4/4 CI is still required for closure.
+
+#### PostgreSQL17 materialized-view case (#136)
+
+The global relation scan also includes `pg_class.relkind = 'm'`
+(materialized views) because `MAINTAIN` authorizes their REFRESH.
+The real PostgreSQL17 regression creates a disposable, unpopulated
+materialized view with `WITH NO DATA`, grants MAINTAIN to the separate
+runtime LOGIN, requires both independently implemented SQL guards to
+refuse, then revokes the grant and drops the view. It never executes
+REFRESH, modifies business data, or weakens the journal's DENY-ALL
+triggers.

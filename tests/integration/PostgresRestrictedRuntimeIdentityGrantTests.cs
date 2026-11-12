@@ -352,6 +352,56 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     $"DROP SCHEMA IF EXISTS {driftSchema}");
             }
 
+
+            // #136: PostgreSQL17 materialized views use pg_class
+            // relkind='m' and can be refreshed by MAINTAIN without
+            // ordinary table DML. Verify drift on that relation kind,
+            // using an intentionally unpopulated, disposable fixture.
+            var auditMatview = "f061_pilot_mv_" +
+                Guid.NewGuid().ToString("N");
+            await db.Database.ExecuteSqlRawAsync(
+                $"CREATE MATERIALIZED VIEW public.{auditMatview} " +
+                "AS SELECT 1 AS marker WITH NO DATA");
+            try
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT MAINTAIN ON TABLE public.{auditMatview} TO {login}");
+                try
+                {
+                    await using (var drifted = new AppDbContext(
+                        new DbContextOptionsBuilder<AppDbContext>()
+                            .UseNpgsql(connection.ConnectionString).Options))
+                    {
+                        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                            () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                drifted));
+                        Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                            refused.Message);
+                    }
+
+                    await using var tx = await db.Database.BeginTransactionAsync();
+                    await db.Database.ExecuteSqlInterpolatedAsync(
+                        $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                    await using var command = db.Database.GetDbConnection()
+                        .CreateCommand();
+                    command.Transaction = tx.GetDbTransaction();
+                    command.CommandText = sql;
+                    var rejected = await Assert.ThrowsAsync<PostgresException>(
+                        () => command.ExecuteNonQueryAsync());
+                    Assert.Equal("P0001", rejected.SqlState);
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"REVOKE MAINTAIN ON TABLE public.{auditMatview} FROM {login}");
+                }
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"DROP MATERIALIZED VIEW IF EXISTS public.{auditMatview}");
+            }
+
             // The operator's successful initial grants are not a
             // permanent credential boundary. A later superuser grant
             // must cause the REAL runtime startup guard to refuse

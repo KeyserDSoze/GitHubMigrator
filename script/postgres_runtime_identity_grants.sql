@@ -218,7 +218,7 @@ BEGIN
         FROM pg_catalog.pg_class writable
         JOIN pg_catalog.pg_namespace ns
           ON ns.oid = writable.relnamespace
-        WHERE writable.relkind IN ('r', 'p', 'v', 'f')
+        WHERE writable.relkind IN ('r', 'p', 'v', 'f', 'm')
           AND ns.nspname <> 'information_schema'
           AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
           AND (
