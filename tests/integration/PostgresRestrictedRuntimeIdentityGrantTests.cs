@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Xunit;
@@ -44,7 +45,19 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 await using var tx = await db.Database.BeginTransactionAsync();
                 await db.Database.ExecuteSqlInterpolatedAsync(
                     $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
-                await db.Database.ExecuteSqlRawAsync(sql);
+                // Execute the EXACT operator SQL through ADO.NET in
+                // the SAME EF transaction. ExecuteSqlRawAsync applies
+                // .NET composite formatting, so PostgreSQL regex bounds
+                // like {2,62} would cause FormatException before the
+                // SQL reaches PostgreSQL. Do not rewrite/escape the
+                // source script: psql must execute identical bytes.
+                await using (var command = db.Database.GetDbConnection()
+                    .CreateCommand())
+                {
+                    command.Transaction = tx.GetDbTransaction();
+                    command.CommandText = sql;
+                    await command.ExecuteNonQueryAsync();
+                }
                 await tx.CommitAsync();
             }
 
