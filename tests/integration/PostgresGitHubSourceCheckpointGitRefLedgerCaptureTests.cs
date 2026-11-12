@@ -3517,8 +3517,9 @@ public sealed class PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests(
                                     // The early PostgreSQL try-lock probe
                                     // must refuse without running nested
                                     // blocking F-031 source readers. The
-                                    // original 12s read-wide cancellation
-                                    // stays as a backstop for lock races.
+                                    // 40s read-wide cancellation
+                                    // remains a backstop for lock races,
+                                    // not a timeout for healthy full reads.
                                     Assert.True(sourceBusyTimer.Elapsed <
                                         TimeSpan.FromSeconds(10),
                                         "Source-busy preflight waited for a " +

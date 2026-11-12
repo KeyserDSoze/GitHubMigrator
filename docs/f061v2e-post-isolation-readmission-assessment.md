@@ -809,3 +809,30 @@ second review digest, while an impersonated historical reviewer is
 rejected. No persisted second decision, lease, new generation,
 GitHub push or re-admission is enabled. The SQL immutable journals
 still DENY ALL writes.
+
+
+### #131: separate real advisory-lock contention from slow healthy F-031 source verification
+
+The archived **canceled** [CI 43125230806](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/43125230806)
+had .NET/React/Terraform green, with SHA-1 physical isolation and
+successful current-source checks at F-031 proof age 220.7 seconds;
+a subsequent expected `LaterCheckpointMirrorSecondReviewAssessmentMissing`
+negative assertion was instead rejected with
+`LaterCheckpointMirrorPostIsolationSourceBusy`. This is consistent
+with the old **12-second internal linked read budget expiring even
+when no PostgreSQL source/plan advisory lock is held**: full live
+source and physical-proof checks cost much more than a single scalar
+SQL lookup.
+
+The `failIfSourceBusy=true` path now retains its **early nonblocking
+source+plan advisory-lock probe** (held-lock integration test still
+requires a fail-closed response in under ten seconds) but provides a
+**40-second total read budget** for legitimate nested F-031/F-035v2
+source history, rather than aborting healthy complex reads at 12s.
+The budget is still bounded and maps only *internal expiry* to a
+fail-closed source-busy error; external caller cancellation remains
+distinct. This change cannot bypass a busy source, change real
+PostgreSQL F-031 five-minute freshness, open mutation triggers,
+create or renew an F-061 lease, or authorize second-human review.
+It must be verified with actual latest-main PG17 integration; an
+archived canceled run is diagnostic, NOT a green quality gate.

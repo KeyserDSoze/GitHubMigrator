@@ -147,7 +147,15 @@ public sealed class PostgresGitIncrementalLaterCheckpointMirrorPreparedReconcili
     {
         using var budget = CancellationTokenSource
             .CreateLinkedTokenSource(ct);
-        budget.CancelAfter(TimeSpan.FromSeconds(12));
+        // The physical callback's healthy full F-031/F-035 source
+        // history may take more than 12s on loaded CI/production
+        // databases; a too-small global budget creates a false
+        // source-busy refusal even when neither advisory lock is held.
+        // The preceding nonblocking source/plan probe still rejects
+        // actual contention immediately. This 40s limit bounds ONLY
+        // a race where another writer acquires locks after that probe.
+        // It does not change PostgreSQL's five-minute freshness rule.
+        budget.CancelAfter(TimeSpan.FromSeconds(40));
         try
         {
             // Fail-fast *before* nested F-031 and F-035 readers
