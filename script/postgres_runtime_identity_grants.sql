@@ -214,7 +214,7 @@ BEGIN
           ON ns.oid = writable.relnamespace
         WHERE writable.relkind IN ('r', 'p', 'v', 'f')
           AND ns.nspname <> 'information_schema'
-          AND ns.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+          AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
           AND (
               (
                   ns.nspname = 'public'

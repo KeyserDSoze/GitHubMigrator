@@ -311,7 +311,7 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 ("UPDATE", "UPDATE", "public.migration_plan_drafts"),
                 ("UPDATE (repositories_json)", "UPDATE (repositories_json)",
                     "public.migration_plan_drafts"),
-                ("DELETE", "DELETE", "public.\\\"AspNetUsers\\\"")
+                ("DELETE", "DELETE", "public.\"AspNetUsers\"")
             })
             {
                 await db.Database.ExecuteSqlRawAsync(
