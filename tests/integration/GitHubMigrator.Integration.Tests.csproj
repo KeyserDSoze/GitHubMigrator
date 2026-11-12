@@ -18,4 +18,9 @@
     <ProjectReference Include="../../src/backend/applications/GitHubMigrator.Api/GitHubMigrator.Api.csproj" />
     <ProjectReference Include="../../src/backend/infrastructures/GitHubMigrator.Infrastructure.PostgreSql/GitHubMigrator.Infrastructure.PostgreSql.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="../../script/postgres_runtime_identity_grants.sql"
+          Link="postgres_runtime_identity_grants.sql"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

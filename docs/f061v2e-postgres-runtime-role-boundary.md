@@ -35,3 +35,48 @@ The guard queries PostgreSQL system catalogs and effective privileges—not user
 - In CI, the separate-login PostgreSQL17 test verifies that the superuser fails the opt-in guard while a distinct restricted principal passes the catalog guard, and that raw SQL inserts/updates/deletes, trigger disabling, `SET ROLE`, forged GUC values and journal event/session inserts are still denied. No filesystem, F-061 generation, remote GitHub push or migration-complete authority is introduced.
 
 **Remaining #133 work:** a reviewed and repeatable schema-owner/bootstrap-role provisioning process, exact least-privilege grants for all existing API relations, genuine runtime end-to-end API tests under that role, and full final-main 4/4 CI verification. One-shot mode separates the *process lifetime* but does not itself provision privileges or grants. #130 independently requires the protected atomic journal writer and concurrent-replay tests.
+
+## #133: opt-in SQL Identity-only permission pilot
+
+A separately provisioned PostgreSQL `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB
+NOCREATEROLE NOREPLICATION NOBYPASSRLS` can receive only the minimum
+initial permissions required for **pre-existing Identity accounts**.
+The reviewable [pilot SQL](../../script/postgres_runtime_identity_grants.sql)
+makes no new role, contains no password, creates no function, and grants
+neither schema CREATE nor journal DML. It permits SELECT on the seven
+existing `AspNet*` Identity relations and UPDATE on `AspNetUsers` for
+login/lockout/password rotation; no DELETE/INSERT or privilege on other
+application tables or sequences is added. It is NOT yet a general
+production runtime role for all API workflows.
+
+After the isolated one-shot bootstrap, provision the runtime LOGIN
+using an independent secret manager and then, **while authenticated as
+the privileged bootstrap operator**, set
+`GITHUBMIGRATOR_RUNTIME_PGROLE` to that existing lower-case role name
+and execute `bash script/provision_postgres_runtime_identity.sh`.
+Set the usual secure libpq environment variables/PGPASSFILE for the
+privileged operator. The wrapper validates the role identifier and
+passes the static SQL through `psql -X --single-transaction -v
+ON_ERROR_STOP=1`. The SQL verifies the operator is a superuser
+(unmodified SESSION_USER), the target role is a separate no-inherit
+LOGIN with zero memberships/DDL authority and none of the three
+protected F-061 journals has DML granted. It verifies three installed
+DENY-ALL triggers and requires the seven Identity tables to exist.
+Repeated grants are idempotent, and any failure rolls back all grants.
+
+**No password is included in the shell argv or migration SQL.**
+Never run this script with runtime application credentials, install
+it as a SECURITY DEFINER function or treat a custom GUC as caller
+authentication: only a privileged *one-shot administrative connection*
+can execute the DO block. The `githubmigrator.runtime_role` session
+setting identifies the intended grant recipient within that trusted
+transaction, not a review-writer authentication mechanism.
+
+The PG17 integration test executes exactly this SQL twice for an
+ephemeral independently authenticated login, verifies real Identity
+SELECT/UPDATE, that DELETE, schema CREATE and all three protected
+journal INSERTs remain forbidden, and checks the restrictive runtime
+startup guard. Future work must grant explicitly reviewed DML on other
+API relations and verify end-to-end HTTP functionality under a
+separately authenticated runtime-only host. **No writer for #130 is
+enabled**.
