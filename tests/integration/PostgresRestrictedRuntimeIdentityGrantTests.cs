@@ -560,6 +560,99 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     $"DROP FUNCTION IF EXISTS public.{definerName}()");
             }
 
+            // #137: pg_proc also holds PROCEdures, not just functions.
+            // A callable SECURITY DEFINER procedure in a second user
+            // schema must be refused as well; USAGE on that schema
+            // alone is legitimate and cannot be confused with CREATE.
+            // The procedure is harmless and deliberately never CALLed.
+            var routineSchema = "f061_definer_schema_" +
+                Guid.NewGuid().ToString("N");
+            var procedureName = "f061_definer_procedure_" +
+                Guid.NewGuid().ToString("N");
+            await db.Database.ExecuteSqlRawAsync(
+                $"CREATE SCHEMA {routineSchema}");
+            try
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"CREATE PROCEDURE {routineSchema}.{procedureName}() " +
+                    "LANGUAGE plpgsql SECURITY DEFINER " +
+                    "SET search_path = pg_catalog AS 'BEGIN NULL; END;'");
+                try
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"GRANT USAGE ON SCHEMA {routineSchema} TO {login}");
+                    try
+                    {
+                        foreach (var grantee in new[] { "PUBLIC", login })
+                        {
+                            // New PG17 procedures default to PUBLIC
+                            // EXECUTE. Revoke it before testing the
+                            // separately granted direct LOGIN privilege.
+                            if (grantee == login)
+                                await db.Database.ExecuteSqlRawAsync(
+                                    $"GRANT EXECUTE ON PROCEDURE " +
+                                    $"{routineSchema}.{procedureName}() TO {login}");
+                            try
+                            {
+                                await using (var drifted = new AppDbContext(
+                                    new DbContextOptionsBuilder<AppDbContext>()
+                                        .UseNpgsql(connection.ConnectionString).Options))
+                                {
+                                    var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                                        () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                            drifted));
+                                    Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                                        refused.Message);
+                                }
+
+                                await using var tx =
+                                    await db.Database.BeginTransactionAsync();
+                                await db.Database.ExecuteSqlInterpolatedAsync(
+                                    $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                                await using var command = db.Database.GetDbConnection()
+                                    .CreateCommand();
+                                command.Transaction = tx.GetDbTransaction();
+                                command.CommandText = sql;
+                                var rejected = await Assert.ThrowsAsync<PostgresException>(
+                                    () => command.ExecuteNonQueryAsync());
+                                Assert.Equal("P0001", rejected.SqlState);
+                                Assert.Contains("executable SECURITY DEFINER routine",
+                                    rejected.MessageText);
+                            }
+                            finally
+                            {
+                                await db.Database.ExecuteSqlRawAsync(
+                                    $"REVOKE EXECUTE ON PROCEDURE " +
+                                    $"{routineSchema}.{procedureName}() FROM {grantee}");
+                            }
+                        }
+
+                        // USAGE alone does not confer CREATE or the
+                        // routine's owner privileges; prove positive
+                        // recovery before dropping the disposable schema.
+                        await using var clean = new AppDbContext(
+                            new DbContextOptionsBuilder<AppDbContext>()
+                                .UseNpgsql(connection.ConnectionString).Options);
+                        await PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(clean);
+                    }
+                    finally
+                    {
+                        await db.Database.ExecuteSqlRawAsync(
+                            $"REVOKE USAGE ON SCHEMA {routineSchema} FROM {login}");
+                    }
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"DROP PROCEDURE IF EXISTS {routineSchema}.{procedureName}()");
+                }
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"DROP SCHEMA IF EXISTS {routineSchema}");
+            }
+
             // The operator's successful initial grants are not a
             // permanent credential boundary. A later superuser grant
             // must cause the REAL runtime startup guard to refuse

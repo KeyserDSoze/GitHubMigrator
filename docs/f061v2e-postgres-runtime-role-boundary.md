@@ -461,3 +461,18 @@ and via PUBLIC on `"AspNetUsers"."Id"`, require both startup and
 operator SQL to reject, and REVOKE each temporary grant in `finally`.
 No FK, schema edit, protected journal write, remote GitHub operation
 or additional runtime role privilege is introduced.
+
+#### #137: non-public schema and PROCEDURE authorization
+
+The same effective EXECUTE fence is not limited to `public` or to
+functions: PostgreSQL17 stores procedures in `pg_catalog.pg_proc`,
+and `SECURITY DEFINER` procedures also execute with owner privileges.
+A real PG17 negative test now creates a disposable **second user schema**
+with a harmless, never-called SECURITY DEFINER procedure. It grants
+schema USAGE (but not CREATE) to the separate NOINHERIT runtime login,
+then independently verifies default PUBLIC EXECUTE and direct LOGIN
+EXECUTE each make both the startup catalog guard and the atomic operator
+script fail closed. Revocation must restore the clean runtime startup;
+all grants, the procedure and its schema are removed in `finally`.
+No privileged routine is executed, no journal is written and the
+current read-only runtime-only policy is unchanged.
