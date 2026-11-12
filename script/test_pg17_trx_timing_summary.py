@@ -115,6 +115,59 @@ class TrxTimingSummaryTests(unittest.TestCase):
                 self.assertNotIn(secret, published)
             self.assertIn("SHA-256 phase=2", published)
 
+    def test_actual_vstest_fully_qualified_f097_results_are_profiled(self):
+        # A real 504-case PostgreSQL17 TRX from CI 43277987423 uses the
+        # full namespace/class in UnitTestResult.testName. Do not
+        # silently emit an empty profile just because the synthetic
+        # fixtures use short theory names.
+        theory = ("F097c4c0c_authenticated_http_review_of_real_"
+                  "later_checkpoint_is_immutable")
+        klass = ("GitHubMigrator.Integration.Tests."
+                 "PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests")
+        xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+ <TestDefinitions>
+  <UnitTest id="physical">
+   <TestMethod className="{klass}"
+      name="{theory}(oidLength: 40, postMovePhase: 1)" />
+  </UnitTest>
+ </TestDefinitions>
+ <Results>
+  <UnitTestResult testId="physical" outcome="Passed"
+    duration="00:05:04.3904791"
+    testName='{klass}.{theory}(oidLength: 40, decision: "secret_token", verifyPhysical: True, postMovePhase: 1)' />
+  <UnitTestResult testId="physical" outcome="Passed"
+    duration="00:05:13.9447392"
+    testName='{klass}.{theory}(oidLength: 64, decision: "private_path", verifyPhysical: True, postMovePhase: 1)' />
+  <UnitTestResult testId="physical" outcome="Passed"
+    duration="00:00:07"
+    testName='Other.Namespace.{klass}.{theory}(oidLength: 64, postMovePhase: 4)' />
+ </Results>
+</TestRun>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "source.trx"
+            out = Path(directory) / "safe.json"
+            path.write_text(xml, encoding="utf-8")
+            data = summarize_trx(path)
+            self.assertEqual(data["f097_phase_profiles"], [
+                {"algorithm": "SHA-256", "post_move_phase": 1, "cases": 1,
+                 "total_seconds": 313.9447392,
+                 "max_seconds": 313.9447392, "outcomes": {"Passed": 1}},
+                {"algorithm": "SHA-1", "post_move_phase": 1, "cases": 1,
+                 "total_seconds": 304.3904791,
+                 "max_seconds": 304.3904791, "outcomes": {"Passed": 1}},
+            ])
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(main([str(path), "--output", str(out)]), 0)
+            published = out.read_text(encoding="utf-8") + stdout.getvalue()
+            for private in ("secret_token", "private_path",
+                            "Other.Namespace", str(path)):
+                self.assertNotIn(private, published)
+            self.assertIn("SHA-1 phase=1", published)
+            self.assertIn("SHA-256 phase=1", published)
+
     def test_missing_allowed_only_when_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "missing.trx"

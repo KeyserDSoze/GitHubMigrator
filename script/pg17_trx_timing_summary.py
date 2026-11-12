@@ -32,6 +32,14 @@ _F097_NAME = "F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_im
 _F097_METHOD = (
     "PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests." + _F097_NAME
 )
+# The actual .NET 10 VSTest TRX exporter includes the full namespace and
+# class in UnitTestResult.testName. Earlier synthetic fixtures only used
+# the short method name, leaving profiles [] for a real 504-case green run.
+# Accept exactly these two immutable names, never an arbitrary suffix.
+_F097_RESULT_PREFIXES = (
+    _F097_NAME + "(",
+    "GitHubMigrator.Integration.Tests." + _F097_METHOD + "(",
+)
 _F097_OID = re.compile(r"(?:^|,\s*)oidLength:\s*(40|64)(?=,|$)")
 _F097_PHASE = re.compile(r"(?:^|,\s*)postMovePhase:\s*([0-5])(?=,|$)")
 
@@ -56,10 +64,15 @@ def _method_name(unit: ET.Element) -> str:
 
 def _f097_profile(test_name: str, method: str) -> tuple[str, int] | None:
     """Return only allowlisted SHA/phase labels; never raw TRX parameters."""
-    prefix = _F097_NAME + "("
     if (method != _F097_METHOD or len(test_name) > 1024
-            or not test_name.startswith(prefix)
             or not test_name.endswith(")")):
+        return None
+    prefix = next(
+        (item for item in _F097_RESULT_PREFIXES
+         if test_name.startswith(item)),
+        None,
+    )
+    if prefix is None:
         return None
     arguments = test_name[len(prefix):-1]
     oid_values = _F097_OID.findall(arguments)
