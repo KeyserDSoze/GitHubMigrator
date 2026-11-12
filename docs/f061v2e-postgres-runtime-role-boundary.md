@@ -207,3 +207,27 @@ including every SHA1/SHA256 scenario, with its own complete TRX and
 code coverage. This reduces time-to-feedback for regressions without
 dropping or shortening any accepted test. It does not yet reduce the
 wall-clock of a successful full PG17 job.
+
+## Fail-closed operator grant audit of pre-existing privileges
+
+The scoped operator SQL now checks the **effective** grant state at the end
+of its transaction, not just the statements it attempted to execute.
+In particular, revoking table-level `SELECT` does **not** remove a
+separately granted `SELECT(secret_reference)`: the script rejects that
+pre-existing privilege. It also refuses any effective read/write access
+to `migration_connection_secrets`, or existing DML on either
+`migration_connections` or `migration_discoveries`. Because this
+attestation runs inside the same psql `--single-transaction`, any
+unsafe state aborts all attempted new grants instead of silently
+normalizing or expanding privileges. The operator must separately audit
+and revoke the excessive existing privileges before retrying.
+
+The real PostgreSQL17 smoke regression now grants each forbidden
+`secret_reference`-column and encrypted-store SELECT privilege
+temporarily to its disposable runtime LOGIN, asserts that running the
+**exact unchanged operator SQL** raises an exception, revokes each
+temporary permission and checks the ordinary independent runtime/API
+smoke remains valid. This operator check applies to the intentionally
+narrow **read-only pilot**, not the eventual full application role with
+separately reviewed business write capabilities. No privilege or
+F-061 journal mutation is introduced by this verification.

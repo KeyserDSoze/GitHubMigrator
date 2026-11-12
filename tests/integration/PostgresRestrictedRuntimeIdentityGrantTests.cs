@@ -90,6 +90,61 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                 await tx.CommitAsync();
             }
 
+            // #133: table-level REVOKE SELECT does NOT remove a prior
+            // GRANT SELECT(secret_reference). Validate that the exact
+            // operator script fails its entire transaction rather than
+            // accepting such a preexisting confidential-column grant.
+            await db.Database.ExecuteSqlRawAsync(
+                $"GRANT SELECT (secret_reference) ON " +
+                $"public.migration_connections TO {login}");
+            try
+            {
+                await using var tx = await db.Database.BeginTransactionAsync();
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                await using var command =
+                    db.Database.GetDbConnection().CreateCommand();
+                command.Transaction = tx.GetDbTransaction();
+                command.CommandText = sql;
+                var refused = await Assert.ThrowsAsync<PostgresException>(
+                    () => command.ExecuteNonQueryAsync());
+                Assert.Equal("P0001", refused.SqlState);
+                Assert.Contains("existing secret or write privileges",
+                    refused.MessageText);
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"REVOKE SELECT (secret_reference) ON " +
+                    $"public.migration_connections FROM {login}");
+            }
+
+            // Even indirect access to the separately encrypted PAT store
+            // makes this restricted pilot unsafe. Retry must still fail
+            // rather than widen a grant or treat secrets as public.
+            await db.Database.ExecuteSqlRawAsync(
+                $"GRANT SELECT ON public.migration_connection_secrets TO {login}");
+            try
+            {
+                await using var tx = await db.Database.BeginTransactionAsync();
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                await using var command =
+                    db.Database.GetDbConnection().CreateCommand();
+                command.Transaction = tx.GetDbTransaction();
+                command.CommandText = sql;
+                var refused = await Assert.ThrowsAsync<PostgresException>(
+                    () => command.ExecuteNonQueryAsync());
+                Assert.Equal("P0001", refused.SqlState);
+                Assert.Contains("existing secret or write privileges",
+                    refused.MessageText);
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    $"REVOKE SELECT ON public.migration_connection_secrets FROM {login}");
+            }
+
             var connection = new NpgsqlConnectionStringBuilder(
                 db.Database.GetDbConnection().ConnectionString)
             {

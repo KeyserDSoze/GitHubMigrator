@@ -157,4 +157,25 @@ BEGIN
     EXECUTE pg_catalog.format(
         'GRANT SELECT ON TABLE public.migration_discoveries TO %I',
         runtime_name);
+    -- Verify the EFFECTIVE permissions after all grants/revokes,
+    -- including pre-existing column-specific and PUBLIC privileges.
+    -- Table-level REVOKE SELECT alone does not remove a separate
+    -- GRANT SELECT(secret_reference) from an earlier deployment.
+    -- Fail the whole operator transaction instead of silently
+    -- accepting a runtime credential able to inspect secret keys.
+    IF pg_catalog.has_column_privilege(
+           runtime_name, 'public.migration_connections',
+           'secret_reference', 'SELECT')
+       OR pg_catalog.has_table_privilege(
+           runtime_name, 'public.migration_connection_secrets',
+           'SELECT, INSERT, UPDATE, DELETE')
+       OR pg_catalog.has_table_privilege(
+           runtime_name, 'public.migration_connections',
+           'INSERT, UPDATE, DELETE')
+       OR pg_catalog.has_table_privilege(
+           runtime_name, 'public.migration_discoveries',
+           'INSERT, UPDATE, DELETE')
+    THEN
+        RAISE EXCEPTION 'F-061 runtime grant pilot detected existing secret or write privileges';
+    END IF;
 END $f061_runtime_identity_grants$;
