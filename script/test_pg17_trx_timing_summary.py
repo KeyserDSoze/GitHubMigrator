@@ -56,6 +56,65 @@ class TrxTimingSummaryTests(unittest.TestCase):
                             "root", str(path)):
                 self.assertNotIn(private, combined)
 
+    def test_f097_phase_profiles_are_bounded_and_never_leak_parameters(self):
+        # Only the known F-097 class+method is profiled. The raw name
+        # contains sensitive test arguments and MUST never be published.
+        theory = ("F097c4c0c_authenticated_http_review_of_real_"
+                  "later_checkpoint_is_immutable")
+        xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+ <TestDefinitions>
+  <UnitTest id="f097">
+   <TestMethod
+     className="GitHubMigrator.Integration.Tests.PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests"
+     name="{theory}(oidLength: 40, postMovePhase: 1)" />
+  </UnitTest>
+  <UnitTest id="untrusted">
+   <TestMethod className="OtherTests" name="Other(oidLength: 64)" />
+  </UnitTest>
+ </TestDefinitions>
+ <Results>
+  <UnitTestResult testId="f097" outcome="Passed" duration="00:00:03"
+    testName='{theory}(oidLength: 40, decision: "secret_source_token", postMovePhase: 1)' />
+  <UnitTestResult testId="f097" outcome="Failed" duration="00:00:04"
+    testName='{theory}(oidLength: 64, decision: "private_oid", postMovePhase: 2)' />
+  <UnitTestResult testId="f097" outcome="Passed" duration="00:00:05"
+    testName='{theory}(oidLength: 64, decision: "private_oid", postMovePhase: 2)' />
+  <UnitTestResult testId="f097" outcome="Passed" duration="00:00:06"
+    testName='{theory}(oidLength: 40, postMovePhase: 99)' />
+  <UnitTestResult testId="untrusted" outcome="Passed" duration="00:00:07"
+    testName='Other(oidLength: 64, postMovePhase: 2)' />
+  <UnitTestResult testId="f097" outcome="Passed" duration="00:00:08"
+    testName='{theory}(oidLength: 40, oidLength: 64, postMovePhase: 1)' />
+ </Results>
+</TestRun>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = Path(directory) / "source.trx"
+            output = Path(directory) / "timings.json"
+            input_path.write_text(xml, encoding="utf-8")
+            report = summarize_trx(input_path)
+            self.assertEqual(report["schema_version"], 2)
+            self.assertEqual(report["test_cases"], 6)
+            self.assertEqual(report["measured_case_seconds"], 33.0)
+            self.assertEqual(report["f097_phase_profiles"], [
+                {"algorithm": "SHA-256", "post_move_phase": 2, "cases": 2,
+                 "total_seconds": 9.0, "max_seconds": 5.0,
+                 "outcomes": {"Failed": 1, "Passed": 1}},
+                {"algorithm": "SHA-1", "post_move_phase": 1, "cases": 1,
+                 "total_seconds": 3.0, "max_seconds": 3.0,
+                 "outcomes": {"Passed": 1}},
+            ])
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(main([str(input_path), "--output",
+                                       str(output)]), 0)
+            published = output.read_text(encoding="utf-8") + stdout.getvalue()
+            for secret in ("secret", "token", "private", "oid", "source.trx",
+                           'decision:', '99', str(input_path)):
+                self.assertNotIn(secret, published)
+            self.assertIn("SHA-256 phase=2", published)
+
     def test_missing_allowed_only_when_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "missing.trx"

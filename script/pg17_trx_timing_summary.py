@@ -26,6 +26,14 @@ _SAFE_OUTCOMES = frozenset({
 })
 _MAX_DURATION_SECONDS = Decimal(7 * 24 * 60 * 60)
 _TIME = re.compile(r"^(\d+):([0-5]\d):([0-5]\d)(?:\.(\d{1,9}))?$")
+# #132: profile ONLY the known expensive physical F-097 theory. Never echo
+# xUnit's free-text arguments (Git refs, tokens, paths, reviewer evidence).
+_F097_NAME = "F097c4c0c_authenticated_http_review_of_real_later_checkpoint_is_immutable"
+_F097_METHOD = (
+    "PostgresGitHubSourceCheckpointGitRefLedgerCaptureTests." + _F097_NAME
+)
+_F097_OID = re.compile(r"(?:^|,\s*)oidLength:\s*(40|64)(?=,|$)")
+_F097_PHASE = re.compile(r"(?:^|,\s*)postMovePhase:\s*([0-5])(?=,|$)")
 
 
 def _tag(local_tag: str) -> str:
@@ -44,6 +52,22 @@ def _method_name(unit: ET.Element) -> str:
     if not _SYMBOL.fullmatch(class_name) or not _SYMBOL.fullmatch(method_name):
         return "unknown_test"
     return f"{class_name}.{method_name}"
+
+
+def _f097_profile(test_name: str, method: str) -> tuple[str, int] | None:
+    """Return only allowlisted SHA/phase labels; never raw TRX parameters."""
+    prefix = _F097_NAME + "("
+    if (method != _F097_METHOD or len(test_name) > 1024
+            or not test_name.startswith(prefix)
+            or not test_name.endswith(")")):
+        return None
+    arguments = test_name[len(prefix):-1]
+    oid_values = _F097_OID.findall(arguments)
+    phase_values = _F097_PHASE.findall(arguments)
+    if len(oid_values) != 1 or len(phase_values) != 1:
+        return None
+    return ("SHA-1" if oid_values[0] == "40" else "SHA-256",
+            int(phase_values[0]))
 
 
 def _seconds(raw: str) -> Decimal:
@@ -79,6 +103,7 @@ def summarize_trx(xml_path: Path, top: int = 15) -> dict:
         if _tag(unit.tag) == "UnitTest"
     }
     groups: dict[str, list[Decimal]] = defaultdict(list)
+    profiles: dict[tuple[str, int], list[tuple[Decimal, str]]] = defaultdict(list)
     outcomes: Counter[str] = Counter()
     total = 0
     for result in root.iter():
@@ -86,11 +111,16 @@ def summarize_trx(xml_path: Path, top: int = 15) -> dict:
             continue
         total += 1
         outcome = result.attrib.get("outcome", "")
-        outcomes[outcome if outcome in _SAFE_OUTCOMES else "Other"] += 1
+        safe_outcome = outcome if outcome in _SAFE_OUTCOMES else "Other"
+        outcomes[safe_outcome] += 1
         method = definitions.get(result.attrib.get("testId", ""), "unknown_test")
         # A missing duration is not a zero-second test. Refuse to report
         # incomplete measurements as valid, especially after 4/4 success.
-        groups[method].append(_seconds(result.attrib.get("duration", "")))
+        duration = _seconds(result.attrib.get("duration", ""))
+        groups[method].append(duration)
+        profile = _f097_profile(result.attrib.get("testName", ""), method)
+        if profile is not None:
+            profiles[profile].append((duration, safe_outcome))
     if total == 0:
         raise ValueError("TRX has no UnitTestResult entries")
     slowest = sorted(
@@ -102,8 +132,26 @@ def summarize_trx(xml_path: Path, top: int = 15) -> dict:
         ),
         key=lambda item: (-item["total_seconds"], item["method"]),
     )
+    # At most 2 SHA formats x 6 phases; data and labels are strictly
+    # bounded. No individual raw theory parameter or test name is copied.
+    f097_profiles = sorted(
+        (
+            {
+                "algorithm": algorithm, "post_move_phase": phase,
+                "cases": len(items),
+                "total_seconds": float(sum(
+                    (seconds for seconds, _ in items), Decimal(0))),
+                "max_seconds": float(max(seconds for seconds, _ in items)),
+                "outcomes": dict(sorted(Counter(
+                    status for _, status in items).items())),
+            }
+            for (algorithm, phase), items in profiles.items()
+        ),
+        key=lambda item: (
+            -item["total_seconds"], item["algorithm"], item["post_move_phase"]),
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "test_cases": total,
         "outcomes": dict(sorted(outcomes.items())),
         "measured_case_seconds": float(
@@ -111,6 +159,7 @@ def summarize_trx(xml_path: Path, top: int = 15) -> dict:
         ),
         "methods": len(groups),
         "slowest_methods": slowest[:top],
+        "f097_phase_profiles": f097_profiles,
         "note": "Sum of measured test-case durations, not workflow wall time",
     }
 
@@ -146,6 +195,14 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"{item['method']}: {item['cases']} case(s), "
             f"sum={item['total_seconds']:.2f}s max={item['max_seconds']:.2f}s"
+        )
+    for item in report["f097_phase_profiles"]:
+        print(
+            f"F-097 {item['algorithm']} phase={item['post_move_phase']}: "
+            f"{item['cases']} case(s), "
+            f"sum={item['total_seconds']:.2f}s "
+            f"max={item['max_seconds']:.2f}s "
+            f"outcomes={item['outcomes']}"
         )
     return 0
 
