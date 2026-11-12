@@ -262,9 +262,12 @@ public static class PostgresRestrictedRuntimeRoleGuard
                       AND pg_catalog.has_function_privilege(
                           role.rolname, routine.oid, 'EXECUTE')
                 )
+                -- #140: SELECT on sequences is a distinct privilege that
+                -- exposes currval/sequence state even when USAGE and UPDATE
+                -- are absent. This runtime-only pilot needs NO sequence
+                -- access, direct or through PUBLIC.
                 -- A sequence can be advanced or reset via USAGE/UPDATE
                 -- without INSERT/UPDATE/DELETE permission on its table.
-                -- This runtime-only pilot does not need writable sequences.
                 AND NOT EXISTS (
                     SELECT 1
                     FROM pg_catalog.pg_class sequence_relation
@@ -278,7 +281,7 @@ public static class PostgresRestrictedRuntimeRoleGuard
                           AND ns.nspname <> 'information_schema'
                           AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
                         THEN pg_catalog.has_sequence_privilege(
-                            role.rolname, sequence_relation.oid, 'USAGE, UPDATE')
+                            role.rolname, sequence_relation.oid, 'USAGE, SELECT, UPDATE')
                         ELSE false
                     END
                 )

@@ -532,3 +532,24 @@ to refuse. The grants are revoked in `finally`; the temporary
 column is dropped in an outer `finally`. No source credential
 value is read or modified; the pilot remains default OFF, and the
 clean positive authenticated HTTP test continues unchanged.
+
+### #140: deny the third PostgreSQL sequence privilege, SELECT
+
+PostgreSQL17's sequence ACL has **three independent privileges**:
+`USAGE` and `UPDATE` can call `nextval`/`setval`, while
+`SELECT` alone allows `currval` and can expose current sequence
+state. A scan checking only `USAGE, UPDATE` would miss SELECT-only
+grants; the table/column SELECT guard does not inspect relation
+`relkind='S'` at all.
+
+Both the real runtime startup guard and the independently executed
+operator SQL now fail closed on effective `USAGE, SELECT, UPDATE` for
+all non-system sequences, including ACLs through `PUBLIC`. The
+pre-existing `CASE WHEN relkind='S' THEN has_sequence_privilege(...)`
+expression is preserved to prevent the PG17 planner from evaluating
+the function against a non-sequence TOAST relation (SQLSTATE 42809).
+The independently authenticated runtime LOGIN test now exercises both
+direct `SELECT` and `PUBLIC SELECT` against one disposable sequence
+and verifies refusal in both guards, with REVOKE in `finally`.
+No sequence value is read, advanced or reset, and there is **no**
+production grant change, source readmission or new writer capability.

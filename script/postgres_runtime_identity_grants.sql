@@ -352,9 +352,10 @@ BEGIN
         RAISE EXCEPTION
             'F-061 runtime grant pilot detected executable SECURITY DEFINER routine';
     END IF;
-    -- Sequences are a separate SQL privilege class: USAGE permits
-    -- nextval and UPDATE permits setval. Neither is safe for this
-    -- read-only pilot, even when the table DML audit was clean.
+    -- #140: SELECT alone permits currval and can expose sequence
+    -- state, even with USAGE and UPDATE revoked. This read-only pilot
+    -- permits NO direct or PUBLIC sequence access. USAGE permits
+    -- nextval and UPDATE permits setval; none are safe here.
     IF EXISTS (
         SELECT 1
         FROM pg_catalog.pg_class sequence_relation
@@ -368,11 +369,11 @@ BEGIN
               AND ns.nspname <> 'information_schema'
               AND pg_catalog.left(ns.nspname, 3) <> 'pg_'
             THEN pg_catalog.has_sequence_privilege(
-                runtime_name, sequence_relation.oid, 'USAGE, UPDATE')
+                runtime_name, sequence_relation.oid, 'USAGE, SELECT, UPDATE')
             ELSE false
         END
     ) THEN
         RAISE EXCEPTION
-            'F-061 runtime grant pilot detected writable sequence privileges';
+            'F-061 runtime grant pilot detected unauthorized sequence privileges';
     END IF;
 END $f061_runtime_identity_grants$;

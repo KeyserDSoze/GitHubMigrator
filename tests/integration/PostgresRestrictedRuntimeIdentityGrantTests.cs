@@ -256,6 +256,10 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                     ("REFERENCES", "TABLE",
                         "public.git_later_checkpoint_mirror_second_reviews"),
                     ("USAGE", "SEQUENCE", $"public.{auditSequence}"),
+                    // #140: SELECT on its own allows currval even with
+                    // no nextval/setval permission; this is NOT covered
+                    // by the general table/column SELECT policy.
+                    ("SELECT", "SEQUENCE", $"public.{auditSequence}"),
                     ("UPDATE", "SEQUENCE", $"public.{auditSequence}")
                 })
                 {
@@ -290,6 +294,44 @@ public sealed class PostgresRestrictedRuntimeIdentityGrantTests(
                         await db.Database.ExecuteSqlRawAsync(
                             $"REVOKE {privilege} ON {kind} {relation} FROM {login}");
                     }
+                }
+
+                // #140: the same sequence SELECT permission may be
+                // inherited through PUBLIC. The test never reads the
+                // sequence or uses currval/nextval/setval; it grants
+                // and revokes only a disposable catalog ACL.
+                await db.Database.ExecuteSqlRawAsync(
+                    $"GRANT SELECT ON SEQUENCE public.{auditSequence} TO PUBLIC");
+                try
+                {
+                    await using (var drifted = new AppDbContext(
+                        new DbContextOptionsBuilder<AppDbContext>()
+                            .UseNpgsql(connection.ConnectionString).Options))
+                    {
+                        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+                            () => PostgresRestrictedRuntimeRoleGuard.RequireSafeAsync(
+                                drifted));
+                        Assert.Contains("PostgreSqlRuntimeRoleNotRestricted",
+                            refused.Message);
+                    }
+
+                    await using var tx = await db.Database.BeginTransactionAsync();
+                    await db.Database.ExecuteSqlInterpolatedAsync(
+                        $"SELECT pg_catalog.set_config('githubmigrator.runtime_role', {login}, true)");
+                    await using var command = db.Database.GetDbConnection()
+                        .CreateCommand();
+                    command.Transaction = tx.GetDbTransaction();
+                    command.CommandText = sql;
+                    var rejected = await Assert.ThrowsAsync<PostgresException>(
+                        () => command.ExecuteNonQueryAsync());
+                    Assert.Equal("P0001", rejected.SqlState);
+                    Assert.Contains("unauthorized sequence privileges",
+                        rejected.MessageText);
+                }
+                finally
+                {
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"REVOKE SELECT ON SEQUENCE public.{auditSequence} FROM PUBLIC");
                 }
             }
             finally
