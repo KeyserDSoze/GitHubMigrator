@@ -217,6 +217,33 @@ BEGIN
             'F-061 runtime grant pilot detected existing secret or write privileges';
     END IF;
 
+    -- #138: refuse PRE-EXISTING SELECT on any future/unreviewed
+    -- connection column BEFORE REVOKE SELECT ON TABLE normalizes ACLs.
+    -- Effective SELECT checked only after normalization can conceal
+    -- previously granted rights, especially a scoped column GRANT.
+    -- Test the explicit per-column ACLs for runtime and PUBLIC; the
+    -- separate post-grant effective-privilege scan remains mandatory.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_attribute a
+        CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) ace
+        WHERE a.attrelid =
+            'public.migration_connections'::pg_catalog.regclass
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND a.attname NOT IN (
+              'id', 'name', 'provider_key', 'direction',
+              'organization', 'created_at_utc', 'validated_at_utc',
+              'validation_code', 'authenticated_as',
+              'permission_assessment'
+          )
+          AND ace.privilege_type = 'SELECT'
+          AND ace.grantee IN (runtime_user.oid, 0::oid)
+    ) THEN
+        RAISE EXCEPTION
+            'F-061 runtime grant pilot detected unreviewed metadata column';
+    END IF;
+
     -- Column-level permission excludes secret_reference even from
     -- direct SQL by the restricted login (not merely from HTTP JSON).
     -- Revoke the previously issued table-wide pilot SELECT before

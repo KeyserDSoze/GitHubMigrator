@@ -669,3 +669,25 @@ owner script twice, verifies the dedicated `NOLOGIN` role owns
 the exact three journals and deny function, and now also requires
 that all three triggers remain `ALWAYS` enabled.
 No session enters replica mode or inserts a protected journal row.
+
+#### #138: reject unreviewed metadata ACLs before operator normalization
+
+The full PG17 runtime-role smoke of [run 43276976562](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/43276976562)
+exposed an important ordering regression: the **actual runtime startup guard**
+rejected a disposable unapproved metadata-column `SELECT` grant, but the
+one-shot operator script proceeded without raising its expected exception
+because the later `REVOKE SELECT ON TABLE` / approved-column `GRANT`
+can change which effective ACLs its post-grant checks observe.
+A provisioning script must reject unsafe pre-existing authority, not
+silently remove or normalize it and then pass.
+
+The exact independent operator SQL now checks explicit
+`pg_attribute.attacl` / `aclexplode` grants on **all unapproved**
+`migration_connections` columns before running any `REVOKE` or
+`GRANT`. It rejects `SELECT` granted to either the restricted LOGIN
+or `PUBLIC`, and preserves the already-present special-case
+`secret_reference` preflight and the comprehensive post-grant
+effective privilege scan. The real PG17 negative test introduced in
+6bade9f exercises both direct-LOGIN and PUBLIC privileges on a
+temporary unreviewed column and requires fail-closed behavior in
+the runtime guard and the exact operator script.
