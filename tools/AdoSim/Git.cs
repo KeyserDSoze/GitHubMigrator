@@ -5,24 +5,42 @@ namespace AdoSim;
 
 public static class Git
 {
-    public static async Task<(int Exit, string Out, string Err)> RunAsync(
-        string? workDir, IDictionary<string, string>? env, params string[] args)
+    private static ProcessStartInfo Info(string? workDir, IDictionary<string, string>? env, string[] args, Encoding? encoding)
     {
         var info = new ProcessStartInfo("git")
         {
             WorkingDirectory = workDir ?? Directory.GetCurrentDirectory(),
             RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = false,
-            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+            StandardOutputEncoding = encoding, StandardErrorEncoding = Encoding.UTF8
         };
         foreach (var a in args) info.ArgumentList.Add(a);
         info.Environment["GIT_TERMINAL_PROMPT"] = "0";
         info.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
         if (env is not null) foreach (var (k, v) in env) info.Environment[k] = v;
-        using var process = Process.Start(info)!;
+        return info;
+    }
+
+    public static async Task<(int Exit, string Out, string Err)> RunAsync(
+        string? workDir, IDictionary<string, string>? env, params string[] args)
+    {
+        using var process = Process.Start(Info(workDir, env, args, Encoding.UTF8))!;
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
         return (process.ExitCode, await stdout, await stderr);
+    }
+
+    // Binary-safe variant for blob content.
+    public static async Task<(int Exit, byte[] Out, string Err)> RunBytesAsync(
+        string? workDir, IDictionary<string, string>? env, params string[] args)
+    {
+        using var process = Process.Start(Info(workDir, env, args, null))!;
+        using var buffer = new MemoryStream();
+        var copy = process.StandardOutput.BaseStream.CopyToAsync(buffer);
+        var stderr = process.StandardError.ReadToEndAsync();
+        await copy;
+        await process.WaitForExitAsync();
+        return (process.ExitCode, buffer.ToArray(), await stderr);
     }
 
     public static async Task<string> MustAsync(string? workDir, IDictionary<string, string>? env, params string[] args)
@@ -40,59 +58,6 @@ public static class Git
         ["GIT_AUTHOR_DATE"] = $"2024-01-{day:00}T10:00:00Z", ["GIT_COMMITTER_DATE"] = $"2024-01-{day:00}T10:00:00Z"
     };
 
-    // Builds a bare repository once; an existing one (persisted volume) is reused.
-    public static async Task CreateRepositoryAsync(SimRepo repo, string dataDir)
-    {
-        if (Directory.Exists(repo.BarePath)) return;
-        Directory.CreateDirectory(Path.GetDirectoryName(repo.BarePath)!);
-        var spec = repo.Spec;
-        if (spec.Empty || spec.Commits < 1)
-        {
-            await MustAsync(null, null, "init", "--bare", "-b", spec.DefaultBranch, repo.BarePath);
-            return;
-        }
-        var work = Path.Combine(dataDir, "work", repo.Id);
-        if (Directory.Exists(work)) Directory.Delete(work, true);
-        Directory.CreateDirectory(work);
-        try
-        {
-            await MustAsync(work, null, "init", "-b", spec.DefaultBranch);
-            await MustAsync(work, null, "config", "core.autocrlf", "false");
-            await MustAsync(work, null, "config", "commit.gpgsign", "false");
-            for (var i = 1; i <= spec.Commits; i++)
-            {
-                File.WriteAllText(Path.Combine(work, "README.md"), $"# {spec.Name}\nrevision {i}\n");
-                Directory.CreateDirectory(Path.Combine(work, "src"));
-                File.WriteAllText(Path.Combine(work, "src", $"file{i}.txt"), $"{spec.Name} content {i}\n");
-                if (i == 1)
-                    foreach (var (path, content) in spec.Files ?? [])
-                    {
-                        var full = Path.Combine(work, path.TrimStart('/'));
-                        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-                        File.WriteAllText(full, content);
-                    }
-                await MustAsync(work, null, "add", "-A");
-                await MustAsync(work, Deterministic(i), "commit", "-m", $"Commit {i} of {spec.Name}");
-            }
-            var day = spec.Commits + 1;
-            foreach (var branch in spec.Branches ?? [])
-            {
-                await MustAsync(work, null, "checkout", "-q", "-b", branch, spec.DefaultBranch);
-                File.WriteAllText(Path.Combine(work, "src", "branch.txt"), branch);
-                await MustAsync(work, null, "add", "-A");
-                await MustAsync(work, Deterministic(day++ % 28 + 1), "commit", "-m", $"Work on {branch}");
-            }
-            await MustAsync(work, null, "checkout", "-q", spec.DefaultBranch);
-            foreach (var tag in spec.Tags ?? []) await MustAsync(work, null, "tag", tag);
-            foreach (var tag in spec.AnnotatedTags ?? [])
-                await MustAsync(work, Deterministic(day % 28 + 1), "tag", "-a", tag, "-m", $"Release {tag}");
-            for (var i = 0; i < spec.ExtraBranches; i++) await MustAsync(work, null, "branch", $"bulk/branch-{i:0000}");
-            for (var i = 0; i < spec.ExtraTags; i++) await MustAsync(work, null, "tag", $"bulk-tag-{i:0000}");
-            await MustAsync(null, null, "clone", "--bare", "--quiet", work, repo.BarePath);
-        }
-        finally { try { Directory.Delete(work, true); } catch { /* best effort */ } }
-    }
-
     public static async Task<List<(string Name, string ObjectId)>> RefsAsync(SimRepo repo)
     {
         var output = await MustAsync(repo.BarePath, null, "for-each-ref", "--format=%(objectname) %(refname)");
@@ -104,7 +69,7 @@ public static class Git
 
     public static async Task<string?> ShowFileAsync(SimRepo repo, string path)
     {
-        var (exit, output, _) = await RunAsync(repo.BarePath, null, "show", $"{repo.Spec.DefaultBranch}:{path.TrimStart('/')}");
+        var (exit, output, _) = await RunAsync(repo.BarePath, null, "show", $"{repo.DefaultRef}:{path.TrimStart('/')}");
         return exit == 0 ? output : null;
     }
 

@@ -24,6 +24,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
 {
     public DbSet<MigrationPlanRecord> MigrationPlans => Set<MigrationPlanRecord>();
     public DbSet<ConnectionRecord> Connections => Set<ConnectionRecord>();
+    public DbSet<AiConnectionRecord> AiConnections => Set<AiConnectionRecord>();
+    public DbSet<WorkflowProposalRecord> WorkflowProposals => Set<WorkflowProposalRecord>();
+    public DbSet<WorkflowProposalEventRecord> WorkflowProposalEvents => Set<WorkflowProposalEventRecord>();
     public DbSet<EncryptedSecretRecord> ConnectionSecrets => Set<EncryptedSecretRecord>();
     public DbSet<DiscoveryInventoryRecord> Discoveries => Set<DiscoveryInventoryRecord>();
     public DbSet<IdentityMappingDraftRecord> IdentityMappingDrafts => Set<IdentityMappingDraftRecord>();
@@ -233,6 +236,69 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.AuthenticatedAs).HasColumnName("authenticated_as").HasMaxLength(160);
             entity.Property(x => x.PermissionAssessment).HasColumnName("permission_assessment").HasMaxLength(64);
             entity.Property(x => x.BaseUrl).HasColumnName("base_url").HasMaxLength(512);
+        });
+        builder.Entity<AiConnectionRecord>(entity =>
+        {
+            entity.ToTable("ai_connections");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(120);
+            entity.Property(x => x.Provider).HasColumnName("provider").HasMaxLength(32);
+            entity.Property(x => x.Endpoint).HasColumnName("endpoint").HasMaxLength(512);
+            entity.Property(x => x.Model).HasColumnName("model").HasMaxLength(100);
+            entity.Property(x => x.Auth).HasColumnName("auth").HasMaxLength(32);
+            entity.Property(x => x.ApiVersion).HasColumnName("api_version").HasMaxLength(32);
+            entity.Property(x => x.TokenParameter).HasColumnName("token_parameter").HasMaxLength(32);
+            entity.Property(x => x.MaxOutputTokens).HasColumnName("max_output_tokens");
+            entity.Property(x => x.Temperature).HasColumnName("temperature");
+            entity.Property(x => x.TimeoutSeconds).HasColumnName("timeout_seconds");
+            entity.Property(x => x.MaxInputBytes).HasColumnName("max_input_bytes");
+            entity.Property(x => x.SecretReference).HasColumnName("secret_reference").HasMaxLength(100);
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.VerifiedAtUtc).HasColumnName("verified_at_utc");
+            entity.Property(x => x.VerificationCode).HasColumnName("verification_code").HasMaxLength(64);
+            entity.Property(x => x.VerifiedModel).HasColumnName("verified_model").HasMaxLength(100);
+            entity.Property(x => x.SendSourceContent).HasColumnName("send_source_content");
+            entity.Property(x => x.ConsentAtUtc).HasColumnName("consent_at_utc");
+            entity.Property(x => x.ConsentBy).HasColumnName("consent_by").HasMaxLength(160);
+        });
+        builder.Entity<WorkflowProposalRecord>(entity =>
+        {
+            entity.ToTable("workflow_proposals");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.SourceConnectionId).HasColumnName("source_connection_id");
+            entity.Property(x => x.ProjectId).HasColumnName("project_id").HasMaxLength(100);
+            entity.Property(x => x.PipelineId).HasColumnName("pipeline_id");
+            entity.Property(x => x.AiConnectionId).HasColumnName("ai_connection_id");
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(16);
+            entity.Property(x => x.Reason).HasColumnName("reason").HasMaxLength(100);
+            entity.Property(x => x.WorkflowYaml).HasColumnName("workflow_yaml");
+            entity.Property(x => x.WorkflowSha256).HasColumnName("workflow_sha256").HasMaxLength(64);
+            entity.Property(x => x.ModelNotes).HasColumnName("model_notes");
+            entity.Property(x => x.Evidence).HasColumnName("evidence").HasColumnType("jsonb");
+            entity.Property(x => x.CreatedById).HasColumnName("created_by_id");
+            entity.Property(x => x.CreatedBy).HasColumnName("created_by").HasMaxLength(160);
+            entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
+            entity.Property(x => x.ApprovedSha256).HasColumnName("approved_sha256").HasMaxLength(64);
+            entity.HasIndex(x => new { x.SourceConnectionId, x.ProjectId, x.PipelineId, x.CreatedAtUtc })
+                .HasDatabaseName("ix_workflow_proposals_pipeline");
+        });
+        builder.Entity<WorkflowProposalEventRecord>(entity =>
+        {
+            entity.ToTable("workflow_proposal_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            entity.Property(x => x.ProposalId).HasColumnName("proposal_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(16);
+            entity.Property(x => x.ActorId).HasColumnName("actor_id");
+            entity.Property(x => x.Actor).HasColumnName("actor").HasMaxLength(160);
+            entity.Property(x => x.OccurredAtUtc).HasColumnName("occurred_at_utc");
+            entity.Property(x => x.WorkflowSha256).HasColumnName("workflow_sha256").HasMaxLength(64);
+            entity.Property(x => x.Note).HasColumnName("note").HasMaxLength(500);
+            entity.Property(x => x.Detail).HasColumnName("detail").HasColumnType("jsonb");
+            entity.HasIndex(x => new { x.ProposalId, x.Id }).HasDatabaseName("ix_workflow_proposal_events_proposal");
+            entity.HasOne<WorkflowProposalRecord>().WithMany().HasForeignKey(x => x.ProposalId).OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<DiscoveryInventoryRecord>(entity =>
         {

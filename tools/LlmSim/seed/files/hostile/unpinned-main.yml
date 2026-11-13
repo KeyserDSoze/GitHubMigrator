@@ -1,0 +1,17 @@
+name: CI
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@main
+        with:
+          persist-credentials: false
+      - name: Build
+        run: dotnet build --configuration Release

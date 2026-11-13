@@ -1,0 +1,13 @@
+{
+  "name": "orion-mobile",
+  "version": "0.9.0",
+  "private": true,
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios"
+  },
+  "dependencies": {
+    "react": "18.2.0",
+    "react-native": "0.73.4"
+  }
+}

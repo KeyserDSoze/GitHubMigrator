@@ -9,9 +9,10 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 // F-039 GET-only, fixed-host repository metadata inspection. The push field
 // is merely GitHub's reported repository permission, NOT proof of token scope,
 // ruleset exceptions, or Git network authorization.
-public sealed class GitHubImportRepositoryReader(HttpClient client, TimeProvider clock)
+public sealed class GitHubImportRepositoryReader(HttpClient client, TimeProvider clock, GitHubEndpoints? endpoints = null)
     : IGitHubImportRepositoryReader
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
     private static readonly Regex Org = new(
         @"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
@@ -30,8 +31,8 @@ public sealed class GitHubImportRepositoryReader(HttpClient client, TimeProvider
             throw new GitHubImportReadinessException("ImportReadinessProbeInvalid");
 
         using var request = new HttpRequestMessage(HttpMethod.Get,
-            "https://api.github.com/repos/" + Uri.EscapeDataString(organization) +
-            "/" + Uri.EscapeDataString(repository));
+            Endpoints.Api("repos/" + Uri.EscapeDataString(organization) +
+            "/" + Uri.EscapeDataString(repository)));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.UserAgent.ParseAdd("GitHubMigrator/0.9");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));

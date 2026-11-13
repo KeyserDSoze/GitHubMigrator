@@ -9,8 +9,9 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 // token, send any Git command, or infer authorization to create remote refs.
 // HTTP errors, redirects, incomplete pagination and untrusted JSON are UNKNOWN.
 public sealed class GitHubCandidatePolicyReader(
-    HttpClient client, TimeProvider clock) : IGitHubCandidatePolicyReader
+    HttpClient client, TimeProvider clock, GitHubEndpoints? endpoints = null) : IGitHubCandidatePolicyReader
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
     private const int MaxBody = 65_536;
     private const int MaxPages = 100;
 
@@ -31,9 +32,9 @@ public sealed class GitHubCandidatePolicyReader(
                 .SequenceEqual(candidates))
             throw new GitHubCandidatePolicyException("CandidatePolicyRequestInvalid");
 
-        var root = "https://api.github.com/repos/" +
+        var root = Endpoints.Api("repos/" +
             Uri.EscapeDataString(organization) + "/" +
-            Uri.EscapeDataString(repository);
+            Uri.EscapeDataString(repository));
 
         // Repository identity must still be the numeric F-043 destination
         // before querying policies. 404 can never mean an empty repo.

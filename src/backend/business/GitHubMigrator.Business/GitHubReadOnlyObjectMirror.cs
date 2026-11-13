@@ -47,11 +47,12 @@ public static class GitHubReadOnlyObjectMirrorIntegrity
     public static string RemoteUrl(
         GitHubReadOnlyObjectMirrorRequest request,
         GitHubReadOnlyObjectMirrorOptions options,
-        DateTimeOffset now)
+        DateTimeOffset now, GitHubEndpoints? endpoints = null)
     {
         Verify(request, options, now);
-        return "https://github.com/" + request.Organization + "/" +
-            request.Repository + ".git";
+        // Organization and repository were validated by Verify: the URL is github.com unless the
+        // operator configured an allow-listed GitHub Enterprise Server (or the lab simulator).
+        return (endpoints ?? GitHubEndpoints.Cloud).GitUrl(request.Organization, request.Repository);
     }
 
     public static void Verify(

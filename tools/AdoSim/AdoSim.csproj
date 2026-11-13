@@ -7,6 +7,12 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Seed repositories ship real source files (*.cs, package.json, ...): never compile or publish them as project content. -->
+    <Compile Remove="seed/**" />
+    <Content Remove="seed/**" />
+    <None Remove="seed/**" />
     <EmbeddedResource Include="seed\default-seed.json" LogicalName="default-seed.json" />
+    <EmbeddedResource Include="seed\orion-seed.json" LogicalName="orion-seed.json" />
+    <EmbeddedResource Include="seed\files\**\*" LogicalName="seed/files/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,106 @@
+# azure-tasks: converted=AzureCLI@2 manual=none
+name: orion-infra Bicep
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        type: choice
+        default: dev
+        options:
+          - dev
+          - staging
+          - prod
+      location:
+        description: location
+        type: string
+        default: westeurope
+      deployMonitoring:
+        description: deployMonitoring
+        type: boolean
+        default: true
+permissions:
+  contents: read
+env:
+  TARGET_ENVIRONMENT: ${{ inputs.environment }}
+  LOCATION: ${{ inputs.location }}
+  RESOURCE_GROUP: rg-orion-${{ inputs.environment }}
+  TF_STATE_STORAGE: ${{ vars.TF_STATE_STORAGE }}
+  TF_STATE_CONTAINER: ${{ vars.TF_STATE_CONTAINER }}
+jobs:
+  what-if:
+    name: What-if
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Login to Azure (orion-azure-dev)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Validate Bicep deployment
+        run: |
+          az deployment group what-if \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file bicep/main.bicep \
+            --parameters environmentName="$TARGET_ENVIRONMENT" location="$LOCATION"
+
+  deploy-staging:
+    name: Deploy staging infrastructure
+    needs: what-if
+    runs-on: ubuntu-latest
+    environment: infra-dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Login to Azure (orion-azure-dev)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy staging infrastructure
+        run: |
+          az deployment group create \
+            --resource-group rg-orion-staging \
+            --template-file bicep/main.bicep \
+            --parameters environmentName=staging location="$LOCATION"
+
+  deploy-prod:
+    name: Deploy production infrastructure
+    needs: [deploy-staging, what-if]
+    if: ${{ inputs.environment == 'prod' }}
+    runs-on: ubuntu-latest
+    environment: infra-prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Login to Azure (orion-azure-prod)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy monitoring
+        if: ${{ inputs.deployMonitoring }}
+        run: az deployment group create --resource-group rg-orion-prod --template-file bicep/monitoring.bicep
+      - name: Deploy production infrastructure
+        run: |
+          az deployment group create \
+            --resource-group rg-orion-prod \
+            --template-file bicep/main.bicep \
+            --parameters environmentName=prod location="$LOCATION"

@@ -27,9 +27,11 @@ public sealed class AzureDevOpsEndpoints
 
     public static readonly string[] ServerApiVersions = ["7.1", "7.0", "6.0", "5.2", "5.1", "5.0"];
 
-    public static AzureDevOpsEndpoints Services(string organization) => new(false,
-        $"https://dev.azure.com/{Uri.EscapeDataString(organization)}",
-        $"https://vssps.dev.azure.com/{Uri.EscapeDataString(organization)}", "7.1");
+    public static AzureDevOpsEndpoints Services(string organization, AzureDevOpsServicesEndpoints? roots = null)
+    {
+        roots ??= AzureDevOpsServicesEndpoints.Cloud;
+        return new(false, roots.Core(organization), roots.Graph(organization), "7.1");
+    }
 
     public static AzureDevOpsEndpoints Server(string serverRoot, string collection, string api)
     {

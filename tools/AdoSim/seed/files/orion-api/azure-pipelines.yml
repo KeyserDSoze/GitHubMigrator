@@ -1,0 +1,228 @@
+# Orion API: build, test, containerize and deploy (dev -> prod).
+name: $(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  batch: true
+  branches:
+    include:
+    - main
+    - release/*
+    exclude:
+    - release/legacy-*
+  paths:
+    include:
+    - src
+    - tests
+    - Dockerfile
+    exclude:
+    - docs
+    - '**/*.md'
+  tags:
+    include:
+    - v*
+
+pr:
+  autoCancel: true
+  branches:
+    include:
+    - main
+    - release/*
+  paths:
+    exclude:
+    - docs
+
+resources:
+  repositories:
+  - repository: templates
+    type: git
+    name: Orion Platform/orion-templates
+    ref: refs/heads/main
+
+parameters:
+- name: deployToProd
+  displayName: Deploy to production
+  type: boolean
+  default: false
+- name: dotnetVersion
+  displayName: .NET SDK version
+  type: string
+  default: 8.x
+- name: buildConfiguration
+  displayName: Build configuration
+  type: string
+  default: Release
+  values:
+  - Release
+  - Debug
+
+variables:
+- group: orion-shared-config
+- group: orion-api-secrets
+- template: pipelines/templates/variables.yml
+- name: imageRepository
+  value: orion/api
+- name: registryHost
+  value: orioncr.azurecr.io
+- name: isMain
+  value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+- stage: Build
+  displayName: Build and test
+  jobs:
+  - job: BuildTest
+    displayName: Build, test and publish
+    steps:
+    - checkout: self
+      fetchDepth: 0
+    - task: UseDotNet@2
+      displayName: Install .NET SDK
+      inputs:
+        packageType: sdk
+        version: ${{ parameters.dotnetVersion }}
+    - template: pipelines/templates/dotnet-quality.yml
+      parameters:
+        solution: Orion.sln
+    - task: DotNetCoreCLI@2
+      displayName: Restore
+      inputs:
+        command: restore
+        projects: Orion.sln
+        feedsToUse: select
+    - task: DotNetCoreCLI@2
+      displayName: Build
+      inputs:
+        command: build
+        projects: Orion.sln
+        arguments: --configuration ${{ parameters.buildConfiguration }} --no-restore
+    - task: DotNetCoreCLI@2
+      displayName: Unit tests
+      inputs:
+        command: test
+        projects: tests/**/*.csproj
+        arguments: --configuration ${{ parameters.buildConfiguration }} --no-build --collect:"XPlat Code Coverage" --logger trx
+        publishTestResults: false
+    - task: PublishTestResults@2
+      displayName: Publish test results
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFormat: VSTest
+        testResultsFiles: '**/*.trx'
+        mergeTestResults: true
+    - task: PublishCodeCoverageResults@2
+      displayName: Publish code coverage
+      condition: succeededOrFailed()
+      inputs:
+        summaryFileLocation: $(Agent.TempDirectory)/**/coverage.cobertura.xml
+    - template: steps/security-scan.yml@templates
+      parameters:
+        failOnHighSeverity: true
+    - task: DotNetCoreCLI@2
+      displayName: Publish
+      inputs:
+        command: publish
+        publishWebProjects: false
+        projects: src/Orion.Api/Orion.Api.csproj
+        arguments: --configuration ${{ parameters.buildConfiguration }} --output $(Build.ArtifactStagingDirectory)/api --no-build
+        zipAfterPublish: true
+    - task: PublishPipelineArtifact@1
+      displayName: Publish API package
+      inputs:
+        targetPath: $(Build.ArtifactStagingDirectory)/api
+        artifact: api-package
+        publishLocation: pipeline
+
+- stage: Docker
+  displayName: Build container image
+  dependsOn: Build
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+  jobs:
+  - job: DockerBuild
+    displayName: Build and push the image
+    steps:
+    - checkout: self
+    - task: Docker@2
+      displayName: Build and push image
+      inputs:
+        command: buildAndPush
+        containerRegistry: orion-acr
+        repository: $(imageRepository)
+        Dockerfile: Dockerfile
+        buildContext: .
+        tags: |
+          $(Build.BuildNumber)
+          latest
+  - job: ImageScan
+    displayName: Scan image
+    dependsOn: DockerBuild
+    steps:
+    - task: Docker@2
+      displayName: Login to registry
+      inputs:
+        command: login
+        containerRegistry: orion-acr
+    - script: trivy image --exit-code 1 --severity HIGH,CRITICAL $(registryHost)/$(imageRepository):$(Build.BuildNumber)
+      displayName: Trivy scan
+
+- stage: Deploy_Dev
+  displayName: Deploy to dev
+  dependsOn: Docker
+  condition: succeeded()
+  variables:
+  - name: webAppName
+    value: orion-api-dev
+  jobs:
+  - deployment: DeployApi
+    displayName: Deploy API to dev
+    environment: dev
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebApp@1
+            displayName: Deploy web app
+            inputs:
+              azureSubscription: orion-azure-dev
+              appType: webAppLinux
+              appName: $(webAppName)
+              package: $(Pipeline.Workspace)/api-package/**/*.zip
+              runtimeStack: DOTNETCORE|8.0
+
+- stage: Deploy_Prod
+  displayName: Deploy to production
+  dependsOn:
+  - Deploy_Dev
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  variables:
+  - group: orion-keyvault-prod
+  jobs:
+  - deployment: DeployApiProd
+    displayName: Deploy API to production
+    condition: eq('${{ parameters.deployToProd }}', 'true')
+    environment: prod
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            displayName: Update container image
+            inputs:
+              azureSubscription: orion-azure-prod
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az webapp config container set \
+                  --name orion-api-prod \
+                  --resource-group rg-orion-prod \
+                  --container-image-name $(registryHost)/$(imageRepository):$(Build.BuildNumber)
+          - task: AzureCLI@2
+            displayName: Smoke test
+            inputs:
+              azureSubscription: orion-azure-prod
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                curl --fail --retry 5 --retry-delay 10 https://api.orion.example.test/healthz

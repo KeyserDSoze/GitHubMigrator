@@ -1,0 +1,161 @@
+# Orion web storefront (React): lint, test on a Node matrix, bundle and deploy to the staging web hosts.
+name: $(Date:yyyyMMdd).$(Rev:r)
+
+trigger:
+  branches:
+    include:
+    - main
+    - develop
+    - feature/*
+  paths:
+    exclude:
+    - README.md
+    - docs/*
+
+pr:
+  branches:
+    include:
+    - main
+    - develop
+
+schedules:
+- cron: '0 3 * * 1-5'
+  displayName: Weekday nightly build
+  branches:
+    include:
+    - main
+  always: false
+
+resources:
+  repositories:
+  - repository: templates
+    type: git
+    name: Orion Platform/orion-templates
+    ref: refs/heads/main
+  - repository: sharedactions
+    type: github
+    endpoint: orion-github
+    name: orion-commerce/shared-actions
+    ref: refs/heads/main
+
+variables:
+- group: orion-shared-config
+- group: orion-web-secrets
+- template: variables/common.yml@templates
+- name: npm_config_cache
+  value: $(Pipeline.Workspace)/.npm
+- name: NODE_ENV
+  value: production
+
+stages:
+- stage: Build
+  displayName: Build and test
+  jobs:
+  - job: BuildAndTest
+    displayName: Build and test on Node $(nodeVersion)
+    pool:
+      vmImage: ubuntu-latest
+    strategy:
+      matrix:
+        node_18:
+          nodeVersion: 18.x
+        node_20:
+          nodeVersion: 20.x
+        node_22:
+          nodeVersion: 22.x
+      maxParallel: 3
+    steps:
+    - task: NodeTool@0
+      displayName: Use Node $(nodeVersion)
+      inputs:
+        versionSpec: $(nodeVersion)
+    - task: Cache@2
+      displayName: Cache npm packages
+      inputs:
+        key: 'npm | "$(Agent.OS)" | package-lock.json'
+        restoreKeys: |
+          npm | "$(Agent.OS)"
+        path: $(npm_config_cache)
+    - task: Npm@1
+      displayName: Install dependencies
+      inputs:
+        command: install
+        customEndpoint: orion-npm-registry
+    - script: npm run lint
+      displayName: Lint
+      workingDirectory: $(Build.SourcesDirectory)
+    - bash: |
+        set -euo pipefail
+        npm test -- --ci --reporters=default --reporters=jest-junit
+      displayName: Unit tests
+      env:
+        NPM_TOKEN: $(npmToken)
+        CI: 'true'
+    - task: PublishTestResults@2
+      displayName: Publish test results
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFormat: JUnit
+        testResultsFiles: junit.xml
+        testRunTitle: Node $(nodeVersion)
+    - task: Npm@1
+      displayName: Build bundle
+      condition: and(succeeded(), eq(variables['nodeVersion'], '20.x'))
+      inputs:
+        command: custom
+        customCommand: run build
+    - pwsh: |
+        $size = (Get-ChildItem build -Recurse -File | Measure-Object Length -Sum).Sum
+        Write-Host "Bundle size: $size bytes"
+      displayName: Report bundle size
+      condition: and(succeeded(), eq(variables['nodeVersion'], '20.x'))
+      workingDirectory: $(Build.SourcesDirectory)
+    - task: PublishBuildArtifacts@1
+      displayName: Publish web bundle
+      condition: and(succeeded(), eq(variables['nodeVersion'], '20.x'))
+      inputs:
+        PathtoPublish: build
+        ArtifactName: web-dist
+        publishLocation: Container
+
+- stage: Deploy
+  displayName: Deploy to staging web hosts
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployStatic
+    displayName: Copy bundle to the staging hosts
+    pool:
+      name: SelfHostedLinux
+      demands:
+      - Agent.OS -equals Linux
+      - docker
+      - npm
+    environment: staging
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: web-dist
+          - task: CopyFilesOverSSH@0
+            displayName: Upload bundle
+            inputs:
+              sshEndpoint: orion-ssh-web
+              sourceFolder: $(Pipeline.Workspace)/web-dist
+              contents: '**'
+              targetFolder: /var/www/orion
+              cleanTargetFolder: true
+          - task: SSH@0
+            displayName: Reload web server
+            inputs:
+              sshEndpoint: orion-ssh-web
+              runOptions: commands
+              commands: sudo systemctl reload nginx
+          - task: Npm@1
+            displayName: Publish UI kit
+            condition: startsWith(variables['Build.SourceBranch'], 'refs/tags/')
+            inputs:
+              command: publish
+              publishRegistry: useExternalRegistry
+              publishEndpoint: orion-npm-feed

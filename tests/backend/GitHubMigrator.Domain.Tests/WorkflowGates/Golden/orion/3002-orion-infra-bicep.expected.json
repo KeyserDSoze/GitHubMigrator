@@ -1,0 +1,50 @@
+{
+  "pipelineId": 3002,
+  "name": "orion-infra Bicep",
+  "source": {
+    "repo": "orion-infra",
+    "path": "/pipelines/bicep.yml"
+  },
+  "equivalence": "partial",
+  "originalTriggers": [
+    "none (trigger: none): manual only already",
+    "parameters become workflow_dispatch inputs"
+  ],
+  "plan": {
+    "secrets": [
+      "AZURE_CLIENT_ID",
+      "AZURE_SUBSCRIPTION_ID",
+      "AZURE_TENANT_ID"
+    ],
+    "variables": [
+      "TF_STATE_CONTAINER",
+      "TF_STATE_STORAGE"
+    ]
+  },
+  "taskMap": [
+    {
+      "azure": "AzureCLI@2",
+      "github": "azure/login (OIDC) + az deployment group what-if/create in run steps",
+      "note": "the monitoring step stays conditional on the deployMonitoring input"
+    }
+  ],
+  "acceptedWarnings": [
+    {
+      "code": "ZIZMOR_SECRETS_OUTSIDE_ENV",
+      "why": "The source gives these jobs no environment and keeps the credentials at repository level (Azure variable groups are not environment-scoped). Scoping them to a GitHub environment is a hardening choice for the reviewer; it would add approvals and deployment records the source does not have."
+    }
+  ],
+  "notes": [
+    "NOT executed on GitHub.",
+    "Azure service connections orion-azure-dev/prod become OIDC identities (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID): repository level for dev, the infra-prod environment for prod.",
+    "Environment infra-prod carries the approval and branch control of the source; configure them on the GitHub environment. Environment infra-dev has no checks.",
+    "Group orion-infra-config non-secret variables are exported as env; its ARM_CLIENT_SECRET secret is not referenced and not created.",
+    "The task analyser does not list the second AzureCLI@2 (inside a conditional insertion) but the same task is listed elsewhere in the file."
+  ],
+  "extraAllowedHosts": [],
+  "unsupported": [],
+  "templates": [],
+  "redaction": {
+    "findings": []
+  }
+}

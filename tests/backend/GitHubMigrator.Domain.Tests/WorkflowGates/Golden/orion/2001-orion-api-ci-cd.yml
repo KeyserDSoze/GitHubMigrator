@@ -1,0 +1,200 @@
+# azure-tasks: converted=UseDotNet@2,DotNetCoreCLI@2,PublishPipelineArtifact@1,Docker@2,AzureWebApp@1,AzureCLI@2 manual=PublishTestResults@2,PublishCodeCoverageResults@2
+name: orion-api CI-CD
+on:
+  workflow_dispatch:
+    inputs:
+      deployToProd:
+        description: Deploy to production
+        type: boolean
+        default: false
+      dotnetVersion:
+        description: .NET SDK version
+        type: string
+        default: 8.x
+      buildConfiguration:
+        description: Build configuration
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+permissions:
+  contents: read
+env:
+  IMAGE_REPOSITORY: orion/api
+  REGISTRY_HOST: orioncr.azurecr.io
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  ENABLE_SMOKE_TESTS: 'true'
+  ENVIRONMENT_NAME: ${{ vars.ENVIRONMENT_NAME }}
+  LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+  AZURE_REGION: ${{ vars.AZURE_REGION }}
+  PAYMENT_API_URL: ${{ vars.PAYMENT_API_URL }}
+jobs:
+  build:
+    name: Build, test and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: ${{ inputs.dotnetVersion }}
+      - name: Restore local tools
+        run: dotnet tool restore
+      - name: Verify formatting
+        run: dotnet format Orion.sln --verify-no-changes --severity warn
+      - name: Restore
+        run: dotnet restore Orion.sln
+      - name: Build
+        env:
+          BUILD_CONFIGURATION: ${{ inputs.buildConfiguration }}
+        run: dotnet build Orion.sln --configuration "$BUILD_CONFIGURATION" --no-restore
+      - name: Unit tests
+        env:
+          BUILD_CONFIGURATION: ${{ inputs.buildConfiguration }}
+        run: find tests -name '*.csproj' -print0 | xargs -0 -n1 dotnet test --configuration "$BUILD_CONFIGURATION" --no-build --collect:"XPlat Code Coverage" --logger trx
+      # MANUAL PORT REQUIRED: PublishTestResults@2 — Azure shows a Tests tab. Here only the .trx files are kept as an artifact.
+      - name: Publish test results (artifact only)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results
+          path: '**/*.trx'
+          if-no-files-found: warn
+      # MANUAL PORT REQUIRED: PublishCodeCoverageResults@2 — Azure shows a Code Coverage tab. Here only the cobertura files are kept as an artifact.
+      - name: Publish code coverage (artifact only)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: code-coverage
+          path: '**/coverage.cobertura.xml'
+          if-no-files-found: warn
+      - name: Dependency vulnerability scan
+        run: |
+          dotnet list package --vulnerable --include-transitive | tee vulnerabilities.log
+          if grep -q "has the following vulnerable packages" vulnerabilities.log; then
+            echo "::warning::Vulnerable packages found"
+          fi
+      - name: Publish scan report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: security-scan
+          path: vulnerabilities.log
+      - name: Publish
+        env:
+          BUILD_CONFIGURATION: ${{ inputs.buildConfiguration }}
+        run: |
+          dotnet publish src/Orion.Api/Orion.Api.csproj --configuration "$BUILD_CONFIGURATION" --output artifacts/publish --no-build
+          mkdir -p artifacts/api
+          (cd artifacts/publish && zip -qr ../api/Orion.Api.zip .)
+      - name: Publish API package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: api-package
+          path: artifacts/api
+
+  docker:
+    name: Build and push the image
+    needs: build
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.build-number.outputs.value }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compute the build number
+        id: build-number
+        run: echo "value=$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+      - name: Login to registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ${{ env.REGISTRY_HOST }}
+          username: ${{ secrets.ORION_ACR_USERNAME }}
+          password: ${{ secrets.ORION_ACR_PASSWORD }}
+      - name: Build and push image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY_HOST }}/${{ env.IMAGE_REPOSITORY }}:${{ steps.build-number.outputs.value }}
+            ${{ env.REGISTRY_HOST }}/${{ env.IMAGE_REPOSITORY }}:latest
+
+  image-scan:
+    name: Scan image
+    needs: docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ${{ env.REGISTRY_HOST }}
+          username: ${{ secrets.ORION_ACR_USERNAME }}
+          password: ${{ secrets.ORION_ACR_PASSWORD }}
+      # The source assumes trivy is installed on the agent; this runner image does not ship it.
+      - name: Trivy scan
+        env:
+          IMAGE_TAG: ${{ needs.docker.outputs.tag }}
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL "$REGISTRY_HOST/$IMAGE_REPOSITORY:$IMAGE_TAG"
+
+  deploy-dev:
+    name: Deploy API to dev
+    needs: [docker, image-scan]
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download the API package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: api-package
+          path: api-package
+      - name: Login to Azure (orion-azure-dev)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy web app
+        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
+        with:
+          app-name: orion-api-dev
+          package: api-package/Orion.Api.zip
+
+  deploy-prod:
+    name: Deploy API to production
+    needs: [deploy-dev, docker]
+    if: ${{ inputs.deployToProd && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Login to Azure (orion-azure-prod)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Update container image
+        env:
+          IMAGE_TAG: ${{ needs.docker.outputs.tag }}
+        run: |
+          az webapp config container set \
+            --name orion-api-prod \
+            --resource-group rg-orion-prod \
+            --container-image-name "$REGISTRY_HOST/$IMAGE_REPOSITORY:$IMAGE_TAG"
+      - name: Smoke test
+        run: curl --fail --retry 5 --retry-delay 10 https://api.orion.example.test/healthz

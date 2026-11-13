@@ -1,0 +1,37 @@
+parameters:
+- name: environment
+  type: string
+  values:
+  - dev
+  - staging
+  - prod
+- name: serviceConnection
+  type: string
+- name: appName
+  type: string
+- name: dependsOn
+  type: object
+  default: []
+- name: notify
+  type: boolean
+  default: true
+
+stages:
+- stage: Deploy_${{ parameters.environment }}
+  displayName: Deploy ${{ parameters.environment }}
+  dependsOn: ${{ parameters.dependsOn }}
+  jobs:
+  - template: ../jobs/deploy-webapp.yml
+    parameters:
+      environment: ${{ parameters.environment }}
+      serviceConnection: ${{ parameters.serviceConnection }}
+      appName: ${{ parameters.appName }}
+  - ${{ if eq(parameters.notify, true) }}:
+    - job: Notify
+      dependsOn: Deploy_${{ parameters.environment }}
+      pool:
+        vmImage: ubuntu-latest
+      steps:
+      - template: ../steps/notify-teams.yml
+        parameters:
+          status: Deployed to ${{ parameters.environment }}

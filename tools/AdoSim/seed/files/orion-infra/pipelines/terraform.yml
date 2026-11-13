@@ -1,0 +1,113 @@
+# Orion infrastructure with Terraform: plan every environment, apply production behind an approval.
+name: terraform-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - terraform
+
+pr: none
+
+parameters:
+- name: env
+  displayName: Target environment
+  type: string
+  default: dev
+  values:
+  - dev
+  - staging
+  - prod
+- name: environments
+  displayName: Environments to plan
+  type: object
+  default:
+  - dev
+  - staging
+- name: terraformVersion
+  displayName: Terraform version
+  type: string
+  default: 1.9.5
+
+resources:
+  repositories:
+  - repository: templates
+    type: git
+    name: orion-templates
+    ref: refs/tags/v3
+
+variables:
+- group: orion-infra-config
+- name: tfStateResourceGroup
+  value: rg-orion-tfstate
+- ${{ if eq(parameters.env, 'prod') }}:
+  - name: tfWorkspace
+    value: prod
+- ${{ else }}:
+  - name: tfWorkspace
+    value: ${{ parameters.env }}
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+- ${{ each environment in parameters.environments }}:
+  - stage: Plan_${{ environment }}
+    displayName: Plan ${{ environment }}
+    jobs:
+    - job: Plan
+      steps:
+      - checkout: self
+      - checkout: templates
+      - task: TerraformInstaller@1
+        displayName: Install Terraform
+        inputs:
+          terraformVersion: ${{ parameters.terraformVersion }}
+      - template: steps/terraform-plan.yml@templates
+        parameters:
+          environment: ${{ environment }}
+          workingDirectory: $(Build.SourcesDirectory)/orion-infra/terraform
+          serviceConnection: orion-azure-dev
+
+- stage: Apply_Prod
+  displayName: Apply to production
+  dependsOn:
+  - Plan_staging
+  condition: and(succeeded(), eq('${{ parameters.env }}', 'prod'))
+  jobs:
+  - deployment: Apply
+    displayName: Terraform apply (prod)
+    environment: infra-prod
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - checkout: templates
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: ${{ parameters.terraformVersion }}
+          - ${{ if eq(parameters.env, 'prod') }}:
+            - task: AzureCLI@2
+              displayName: Terraform apply
+              inputs:
+                azureSubscription: orion-azure-prod
+                scriptType: bash
+                scriptLocation: inlineScript
+                workingDirectory: $(Build.SourcesDirectory)/orion-infra/terraform
+                addSpnToEnvironment: true
+                inlineScript: |
+                  export ARM_CLIENT_ID=$servicePrincipalId
+                  export ARM_TENANT_ID=$tenantId
+                  export ARM_USE_OIDC=true
+                  terraform init -input=false -backend-config="key=prod.tfstate"
+                  terraform apply -input=false -auto-approve -var-file="env/prod.tfvars.json"
+          - task: Kubernetes@1
+            displayName: Roll the ingress controller
+            inputs:
+              connectionType: Kubernetes Service Connection
+              kubernetesServiceEndpoint: orion-aks-prod
+              command: rollout
+              arguments: restart deployment/ingress-nginx-controller -n ingress-nginx

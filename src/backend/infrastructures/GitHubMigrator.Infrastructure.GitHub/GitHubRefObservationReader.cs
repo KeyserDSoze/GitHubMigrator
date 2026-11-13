@@ -8,9 +8,10 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 // GitHub Cloud-only fixed-host, GET-only Git-data reader.
 // Matching refs returns the Git ref OID, including an annotated TAG object
 // (unlike the repository Tags endpoint, which can report a peeled commit).
-public sealed class GitHubRefObservationReader(HttpClient client, TimeProvider clock)
+public sealed class GitHubRefObservationReader(HttpClient client, TimeProvider clock, GitHubEndpoints? endpoints = null)
     : IGitHubRefObservationReader
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
     private const int MaxResponseBytes = 2_000_000;
 
     public async Task<GitHubRefObservation> ReadAsync(
@@ -35,9 +36,9 @@ public sealed class GitHubRefObservationReader(HttpClient client, TimeProvider c
         string org, string repo, string kind, string token,
         List<GitHubObservedRef> output, CancellationToken ct)
     {
-        var url = "https://api.github.com/repos/" +
+        var url = Endpoints.Api("repos/" +
             Uri.EscapeDataString(org) + "/" + Uri.EscapeDataString(repo) +
-            "/git/matching-refs/" + kind;
+            "/git/matching-refs/" + kind);
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.UserAgent.ParseAdd("GitHubMigrator/0.7");

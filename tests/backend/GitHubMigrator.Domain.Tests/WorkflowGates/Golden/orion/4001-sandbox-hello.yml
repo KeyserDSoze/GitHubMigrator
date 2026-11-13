@@ -1,0 +1,25 @@
+# azure-tasks: converted=none manual=none
+name: sandbox hello
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: message
+        type: string
+        default: hello from the sandbox
+permissions:
+  contents: read
+jobs:
+  hello:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Say hello
+        env:
+          MESSAGE: ${{ inputs.message }}
+        run: echo "$MESSAGE"
+      - name: Dump environment
+        if: runner.debug == '1'
+        run: printenv | sort

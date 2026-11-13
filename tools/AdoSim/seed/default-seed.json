@@ -75,6 +75,12 @@
     { "id": 3, "name": "prod-secrets", "variables": [ { "name": "APP_TOKEN", "secret": true }, { "name": "REGION", "secret": false } ] }
   ],
   "serviceEndpoints": [ { "name": "azure-prod", "type": "azurerm" }, { "name": "npm-feed", "type": "externalnpmregistry" } ],
+  "pullRequests": [
+    { "id": 301, "project": "Alpha Platform", "repo": "alpha-api", "title": "Fix crash on logout", "status": "completed",
+      "source": "hotfix/2024-01", "target": "main", "createdBy": "bob", "created": "2024-01-20T10:00:00Z",
+      "closed": "2024-01-21T09:30:00Z", "closedBy": "alice", "description": "Releases the session before the redirect.",
+      "reviewers": [ { "user": "alice", "vote": 10 } ], "workItems": [105] }
+  ],
   "workItems": [
     { "id": 101, "project": "Alpha Platform", "type": "Epic", "title": "Platform modernization", "state": "Active",
       "description": "<div>Modernize the <b>platform</b></div>", "links": [ { "kind": "child", "to": 102 } ] },

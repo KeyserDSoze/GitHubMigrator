@@ -1,0 +1,73 @@
+{
+  "pipelineId": 3001,
+  "name": "orion-infra Terraform",
+  "source": {
+    "repo": "orion-infra",
+    "path": "/pipelines/terraform.yml"
+  },
+  "equivalence": "partial",
+  "originalTriggers": [
+    "push: main, paths terraform",
+    "pull request: none",
+    "parameters become workflow_dispatch inputs; 'environments' (object) becomes a JSON-array string input"
+  ],
+  "plan": {
+    "secrets": [
+      "AZURE_CLIENT_ID",
+      "AZURE_SUBSCRIPTION_ID",
+      "AZURE_TENANT_ID"
+    ],
+    "variables": [
+      "ORION_AKS_PROD_CLUSTER",
+      "ORION_AKS_PROD_RESOURCE_GROUP",
+      "TF_STATE_CONTAINER",
+      "TF_STATE_STORAGE"
+    ]
+  },
+  "taskMap": [
+    {
+      "azure": "TerraformInstaller@1",
+      "github": "hashicorp/setup-terraform with the terraformVersion input"
+    },
+    {
+      "azure": "AzureCLI@2",
+      "github": "azure/login (OIDC) + terraform init/plan/apply in run steps with ARM_USE_OIDC",
+      "note": "the source's plan template exports ARM_CLIENT_SECRET from the service principal key; OIDC removes that secret. The task analyser does not list this task for this pipeline because it sits inside a conditional insertion"
+    },
+    {
+      "azure": "Kubernetes@1",
+      "github": "azure/aks-set-context + kubectl rollout restart",
+      "note": "cluster and resource group come from new variables ORION_AKS_PROD_CLUSTER and ORION_AKS_PROD_RESOURCE_GROUP: the service connection orion-aks-prod does not expose them in the seed"
+    },
+    {
+      "azure": "PublishPipelineArtifact@1",
+      "github": "actions/upload-artifact (tfplan-<environment>)",
+      "note": "used by the steps/terraform-plan.yml template, not by the pipeline file itself"
+    }
+  ],
+  "templates": [
+    {
+      "template": "steps/terraform-plan.yml@templates",
+      "handledBy": "inlined as the Terraform plan and Publish plan steps of the plan job (matrix over environments)"
+    }
+  ],
+  "acceptedWarnings": [
+    {
+      "code": "ZIZMOR_SECRETS_OUTSIDE_ENV",
+      "why": "The source gives these jobs no environment and keeps the credentials at repository level (Azure variable groups are not environment-scoped). Scoping them to a GitHub environment is a hardening choice for the reviewer; it would add approvals and deployment records the source does not have."
+    }
+  ],
+  "notes": [
+    "NOT executed on GitHub.",
+    "The compile-time 'each environment' stages become one matrix job; Apply_Prod depended only on Plan_staging in Azure but needs the whole plan matrix here.",
+    "The remote state uses the azurerm backend: it needs use_oidc (or ARM_USE_OIDC, set) and the identity must have access to the state storage.",
+    "The second checkout of the templates repository is dropped because the template is inlined; the working directory is terraform/ instead of orion-infra/terraform.",
+    "Environment infra-prod carries the approval (Release Managers, gina, 24 h timeout) and branch control (main) in the source: configure them on the GitHub environment.",
+    "Group secret ARM_CLIENT_SECRET is not referenced by the YAML and is not created (OIDC replaces it)."
+  ],
+  "extraAllowedHosts": [],
+  "unsupported": [],
+  "redaction": {
+    "findings": []
+  }
+}

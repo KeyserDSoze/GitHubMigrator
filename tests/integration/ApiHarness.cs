@@ -63,6 +63,16 @@ public sealed class ApiHarness : IAsyncLifetime
     public int TargetObjectIdLength { get; set; } = 40;
     // Fake fixed-host provider fault injection; no real outbound network.
     public string TargetObservationFault { get; set; } = "";
+    // When set (origin of a running tools/GhSim), the GitHub readers use the real Providers:GitHub
+    // configuration and real HTTP against that simulator instead of the WireStub fakes.
+    public string? GitHubSimOrigin { get; set; }
+    // When set (origin of a tools/AdoSim running with the Services flavour), the Azure DevOps Services
+    // readers use the real Providers:AzureDevOpsServices configuration and real HTTP against it.
+    public string? AzureServicesSimOrigin { get; set; }
+    // When set (origin of a running tools/LlmSim), AI connections may point at that loopback host over plain HTTP.
+    public string? LlmSimOrigin { get; set; }
+    // When true the person who asked for a conversion may also approve it (WorkflowApproval:RequireSecondApprover=false).
+    public bool SingleReviewer { get; set; }
 
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
@@ -171,6 +181,30 @@ public sealed class ApiHarness : IAsyncLifetime
             values["GitHubSourceCheckpointGitRefLedger__Enabled"] = "true";
             values["GitHubSourceSyncCheckpoints__Enabled"] = "true";
         }
+        if (GitHubSimOrigin is not null)
+        {
+            values["Providers__GitHub__ApiRoot"] = GitHubSimOrigin + "/api/v3";
+            values["Providers__GitHub__WebRoot"] = GitHubSimOrigin;
+            values["Providers__GitHub__AllowedHosts"] = "127.0.0.1";
+            values["Providers__GitHub__AllowHttp"] = "true";
+        }
+        if (AzureServicesSimOrigin is not null)
+        {
+            values["Providers__AzureDevOpsServices__CoreRoot"] = AzureServicesSimOrigin;
+            values["Providers__AzureDevOpsServices__GraphRoot"] = AzureServicesSimOrigin + "/vssps";
+            values["Providers__AzureDevOpsServices__GitRoot"] = AzureServicesSimOrigin;
+            values["Providers__AzureDevOpsServices__AllowedHosts"] = "127.0.0.1";
+            values["Providers__AzureDevOpsServices__AllowHttp"] = "true";
+        }
+        if (SingleReviewer) values["WorkflowApproval__RequireSecondApprover"] = "false";
+        if (LlmSimOrigin is not null)
+        {
+            values["Ai__AllowedHosts"] = "127.0.0.1";
+            values["Ai__AllowHttp"] = "true";
+            // the analysers the conversion gates run, when the test machine has them (otherwise proposals are unapprovable)
+            if (Environment.GetEnvironmentVariable("GITHUBMIGRATOR_ACTIONLINT") is { Length: > 0 } actionlint) values["WorkflowGates__ActionlintPath"] = actionlint;
+            if (Environment.GetEnvironmentVariable("GITHUBMIGRATOR_ZIZMOR") is { Length: > 0 } zizmor) values["WorkflowGates__ZizmorPath"] = zizmor;
+        }
         foreach (var pair in values)
         {
             _savedEnvironment[pair.Key] = Environment.GetEnvironmentVariable(pair.Key);
@@ -192,10 +226,14 @@ public sealed class ApiHarness : IAsyncLifetime
                     services.Replace(ServiceDescriptor.Singleton<TimeProvider>(
                         IntegrationClockOverride));
                 // App constructs the actual typed readers; their outbound transport is a strict stub.
-                services.AddHttpClient<AzureDevOpsWorkloadReader>()
-                    .ConfigurePrimaryHttpMessageHandler(() => azure);
-                services.AddHttpClient<AzureDevOpsDiscoveryReader>()
-                    .ConfigurePrimaryHttpMessageHandler(() => azure);
+                if (AzureServicesSimOrigin is null)
+                {
+                    services.AddHttpClient<AzureDevOpsWorkloadReader>()
+                        .ConfigurePrimaryHttpMessageHandler(() => azure);
+                    services.AddHttpClient<AzureDevOpsDiscoveryReader>()
+                        .ConfigurePrimaryHttpMessageHandler(() => azure);
+                }
+                if (GitHubSimOrigin is not null) return;
                 services.AddHttpClient<GitHubConfigurationReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubTraceabilityReader>()
@@ -221,7 +259,8 @@ public sealed class ApiHarness : IAsyncLifetime
         var secrets = scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>();
         var now = DateTimeOffset.UtcNow;
         await secrets.SaveAsync("mock-api-source-" + SourceConnectionId.ToString("N"), SourceToken, default);
-        await secrets.SaveAsync("mock-api-target-" + DestinationConnectionId.ToString("N"), TargetToken, default);
+        await secrets.SaveAsync("mock-api-target-" + DestinationConnectionId.ToString("N"),
+            GitHubSimOrigin is null ? TargetToken : "gh-sim-pat", default);
         if (EnableCheckpointTargetObservation)
         {
             // Independent real two-epoch F-029 test fixtures have a
@@ -234,8 +273,9 @@ public sealed class ApiHarness : IAsyncLifetime
             ConnectionDirection.Source, "az-org", "mock-api-source-" + SourceConnectionId.ToString("N"),
             now, now, "Verified", "test", "not_verified"), default);
         await connections.SaveAsync(new(DestinationConnectionId, "Target Fixture", "github-enterprise-cloud",
-            ConnectionDirection.Destination, "gh-org", "mock-api-target-" + DestinationConnectionId.ToString("N"),
-            now, now, "Verified", "test", "not_verified"), default);
+            ConnectionDirection.Destination, GitHubSimOrigin is null ? "gh-org" : "orion-org",
+            "mock-api-target-" + DestinationConnectionId.ToString("N"),
+            now, now, "Verified", GitHubSimOrigin is null ? "test" : "sim-admin", "not_verified"), default);
     }
 
     private static async Task AddUserAsync(UserManager<ApplicationUser> users, string name,

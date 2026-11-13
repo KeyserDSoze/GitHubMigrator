@@ -1,0 +1,17 @@
+trigger: none
+pr: none
+
+pool:
+  name: Default
+
+parameters:
+- name: message
+  type: string
+  default: hello from the sandbox
+
+steps:
+- script: echo "${{ parameters.message }}"
+  displayName: Say hello
+- script: printenv | sort
+  displayName: Dump environment
+  condition: eq(variables['System.Debug'], 'true')

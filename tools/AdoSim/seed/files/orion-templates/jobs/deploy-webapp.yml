@@ -1,0 +1,28 @@
+parameters:
+- name: environment
+  type: string
+- name: serviceConnection
+  type: string
+- name: appName
+  type: string
+- name: artifactName
+  type: string
+  default: api-package
+
+jobs:
+- deployment: Deploy_${{ parameters.environment }}
+  displayName: Deploy ${{ parameters.appName }} to ${{ parameters.environment }}
+  pool:
+    vmImage: ubuntu-latest
+  environment: ${{ parameters.environment }}
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+        - task: AzureWebApp@1
+          displayName: Deploy web app
+          inputs:
+            azureSubscription: ${{ parameters.serviceConnection }}
+            appType: webAppLinux
+            appName: ${{ parameters.appName }}
+            package: $(Pipeline.Workspace)/${{ parameters.artifactName }}/**/*.zip

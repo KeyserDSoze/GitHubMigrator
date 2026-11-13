@@ -1,0 +1,23 @@
+parameters:
+- name: failOnHighSeverity
+  type: boolean
+  default: true
+- name: scanPath
+  type: string
+  default: $(Build.SourcesDirectory)
+
+steps:
+- script: |
+    dotnet list package --vulnerable --include-transitive | tee vulnerabilities.log
+    if grep -q "has the following vulnerable packages" vulnerabilities.log; then
+      echo "##vso[task.logissue type=warning]Vulnerable packages found"
+    fi
+  displayName: Dependency vulnerability scan
+  workingDirectory: ${{ parameters.scanPath }}
+  continueOnError: ${{ not(parameters.failOnHighSeverity) }}
+- task: PublishPipelineArtifact@1
+  displayName: Publish scan report
+  condition: always()
+  inputs:
+    targetPath: ${{ parameters.scanPath }}/vulnerabilities.log
+    artifact: security-scan

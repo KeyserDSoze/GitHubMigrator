@@ -19,8 +19,10 @@ public sealed class PostgresAzureGitSourceLocationResolver(AppDbContext db)
             .GetWithoutRefsAsync(snapshotId, ct);
         if (inventory is null || inventory.Id != snapshotId ||
             inventory.ConnectionId != connectionId ||
-            inventory.SourceProvider != "azure-devops-services" ||
-            inventory.Snapshot.SourceSystem != SourceSystemKind.AzureDevOpsServices)
+            !(inventory.SourceProvider == ProviderKeys.AzureDevOpsServices &&
+                inventory.Snapshot.SourceSystem == SourceSystemKind.AzureDevOpsServices ||
+              inventory.SourceProvider == ProviderKeys.AzureDevOpsServer &&
+                inventory.Snapshot.SourceSystem == SourceSystemKind.AzureDevOpsServer))
             throw new GitSourceBundleException("AzureGitSourceSnapshotUnavailable");
 
         var matches = inventory.Snapshot.Projects
@@ -32,6 +34,6 @@ public sealed class PostgresAzureGitSourceLocationResolver(AppDbContext db)
         if (matches.Length != 1)
             throw new GitSourceBundleException("AzureGitSourceMappingInvalid");
         return new(connectionId, inventory.Organization,
-            matches[0].Project.Name, matches[0].Repo.Name, repositoryId);
+            matches[0].Project.Name, matches[0].Repo.Name, repositoryId, inventory.SourceProvider);
     }
 }

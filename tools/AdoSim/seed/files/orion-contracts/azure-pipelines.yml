@@ -1,0 +1,13 @@
+trigger:
+- main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+- script: dotnet restore
+  displayName: dotnet restore
+- script: dotnet build --configuration Release --no-restore
+  displayName: dotnet build
+- script: dotnet test --configuration Release --no-build
+  displayName: dotnet test

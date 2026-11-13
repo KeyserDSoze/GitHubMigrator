@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <PackageId>Orion.Core</PackageId>
+    <Description>Shared domain primitives for the Orion platform.</Description>
+    <Authors>Orion Commerce</Authors>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>

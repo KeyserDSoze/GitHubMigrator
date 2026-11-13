@@ -1,0 +1,65 @@
+{
+  "pipelineId": 2002,
+  "name": "orion-api nightly scan",
+  "source": {
+    "repo": "orion-api",
+    "path": "/pipelines/nightly-scan.yml"
+  },
+  "equivalence": "partial",
+  "originalTriggers": [
+    "schedule: cron 30 1 * * * (UTC) on main, always: true (runs even without changes)",
+    "no CI trigger, no pull request trigger"
+  ],
+  "plan": {
+    "secrets": [
+      "SONAR_TOKEN"
+    ],
+    "variables": [
+      "AZURE_REGION",
+      "ENVIRONMENT_NAME",
+      "LOG_LEVEL",
+      "SONAR_HOST_URL"
+    ]
+  },
+  "taskMap": [
+    {
+      "azure": "UseDotNet@2",
+      "github": "actions/setup-dotnet 8.x"
+    },
+    {
+      "azure": "SonarQubePrepare@5",
+      "github": "run: dotnet sonarscanner begin (token and host from the SONAR_TOKEN secret and SONAR_HOST_URL variable)",
+      "note": "the service connection orion-sonarqube is replaced by that secret and variable"
+    },
+    {
+      "azure": "DotNetCoreCLI@2",
+      "github": "run: dotnet build Orion.sln"
+    },
+    {
+      "azure": "SonarQubeAnalyze@5",
+      "github": "run: dotnet sonarscanner end"
+    },
+    {
+      "azure": "SonarQubePublish@5",
+      "github": "sonarsource/sonarqube-quality-gate-action (polling 300 s, timeout-minutes 6)",
+      "note": "the scan metadata file path .sonarqube/out/.sonar/report-task.txt is the MSBuild scanner default and was not verified"
+    }
+  ],
+  "acceptedWarnings": [
+    {
+      "code": "ZIZMOR_SECRETS_OUTSIDE_ENV",
+      "why": "The source gives these jobs no environment and keeps the credentials at repository level (Azure variable groups are not environment-scoped). Scoping them to a GitHub environment is a hardening choice for the reviewer; it would add approvals and deployment records the source does not have."
+    }
+  ],
+  "notes": [
+    "NOT executed on GitHub.",
+    "The nightly schedule is only recorded in originalTriggers: enabling it is a separate approval.",
+    "dotnet-sonarscanner is installed unpinned with dotnet tool install; pin it when the version is chosen."
+  ],
+  "extraAllowedHosts": [],
+  "unsupported": [],
+  "templates": [],
+  "redaction": {
+    "findings": []
+  }
+}

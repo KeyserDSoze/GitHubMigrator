@@ -21,6 +21,16 @@ public sealed class ProviderWireMockTests
     private readonly MigrationConnection _azure = NewConnection("azure-devops-services", ConnectionDirection.Source, "az-org", "src-secret");
     private readonly MigrationConnection _github = NewConnection("github-enterprise-cloud", ConnectionDirection.Destination, "gh-org", "dst-secret");
 
+    // Azure DevOps returns BuildDefinition.variableGroups as VariableGroup objects, not bare ids.
+    [Fact]
+    public async Task Variable_groups_listed_as_objects_by_a_real_server_are_resolved_too()
+    {
+        var result = await Service(AzureMock(objectVariableGroups: true), GitHubMock(), new RecordingAi())
+            .PreviewPipelineAsync(_azure.Id, _github.Id, "project", 42, "destination", CancellationToken.None);
+        Assert.Contains(result.SetupSteps, s => s.Name == "DEPLOY_TOKEN" && s.Kind == "secret");
+        Assert.DoesNotContain("NEVER_REVEAL_GROUP_VALUE", JsonSerializer.Serialize(result));
+    }
+
     [Fact]
     public async Task Full_pipeline_HTTP_to_business_preview_preserves_sanitized_tasks_and_omits_secrets()
     {
@@ -231,7 +241,7 @@ public sealed class ProviderWireMockTests
     }
 
     private static MockHttp AzureMock(HttpStatusCode? pipelineStatus = null,
-        HttpStatusCode? yamlStatus = null) => new(req =>
+        HttpStatusCode? yamlStatus = null, bool objectVariableGroups = false) => new(req =>
     {
         var path = req.RequestUri!.AbsolutePath;
         if (path.EndsWith("/_apis/pipelines/42"))
@@ -239,7 +249,8 @@ public sealed class ProviderWireMockTests
                 ? new HttpResponseMessage(pipelineStatus.Value)
                 : Json("""{"id":42,"name":"Release API","configuration":{"type":"yaml","path":"/azure-pipelines.yml","repository":{"id":"repo-1"}}}""");
         if (path.EndsWith("/_apis/build/definitions/42"))
-            return Json(JsonSerializer.Serialize(new { repository = new { id = "repo-1" }, variableGroups = new[] { 8 },
+            return Json(JsonSerializer.Serialize(new { repository = new { id = "repo-1" },
+                variableGroups = objectVariableGroups ? (object)new[] { new { id = 8, name = "prod", type = "Vsts" } } : new[] { 8 },
                 variables = new Dictionary<string, object> {
                     ["AZURE_CLIENT_ID"] = new { isSecret = true, value = SourceValue },
                     ["BUILD_FLAVOR"] = new { isSecret = false, value = SourceValue }

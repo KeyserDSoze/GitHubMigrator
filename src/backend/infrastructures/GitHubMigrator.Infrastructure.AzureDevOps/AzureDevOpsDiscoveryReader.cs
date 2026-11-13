@@ -11,7 +11,8 @@ namespace GitHubMigrator.Infrastructure.AzureDevOps;
 // F-003 read-only inventory. Every request is built from a fixed Microsoft hostname.
 // No custom URL, redirects, cookies, or user-provided request path is accepted.
 public class AzureDevOpsDiscoveryReader(
-    HttpClient client, TimeProvider clock, IDiscoveryPageCheckpointStore? checkpoints = null)
+    HttpClient client, TimeProvider clock, IDiscoveryPageCheckpointStore? checkpoints = null,
+    AzureDevOpsServicesEndpoints? services = null)
     : IResumableDiscoveryReader, IEndpointAwareDiscoveryReader
 {
     public virtual string ProviderKey => ProviderKeys.AzureDevOpsServices;
@@ -24,7 +25,7 @@ public class AzureDevOpsDiscoveryReader(
     // Cloud: fixed Microsoft hosts. Self-hosted subclasses resolve and re-validate the server root.
     protected virtual Task<AzureDevOpsEndpoints> ResolveEndpointsAsync(
         string organization, string? baseUrl, string accessToken, CancellationToken ct) =>
-        Task.FromResult(AzureDevOpsEndpoints.Services(organization));
+        Task.FromResult(AzureDevOpsEndpoints.Services(organization, services));
 
     protected virtual SourceSystemKind SourceSystem => SourceSystemKind.AzureDevOpsServices;
 

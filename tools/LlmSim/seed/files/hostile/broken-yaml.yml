@@ -1,0 +1,10 @@
+name: Broken
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+   steps:
+      - name: Build
+        run: echo "this step is mis-indented"
+      - name: Test
+        run: dotnet test

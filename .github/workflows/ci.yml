@@ -30,8 +30,32 @@ jobs:
           dotnet-version: 10.0.x
       - name: Fail fast on EF Core F-061 SQL brace regression
         run: python3 script/check_f061_sql_format.py
+      # The AI conversion gates run actionlint and zizmor on generated workflows. A missing analyser must fail the
+      # build (GITHUBMIGRATOR_REQUIRE_TOOLS) instead of silently skipping the real-tool tests. Versions are pinned and
+      # the archives verified against the sha256 published with each release.
+      - name: Install pinned workflow analysers (actionlint 1.7.12, zizmor 1.32.0)
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/workflow-tools"
+          mkdir -p "$tools"
+          cd "$tools"
+          curl -fsSL -o actionlint.tgz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tgz" | sha256sum -c -
+          tar xzf actionlint.tgz actionlint
+          curl -fsSL -o zizmor.tgz https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-x86_64-unknown-linux-gnu.tar.gz
+          echo "bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b  zizmor.tgz" | sha256sum -c -
+          tar xzf zizmor.tgz zizmor
+          ./actionlint -version | head -1
+          ./zizmor --version
+          {
+            echo "GITHUBMIGRATOR_ACTIONLINT=$tools/actionlint"
+            echo "GITHUBMIGRATOR_ZIZMOR=$tools/zizmor"
+            echo "GITHUBMIGRATOR_REQUIRE_TOOLS=true"
+          } >> "$GITHUB_ENV"
       - name: Restore and test domain + business logic
         run: dotnet test src/backend/GitHubMigrator.slnx --verbosity normal --collect:"XPlat Code Coverage"
+      - name: Compile the opt-in live smoke tests (they run only with credentials, see docs/live-smoke-tests.md)
+        run: dotnet build tests/live/LiveSmoke.Tests/LiveSmoke.Tests.csproj --configuration Release
       - name: Compile actual ASP.NET API entrypoint
         run: dotnet build src/backend/applications/GitHubMigrator.Api/GitHubMigrator.Api.csproj --configuration Release
       - name: Upload backend coverage and test results
@@ -125,6 +149,28 @@ jobs:
           dotnet-version: 10.0.x
       - name: Verify F-061 bootstrap SQL formatting before integration
         run: python3 script/check_f061_sql_format.py
+      # The approval of an AI-converted workflow runs actionlint and zizmor again on the kept text; the API integration tests need
+      # them to obtain an approvable proposal. A missing analyser must fail the build (GITHUBMIGRATOR_REQUIRE_TOOLS), not skip. Versions are pinned and
+      # the archives verified against the sha256 published with each release.
+      - name: Install pinned workflow analysers (actionlint 1.7.12, zizmor 1.32.0)
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/workflow-tools"
+          mkdir -p "$tools"
+          cd "$tools"
+          curl -fsSL -o actionlint.tgz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tgz" | sha256sum -c -
+          tar xzf actionlint.tgz actionlint
+          curl -fsSL -o zizmor.tgz https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-x86_64-unknown-linux-gnu.tar.gz
+          echo "bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b  zizmor.tgz" | sha256sum -c -
+          tar xzf zizmor.tgz zizmor
+          ./actionlint -version | head -1
+          ./zizmor --version
+          {
+            echo "GITHUBMIGRATOR_ACTIONLINT=$tools/actionlint"
+            echo "GITHUBMIGRATOR_ZIZMOR=$tools/zizmor"
+            echo "GITHUBMIGRATOR_REQUIRE_TOOLS=true"
+          } >> "$GITHUB_ENV"
       - name: Verify safe TRX timing summarizer
         run: python3 -m unittest discover -s script -p 'test_pg17_trx_timing_summary.py'
       # #132: fail fast on permission/owner/runtime-host regressions

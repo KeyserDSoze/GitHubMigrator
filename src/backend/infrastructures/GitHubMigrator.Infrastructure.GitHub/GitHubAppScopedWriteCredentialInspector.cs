@@ -11,11 +11,12 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 // issuance endpoint (POST /app/installations/{id}/access_tokens). No
 // repository API write, no Git push, no token returned or persisted.
 public sealed class GitHubAppScopedWriteCredentialInspector(
-    HttpClient client, TimeProvider clock)
+    HttpClient client, TimeProvider clock, GitHubEndpoints? endpoints = null)
     : IGitHubAppScopedWriteCredentialInspector, IGitHubRemoteAppPreflightReader,
       IGitHubSandboxVerifiedTokenScope, IGitHubRecoveryReadOnlyTokenScope
 {
     private const int MaxReplyBytes = 32_768;
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
 
     // F-087: read-only recovery mints a SEPARATE token with only
     // contents:read; the legacy F-083 writer token is never reused.
@@ -106,9 +107,9 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
 
         // Each reader has only fixed api.github.com GET paths. Even the
         // GitHub App's contents:write token cannot enter a mutation path.
-        var refs = await new GitHubRefObservationReader(client, clock).ReadAsync(
+        var refs = await new GitHubRefObservationReader(client, clock, endpoints).ReadAsync(
             target.Organization, target.Repository, minted.Token, ct);
-        var policies = await new GitHubCandidatePolicyReader(client, clock)
+        var policies = await new GitHubCandidatePolicyReader(client, clock, endpoints)
             .ReadAsync(target.Organization, target.Repository,
                 target.RepositoryId, minted.Token, packet.Candidates, ct);
 
@@ -116,7 +117,7 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         // Re-read the entire typed head/tag ref set after the policy GETs.
         // A branch, annotated tag or baseline ref changed mid-review
         // must never yield a sealed F-051 preflight receipt.
-        var finalRefs = await new GitHubRefObservationReader(client, clock)
+        var finalRefs = await new GitHubRefObservationReader(client, clock, endpoints)
             .ReadAsync(target.Organization, target.Repository,
                 minted.Token, ct);
         if (!refs.Refs.SequenceEqual(finalRefs.Refs))
@@ -185,9 +186,9 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
             organization, appJwt, ct, readOnly);
 
         using var mint = new HttpRequestMessage(HttpMethod.Post,
-            "https://api.github.com/app/installations/" +
+            Endpoints.Api("app/installations/" +
             installationId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
-            "/access_tokens");
+            "/access_tokens"));
         mint.Headers.Authorization = new AuthenticationHeaderValue("Bearer", appJwt);
         mint.Headers.UserAgent.ParseAdd("GitHubMigrator/1.0");
         mint.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(
@@ -262,9 +263,9 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         long expectedRepositoryId, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get,
-            "https://api.github.com/repos/" +
+            Endpoints.Api("repos/" +
             Uri.EscapeDataString(organization) + "/" +
-            Uri.EscapeDataString(repository));
+            Uri.EscapeDataString(repository)));
         request.Headers.Authorization =
             new AuthenticationHeaderValue("Bearer", token);
         request.Headers.UserAgent.ParseAdd("GitHubMigrator/1.0");
@@ -300,9 +301,9 @@ public sealed class GitHubAppScopedWriteCredentialInspector(
         CancellationToken ct, bool readOnly)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get,
-            "https://api.github.com/app/installations/" +
+            Endpoints.Api("app/installations/" +
             installationId.ToString(
-                System.Globalization.CultureInfo.InvariantCulture));
+                System.Globalization.CultureInfo.InvariantCulture)));
         request.Headers.Authorization =
             new AuthenticationHeaderValue("Bearer", appJwt);
         request.Headers.UserAgent.ParseAdd("GitHubMigrator/1.0");

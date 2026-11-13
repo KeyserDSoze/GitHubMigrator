@@ -6,8 +6,9 @@ using GitHubMigrator.Domain;
 
 namespace GitHubMigrator.Infrastructure.GitHub;
 
-public sealed class GitHubConnectionValidator(HttpClient client) : IConnectionValidator
+public sealed class GitHubConnectionValidator(HttpClient client, GitHubEndpoints? endpoints = null) : IConnectionValidator
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
     public string ProviderKey => "github-enterprise-cloud";
     public ConnectionDirection Direction => ConnectionDirection.Destination;
 
@@ -15,7 +16,7 @@ public sealed class GitHubConnectionValidator(HttpClient client) : IConnectionVa
     {
         try
         {
-            using var identity = await SendGetAsync("https://api.github.com/user", personalAccessToken, ct);
+            using var identity = await SendGetAsync(Endpoints.Api("user"), personalAccessToken, ct);
             if (identity.StatusCode == HttpStatusCode.Unauthorized)
                 return new(false, "Unauthorized", null, "not_verified");
             if (identity.StatusCode == HttpStatusCode.Forbidden)
@@ -30,7 +31,7 @@ public sealed class GitHubConnectionValidator(HttpClient client) : IConnectionVa
                 string.IsNullOrWhiteSpace(login.GetString()))
                 return new(false, "UnexpectedResponse", null, "not_verified");
 
-            using var org = await SendGetAsync($"https://api.github.com/orgs/{Uri.EscapeDataString(organization)}", personalAccessToken, ct);
+            using var org = await SendGetAsync(Endpoints.Api($"orgs/{Uri.EscapeDataString(organization)}"), personalAccessToken, ct);
             if (org.StatusCode == HttpStatusCode.NotFound)
                 return new(false, "OrganizationNotFound", null, "not_verified");
             if (org.StatusCode == HttpStatusCode.Forbidden)

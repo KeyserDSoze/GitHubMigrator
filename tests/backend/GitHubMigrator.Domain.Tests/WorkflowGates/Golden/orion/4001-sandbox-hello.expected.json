@@ -1,0 +1,37 @@
+{
+  "pipelineId": 4001,
+  "name": "sandbox hello",
+  "source": {
+    "repo": "sandbox-playground",
+    "path": "/azure-pipelines.yml"
+  },
+  "equivalence": "full",
+  "originalTriggers": [
+    "none (trigger: none, pr: none): manual only already"
+  ],
+  "plan": {
+    "secrets": [],
+    "variables": []
+  },
+  "extraAllowedHosts": [],
+  "taskMap": [],
+  "unsupported": [],
+  "templates": [],
+  "acceptedWarnings": [
+    {
+      "code": "SELF_HOSTED_RUNNER",
+      "why": "The source runs on a self-hosted pool; a self-hosted runner group has to exist at the destination."
+    },
+    {
+      "code": "ZIZMOR_SELF_HOSTED_RUNNER",
+      "why": "Same fact reported by zizmor: self-hosted runners are persistent and need hardening that is outside this workflow."
+    }
+  ],
+  "redaction": {
+    "findings": []
+  },
+  "notes": [
+    "The parameter becomes a typed workflow_dispatch input passed through env, never interpolated into the script.",
+    "System.Debug maps to runner.debug (step debug logging)."
+  ]
+}

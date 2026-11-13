@@ -180,7 +180,7 @@ function App() {
             <h3>{tile.title}</h3><p>{tile.text}</p><div className="card-foot">{tile.index !== '03' ? t('active') : t('planned')} <CircleHelp size={15} /></div>
           </article>; })}</div>
         </>}
-        {page === 'connections' && <ConnectionsPage token={session.accessToken} isAdmin={isAdmin} />}
+        {page === 'connections' && <ConnectionsPage token={session.accessToken} isAdmin={isAdmin} isSuperAdmin={session.role === 'superadmin'} />}
         {page === 'repositories' && <DiscoveryPage token={session.accessToken} isAdmin={isAdmin}
           isSuperAdmin={session.role === 'superadmin'}
           onViewReconciliation={(preparationId, planId) => {

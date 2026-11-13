@@ -1,0 +1,42 @@
+# azure-tasks: converted=UseDotNet@2,SonarQubePrepare@5,DotNetCoreCLI@2,SonarQubeAnalyze@5,SonarQubePublish@5 manual=none
+name: orion-api nightly scan
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  ENVIRONMENT_NAME: ${{ vars.ENVIRONMENT_NAME }}
+  LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+  AZURE_REGION: ${{ vars.AZURE_REGION }}
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 8.x
+      - name: Prepare SonarQube analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        run: |
+          dotnet tool install --global dotnet-sonarscanner
+          dotnet sonarscanner begin /k:"orion-api" /n:"Orion API" /d:sonar.host.url="$SONAR_HOST_URL" /d:sonar.token="$SONAR_TOKEN"
+      - name: Build for analysis
+        run: dotnet build Orion.sln
+      - name: Run analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
+      - name: Publish quality gate result
+        uses: sonarsource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1.2.1
+        timeout-minutes: 6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        with:
+          scanMetadataReportFile: .sonarqube/out/.sonar/report-task.txt
+          pollingTimeoutSec: 300

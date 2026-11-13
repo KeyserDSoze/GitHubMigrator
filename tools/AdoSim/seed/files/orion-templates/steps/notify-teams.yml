@@ -1,0 +1,16 @@
+parameters:
+- name: status
+  type: string
+  default: Succeeded
+- name: webhookVariable
+  type: string
+  default: TEAMS_WEBHOOK_URL
+
+steps:
+- pwsh: |
+    $body = @{ text = "Orion pipeline $(Build.DefinitionName) $(Build.BuildNumber): ${{ parameters.status }}" } | ConvertTo-Json
+    Invoke-RestMethod -Method Post -Uri $env:WEBHOOK -ContentType 'application/json' -Body $body
+  displayName: Notify Teams
+  condition: always()
+  env:
+    WEBHOOK: $(${{ parameters.webhookVariable }})

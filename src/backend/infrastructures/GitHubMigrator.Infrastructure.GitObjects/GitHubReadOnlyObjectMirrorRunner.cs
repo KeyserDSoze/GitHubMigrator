@@ -22,12 +22,15 @@ public sealed class GitHubReadOnlyObjectMirrorRunner : IGitHubReadOnlyObjectMirr
     // Test-local origin is deliberately INTERNAL and inaccessible to normal
     // application composition. Production always derives github.com HTTPS.
     private readonly string? testLocalOrigin;
+    private readonly GitHubEndpoints endpoints;
+    private string GitScheme => new Uri(endpoints.WebRoot).Scheme;
 
     public GitHubReadOnlyObjectMirrorRunner(
         string sourceRoot, string scratchRoot,
         GitHubReadOnlyObjectMirrorOptions options,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null, GitHubEndpoints? gitHubEndpoints = null)
     {
+        endpoints = gitHubEndpoints ?? GitHubEndpoints.Cloud;
         this.sourceRoot = sourceRoot;
         this.scratchRoot = scratchRoot;
         this.options = options;
@@ -52,7 +55,7 @@ public sealed class GitHubReadOnlyObjectMirrorRunner : IGitHubReadOnlyObjectMirr
     {
         var now = clock.GetUtcNow();
         var realUrl = GitHubReadOnlyObjectMirrorIntegrity.RemoteUrl(
-            request, options, now);
+            request, options, now, endpoints);
         if (string.IsNullOrEmpty(installationToken) ||
             installationToken.Length > 1024 ||
             installationToken.Any(char.IsControl))
@@ -171,7 +174,7 @@ public sealed class GitHubReadOnlyObjectMirrorRunner : IGitHubReadOnlyObjectMirr
                     "RemoteMirrorSymlinkBlocked");
     }
 
-    private static async Task<IReadOnlyList<GitMirrorRef>> ObserveRemoteAsync(
+    private async Task<IReadOnlyList<GitMirrorRef>> ObserveRemoteAsync(
         string gitDir, string remote, string token, bool localOnly,
         CancellationToken ct)
     {
@@ -195,7 +198,7 @@ public sealed class GitHubReadOnlyObjectMirrorRunner : IGitHubReadOnlyObjectMirr
         }
     }
 
-    private static async Task<IReadOnlyList<GitHubObservedRef>> PhysicalTypedRefsAsync(
+    private async Task<IReadOnlyList<GitHubObservedRef>> PhysicalTypedRefsAsync(
         string gitDir, string remote, string token, bool localOnly,
         CancellationToken ct)
     {
@@ -215,7 +218,7 @@ public sealed class GitHubReadOnlyObjectMirrorRunner : IGitHubReadOnlyObjectMirr
         return items;
     }
 
-    private static async Task<string> GitAsync(
+    private async Task<string> GitAsync(
         string gitDir, string remote, string token, bool localOnly,
         CancellationToken external, params string[] args)
     {
@@ -238,7 +241,8 @@ public sealed class GitHubReadOnlyObjectMirrorRunner : IGitHubReadOnlyObjectMirr
         env["GIT_NO_REPLACE_OBJECTS"] = "1";
         env["GIT_NO_LAZY_FETCH"] = "1";
         env["GIT_OPTIONAL_LOCKS"] = "0";
-        env["GIT_ALLOW_PROTOCOL"] = localOnly ? "file" : "https";
+        // https for github.com; http only when the operator allow-listed a plain-HTTP lab endpoint.
+        env["GIT_ALLOW_PROTOCOL"] = localOnly ? "file" : GitScheme;
         // Disable credential helpers and redirects: the ephemeral GitHub
         // installation token must not leak to another host.
         env["GIT_CONFIG_COUNT"] = localOnly ? "4" : "5";
@@ -252,7 +256,7 @@ public sealed class GitHubReadOnlyObjectMirrorRunner : IGitHubReadOnlyObjectMirr
         env["GIT_CONFIG_VALUE_3"] = "never";
         if (!localOnly)
         {
-            env["GIT_CONFIG_KEY_4"] = "http.https://github.com/.extraheader";
+            env["GIT_CONFIG_KEY_4"] = "http." + endpoints.WebRoot + "/.extraheader";
             env["GIT_CONFIG_VALUE_4"] = "AUTHORIZATION: basic " +
                 Convert.ToBase64String(Encoding.UTF8.GetBytes(
                     "x-access-token:" + token));

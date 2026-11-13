@@ -204,6 +204,22 @@ export type ConnectionDraft = { name: string; providerKey: string; organization:
 export type ValidationResult = {
   isValid: boolean; code: string; authenticatedAs: string | null; permissionAssessment: string
 };
+export type AiProviderKey = 'OpenAICompatible' | 'AzureOpenAI';
+export type AiAuthMode = 'ApiKey' | 'None' | 'ManagedIdentity';
+export type AiConnection = {
+  id: string; name: string; provider: AiProviderKey; endpoint: string; model: string; auth: AiAuthMode;
+  apiVersion: string | null; tokenParameter: 'MaxTokens' | 'MaxCompletionTokens'; maxOutputTokens: number;
+  temperature: number | null; timeoutSeconds: number; maxInputBytes: number; createdAtUtc: string;
+  verifiedAtUtc: string | null; verificationCode: string; verifiedModel: string | null;
+  sendSourceContent: boolean; consentAtUtc: string | null; consentBy: string | null;
+};
+export type AiConnectionDraft = {
+  name: string; provider: AiProviderKey; endpoint: string; model: string; auth: AiAuthMode;
+  apiKey?: string; apiVersion?: string; tokenParameter?: string; maxOutputTokens?: number;
+  sendTemperature?: boolean; temperature?: number; timeoutSeconds?: number;
+};
+export type AiOptions = { providers: AiProviderKey[]; allowedHosts: string[]; allowHttp: boolean; managedIdentityAvailable: boolean };
+export type AiVerification = { isValid: boolean; code: string; model: string | null; detail: string | null };
 export type DiscoveryRefManifest = {
   jobId: string; sourceConnectionId: string;
   assetCount: number; chunkSize: number; chunkCount: number;
@@ -491,6 +507,44 @@ export type PipelineBlueprint = {
   workflowYaml: string; setupSteps: SetupStep[]; issues: WorkloadIssue[];
   ai: { status: string; findings: string[] }; deployableWithoutReview: boolean;
 };
+export type ConversionGate = { name: string; status: 'Passed' | 'Failed' | 'NotRun'; detail: string | null };
+export type ConversionFinding = { gate: string; code: string; severity: 'Info' | 'Warning' | 'Blocker'; message: string; line: number | null };
+export type ConversionAttempt = {
+  number: number; outcome: string; promptTokens: number | null; completionTokens: number | null;
+  workflowSha256: string | null; blockerCodes: string[];
+};
+export type ConversionProposal = {
+  status: 'ReadyForReview' | 'Blocked' | 'NotAttempted'; reason: string | null; workflowYaml: string | null;
+  workflowSha256: string | null; modelNotes: string | null; approvable: boolean; proposalOnly: boolean; saved: boolean;
+  proposalId?: string | null; proposalState?: ProposalState | null;
+  gates: ConversionGate[]; findings: ConversionFinding[];
+  plan: {
+    secrets: { name: string; origin: string }[]; variables: { name: string; origin: string }[];
+    connections: { connection: string; kind: string; guidance: string; secrets: string[]; variables: string[] }[]; notes: string[];
+  };
+  provenance: {
+    aiConnectionId: string; provider: string; host: string; model: string; reportedModel: string | null;
+    promptSha256: string; planSha256: string; policyVersion: string; actionCatalogVerifiedOn: string;
+    redactions: { kind: string; count: number }[]; totalPromptTokens: number; totalCompletionTokens: number;
+    attempts: ConversionAttempt[]; generatedAtUtc: string;
+  } | null;
+};
+export type ProposalState = 'Proposed' | 'Blocked' | 'Approved' | 'Rejected' | 'Revoked';
+export type ProposalSummary = {
+  id: string; state: ProposalState; reason: string | null; workflowSha256: string | null; createdBy: string; createdAtUtc: string;
+};
+export type ProposalEvent = {
+  id: number; type: 'Created' | 'Approved' | 'Rejected' | 'Revoked'; actor: string; occurredAtUtc: string;
+  workflowSha256: string | null; note: string | null; reportSha256: string | null; policyVersion: string | null; acknowledgedWarnings: string[];
+};
+export type ProposalDetail = Pick<ConversionProposal, 'gates' | 'findings' | 'plan' | 'provenance' | 'workflowYaml' | 'workflowSha256' | 'modelNotes' | 'reason'> & {
+  id: string; state: ProposalState; sourceConnectionId: string; projectId: string; pipelineId: number; aiConnectionId: string;
+  approvedSha256: string | null; integrityOk: boolean; createdBy: string; createdAtUtc: string; createdByMe: boolean;
+  requiresSecondApprover: boolean; canApprove: boolean; events: ProposalEvent[];
+};
+export type ConversionStatus = {
+  actionlint: boolean; zizmor: boolean; canBeApprovable: boolean; policyVersion: string; actionCatalogVerifiedOn: string;
+};
 export type BoardIssueDraft = {
   sourceId: number; title: string; body: string; state: string; issues: WorkloadIssue[];
 };
@@ -507,6 +561,11 @@ export type BoardReconciliationReport = {
 };
 const base = import.meta.env.VITE_API_URL ?? '';
 
+// The message stays the machine code the API answered with; `details` carries the codes that explain it (never text from a workflow).
+export class ApiError extends Error {
+  constructor(message: string, public readonly details: string[] = [], public readonly status = 0) { super(message); }
+}
+
 async function call<T>(path: string, options: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -515,8 +574,9 @@ async function call<T>(path: string, options: RequestInit): Promise<T> {
     throw new Error('Network error - verify that the API is running.');
   }
   if (!response.ok) {
-    const problem = await response.json().catch(() => null) as { title?: string; error?: string } | null;
-    throw new Error(problem?.error ?? problem?.title ?? `HTTP ${response.status}`);
+    const problem = await response.json().catch(() => null) as { title?: string; error?: string; details?: string[] } | null;
+    throw new ApiError(problem?.error ?? problem?.title ?? `HTTP ${response.status}`,
+      Array.isArray(problem?.details) ? problem.details : [], response.status);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -554,6 +614,30 @@ export const api = {
     call<Connection>(`/api/connections/${encodeURIComponent(id)}/credential`, {
       method: 'PUT', headers: withToken(token), body: JSON.stringify({ personalAccessToken })
     }),
+  aiOptions: (token: string) =>
+    call<AiOptions>('/api/ai-connections/options', { headers: withToken(token) }),
+  listAiConnections: (token: string) =>
+    call<AiConnection[]>('/api/ai-connections', { headers: withToken(token) }),
+  validateAiConnection: (token: string, draft: AiConnectionDraft) =>
+    call<AiVerification>('/api/ai-connections/validate', {
+      method: 'POST', headers: withToken(token), body: JSON.stringify(draft)
+    }),
+  saveAiConnection: (token: string, draft: AiConnectionDraft) =>
+    call<AiConnection>('/api/ai-connections', {
+      method: 'POST', headers: withToken(token), body: JSON.stringify(draft)
+    }),
+  verifyAiConnection: (token: string, id: string) =>
+    call<AiConnection>(`/api/ai-connections/${encodeURIComponent(id)}/verify`, { method: 'POST', headers: withToken(token) }),
+  rotateAiCredential: (token: string, id: string, apiKey: string) =>
+    call<AiConnection>(`/api/ai-connections/${encodeURIComponent(id)}/credential`, {
+      method: 'PUT', headers: withToken(token), body: JSON.stringify({ apiKey })
+    }),
+  setAiSourceConsent: (token: string, id: string, sendSourceContent: boolean) =>
+    call<AiConnection>(`/api/ai-connections/${encodeURIComponent(id)}/source-consent`, {
+      method: 'PUT', headers: withToken(token), body: JSON.stringify({ sendSourceContent })
+    }),
+  deleteAiConnection: (token: string, id: string) =>
+    call<void>(`/api/ai-connections/${encodeURIComponent(id)}`, { method: 'DELETE', headers: withToken(token) }),
   listDiscoveries: (token: string) =>
     call<DiscoverySummary[]>('/api/discoveries', { headers: withToken(token) }),
   getDiscovery: (token: string, id: string) =>
@@ -867,6 +951,30 @@ export const api = {
     call<PipelineBlueprint>('/api/workloads/pipelines/preview', {
       method: 'POST', headers: withToken(token),
       body: JSON.stringify({ sourceConnectionId, destinationConnectionId, projectId, pipelineId, targetRepository })
+    }),
+  conversionStatus: (token: string) =>
+    call<ConversionStatus>('/api/workloads/pipelines/convert/status', { headers: withToken(token) }),
+  convertPipeline: (token: string, sourceConnectionId: string, projectId: string, pipelineId: number, aiConnectionId: string) =>
+    call<ConversionProposal>('/api/workloads/pipelines/convert', {
+      method: 'POST', headers: withToken(token),
+      body: JSON.stringify({ sourceConnectionId, projectId, pipelineId, aiConnectionId })
+    }),
+  listProposals: (token: string, sourceConnectionId: string, projectId: string, pipelineId: number) =>
+    call<ProposalSummary[]>('/api/workloads/pipelines/proposals?' + new URLSearchParams({
+      sourceConnectionId, projectId, pipelineId: String(pipelineId) }), { headers: withToken(token) }),
+  getProposal: (token: string, id: string) =>
+    call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}`, { headers: withToken(token) }),
+  approveProposal: (token: string, id: string, workflowSha256: string, acknowledgedWarnings: string[], note: string) =>
+    call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/approve`, {
+      method: 'POST', headers: withToken(token), body: JSON.stringify({ workflowSha256, acknowledgedWarnings, note })
+    }),
+  rejectProposal: (token: string, id: string, note: string) =>
+    call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/reject`, {
+      method: 'POST', headers: withToken(token), body: JSON.stringify({ note })
+    }),
+  revokeProposal: (token: string, id: string, note: string) =>
+    call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/revoke`, {
+      method: 'POST', headers: withToken(token), body: JSON.stringify({ note })
     }),
   previewBoards: (token: string, sourceConnectionId: string, projectId: string,
     workItemIds: number[], knownGitHubIssues: Record<number, number>) =>

@@ -19,5 +19,11 @@
     <ProjectReference Include="../../../src/backend/infrastructures/GitHubMigrator.Infrastructure.PostgreSql/GitHubMigrator.Infrastructure.PostgreSql.csproj" />
     <ProjectReference Include="../../../src/backend/infrastructures/GitHubMigrator.Infrastructure.AzureDevOps/GitHubMigrator.Infrastructure.AzureDevOps.csproj" />
     <ProjectReference Include="../../../src/backend/infrastructures/GitHubMigrator.Infrastructure.GitHub/GitHubMigrator.Infrastructure.GitHub.csproj" />
+    <ProjectReference Include="../../../src/backend/infrastructures/GitHubMigrator.Infrastructure.WorkflowTools/GitHubMigrator.Infrastructure.WorkflowTools.csproj" />
+    <ProjectReference Include="../../../src/backend/infrastructures/GitHubMigrator.Infrastructure.Ai/GitHubMigrator.Infrastructure.Ai.csproj" />
+    <ProjectReference Include="../../../tools/LlmSim/LlmSim.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="WorkflowGates/Golden/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

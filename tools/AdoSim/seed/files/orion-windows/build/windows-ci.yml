@@ -1,0 +1,94 @@
+# Orion desktop client: Windows build, plus a Linux job that runs integration tests in a container with sidecar services.
+name: desktop-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+    - main
+    - release/*
+
+resources:
+  pipelines:
+  - pipeline: corelib
+    source: orion-lib Pack and Publish
+    project: Orion Commerce
+    trigger:
+      branches:
+        include:
+        - main
+  containers:
+  - container: dotnet-sdk
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    options: --cpus 2
+  - container: redis
+    image: redis:7
+    ports:
+    - 6379:6379
+  - container: toolbox
+    image: orioncr.azurecr.io/tools/ci-toolbox:latest
+    endpoint: orion-acr
+
+variables:
+  solution: '**/*.sln'
+  buildPlatform: Any CPU
+  buildConfiguration: Release
+
+jobs:
+- job: WindowsBuild
+  displayName: Build and test the desktop client
+  pool:
+    vmImage: windows-latest
+  steps:
+  - task: NuGetToolInstaller@1
+  - task: NuGetCommand@2
+    displayName: Restore packages
+    inputs:
+      restoreSolution: $(solution)
+  - task: VSBuild@1
+    displayName: Build solution
+    inputs:
+      solution: $(solution)
+      msbuildArgs: /p:DeployOnBuild=true /p:WebPublishMethod=Package /p:PackageAsSingleFile=true
+      platform: $(buildPlatform)
+      configuration: $(buildConfiguration)
+  - task: VSTest@2
+    displayName: Run unit tests
+    inputs:
+      platform: $(buildPlatform)
+      configuration: $(buildConfiguration)
+      testSelector: testAssemblies
+      testAssemblyVer2: |
+        **\*Tests.dll
+        !**\obj\**
+  - task: PowerShell@2
+    displayName: Sign binaries
+    inputs:
+      filePath: scripts/sign.ps1
+      arguments: -Folder $(Build.SourcesDirectory)\src -Thumbprint $(SigningThumbprint)
+      pwsh: true
+  - task: PowerShell@2
+    displayName: Collect installer
+    inputs:
+      targetType: inline
+      script: |
+        New-Item -ItemType Directory -Force -Path "$(Build.ArtifactStagingDirectory)\installer" | Out-Null
+        Copy-Item -Path "src\Orion.Desktop\bin\$(buildConfiguration)\*" -Destination "$(Build.ArtifactStagingDirectory)\installer" -Recurse
+  - task: PublishBuildArtifacts@1
+    inputs:
+      PathtoPublish: $(Build.ArtifactStagingDirectory)
+      ArtifactName: desktop-installer
+
+- job: IntegrationTests
+  displayName: Integration tests in a container
+  dependsOn: WindowsBuild
+  pool:
+    vmImage: ubuntu-latest
+  container: dotnet-sdk
+  services:
+    redis: redis
+  steps:
+  - script: dotnet test tests/Orion.Desktop.Integration --filter Category=Integration
+    displayName: Run integration tests
+    env:
+      REDIS_HOST: redis
+      CORELIB_BUILD: $(resources.pipeline.corelib.runName)

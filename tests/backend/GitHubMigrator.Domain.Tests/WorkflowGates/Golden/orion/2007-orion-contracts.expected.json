@@ -1,0 +1,27 @@
+{
+  "pipelineId": 2007,
+  "name": "Orion.Contracts CI",
+  "source": {
+    "repo": "orion-contracts",
+    "path": "/azure-pipelines.yml"
+  },
+  "equivalence": "full",
+  "originalTriggers": [
+    "push: main"
+  ],
+  "plan": {
+    "secrets": [],
+    "variables": []
+  },
+  "extraAllowedHosts": [],
+  "taskMap": [],
+  "unsupported": [],
+  "templates": [],
+  "acceptedWarnings": [],
+  "redaction": {
+    "findings": []
+  },
+  "notes": [
+    "Only script steps: restore, build, test. Azure checks out the repository implicitly; the workflow does it explicitly with credentials not persisted."
+  ]
+}

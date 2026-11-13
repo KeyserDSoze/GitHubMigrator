@@ -1,0 +1,30 @@
+parameters:
+- name: environment
+  type: string
+- name: workingDirectory
+  type: string
+  default: terraform
+- name: serviceConnection
+  type: string
+  default: orion-azure-dev
+
+steps:
+- task: AzureCLI@2
+  displayName: Terraform plan (${{ parameters.environment }})
+  inputs:
+    azureSubscription: ${{ parameters.serviceConnection }}
+    scriptType: bash
+    scriptLocation: inlineScript
+    workingDirectory: ${{ parameters.workingDirectory }}
+    addSpnToEnvironment: true
+    inlineScript: |
+      export ARM_CLIENT_ID=$servicePrincipalId
+      export ARM_CLIENT_SECRET=$servicePrincipalKey
+      export ARM_TENANT_ID=$tenantId
+      terraform init -input=false -backend-config="key=${{ parameters.environment }}.tfstate"
+      terraform plan -input=false -var-file="env/${{ parameters.environment }}.tfvars.json" -out=tfplan
+- task: PublishPipelineArtifact@1
+  displayName: Publish plan
+  inputs:
+    targetPath: ${{ parameters.workingDirectory }}/tfplan
+    artifact: tfplan-${{ parameters.environment }}

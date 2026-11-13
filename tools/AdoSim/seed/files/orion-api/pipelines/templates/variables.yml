@@ -1,0 +1,7 @@
+variables:
+- name: dotnetSdkVersion
+  value: 8.x
+- name: NUGET_PACKAGES
+  value: $(Pipeline.Workspace)/.nuget/packages
+- name: DOTNET_CLI_TELEMETRY_OPTOUT
+  value: 1

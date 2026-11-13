@@ -1,0 +1,5 @@
+variables:
+- name: orionRegion
+  value: westeurope
+- name: teamsWebhookVariable
+  value: TEAMS_WEBHOOK_URL

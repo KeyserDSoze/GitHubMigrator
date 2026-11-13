@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('up', 'down', 'reset', 'logs', 'ps', 'test', 'ado-server')]
+  [ValidateSet('up', 'lab', 'lab-services', 'down', 'reset', 'logs', 'ps', 'test', 'ado-server')]
   [string]$Action = 'up',
   [ValidateSet('local', 'test')]
   [string]$Mode = 'local'
@@ -35,7 +35,25 @@ function Invoke-Compose {
 
 switch ($Action) {
   'up' {
-    Invoke-Compose up -d --build postgres azurite observability ado-sim api frontend
+    Invoke-Compose up -d --build postgres azurite observability ado-sim gh-sim llm-sim api frontend
+    Invoke-Compose ps
+  }
+  { $_ -in 'lab', 'lab-services' } {
+    # Whole lab: source = ado-sim (Azure DevOps Server, or lab-services: the Azure DevOps Services stand-in),
+    # target = gh-sim (GitHub Enterprise Server shape).
+    if ($Action -eq 'lab-services') {
+      $env:ADO_SIM_FLAVOR = 'services'
+      $env:ADO_SERVICES_CORE_ROOT = 'http://ado-sim:8080'
+      $env:ADO_SERVICES_GRAPH_ROOT = 'http://ado-sim:8080/vssps'
+      $env:ADO_SERVICES_GIT_ROOT = 'http://ado-sim:8080'
+      $env:ADO_SERVICES_ALLOWED_HOSTS = 'ado-sim'
+    }
+    $env:GITHUB_API_ROOT = 'http://gh-sim:8080/api/v3'
+    $env:GITHUB_WEB_ROOT = 'http://gh-sim:8080'
+    $env:GITHUB_ALLOWED_HOSTS = 'gh-sim'
+    # AI connections may point at llm-sim (http://llm-sim:8080/v1, key llm-sim-key, model gpt-sim).
+    $env:AI_ALLOWED_HOSTS = 'llm-sim'
+    Invoke-Compose up -d --build postgres azurite observability ado-sim gh-sim llm-sim api frontend
     Invoke-Compose ps
   }
   'down' { Invoke-Compose down }
@@ -46,7 +64,7 @@ switch ($Action) {
   'logs' { Invoke-Compose logs -f --tail=150 }
   'ps' { Invoke-Compose ps }
   'test' {
-    Invoke-Compose up -d --build postgres azurite observability ado-sim api frontend
+    Invoke-Compose up -d --build postgres azurite observability ado-sim gh-sim llm-sim api frontend
     Invoke-Compose --profile test run --build --rm backend-tests
     Invoke-Compose --profile test run --rm frontend-tests
     Invoke-Compose --profile test run --build --rm integration-tests

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, ClipboardCopy, RefreshCw, ShieldAlert } from 'lucide-react';
+import PipelineConversionPanel from './PipelineConversionPanel';
 import { api, type Connection, type BoardsPreview, type PipelineBlueprint, type BoardReconciliationReport } from './api';
 
 type Props = { mode: 'pipelines' | 'boards'; token: string; isAdmin: boolean };
@@ -170,6 +171,7 @@ export default function WorkloadsPage({ mode, token, isAdmin }: Props) {
         {t('workloadVerify')}
       </button>}
     </form>
+    {mode === 'pipelines' && <PipelineConversionPanel token={token} sourceId={sourceId} projectId={projectId} pipelineId={pipelineId} />}
     {pipeline && <section className="workload-output">
       <h2>{pipeline.sourceName}</h2>
       <p>{t('workloadPath')}: <code>{pipeline.workflowPath}</code></p>

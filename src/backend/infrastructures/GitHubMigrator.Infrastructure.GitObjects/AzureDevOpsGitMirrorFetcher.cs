@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using GitHubMigrator.Business;
+using GitHubMigrator.Domain;
 
 namespace GitHubMigrator.Infrastructure.GitObjects;
 
@@ -16,9 +17,11 @@ public interface IAzureGitReadOnlyTransport
 }
 
 public sealed class AzureDevOpsGitMirrorFetcher(
-    string sourceRoot, IAzureGitReadOnlyTransport? transport = null)
+    string sourceRoot, IAzureGitReadOnlyTransport? transport = null,
+    AzureGitRemotePolicy? policy = null)
     : IAzureGitMirrorFetcher
 {
+    private readonly AzureGitRemotePolicy _policy = policy ?? AzureGitRemotePolicy.Cloud;
     public const long MaxMirrorBytes = 512L * 1024 * 1024;
     // A fast fail-closed admission gate protects CPU/disk from overlapping
     // authenticated requests on one API replica; per-job global fencing
@@ -27,7 +30,9 @@ public sealed class AzureDevOpsGitMirrorFetcher(
     private static readonly Regex OrgPattern = new(
         "^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$", RegexOptions.Compiled);
     private readonly IAzureGitReadOnlyTransport _transport =
-        transport ?? new GitCliAzureReadOnlyTransport();
+        transport ?? new GitCliAzureReadOnlyTransport(policy);
+    private static readonly Regex CollectionPattern = new(
+        "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$", RegexOptions.Compiled);
 
     public static Uri BuildTrustedAzureUri(
         string organization, string projectName, string repositoryName)
@@ -44,6 +49,36 @@ public sealed class AzureDevOpsGitMirrorFetcher(
             !string.IsNullOrEmpty(uri.UserInfo) ||
             !string.IsNullOrEmpty(uri.Query) ||
             !string.IsNullOrEmpty(uri.Fragment))
+            throw new GitSourceBundleException("AzureGitSourceMappingInvalid");
+        return uri;
+    }
+
+    // The remote is always derived from the immutable source location, then re-checked against the
+    // egress policy: Services (Microsoft cloud, or the Development lab stand-in) or an allow-listed Server.
+    internal Uri BuildUri(AzureGitSourceLocation location)
+    {
+        string text;
+        if (location.SourceProvider == ProviderKeys.AzureDevOpsServer)
+        {
+            if (_policy.Server is not { Enabled: true } || location.Organization is null ||
+                !CollectionPattern.IsMatch(location.Organization) ||
+                !ValidSegment(location.ProjectName) || !ValidSegment(location.RepositoryName))
+                throw new GitSourceBundleException("AzureGitSourceMappingInvalid");
+            string root;
+            try { root = _policy.Server.Normalize(location.ServerRoot); }
+            catch (ArgumentException) { throw new GitSourceBundleException("AzureGitSourceMappingInvalid"); }
+            text = $"{root}/{Uri.EscapeDataString(location.Organization)}/{Uri.EscapeDataString(location.ProjectName)}" +
+                $"/_git/{Uri.EscapeDataString(location.RepositoryName)}";
+        }
+        else if (location.SourceProvider == ProviderKeys.AzureDevOpsServices)
+        {
+            if (location.Organization is null || !OrgPattern.IsMatch(location.Organization) ||
+                !ValidSegment(location.ProjectName) || !ValidSegment(location.RepositoryName))
+                throw new GitSourceBundleException("AzureGitSourceMappingInvalid");
+            text = _policy.Services.GitUrl(location.Organization, location.ProjectName, location.RepositoryName);
+        }
+        else throw new GitSourceBundleException("AzureGitSourceMappingInvalid");
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri) || !_policy.Allows(uri))
             throw new GitSourceBundleException("AzureGitSourceMappingInvalid");
         return uri;
     }
@@ -80,8 +115,7 @@ public sealed class AzureDevOpsGitMirrorFetcher(
         { throw new GitSourceBundleException("AzureGitExpectedRefsInvalid"); }
         if (expected.Count == 0)
             throw new GitSourceBundleException("EmptyBundleRefsUnsupported");
-        var url = BuildTrustedAzureUri(request.Location.Organization,
-            request.Location.ProjectName, request.Location.RepositoryName);
+        var url = BuildUri(request.Location);
 
         // Root must be an absolute, operator provisioned, non-symlinked path.
         if (!Path.IsPathFullyQualified(sourceRoot) || !Directory.Exists(sourceRoot))
@@ -185,25 +219,26 @@ public sealed class AzureDevOpsGitMirrorFetcher(
     }
 }
 
-// Production transport: ONLY HTTPS dev.azure.com, no shell and no URL with
-// embedded credentials. Basic PAT is carried only in a child environment
+// Production transport: HTTPS dev.azure.com unless the operator allow-listed another Azure DevOps
+// remote (AzureGitRemotePolicy); no shell and no URL with embedded credentials. Basic PAT is carried only in a child environment
 // variable (not command arguments, stdout, config files or the remote URL).
-public sealed class GitCliAzureReadOnlyTransport : IAzureGitReadOnlyTransport
+public sealed class GitCliAzureReadOnlyTransport(AzureGitRemotePolicy? policy = null) : IAzureGitReadOnlyTransport
 {
     public static readonly TimeSpan FetchDeadline = TimeSpan.FromSeconds(115);
     private const int MaxOutputChars = 12 * 1024 * 1024;
 
     public static ProcessStartInfo CreateFetchStartInfo(
-        string bare, Uri url, string token)
+        string bare, Uri url, string token) =>
+        CreateFetchStartInfo(bare, url, token, AzureGitRemotePolicy.Cloud);
+
+    public static ProcessStartInfo CreateFetchStartInfo(
+        string bare, Uri url, string token, AzureGitRemotePolicy policy)
     {
-        if (url is null || url.Scheme != Uri.UriSchemeHttps ||
-            url.Host != "dev.azure.com" || !url.IsDefaultPort ||
-            !string.IsNullOrEmpty(url.UserInfo) ||
-            !string.IsNullOrEmpty(url.Query) ||
-            !string.IsNullOrEmpty(url.Fragment) ||
+        if (!(policy ?? AzureGitRemotePolicy.Cloud).Allows(url) ||
             string.IsNullOrWhiteSpace(token) || token.Length > 4096 ||
             token.Any(char.IsControl))
             throw new GitSourceBundleException("AzureGitTransportRejected");
+        policy ??= AzureGitRemotePolicy.Cloud;
 
         var start = NewStartInfo(bare);
         start.ArgumentList.Add("--git-dir=" + bare);
@@ -223,9 +258,11 @@ public sealed class GitCliAzureReadOnlyTransport : IAzureGitReadOnlyTransport
         var keys = new[] {
             ("credential.helper", ""),
             ("http.followRedirects", "false"),
-            ("http.sslVerify", "true"),
+            // Lab servers only: Microsoft's cloud host is always verified, whatever the flag says.
+            ("http.sslVerify", policy.SkipTlsVerification && url.Scheme == Uri.UriSchemeHttps &&
+                url.Host != "dev.azure.com" ? "false" : "true"),
             ("protocol.allow", "never"),
-            ("protocol.https.allow", "always"),
+            ("protocol." + url.Scheme + ".allow", "always"),
             ("http.extraHeader", auth)
         };
         start.Environment["GIT_CONFIG_COUNT"] = keys.Length.ToString();
@@ -234,7 +271,8 @@ public sealed class GitCliAzureReadOnlyTransport : IAzureGitReadOnlyTransport
             start.Environment["GIT_CONFIG_KEY_" + i] = keys[i].Item1;
             start.Environment["GIT_CONFIG_VALUE_" + i] = keys[i].Item2;
         }
-        start.Environment["GIT_ALLOW_PROTOCOL"] = "https";
+        // https for Microsoft's cloud; http only when the operator allow-listed a plain-HTTP lab server.
+        start.Environment["GIT_ALLOW_PROTOCOL"] = url.Scheme;
         return start;
     }
 
@@ -242,7 +280,7 @@ public sealed class GitCliAzureReadOnlyTransport : IAzureGitReadOnlyTransport
         string bareDirectory, Uri azureUri,
         string personalAccessToken, CancellationToken ct) =>
         RunAsync(CreateFetchStartInfo(
-            bareDirectory, azureUri, personalAccessToken),
+            bareDirectory, azureUri, personalAccessToken, policy ?? AzureGitRemotePolicy.Cloud),
             bareDirectory, ct, FetchDeadline);
 
     internal static Task<string> RunLocalGitAsync(

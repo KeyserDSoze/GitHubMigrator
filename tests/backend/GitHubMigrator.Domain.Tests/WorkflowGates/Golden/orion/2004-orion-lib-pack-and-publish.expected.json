@@ -1,0 +1,66 @@
+{
+  "pipelineId": 2004,
+  "name": "orion-lib Pack and Publish",
+  "source": {
+    "repo": "orion-lib",
+    "path": "/azure-pipelines.yml"
+  },
+  "equivalence": "partial",
+  "originalTriggers": [
+    "push: main, release/*",
+    "tags: *",
+    "pull request: none",
+    "run name 1.4$(Rev:.r)"
+  ],
+  "plan": {
+    "secrets": [
+      "ORION_NUGET_FEED_API_KEY"
+    ],
+    "variables": [
+      "ORION_NUGET_FEED_URL"
+    ]
+  },
+  "taskMap": [
+    {
+      "azure": "NuGetToolInstaller@1",
+      "github": "no step: the .NET SDK on the runner ships NuGet"
+    },
+    {
+      "azure": "DotNetCoreCLI@2",
+      "github": "run steps: restore, build, test, pack over the project globs (find/xargs)",
+      "note": "versioningScheme byEnvVar becomes -p:PackageVersion"
+    },
+    {
+      "azure": "NuGetCommand@2",
+      "github": "run: dotnet nuget push to the feed URL variable with the API key secret",
+      "note": "the external feed credential orion-nuget-feed is assumed to be an API key"
+    },
+    {
+      "azure": "PublishBuildArtifacts@1",
+      "github": "actions/upload-artifact (packages)"
+    }
+  ],
+  "unsupported": [
+    {
+      "azure": "##vso[build.updatebuildnumber]",
+      "reason": "A run cannot rename itself with the branch name on GitHub",
+      "suggestion": "put the branch in the package version suffix or the artifact name if it is needed"
+    }
+  ],
+  "acceptedWarnings": [
+    {
+      "code": "ZIZMOR_SECRETS_OUTSIDE_ENV",
+      "why": "The source gives these jobs no environment and keeps the credentials at repository level (Azure variable groups are not environment-scoped). Scoping them to a GitHub environment is a hardening choice for the reviewer; it would add approvals and deployment records the source does not have."
+    }
+  ],
+  "notes": [
+    "NOT executed on GitHub.",
+    "packageVersion is 1.4.<run number>, not 1.4.<Build.BuildId>: GitHub has no build id with the same meaning, so version numbers will differ from Azure's.",
+    "The unused 'prerelease' variable is not converted."
+  ],
+  "extraAllowedHosts": [],
+  "templates": [],
+  "redaction": {
+    "findings": []
+  }
+}

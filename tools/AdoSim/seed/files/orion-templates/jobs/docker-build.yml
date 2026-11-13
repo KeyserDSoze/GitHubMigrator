@@ -1,0 +1,38 @@
+parameters:
+- name: jobName
+  type: string
+  default: DockerBuild
+- name: registryConnection
+  type: string
+- name: repository
+  type: string
+- name: dockerfile
+  type: string
+  default: Dockerfile
+- name: buildContext
+  type: string
+  default: .
+- name: tag
+  type: string
+  default: $(Build.BuildId)
+- name: dependsOn
+  type: object
+  default: []
+
+jobs:
+- job: ${{ parameters.jobName }}
+  displayName: Build ${{ parameters.repository }} image
+  dependsOn: ${{ parameters.dependsOn }}
+  pool:
+    vmImage: ubuntu-latest
+  steps:
+  - checkout: self
+  - task: Docker@2
+    displayName: Build and push ${{ parameters.repository }}
+    inputs:
+      command: buildAndPush
+      containerRegistry: ${{ parameters.registryConnection }}
+      repository: ${{ parameters.repository }}
+      Dockerfile: ${{ parameters.dockerfile }}
+      buildContext: ${{ parameters.buildContext }}
+      tags: ${{ parameters.tag }}

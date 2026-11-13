@@ -5,12 +5,13 @@ using GitHubMigrator.Business;
 namespace GitHubMigrator.Infrastructure.GitHub;
 
 // Secret VALUES cannot be read back through GitHub API. Names only.
-public sealed class GitHubConfigurationReader(HttpClient client) : IGitHubConfigurationReader
+public sealed class GitHubConfigurationReader(HttpClient client, GitHubEndpoints? endpoints = null) : IGitHubConfigurationReader
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
     public async Task<GitHubConfigNames> GetNamesAsync(string organization, string repository,
         string token, CancellationToken ct)
     {
-        var root = $"https://api.github.com/repos/{Uri.EscapeDataString(organization)}/{Uri.EscapeDataString(repository)}/actions";
+        var root = Endpoints.Api($"repos/{Uri.EscapeDataString(organization)}/{Uri.EscapeDataString(repository)}/actions");
         var secrets = await ReadNamesAsync($"{root}/secrets", token, "secrets", ct);
         var variables = await ReadNamesAsync($"{root}/variables", token, "variables", ct);
         return new(secrets, variables);

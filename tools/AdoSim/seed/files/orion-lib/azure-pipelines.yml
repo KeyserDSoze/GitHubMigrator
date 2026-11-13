@@ -1,0 +1,68 @@
+# Orion.Core NuGet library: version from predefined variables, pack and push to the internal feed.
+name: 1.4$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+    - main
+    - release/*
+  tags:
+    include:
+    - '*'
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  buildConfiguration: Release
+  packageVersion: 1.4.$(Build.BuildId)
+  prerelease: $[ne(variables['Build.SourceBranchName'], 'main')]
+
+steps:
+- task: NuGetToolInstaller@1
+  displayName: Install NuGet
+  inputs:
+    versionSpec: 6.x
+- task: DotNetCoreCLI@2
+  displayName: Restore
+  inputs:
+    command: restore
+    projects: src/**/*.csproj
+- script: echo "##vso[build.updatebuildnumber]$(Build.BuildNumber)-$(Build.SourceBranchName)"
+  displayName: Tag build number with the branch
+  condition: ne(variables['Build.SourceBranchName'], 'main')
+- task: DotNetCoreCLI@2
+  displayName: Build
+  inputs:
+    command: build
+    projects: src/**/*.csproj
+    arguments: --configuration $(buildConfiguration) --no-restore -p:Version=$(packageVersion)
+- task: DotNetCoreCLI@2
+  displayName: Test
+  inputs:
+    command: test
+    projects: tests/**/*.csproj
+    arguments: --configuration $(buildConfiguration) --no-build
+- task: DotNetCoreCLI@2
+  displayName: Pack
+  inputs:
+    command: pack
+    packagesToPack: src/**/*.csproj
+    versioningScheme: byEnvVar
+    versionEnvVar: packageVersion
+    packDestination: $(Build.ArtifactStagingDirectory)
+- task: NuGetCommand@2
+  displayName: Push to the internal feed
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+  inputs:
+    command: push
+    packagesToPush: $(Build.ArtifactStagingDirectory)/*.nupkg
+    nuGetFeedType: external
+    publishFeedCredentials: orion-nuget-feed
+- task: PublishBuildArtifacts@1
+  displayName: Keep the packages
+  inputs:
+    PathtoPublish: $(Build.ArtifactStagingDirectory)
+    ArtifactName: packages

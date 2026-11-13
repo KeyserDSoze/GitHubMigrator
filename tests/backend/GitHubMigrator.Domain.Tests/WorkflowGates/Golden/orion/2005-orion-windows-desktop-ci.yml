@@ -1,0 +1,72 @@
+# azure-tasks: converted=NuGetToolInstaller@1,NuGetCommand@2,VSBuild@1,VSTest@2,PowerShell@2,PublishBuildArtifacts@1 manual=none
+name: Orion desktop CI
+on:
+  workflow_dispatch:
+    inputs:
+      corelibBuild:
+        description: Run name of the orion-lib build that triggered this run (empty for a manual run)
+        type: string
+        default: ''
+permissions:
+  contents: read
+env:
+  BUILD_PLATFORM: Any CPU
+  BUILD_CONFIGURATION: Release
+jobs:
+  windows-build:
+    name: Build and test the desktop client
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+      - name: Restore packages
+        shell: pwsh
+        run: Get-ChildItem -Recurse -Filter *.sln | ForEach-Object { msbuild $_.FullName -t:Restore }
+      - name: Build solution
+        shell: pwsh
+        run: Get-ChildItem -Recurse -Filter *.sln | ForEach-Object { msbuild $_.FullName /p:DeployOnBuild=true /p:WebPublishMethod=Package /p:PackageAsSingleFile=true "/p:Platform=$env:BUILD_PLATFORM" "/p:Configuration=$env:BUILD_CONFIGURATION" }
+      - name: Run unit tests
+        shell: pwsh
+        run: |
+          $dlls = Get-ChildItem -Recurse -Filter *Tests.dll | Where-Object { $_.FullName -notmatch '\\obj\\' }
+          dotnet vstest $dlls.FullName
+      # The signing certificate identified by the thumbprint has to be installed on the runner; this workflow cannot provide it.
+      - name: Sign binaries
+        shell: pwsh
+        env:
+          SIGNING_THUMBPRINT: ${{ secrets.SigningThumbprint }}
+        run: ./scripts/sign.ps1 -Folder "$env:GITHUB_WORKSPACE\src" -Thumbprint $env:SIGNING_THUMBPRINT
+      - name: Collect installer
+        shell: pwsh
+        env:
+          STAGING: ${{ runner.temp }}\installer
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:STAGING | Out-Null
+          Copy-Item -Path "src\Orion.Desktop\bin\$env:BUILD_CONFIGURATION\*" -Destination $env:STAGING -Recurse
+      - name: Publish the installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-installer
+          path: ${{ runner.temp }}\installer
+
+  integration-tests:
+    name: Integration tests in a container
+    needs: windows-build
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/dotnet/sdk:8.0@sha256:1b955f179b02df4f0eb5fadedaa898cbe44d620a64aab52eec72c8e91d1355b5
+      options: --cpus 2
+    services:
+      redis:
+        image: redis:7@sha256:2e3eb11462c4e3759e6972678dd051d150ff54b1e60714b3c33b701260172a90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run integration tests
+        env:
+          REDIS_HOST: redis
+          CORELIB_BUILD: ${{ inputs.corelibBuild }}
+        run: dotnet test tests/Orion.Desktop.Integration --filter Category=Integration

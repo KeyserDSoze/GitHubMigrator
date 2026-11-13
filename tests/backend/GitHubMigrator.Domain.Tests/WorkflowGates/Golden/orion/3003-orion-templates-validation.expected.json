@@ -1,0 +1,28 @@
+{
+  "pipelineId": 3003,
+  "name": "orion-templates Validation",
+  "source": {
+    "repo": "orion-templates",
+    "path": "/azure-pipelines.yml"
+  },
+  "equivalence": "full",
+  "originalTriggers": [
+    "push: main",
+    "pull request: main"
+  ],
+  "plan": {
+    "secrets": [],
+    "variables": []
+  },
+  "extraAllowedHosts": [],
+  "taskMap": [],
+  "unsupported": [],
+  "templates": [],
+  "acceptedWarnings": [],
+  "redaction": {
+    "findings": []
+  },
+  "notes": [
+    "Script steps only. A pinned setup-python step was added so `pip install` works on the runner image; yamllint itself is installed unpinned, as in the source."
+  ]
+}

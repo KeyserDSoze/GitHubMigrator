@@ -1,0 +1,106 @@
+{
+  "pipelineId": 2001,
+  "name": "orion-api CI-CD",
+  "source": {
+    "repo": "orion-api",
+    "path": "/azure-pipelines.yml"
+  },
+  "equivalence": "partial",
+  "originalTriggers": [
+    "push: main, release/* (not release/legacy-*), paths src, tests, Dockerfile (not docs, *.md), batch builds",
+    "tags: v*",
+    "pull request: main, release/* (docs excluded), autoCancel",
+    "parameters become workflow_dispatch inputs"
+  ],
+  "plan": {
+    "secrets": [
+      "AZURE_CLIENT_ID",
+      "AZURE_SUBSCRIPTION_ID",
+      "AZURE_TENANT_ID",
+      "ORION_ACR_PASSWORD",
+      "ORION_ACR_USERNAME"
+    ],
+    "variables": [
+      "AZURE_REGION",
+      "ENVIRONMENT_NAME",
+      "LOG_LEVEL",
+      "PAYMENT_API_URL"
+    ]
+  },
+  "extraAllowedHosts": [
+    {
+      "host": "api.orion.example.test",
+      "why": "The production health endpoint the Smoke test step calls; it is this plan's own service and no secret is in that step."
+    }
+  ],
+  "taskMap": [
+    {
+      "azure": "UseDotNet@2",
+      "github": "actions/setup-dotnet with the dotnetVersion input"
+    },
+    {
+      "azure": "DotNetCoreCLI@2",
+      "github": "run steps: dotnet restore, build, test (find over tests/**/*.csproj), publish + zip",
+      "note": "project globs are expanded with find/xargs"
+    },
+    {
+      "azure": "PublishPipelineArtifact@1",
+      "github": "actions/upload-artifact (api-package, security-scan)"
+    },
+    {
+      "azure": "Docker@2",
+      "github": "docker/login-action + docker/build-push-action; docker/login-action again before the scan",
+      "note": "tags: build number and latest; the build number is date + run number, not Azure's $(Rev:.r) counter"
+    },
+    {
+      "azure": "AzureWebApp@1",
+      "github": "azure/login (OIDC) + azure/webapps-deploy",
+      "note": "runtimeStack DOTNETCORE|8.0 has no input in the action: set it on the web app"
+    },
+    {
+      "azure": "AzureCLI@2",
+      "github": "azure/login (OIDC) + az in a run step"
+    }
+  ],
+  "unsupported": [
+    {
+      "azure": "PublishTestResults@2",
+      "reason": "Azure shows a Tests tab with pass/fail history; no step in the allow-listed actions produces an equivalent view",
+      "suggestion": "keep the .trx artifact (done) or add a reviewed test-report action that needs checks: write"
+    },
+    {
+      "azure": "PublishCodeCoverageResults@2",
+      "reason": "Azure shows a Code Coverage tab; only the cobertura files are kept as an artifact",
+      "suggestion": "upload to a coverage service or add a reviewed report action"
+    }
+  ],
+  "templates": [
+    {
+      "template": "pipelines/templates/dotnet-quality.yml",
+      "handledBy": "inlined as the Restore local tools and Verify formatting steps"
+    },
+    {
+      "template": "steps/security-scan.yml@templates",
+      "handledBy": "inlined as the Dependency vulnerability scan and Publish scan report steps (failOnHighSeverity true: no continue-on-error)"
+    }
+  ],
+  "acceptedWarnings": [
+    {
+      "code": "ZIZMOR_SECRETS_OUTSIDE_ENV",
+      "why": "The source gives these jobs no environment and keeps the credentials at repository level (Azure variable groups are not environment-scoped). Scoping them to a GitHub environment is a hardening choice for the reviewer; it would add approvals and deployment records the source does not have."
+    }
+  ],
+  "notes": [
+    "NOT executed on GitHub: only linted by actionlint and zizmor and checked by the policy gates.",
+    "Environments dev and prod must be created in the repository; the source's prod approval (Release Managers, branch control main) and the OIDC trust for each Azure identity are configured there, not in this file. Repository-level secrets are the dev identity; the prod environment must override AZURE_* with the prod identity.",
+    "Group orion-keyvault-prod (db-admin-password, stripe-secret-key, signing-certificate) is linked to the prod stage but none of its variables is referenced by the YAML; its secret names are not valid GitHub secret names (hyphens) and nothing is created for them.",
+    "Non-secret variables of the linked groups are exported as workflow env, as Azure exposes them to script steps. Group secrets are not exposed implicitly, as in Azure.",
+    "The Docker@2 service connection orion-acr (a registry credential, not Azure) becomes the ORION_ACR_USERNAME/ORION_ACR_PASSWORD secrets; an OIDC login with az acr login would be safer.",
+    "The image scan assumes trivy exists on the runner; it is not installed by this workflow.",
+    "The ENABLE_SMOKE_TESTS pipeline variable is exported but, as in the source, nothing reads it; the SLACK_WEBHOOK secret variable is not referenced by the YAML and is not created.",
+    "The variables template pipelines/templates/variables.yml (not a step template, so the task analyser does not count it) is converted to workflow env: NUGET_PACKAGES now points inside the workspace instead of Pipeline.Workspace, DOTNET_CLI_TELEMETRY_OPTOUT is kept, dotnetSdkVersion is unused as in the source."
+  ],
+  "redaction": {
+    "findings": []
+  }
+}

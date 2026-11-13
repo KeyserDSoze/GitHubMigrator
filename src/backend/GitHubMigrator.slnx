@@ -14,11 +14,18 @@
     <Project Path="infrastructures/GitHubMigrator.Infrastructure.AzureDevOps/GitHubMigrator.Infrastructure.AzureDevOps.csproj" />
     <Project Path="infrastructures/GitHubMigrator.Infrastructure.GitHub/GitHubMigrator.Infrastructure.GitHub.csproj" />
     <Project Path="infrastructures/GitHubMigrator.Infrastructure.KeyVault/GitHubMigrator.Infrastructure.KeyVault.csproj" />
+    <Project Path="infrastructures/GitHubMigrator.Infrastructure.WorkflowTools/GitHubMigrator.Infrastructure.WorkflowTools.csproj" />
+    <Project Path="infrastructures/GitHubMigrator.Infrastructure.Ai/GitHubMigrator.Infrastructure.Ai.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="../../tests/backend/GitHubMigrator.Domain.Tests/GitHubMigrator.Domain.Tests.csproj" />
+    <Project Path="../../tests/simulators/AdoSim.Tests/AdoSim.Tests.csproj" />
+    <Project Path="../../tests/simulators/GhSim.Tests/GhSim.Tests.csproj" />
+    <Project Path="../../tests/simulators/LlmSim.Tests/LlmSim.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="../../tools/AdoSim/AdoSim.csproj" />
+    <Project Path="../../tools/GhSim/GhSim.csproj" />
+    <Project Path="../../tools/LlmSim/LlmSim.csproj" />
   </Folder>
 </Solution>

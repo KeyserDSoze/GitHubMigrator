@@ -1,0 +1,101 @@
+# Orion infrastructure with Bicep: what-if on every environment, deploy staging then production.
+trigger: none
+
+parameters:
+- name: environment
+  displayName: Environment
+  type: string
+  default: dev
+  values:
+  - dev
+  - staging
+  - prod
+- name: location
+  type: string
+  default: westeurope
+- name: deployMonitoring
+  type: boolean
+  default: true
+
+variables:
+- group: orion-infra-config
+- name: resourceGroup
+  value: rg-orion-${{ parameters.environment }}
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+- stage: WhatIf
+  displayName: What-if
+  jobs:
+  - job: WhatIf
+    steps:
+    - task: AzureCLI@2
+      displayName: Validate Bicep deployment
+      inputs:
+        azureSubscription: orion-azure-dev
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az deployment group what-if \
+            --resource-group $(resourceGroup) \
+            --template-file bicep/main.bicep \
+            --parameters environmentName=${{ parameters.environment }} location=${{ parameters.location }}
+
+- stage: Deploy_Staging
+  dependsOn: WhatIf
+  condition: succeeded()
+  jobs:
+  - deployment: DeployStaging
+    environment: infra-dev
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: Deploy staging infrastructure
+            inputs:
+              azureSubscription: orion-azure-dev
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group create \
+                  --resource-group rg-orion-staging \
+                  --template-file bicep/main.bicep \
+                  --parameters environmentName=staging location=${{ parameters.location }}
+
+- stage: Deploy_Prod
+  dependsOn:
+  - Deploy_Staging
+  - WhatIf
+  condition: and(succeeded(), eq('${{ parameters.environment }}', 'prod'))
+  jobs:
+  - deployment: DeployProd
+    environment: infra-prod
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - ${{ if eq(parameters.deployMonitoring, true) }}:
+            - task: AzureCLI@2
+              displayName: Deploy monitoring
+              inputs:
+                azureSubscription: orion-azure-prod
+                scriptType: bash
+                scriptLocation: inlineScript
+                inlineScript: |
+                  az deployment group create --resource-group rg-orion-prod --template-file bicep/monitoring.bicep
+          - task: AzureCLI@2
+            displayName: Deploy production infrastructure
+            inputs:
+              azureSubscription: orion-azure-prod
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group create \
+                  --resource-group rg-orion-prod \
+                  --template-file bicep/main.bicep \
+                  --parameters environmentName=prod location=${{ parameters.location }}

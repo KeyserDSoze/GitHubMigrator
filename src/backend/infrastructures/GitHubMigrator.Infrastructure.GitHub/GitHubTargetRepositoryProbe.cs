@@ -7,11 +7,12 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 
 // Fixed api.github.com endpoint; GET only, no redirects/cookies configured in DI.
 // A 404 MUST NOT be interpreted as guaranteed name availability.
-public sealed class GitHubTargetRepositoryProbe(HttpClient client) : IGitHubTargetRepositoryProbe
+public sealed class GitHubTargetRepositoryProbe(HttpClient client, GitHubEndpoints? endpoints = null) : IGitHubTargetRepositoryProbe
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
     public async Task<string> ProbeAsync(string organization, string repository, string token, CancellationToken ct)
     {
-        var url = $"https://api.github.com/repos/{Uri.EscapeDataString(organization)}/{Uri.EscapeDataString(repository)}";
+        var url = Endpoints.Api($"repos/{Uri.EscapeDataString(organization)}/{Uri.EscapeDataString(repository)}");
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.UserAgent.ParseAdd("GitHubMigrator/0.5");

@@ -28,6 +28,28 @@ public static class Bootstrap
                 permission_assessment varchar(64) NOT NULL
             );
             ALTER TABLE migration_connections ADD COLUMN IF NOT EXISTS base_url varchar(512) NULL;
+            CREATE TABLE IF NOT EXISTS ai_connections (
+                id uuid PRIMARY KEY,
+                name varchar(120) NOT NULL,
+                provider varchar(32) NOT NULL,
+                endpoint varchar(512) NOT NULL,
+                model varchar(100) NOT NULL,
+                auth varchar(32) NOT NULL,
+                api_version varchar(32) NULL,
+                token_parameter varchar(32) NOT NULL,
+                max_output_tokens integer NOT NULL,
+                temperature double precision NULL,
+                timeout_seconds integer NOT NULL,
+                max_input_bytes integer NOT NULL,
+                secret_reference varchar(100) NOT NULL,
+                created_at_utc timestamp with time zone NOT NULL,
+                verified_at_utc timestamp with time zone NULL,
+                verification_code varchar(64) NOT NULL,
+                verified_model varchar(100) NULL,
+                send_source_content boolean NOT NULL DEFAULT false,
+                consent_at_utc timestamp with time zone NULL,
+                consent_by varchar(160) NULL
+            );
             CREATE TABLE IF NOT EXISTS migration_discoveries (
                 id uuid PRIMARY KEY,
                 connection_id uuid NOT NULL,

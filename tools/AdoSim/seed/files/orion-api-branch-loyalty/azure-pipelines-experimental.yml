@@ -1,0 +1,43 @@
+# Experimental pipeline that only exists on feature/loyalty/points: reuses the shared deployment stage.
+trigger:
+  branches:
+    include:
+    - feature/loyalty/*
+
+resources:
+  repositories:
+  - repository: templates
+    type: git
+    name: Orion Platform/orion-templates
+    ref: refs/tags/v3
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+- stage: Build
+  jobs:
+  - job: Build
+    steps:
+    - script: dotnet build Orion.sln --configuration Release
+      displayName: Build
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: src/Orion.Api/bin
+        artifact: api-package
+- stage: Docker
+  dependsOn: Build
+  jobs:
+  - template: jobs/docker-build.yml@templates
+    parameters:
+      registryConnection: orion-acr
+      repository: orion/api-loyalty
+      tag: $(Build.BuildNumber)
+- template: stages/deploy-environment.yml@templates
+  parameters:
+    environment: dev
+    serviceConnection: orion-azure-dev
+    appName: orion-api-loyalty
+    dependsOn:
+    - Docker
+    notify: false

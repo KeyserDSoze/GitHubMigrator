@@ -1,0 +1,34 @@
+{
+  "users": [
+    { "login": "sim-admin", "token": "gh-sim-pat" },
+    { "login": "sim-member", "token": "gh-sim-member-pat" },
+    { "login": "sim-readonly", "token": "gh-sim-readonly-pat", "readOnly": true }
+  ],
+  "orgs": [
+    {
+      "login": "orion-org",
+      "membersCanCreatePrivateRepositories": true,
+      "members": { "sim-admin": "admin", "sim-member": "member", "sim-readonly": "member" }
+    },
+    {
+      "login": "locked-org",
+      "membersCanCreatePrivateRepositories": false,
+      "members": { "sim-admin": "member" }
+    }
+  ],
+  "repos": [
+    { "org": "orion-org", "name": "existing-repo", "private": true, "files": { "README.md": "# existing-repo\n" } },
+    { "org": "orion-org", "name": "archived-repo", "archived": true, "files": { "README.md": "# archived-repo\n" } },
+    {
+      "org": "orion-org", "name": "protected-repo", "files": { "README.md": "# protected-repo\n" },
+      "rulesets": [
+        { "name": "keep-history", "enforcement": "active", "target": "branch", "include": ["~DEFAULT_BRANCH"], "rules": ["deletion", "non_fast_forward"] }
+      ]
+    },
+    {
+      "org": "orion-org", "name": "configured-repo", "files": { "README.md": "# configured-repo\n" },
+      "variables": { "REGION": "westeurope" }, "secrets": ["DEPLOY_PASSWORD"]
+    }
+  ],
+  "apps": []
+}

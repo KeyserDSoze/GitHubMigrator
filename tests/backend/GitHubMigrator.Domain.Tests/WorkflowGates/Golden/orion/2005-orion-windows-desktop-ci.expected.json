@@ -1,0 +1,65 @@
+{
+  "pipelineId": 2005,
+  "name": "orion-windows Desktop CI",
+  "source": {
+    "repo": "orion-windows",
+    "path": "/build/windows-ci.yml"
+  },
+  "equivalence": "partial",
+  "originalTriggers": [
+    "push: main, release/*",
+    "completion of pipeline 'orion-lib Pack and Publish' (Orion Commerce) on main: becomes workflow_run, and the corelib run name becomes the corelibBuild input"
+  ],
+  "plan": {
+    "secrets": [
+      "SigningThumbprint"
+    ],
+    "variables": []
+  },
+  "taskMap": [
+    {
+      "azure": "NuGetToolInstaller@1",
+      "github": "microsoft/setup-msbuild (restore is done by msbuild -t:Restore)"
+    },
+    {
+      "azure": "NuGetCommand@2",
+      "github": "run (pwsh): msbuild -t:Restore for every .sln"
+    },
+    {
+      "azure": "VSBuild@1",
+      "github": "run (pwsh): msbuild for every .sln with the same /p: arguments"
+    },
+    {
+      "azure": "VSTest@2",
+      "github": "run (pwsh): dotnet vstest on the *Tests.dll assemblies outside obj",
+      "note": "selection by assembly is kept; the VSTest task's reporting and settings are not"
+    },
+    {
+      "azure": "PowerShell@2",
+      "github": "run steps with shell: pwsh (sign.ps1 and the installer collection)"
+    },
+    {
+      "azure": "PublishBuildArtifacts@1",
+      "github": "actions/upload-artifact (desktop-installer)"
+    }
+  ],
+  "acceptedWarnings": [
+    {
+      "code": "ZIZMOR_SECRETS_OUTSIDE_ENV",
+      "why": "The source gives these jobs no environment and keeps the credentials at repository level (Azure variable groups are not environment-scoped). Scoping them to a GitHub environment is a hardening choice for the reviewer; it would add approvals and deployment records the source does not have."
+    }
+  ],
+  "notes": [
+    "NOT executed on GitHub.",
+    "The signing certificate identified by the thumbprint must be installed on the runner; this workflow cannot provide it.",
+    "The container image and the redis service are pinned by digest (see ACTION_PINS.md) where the source used tags, because the gates reject unpinned images; they will not follow tag updates.",
+    "The 'toolbox' container resource (private registry, endpoint orion-acr) is declared by the source but used by no job: it is not converted. The redis port mapping is dropped: inside a container job the service is reached by name.",
+    "The workflow_run chaining from orion-lib is not part of the file: original triggers are enabled by a separate approval."
+  ],
+  "extraAllowedHosts": [],
+  "unsupported": [],
+  "templates": [],
+  "redaction": {
+    "findings": []
+  }
+}

@@ -1,0 +1,11 @@
+parameters:
+- name: solution
+  type: string
+  default: '*.sln'
+
+steps:
+- script: dotnet tool restore
+  displayName: Restore local tools
+- script: dotnet format ${{ parameters.solution }} --verify-no-changes --severity warn
+  displayName: Verify formatting
+  workingDirectory: $(Build.SourcesDirectory)

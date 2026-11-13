@@ -1,0 +1,452 @@
+{
+  "collection": "DefaultCollection",
+  "users": [
+    { "name": "alice", "display": "Alice Rossi", "mail": "alice@example.test" },
+    { "name": "bob", "display": "Bob Bianchi", "mail": "bob@example.test" },
+    { "name": "carol", "display": "Carol Verdi", "mail": null },
+    { "name": "dave", "display": "Dave Neri", "mail": "dave@example.test" },
+    { "name": "sam1", "display": "Sam Smith", "mail": "sam.smith@example.test" },
+    { "name": "sam2", "display": "Sam Smith", "mail": "sam.smith@other.example.test" },
+    { "name": "erin", "display": "Erin Gialli", "mail": "erin@example.test" },
+    { "name": "svc-build", "display": "Orion Build Service", "mail": null },
+    { "name": "frank", "display": "Frank Blu", "mail": "frank@example.test" },
+    { "name": "gina", "display": "Gina Rosa", "mail": "gina@example.test" }
+  ],
+  "groups": [
+    { "name": "[DefaultCollection]\\Project Collection Administrators", "members": ["alice"] },
+    { "name": "[Orion Commerce]\\Contributors", "members": ["alice", "bob", "carol", "dave", "erin"] },
+    { "name": "[Orion Commerce]\\Readers", "members": ["[Orion Commerce]\\Contributors", "frank"] },
+    { "name": "[Orion Commerce]\\Build Administrators", "members": ["svc-build", "bob"] },
+    { "name": "[Orion Commerce]\\Release Managers", "members": ["alice", "gina"] },
+    { "name": "[Orion Platform]\\Contributors", "members": ["erin", "gina", "[Orion Platform]\\Build Administrators"] },
+    { "name": "[Orion Platform]\\Readers", "members": ["[Orion Platform]\\Contributors", "[Orion Commerce]\\Readers"] },
+    { "name": "[Orion Platform]\\Build Administrators", "members": ["svc-build", "dave"] },
+    { "name": "[Orion Platform]\\Release Managers", "members": ["alice", "[Orion Commerce]\\Release Managers"] },
+    { "name": "[Orion Sandbox]\\Contributors", "members": ["frank", "sam1", "sam2", "dave"] },
+    { "name": "[Orion Sandbox]\\Readers", "members": ["[Orion Sandbox]\\Contributors"] }
+  ],
+  "projects": [
+    {
+      "name": "Orion Commerce",
+      "sourceControl": "Git",
+      "acl": [
+        { "principal": "[Orion Commerce]\\Contributors", "allow": 6, "deny": 0 },
+        { "principal": "[Orion Commerce]\\Build Administrators", "allow": 6, "deny": 0 }
+      ],
+      "repos": [
+        {
+          "name": "orion-api", "commits": 14, "start": "2024-02-01T10:00:00Z", "filesFrom": "orion-api", "historyDir": "docs/history",
+          "authors": ["alice", "bob", "carol", "dave"],
+          "branches": ["feature/checkout-v2", "feature/loyalty/points", "release/2024.1", "release/2024.2", "hotfix/payment-timeout", "develop"],
+          "branchFilesFrom": { "feature/loyalty/points": "orion-api-branch-loyalty" },
+          "branchFiles": { "feature/checkout-v2": { "docs/design/checkout-v2.md": "# Checkout v2\n\nAdds 3-D Secure and payment retries.\n" } },
+          "tags": ["v1.0.0", "v1.1.0"], "annotatedTags": ["v1.2.0", "v2.0.0"],
+          "acl": [
+            { "principal": "[Orion Commerce]\\Readers", "allow": 0, "deny": 4 },
+            { "principal": "frank", "allow": 2, "deny": 0 },
+            { "principal": "svc-build", "allow": 6, "deny": 0 }
+          ]
+        },
+        {
+          "name": "orion-web", "commits": 40, "start": "2024-02-01T10:00:00Z", "filesFrom": "orion-web", "historyDir": "docs/history",
+          "authors": ["erin", "alice", "bob", "carol", "dave", "gina"],
+          "branches": ["develop", "feature/cart-redesign", "feature/i18n", "release/3.0", "bugfix/safari-layout"],
+          "tags": ["web-3.0.0-rc1"], "annotatedTags": ["web-3.0.0"],
+          "blobs": [
+            { "path": "public/images/hero.png", "size": 65536, "kind": "png" },
+            { "path": "data/catalog-snapshot.bin", "size": 1572864, "kind": "binary" }
+          ]
+        },
+        {
+          "name": "orion-lib", "commits": 15, "start": "2024-02-10T10:00:00Z", "filesFrom": "orion-lib", "historyDir": "docs/history",
+          "authors": ["dave", "alice"], "branches": ["develop", "release/1.4"],
+          "tags": ["1.3.0", "1.4.0"], "annotatedTags": ["1.4.1"]
+        },
+        {
+          "name": "Orion.Contracts", "commits": 5, "start": "2024-02-15T10:00:00Z", "filesFrom": "orion-contracts", "historyDir": "docs/history",
+          "authors": ["alice", "bob"], "tags": ["2.0.0"]
+        },
+        {
+          "name": "orion-windows", "commits": 8, "start": "2024-03-01T10:00:00Z", "filesFrom": "orion-windows", "historyDir": "docs/history",
+          "authors": ["carol", "dave"], "branches": ["feature/dark-mode"], "tags": ["win-5.2"]
+        },
+        {
+          "name": "orion-legacy", "defaultBranch": "master", "commits": 6, "start": "2023-09-01T10:00:00Z", "filesFrom": "orion-legacy", "historyDir": "docs/history",
+          "authors": ["frank", "bob"], "branches": ["maintenance/2019"], "annotatedTags": ["legacy-final"],
+          "acl": [
+            { "principal": "frank", "allow": 2, "deny": 0 },
+            { "principal": "[Orion Commerce]\\Build Administrators", "allow": 6, "deny": 0 }
+          ]
+        },
+        {
+          "name": "orion mobile app",
+          "defaultBranch": "develop/mobile/trunk-based-development-integration-line-for-release-train-2024-q2",
+          "commits": 9, "filesFrom": "orion-mobile", "start": "2024-03-10T10:00:00Z", "historyDir": "docs/history", "authors": ["erin", "carol"],
+          "branches": ["feature/приветствие", "feature/日本語-ロケール", "feature/rocket-🚀", "release/ünïcode-2024"],
+          "tags": ["mobile-0.8"], "annotatedTags": ["v0.9.0-β"]
+        },
+        { "name": "orion-docs", "empty": true },
+        {
+          "name": "orion-archive", "commits": 2, "start": "2023-06-01T10:00:00Z", "disabled": true, "authors": ["frank"],
+          "acl": [ { "principal": "S-1-9-orphan-deleted-user", "allow": 2, "deny": 0 } ]
+        }
+      ],
+      "pipelines": [
+        {
+          "id": 2001, "name": "orion-api CI-CD", "repo": "orion-api", "path": "/azure-pipelines.yml", "folder": "\\Orion\\API",
+          "variables": [ { "name": "ENABLE_SMOKE_TESTS", "secret": false, "value": "true" }, { "name": "SLACK_WEBHOOK", "secret": true } ],
+          "variableGroups": [101, 102, 104]
+        },
+        {
+          "id": 2002, "name": "orion-api nightly scan", "repo": "orion-api", "path": "/pipelines/nightly-scan.yml", "folder": "\\Orion\\API",
+          "variableGroups": [101]
+        },
+        {
+          "id": 2003, "name": "orion-web CI-CD", "repo": "orion-web", "path": "/azure-pipelines.yml", "folder": "\\Orion\\Web",
+          "variables": [ { "name": "SENTRY_AUTH_TOKEN", "secret": true }, { "name": "NODE_OPTIONS", "secret": false, "value": "--max-old-space-size=4096" } ],
+          "variableGroups": [101, 103]
+        },
+        { "id": 2004, "name": "orion-lib Pack and Publish", "repo": "orion-lib", "path": "/azure-pipelines.yml", "folder": "\\Orion\\Libraries" },
+        {
+          "id": 2005, "name": "orion-windows Desktop CI", "repo": "orion-windows", "path": "/build/windows-ci.yml", "folder": "\\Orion\\Desktop",
+          "variables": [ { "name": "SigningThumbprint", "secret": true } ]
+        },
+        {
+          "id": 2006, "name": "orion-legacy Build", "repo": "orion-legacy", "folder": "\\Orion\\Legacy",
+          "variables": [
+            { "name": "BuildConfiguration", "secret": false, "value": "Release" },
+            { "name": "BuildPlatform", "secret": false, "value": "Any CPU" },
+            { "name": "DeployPassword", "secret": true }
+          ],
+          "classic": {
+            "queue": "Windows Agents", "agentSpec": "windows-2019", "buildNumberFormat": "$(date:yyyyMMdd)$(rev:.r)",
+            "ciBranches": ["master", "maintenance/2019"], "batch": true, "scheduleHour": 2,
+            "phases": [
+              {
+                "name": "Agent job 1",
+                "steps": [
+                  { "task": "NuGetToolInstaller@1", "displayName": "Use NuGet 6.x", "inputs": { "versionSpec": "6.x", "checkLatest": "true" } },
+                  { "task": "NuGetCommand@2", "displayName": "NuGet restore", "inputs": { "command": "restore", "restoreSolution": "**\\*.sln", "feedsToUse": "select" } },
+                  {
+                    "task": "VSBuild@1", "displayName": "Build solution",
+                    "inputs": { "solution": "**\\*.sln", "msbuildArgs": "/p:DeployOnBuild=true /p:WebPublishMethod=Package /p:PackageAsSingleFile=true", "platform": "$(BuildPlatform)", "configuration": "$(BuildConfiguration)" }
+                  },
+                  { "task": "VSTest@2", "displayName": "Test assemblies", "inputs": { "testSelector": "testAssemblies", "testAssemblyVer2": "**\\*test*.dll\n!**\\obj\\**", "platform": "$(BuildPlatform)", "configuration": "$(BuildConfiguration)" }, "continueOnError": true },
+                  { "task": "PowerShell@2", "displayName": "Package site", "inputs": { "targetType": "filePath", "filePath": "build/package.ps1", "arguments": "-Output $(build.artifactstagingdirectory)" } },
+                  { "task": "CopyFiles@2", "displayName": "Copy files to staging", "inputs": { "SourceFolder": "$(build.sourcesdirectory)", "Contents": "**\\bin\\$(BuildConfiguration)\\**", "TargetFolder": "$(build.artifactstagingdirectory)" } },
+                  { "task": "PublishBuildArtifacts@1", "displayName": "Publish artifact: drop", "condition": "succeededOrFailed()", "inputs": { "PathtoPublish": "$(build.artifactstagingdirectory)", "ArtifactName": "drop", "publishLocation": "Container" } }
+                ]
+              }
+            ]
+          }
+        },
+        { "id": 2007, "name": "Orion.Contracts CI", "repo": "Orion.Contracts", "path": "/azure-pipelines.yml", "folder": "\\Orion\\Libraries" }
+      ]
+    },
+    {
+      "name": "Orion Platform",
+      "sourceControl": "Git",
+      "acl": [
+        { "principal": "[Orion Platform]\\Contributors", "allow": 6, "deny": 0 },
+        { "principal": "[Orion Platform]\\Readers", "allow": 2, "deny": 0 }
+      ],
+      "repos": [
+        {
+          "name": "orion-templates", "commits": 7, "start": "2024-02-20T10:00:00Z", "filesFrom": "orion-templates", "historyDir": "docs/history",
+          "authors": ["gina", "alice"], "branches": ["develop"], "tags": ["v1", "v2"], "annotatedTags": ["v3"]
+        },
+        {
+          "name": "orion-infra", "commits": 10, "start": "2024-03-01T10:00:00Z", "filesFrom": "orion-infra", "historyDir": "docs/history",
+          "authors": ["gina", "dave", "svc-build"], "branches": ["feature/aks-upgrade", "env/prod-hotfix"],
+          "inheritPermissions": false,
+          "acl": [
+            { "principal": "[Orion Platform]\\Contributors", "allow": 6, "deny": 0 },
+            { "principal": "[Orion Platform]\\Readers", "allow": 2, "deny": 0 },
+            { "principal": "svc-build", "allow": 6, "deny": 0 }
+          ]
+        }
+      ],
+      "pipelines": [
+        { "id": 3001, "name": "orion-infra Terraform", "repo": "orion-infra", "path": "/pipelines/terraform.yml", "folder": "\\Platform\\Infra", "variableGroups": [105] },
+        { "id": 3002, "name": "orion-infra Bicep", "repo": "orion-infra", "path": "/pipelines/bicep.yml", "folder": "\\Platform\\Infra", "variableGroups": [105] },
+        { "id": 3003, "name": "orion-templates Validation", "repo": "orion-templates", "path": "/azure-pipelines.yml", "folder": "\\Platform\\Templates" }
+      ]
+    },
+    {
+      "name": "Orion Sandbox",
+      "sourceControl": "Git",
+      "acl": [ { "principal": "[Orion Sandbox]\\Contributors", "allow": 6, "deny": 0 } ],
+      "repos": [
+        { "name": "sandbox-playground", "commits": 3, "start": "2024-05-01T10:00:00Z", "filesFrom": "sandbox-playground", "authors": ["frank", "sam1"] },
+        { "name": "orion data tools", "commits": 4, "start": "2024-04-20T10:00:00Z", "filesFrom": "orion-data-tools", "authors": ["sam2", "dave"], "branches": ["feature/etl-v2"] }
+      ],
+      "pipelines": [
+        { "id": 4001, "name": "sandbox hello", "repo": "sandbox-playground", "path": "/azure-pipelines.yml", "folder": "\\Sandbox" }
+      ]
+    }
+  ],
+  "variableGroups": [
+    {
+      "id": 101, "name": "orion-shared-config", "description": "Settings shared by every Orion pipeline",
+      "projects": ["Orion Commerce", "Orion Platform", "Orion Sandbox"], "createdBy": "alice",
+      "variables": [
+        { "name": "ENVIRONMENT_NAME", "secret": false, "value": "dev" },
+        { "name": "LOG_LEVEL", "secret": false, "value": "Information" },
+        { "name": "AZURE_REGION", "secret": false, "value": "westeurope" },
+        { "name": "TEAMS_WEBHOOK_URL", "secret": true }
+      ]
+    },
+    {
+      "id": 102, "name": "orion-api-secrets", "description": "Connection strings and keys of the API", "projects": ["Orion Commerce"], "createdBy": "bob",
+      "variables": [
+        { "name": "DB_CONNECTION_STRING", "secret": true },
+        { "name": "PAYMENT_API_KEY", "secret": true },
+        { "name": "JWT_SIGNING_KEY", "secret": true },
+        { "name": "PAYMENT_API_URL", "secret": false, "value": "https://payments.example.test/v2" }
+      ]
+    },
+    {
+      "id": 103, "name": "orion-web-secrets", "description": "Storefront secrets", "projects": ["Orion Commerce"], "createdBy": "erin",
+      "variables": [
+        { "name": "npmToken", "secret": true },
+        { "name": "SENTRY_DSN", "secret": true },
+        { "name": "CDN_PURGE_KEY", "secret": true },
+        { "name": "PUBLIC_API_URL", "secret": false, "value": "https://api.orion.example.test" }
+      ]
+    },
+    {
+      "id": 104, "name": "orion-keyvault-prod", "description": "Production secrets linked from Azure Key Vault",
+      "projects": ["Orion Commerce", "Orion Platform"], "createdBy": "gina",
+      "keyVault": "kv-orion-prod", "keyVaultEndpoint": "orion-azure-prod",
+      "variables": [
+        { "name": "db-admin-password", "secret": true },
+        { "name": "stripe-secret-key", "secret": true },
+        { "name": "signing-certificate", "secret": true }
+      ]
+    },
+    {
+      "id": 105, "name": "orion-infra-config", "description": "Terraform backend configuration", "projects": ["Orion Platform"], "createdBy": "gina",
+      "variables": [
+        { "name": "TF_STATE_STORAGE", "secret": false, "value": "storionstate" },
+        { "name": "TF_STATE_CONTAINER", "secret": false, "value": "tfstate" },
+        { "name": "ARM_CLIENT_SECRET", "secret": true }
+      ]
+    }
+  ],
+  "serviceEndpoints": [
+    {
+      "name": "orion-azure-dev", "type": "azurerm", "scheme": "ServicePrincipal", "url": "https://management.azure.com/",
+      "isShared": true, "createdBy": "gina", "description": "Orion development subscription",
+      "projects": ["Orion Commerce", "Orion Platform", "Orion Sandbox"],
+      "data": { "environment": "AzureCloud", "scopeLevel": "Subscription", "subscriptionId": "11111111-2222-4333-8444-555555555501", "subscriptionName": "Orion Dev" },
+      "parameters": { "tenantid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee01", "serviceprincipalid": "bbbbbbbb-cccc-4ddd-8eee-ffffffffff01", "authenticationType": "spnKey" }
+    },
+    {
+      "name": "orion-azure-prod", "type": "azurerm", "scheme": "ServicePrincipal", "url": "https://management.azure.com/",
+      "isShared": true, "createdBy": "gina", "description": "Orion production subscription",
+      "projects": ["Orion Commerce", "Orion Platform"],
+      "data": { "environment": "AzureCloud", "scopeLevel": "Subscription", "subscriptionId": "11111111-2222-4333-8444-555555555502", "subscriptionName": "Orion Prod" },
+      "parameters": { "tenantid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee01", "serviceprincipalid": "bbbbbbbb-cccc-4ddd-8eee-ffffffffff02", "authenticationType": "spnCertificate" }
+    },
+    {
+      "name": "orion-azure-sandbox", "type": "azurerm", "scheme": "ManagedServiceIdentity", "url": "https://management.azure.com/",
+      "createdBy": "frank", "projects": ["Orion Sandbox"],
+      "data": { "environment": "AzureCloud", "scopeLevel": "Subscription", "subscriptionId": "11111111-2222-4333-8444-555555555503", "subscriptionName": "Orion Sandbox" },
+      "parameters": { "tenantid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee01" }
+    },
+    {
+      "name": "orion-acr", "type": "dockerregistry", "scheme": "UsernamePassword", "url": "https://orioncr.azurecr.io",
+      "isShared": true, "createdBy": "bob", "projects": ["Orion Commerce", "Orion Platform"],
+      "data": { "registrytype": "Others" }, "parameters": { "username": "orioncr", "registry": "https://orioncr.azurecr.io" }
+    },
+    {
+      "name": "orion-github", "type": "github", "scheme": "PersonalAccessToken", "url": "https://github.com",
+      "isShared": true, "createdBy": "alice", "projects": ["Orion Commerce", "Orion Platform", "Orion Sandbox"]
+    },
+    {
+      "name": "orion-ssh-web", "type": "ssh", "scheme": "UsernamePassword", "createdBy": "carol", "projects": ["Orion Commerce"],
+      "data": { "Host": "web-stg-01.orion.example.test", "Port": "22" }, "parameters": { "username": "deploy" }
+    },
+    {
+      "name": "orion-sonarqube", "type": "sonarqube", "scheme": "Token", "url": "https://sonar.orion.example.test",
+      "isShared": true, "createdBy": "dave", "projects": ["Orion Commerce", "Orion Platform"]
+    },
+    { "name": "orion-npm-feed", "type": "npm", "scheme": "Token", "url": "https://registry.orion.example.test/", "createdBy": "erin", "projects": ["Orion Commerce"] },
+    { "name": "orion-npm-registry", "type": "externalnpmregistry", "scheme": "Token", "url": "https://registry.orion.example.test/", "createdBy": "erin", "projects": ["Orion Commerce"] },
+    {
+      "name": "orion-nuget-feed", "type": "externalnugetfeed", "scheme": "Token", "url": "https://pkgs.orion.example.test/nuget/v3/index.json",
+      "isShared": true, "createdBy": "dave", "projects": ["Orion Commerce", "Orion Platform"]
+    },
+    {
+      "name": "orion-webhook-deployer", "type": "generic", "scheme": "UsernamePassword", "url": "https://deploy-hooks.orion.example.test/",
+      "createdBy": "bob", "isReady": false, "projects": ["Orion Commerce"], "parameters": { "username": "ci" }
+    },
+    {
+      "name": "orion-aks-prod", "type": "kubernetes", "scheme": "Kubeconfig", "url": "https://aks-orion-prod.example.test:443",
+      "isShared": true, "createdBy": "gina", "projects": ["Orion Commerce", "Orion Platform"],
+      "data": { "authorizationType": "Kubeconfig", "acceptUntrustedCerts": "false" }
+    }
+  ],
+  "environments": [
+    { "id": 1, "name": "dev", "project": "Orion Commerce", "description": "Development, deployed on every build" },
+    {
+      "id": 2, "name": "staging", "project": "Orion Commerce", "description": "Pre-production",
+      "checks": [ { "type": "branchControl", "branches": "refs/heads/main,refs/heads/release/*" } ]
+    },
+    {
+      "id": 3, "name": "prod", "project": "Orion Commerce", "description": "Production",
+      "checks": [
+        { "type": "approval", "approvers": ["[Orion Commerce]\\Release Managers"], "minApprovers": 1, "instructions": "Check the release notes before approving." },
+        { "type": "branchControl", "branches": "refs/heads/main" }
+      ]
+    },
+    { "id": 4, "name": "infra-dev", "project": "Orion Platform", "description": "Infrastructure development" },
+    {
+      "id": 5, "name": "infra-prod", "project": "Orion Platform", "description": "Infrastructure production",
+      "checks": [
+        { "type": "approval", "approvers": ["[Orion Platform]\\Release Managers", "gina"], "order": "anyOrder", "minApprovers": 1, "timeout": 86400 },
+        { "type": "branchControl", "branches": "refs/heads/main" }
+      ]
+    },
+    { "id": 6, "name": "sandbox", "project": "Orion Sandbox", "description": "Scratch environment" }
+  ],
+  "policies": [
+    { "id": 1, "project": "Orion Commerce", "type": "minReviewers", "repo": "orion-api", "branch": "main", "min": 2, "createdBy": "alice" },
+    { "id": 2, "project": "Orion Commerce", "type": "build", "repo": "orion-api", "branch": "main", "pipeline": 2001, "createdBy": "alice" },
+    { "id": 3, "project": "Orion Commerce", "type": "workItemLinking", "repo": "orion-api", "branch": "main", "createdBy": "alice" },
+    { "id": 4, "project": "Orion Commerce", "type": "commentResolution", "repo": "orion-api", "branch": "main", "createdBy": "alice" },
+    { "id": 5, "project": "Orion Commerce", "type": "requiredReviewers", "repo": "orion-api", "branch": "main", "reviewers": ["[Orion Commerce]\\Release Managers"], "createdBy": "alice" },
+    { "id": 6, "project": "Orion Commerce", "type": "minReviewers", "repo": "orion-web", "branch": "main", "min": 1, "createdBy": "erin" },
+    { "id": 7, "project": "Orion Commerce", "type": "build", "repo": "orion-web", "branch": "main", "pipeline": 2003, "createdBy": "erin" },
+    { "id": 8, "project": "Orion Commerce", "type": "workItemLinking", "repo": "orion-web", "branch": "main", "blocking": false, "createdBy": "erin" },
+    { "id": 9, "project": "Orion Commerce", "type": "commentResolution", "repo": "orion-web", "branch": "main", "createdBy": "erin" },
+    { "id": 10, "project": "Orion Commerce", "type": "minReviewers", "repo": "orion-lib", "branch": "main", "min": 1, "enabled": false, "createdBy": "dave" },
+    { "id": 11, "project": "Orion Platform", "type": "minReviewers", "repo": "orion-infra", "branch": "main", "min": 1, "createdBy": "gina" },
+    { "id": 12, "project": "Orion Platform", "type": "build", "repo": "orion-templates", "branch": "main", "pipeline": 3003, "createdBy": "gina" }
+  ],
+  "hooks": [
+    { "name": "api-push-ci-bridge", "event": "git.push", "consumer": "webhook", "project": "Orion Commerce", "repo": "orion-api", "branch": "main", "url": "https://ci-bridge.orion.example.test/hooks/ado/push", "createdBy": "alice" },
+    { "name": "commerce-build-complete-slack", "event": "build.complete", "consumer": "slack", "project": "Orion Commerce", "url": "https://hooks.slack.test/services/orion-builds", "createdBy": "bob" },
+    { "name": "web-pr-created-teams", "event": "git.pullrequest.created", "consumer": "teams", "project": "Orion Commerce", "repo": "orion-web", "branch": "main", "url": "https://teams.webhook.test/orion-web-reviews", "createdBy": "erin" },
+    { "name": "platform-build-complete-webhook", "event": "build.complete", "consumer": "webhook", "project": "Orion Platform", "url": "https://ops-events.orion.example.test/ado", "createdBy": "gina" },
+    { "name": "legacy-push-audit", "event": "git.push", "consumer": "webhook", "project": "Orion Commerce", "repo": "orion-legacy", "url": "https://audit.orion.example.test/push", "enabled": false, "createdBy": "frank" }
+  ],
+  "pullRequests": [
+    {
+      "id": 1001, "project": "Orion Commerce", "repo": "orion-api", "title": "Checkout v2: 3-D Secure flow", "status": "active",
+      "source": "feature/checkout-v2", "target": "main", "createdBy": "bob", "created": "2024-04-02T09:12:00Z",
+      "description": "Implements the 3-D Secure challenge and retries failed callbacks.", "labels": ["checkout"],
+      "reviewers": [ { "user": "alice", "vote": 10, "required": true }, { "user": "carol", "vote": 0 }, { "user": "[Orion Commerce]\\Release Managers", "vote": 0, "required": true } ],
+      "workItems": [2004]
+    },
+    {
+      "id": 1002, "project": "Orion Commerce", "repo": "orion-api", "title": "Fix payment callback timeout", "status": "completed",
+      "source": "hotfix/payment-timeout", "target": "main", "createdBy": "dave", "created": "2024-03-18T14:02:00Z", "closed": "2024-03-19T08:45:00Z", "closedBy": "alice",
+      "description": "Raises the callback timeout and adds a retry with backoff.",
+      "reviewers": [ { "user": "alice", "vote": 10, "required": true }, { "user": "gina", "vote": 5 } ],
+      "workItems": [2005, 2007]
+    },
+    {
+      "id": 1003, "project": "Orion Commerce", "repo": "orion-api", "title": "Loyalty points prototype", "status": "abandoned",
+      "source": "feature/loyalty/points", "target": "main", "createdBy": "erin", "created": "2024-03-25T11:30:00Z", "closed": "2024-04-15T16:10:00Z",
+      "description": "Superseded by the loyalty epic.", "reviewers": [ { "user": "bob", "vote": -5 } ]
+    },
+    {
+      "id": 1004, "project": "Orion Commerce", "repo": "orion-api", "title": "WIP: release 2024.2 candidate", "status": "active", "draft": true,
+      "source": "release/2024.2", "target": "main", "createdBy": "carol", "created": "2024-04-20T08:00:00Z"
+    },
+    {
+      "id": 1005, "project": "Orion Commerce", "repo": "orion-web", "title": "Cart redesign", "status": "active",
+      "source": "feature/cart-redesign", "target": "develop", "createdBy": "erin", "created": "2024-04-05T10:20:00Z",
+      "reviewers": [ { "user": "carol", "vote": 5 }, { "user": "bob", "vote": 0 } ], "workItems": [2006]
+    },
+    {
+      "id": 1006, "project": "Orion Commerce", "repo": "orion-web", "title": "Fix Safari layout", "status": "completed",
+      "source": "bugfix/safari-layout", "target": "develop", "createdBy": "carol", "created": "2024-04-08T13:15:00Z", "closed": "2024-04-09T09:00:00Z", "closedBy": "erin",
+      "reviewers": [ { "user": "erin", "vote": 10 } ], "workItems": [2008]
+    },
+    {
+      "id": 1007, "project": "Orion Commerce", "repo": "orion-web", "title": "i18n spike", "status": "abandoned",
+      "source": "feature/i18n", "target": "main", "createdBy": "dave", "created": "2024-04-01T15:00:00Z", "closed": "2024-04-12T10:00:00Z"
+    },
+    {
+      "id": 1008, "project": "Orion Platform", "repo": "orion-infra", "title": "Upgrade AKS to 1.29", "status": "completed",
+      "source": "feature/aks-upgrade", "target": "main", "createdBy": "gina", "created": "2024-04-18T09:00:00Z", "closed": "2024-04-22T07:30:00Z", "closedBy": "dave",
+      "reviewers": [ { "user": "dave", "vote": 10, "required": true } ], "workItems": [2009]
+    },
+    {
+      "id": 1009, "project": "Orion Commerce", "repo": "orion-lib", "title": "Release 1.4", "status": "active",
+      "source": "release/1.4", "target": "main", "createdBy": "dave", "created": "2024-03-26T12:00:00Z",
+      "reviewers": [ { "user": "alice", "vote": 0 } ], "workItems": [2014]
+    }
+  ],
+  "runs": [
+    { "id": 5001, "pipeline": 2001, "result": "succeeded", "branch": "main", "started": "2024-03-05T08:10:00Z", "minutes": 9, "version": "main~3" },
+    { "id": 5002, "pipeline": 2001, "result": "failed", "branch": "feature/checkout-v2", "started": "2024-03-08T10:40:00Z", "minutes": 6 },
+    { "id": 5003, "pipeline": 2001, "result": "succeeded", "branch": "main", "started": "2024-03-12T07:55:00Z", "minutes": 11 },
+    { "id": 5004, "pipeline": 2001, "result": "canceled", "branch": "release/2024.1", "started": "2024-03-14T13:20:00Z", "minutes": 2 },
+    { "id": 5005, "pipeline": 2001, "result": "succeeded", "branch": "release/2024.2", "started": "2024-04-10T09:05:00Z", "minutes": 12 },
+    { "id": 5006, "pipeline": 2002, "result": "succeeded", "branch": "main", "started": "2024-03-06T01:30:00Z", "minutes": 14 },
+    { "id": 5007, "pipeline": 2002, "result": "failed", "branch": "main", "started": "2024-03-07T01:30:00Z", "minutes": 13 },
+    { "id": 5008, "pipeline": 2002, "result": "succeeded", "branch": "main", "started": "2024-03-08T01:30:00Z", "minutes": 15 },
+    { "id": 5009, "pipeline": 2003, "result": "succeeded", "branch": "main", "started": "2024-04-02T09:00:00Z", "minutes": 18 },
+    { "id": 5010, "pipeline": 2003, "result": "failed", "branch": "develop", "started": "2024-04-03T10:15:00Z", "minutes": 7 },
+    { "id": 5011, "pipeline": 2003, "result": "succeeded", "branch": "feature/cart-redesign", "started": "2024-04-05T14:00:00Z", "minutes": 16 },
+    { "id": 5012, "pipeline": 2003, "result": "canceled", "branch": "feature/i18n", "started": "2024-04-08T11:45:00Z", "minutes": 3 },
+    { "id": 5013, "pipeline": 2004, "result": "succeeded", "branch": "main", "started": "2024-03-20T08:00:00Z", "minutes": 5 },
+    { "id": 5014, "pipeline": 2004, "result": "succeeded", "branch": "release/1.4", "started": "2024-03-27T09:30:00Z", "minutes": 6 },
+    { "id": 5015, "pipeline": 2004, "result": "failed", "branch": "develop", "started": "2024-04-01T16:20:00Z", "minutes": 4 },
+    { "id": 5016, "pipeline": 2005, "result": "succeeded", "branch": "main", "started": "2024-04-12T07:00:00Z", "minutes": 22 },
+    { "id": 5017, "pipeline": 2005, "result": "failed", "branch": "main", "started": "2024-04-15T07:00:00Z", "minutes": 21 },
+    { "id": 5018, "pipeline": 2005, "result": "canceled", "branch": "feature/dark-mode", "started": "2024-04-16T12:10:00Z", "minutes": 5 },
+    { "id": 5019, "pipeline": 2006, "result": "succeeded", "branch": "master", "started": "2024-02-20T02:00:00Z", "minutes": 31 },
+    { "id": 5020, "pipeline": 2006, "result": "failed", "branch": "master", "started": "2024-02-27T02:00:00Z", "minutes": 12 },
+    { "id": 5021, "pipeline": 2006, "result": "succeeded", "branch": "maintenance/2019", "started": "2024-03-05T02:00:00Z", "minutes": 30 },
+    { "id": 5022, "pipeline": 2007, "result": "succeeded", "branch": "main", "started": "2024-03-01T09:00:00Z", "minutes": 3 },
+    { "id": 5023, "pipeline": 2007, "result": "succeeded", "branch": "main", "started": "2024-03-15T09:00:00Z", "minutes": 3 },
+    { "id": 5024, "pipeline": 3001, "result": "succeeded", "branch": "main", "started": "2024-03-25T10:00:00Z", "minutes": 8 },
+    { "id": 5025, "pipeline": 3001, "result": "failed", "branch": "feature/aks-upgrade", "started": "2024-04-20T13:00:00Z", "minutes": 5 },
+    { "id": 5026, "pipeline": 3001, "result": "succeeded", "branch": "main", "started": "2024-04-22T08:00:00Z", "minutes": 9 },
+    { "id": 5027, "pipeline": 3002, "result": "succeeded", "branch": "main", "started": "2024-05-02T10:00:00Z", "minutes": 6 },
+    { "id": 5028, "pipeline": 3002, "result": "canceled", "branch": "main", "started": "2024-05-03T10:00:00Z", "minutes": 1 },
+    { "id": 5029, "pipeline": 3003, "result": "succeeded", "branch": "main", "started": "2024-03-09T12:00:00Z", "minutes": 2 },
+    { "id": 5030, "pipeline": 3003, "result": "succeeded", "branch": "main", "started": "2024-03-30T12:00:00Z", "minutes": 2 },
+    { "id": 5031, "pipeline": 4001, "result": "succeeded", "branch": "main", "started": "2024-05-10T15:00:00Z", "minutes": 1 },
+    { "id": 5032, "pipeline": 4001, "result": "failed", "branch": "main", "started": "2024-05-11T15:00:00Z", "minutes": 1 }
+  ],
+  "workItems": [
+    { "id": 2001, "project": "Orion Commerce", "type": "Epic", "title": "Checkout v2", "state": "Active", "assignedTo": "alice", "tags": "checkout; q2",
+      "description": "<div>Rebuild checkout with 3-D Secure and loyalty points.</div>", "links": [ { "kind": "child", "to": 2002 }, { "kind": "child", "to": 2003 } ] },
+    { "id": 2002, "project": "Orion Commerce", "type": "Feature", "title": "Payment provider integration", "state": "Active", "assignedTo": "bob",
+      "description": "Support 3-D Secure and resilient callbacks.", "links": [ { "kind": "parent", "to": 2001 }, { "kind": "child", "to": 2004 }, { "kind": "child", "to": 2005 } ] },
+    { "id": 2003, "project": "Orion Commerce", "type": "Feature", "title": "Loyalty points", "state": "New", "assignedTo": "erin",
+      "description": "Earn and redeem points in the cart.", "links": [ { "kind": "parent", "to": 2001 }, { "kind": "child", "to": 2006 } ] },
+    { "id": 2004, "project": "Orion Commerce", "type": "User Story", "title": "Support 3-D Secure challenge", "state": "Active", "assignedTo": "bob",
+      "description": "As a shopper I confirm a payment with my bank app.",
+      "links": [ { "kind": "parent", "to": 2002 }, { "kind": "commit", "repo": "orion-api", "ref": "refs/heads/feature/checkout-v2" }, { "kind": "pullrequest", "repo": "orion-api", "to": 1001 } ] },
+    { "id": 2005, "project": "Orion Commerce", "type": "User Story", "title": "Retry failed payment callbacks", "state": "Closed", "assignedTo": "dave",
+      "description": "Callbacks are retried with exponential backoff.",
+      "links": [ { "kind": "parent", "to": 2002 }, { "kind": "related", "to": 2007 }, { "kind": "pullrequest", "repo": "orion-api", "to": 1002 } ] },
+    { "id": 2006, "project": "Orion Commerce", "type": "User Story", "title": "Show the points balance in the cart", "state": "Active", "assignedTo": "erin",
+      "description": "", "links": [ { "kind": "parent", "to": 2003 }, { "kind": "pullrequest", "repo": "orion-web", "to": 1005 } ] },
+    { "id": 2007, "project": "Orion Commerce", "type": "Bug", "title": "Payment timeout on slow networks", "state": "Closed", "assignedTo": "dave", "tags": "payments",
+      "description": "<p>Callback times out after 5 seconds.</p><script>alert('x')</script>",
+      "links": [ { "kind": "related", "to": 2005 }, { "kind": "commit", "repo": "orion-api", "ref": "refs/heads/hotfix/payment-timeout" }, { "kind": "pullrequest", "repo": "orion-api", "to": 1002 } ] },
+    { "id": 2008, "project": "Orion Commerce", "type": "Bug", "title": "Safari layout breaks the product grid", "state": "Resolved", "assignedTo": "carol",
+      "description": "Grid collapses on Safari 17.", "links": [ { "kind": "pullrequest", "repo": "orion-web", "to": 1006 }, { "kind": "commit", "repo": "orion-web", "ref": "refs/heads/bugfix/safari-layout" } ] },
+    { "id": 2009, "project": "Orion Platform", "type": "Task", "title": "Upgrade AKS to 1.29", "state": "Closed", "assignedTo": "gina",
+      "description": "", "links": [ { "kind": "parent", "to": 2010 }, { "kind": "pullrequest", "repo": "orion-infra", "to": 1008 }, { "kind": "commit", "repo": "orion-infra", "ref": "refs/heads/feature/aks-upgrade" } ] },
+    { "id": 2010, "project": "Orion Platform", "type": "Epic", "title": "Platform hardening", "state": "Active", "assignedTo": "alice",
+      "description": "Security and reliability work for the platform.", "links": [ { "kind": "child", "to": 2009 }, { "kind": "child", "to": 2011 } ] },
+    { "id": 2011, "project": "Orion Platform", "type": "Feature", "title": "Pipeline template consolidation", "state": "Active", "assignedTo": "gina",
+      "description": "One templates repository for every product.", "links": [ { "kind": "parent", "to": 2010 }, { "kind": "child", "to": 2012 } ] },
+    { "id": 2012, "project": "Orion Platform", "type": "User Story", "title": "Convert Azure Pipelines to GitHub Actions", "state": "New", "assignedTo": "dave",
+      "description": "Use the migration workbench to convert the Orion pipelines.", "links": [ { "kind": "parent", "to": 2011 }, { "kind": "commit", "repo": "orion-templates", "ref": "refs/tags/v3" } ] },
+    { "id": 2013, "project": "Orion Commerce", "type": "Bug", "title": "Legacy build fails on VS2022 agents", "state": "Active", "assignedTo": "frank",
+      "description": "MSBuild cannot find the Web Applications targets.", "links": [ { "kind": "commit", "repo": "orion-legacy" } ] },
+    { "id": 2014, "project": "Orion Commerce", "type": "Task", "title": "Publish Orion.Core 1.4", "state": "Active", "assignedTo": "dave",
+      "description": "", "links": [ { "kind": "pullrequest", "repo": "orion-lib", "to": 1009 }, { "kind": "commit", "repo": "orion-lib", "ref": "refs/tags/1.4.1" } ] },
+    { "id": 2015, "project": "Orion Commerce", "type": "Bug", "title": "Release pipeline waits forever for approval", "state": "New", "assignedTo": "alice",
+      "description": "The prod environment approval never notifies the release managers.", "links": [] }
+  ]
+}

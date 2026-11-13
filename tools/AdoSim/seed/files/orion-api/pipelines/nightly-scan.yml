@@ -1,0 +1,41 @@
+# Nightly dependency and code quality scan (SonarQube + vulnerable package audit).
+trigger: none
+pr: none
+
+schedules:
+- cron: '30 1 * * *'
+  displayName: Nightly scan
+  branches:
+    include:
+    - main
+  always: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+- group: orion-shared-config
+
+steps:
+- task: UseDotNet@2
+  inputs:
+    packageType: sdk
+    version: 8.x
+- task: SonarQubePrepare@5
+  displayName: Prepare SonarQube analysis
+  inputs:
+    SonarQube: orion-sonarqube
+    scannerMode: MSBuild
+    projectKey: orion-api
+    projectName: Orion API
+- task: DotNetCoreCLI@2
+  displayName: Build for analysis
+  inputs:
+    command: build
+    projects: Orion.sln
+- task: SonarQubeAnalyze@5
+  displayName: Run analysis
+- task: SonarQubePublish@5
+  displayName: Publish quality gate result
+  inputs:
+    pollingTimeoutSec: 300

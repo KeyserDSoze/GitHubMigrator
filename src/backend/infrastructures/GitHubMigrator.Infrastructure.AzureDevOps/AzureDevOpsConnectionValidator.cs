@@ -7,14 +7,15 @@ using GitHubMigrator.Domain;
 
 namespace GitHubMigrator.Infrastructure.AzureDevOps;
 
-public sealed class AzureDevOpsConnectionValidator(HttpClient client) : IConnectionValidator
+public sealed class AzureDevOpsConnectionValidator(HttpClient client, AzureDevOpsServicesEndpoints? services = null)
+    : IConnectionValidator
 {
     public string ProviderKey => "azure-devops-services";
     public ConnectionDirection Direction => ConnectionDirection.Source;
 
     public async Task<ConnectionValidation> ValidateAsync(string organization, string personalAccessToken, CancellationToken ct)
     {
-        var endpoint = new Uri($"https://dev.azure.com/{Uri.EscapeDataString(organization)}/_apis/projects?$top=1&api-version=7.1");
+        var endpoint = new Uri($"{(services ?? AzureDevOpsServicesEndpoints.Cloud).Core(organization)}/_apis/projects?$top=1&api-version=7.1");
         using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic",
             Convert.ToBase64String(Encoding.UTF8.GetBytes(":" + personalAccessToken)));

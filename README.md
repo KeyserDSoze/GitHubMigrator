@@ -69,6 +69,12 @@ Local defaults: UI http://localhost:5173, API http://localhost:8080/api/health, 
 
 Bootstrap (LOCAL TEST ONLY): `superadmin` / `superadmin`; changing it at first login is mandatory. On Azure configure a strong one-time bootstrap password through Key Vault; the insecure default is rejected outside Development.
 
+## Simulated source and target for end-to-end tests
+
+`docker compose up` also starts **ado-sim** (an Azure DevOps Server-compatible source with a deterministic estate, [docs](docs/ado-test-environment.md)) and **gh-sim** (a GitHub Enterprise Server-shaped target with real git, GitHub App tokens and rulesets, [docs](docs/github-test-environment.md)). and **llm-sim** (an OpenAI-compatible model stand-in with scripted, hostile and faulty answers for the AI conversion gates, [docs](docs/llm-test-environment.md)). `./script/dev.sh lab` points the API at gh-sim and allows llm-sim for AI connections; by default the API still talks to github.com. Contract tests of the simulators run without PostgreSQL. See [ADR-009](ADR/ADR-009-github-endpoints-and-simulated-test-bed.md) and [ADR-010](ADR/ADR-010-git-remote-policy-and-services-stand-in.md). `./script/dev.sh lab-services` makes ado-sim imitate Azure DevOps Services. The simulators are not an oracle: [live smoke tests](docs/live-smoke-tests.md) check them read-only against real Azure DevOps Services and GitHub.
+
+AI-assisted pipeline conversion returns a *proposal* that is kept and approved by a person against its hash (model connections, redaction, output gates, task accounting; no pull request yet): see [docs/ai-conversion-gates.md](docs/ai-conversion-gates.md).
+
 See [architecture](docs/architecture.md), [local development](docs/local-development.md), [migration fidelity](docs/tfvc-migration.md), [Azure deployment](docs/azure-deployment.md), [ADRs](ADR/) and [roadmap](features/README.md).
 
 ## Scope

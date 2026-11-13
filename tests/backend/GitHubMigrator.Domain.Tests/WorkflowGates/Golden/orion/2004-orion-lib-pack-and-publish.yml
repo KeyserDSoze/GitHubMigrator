@@ -1,0 +1,40 @@
+# azure-tasks: converted=NuGetToolInstaller@1,DotNetCoreCLI@2,NuGetCommand@2,PublishBuildArtifacts@1 manual=none
+name: orion-lib Pack and Publish
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  BUILD_CONFIGURATION: Release
+  PACKAGE_VERSION: 1.4.${{ github.run_number }}
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # NuGetToolInstaller@1 needs no step: the .NET SDK on the runner ships NuGet.
+      - name: Restore
+        run: find src -name '*.csproj' -print0 | xargs -0 -n1 dotnet restore
+      # ##vso[build.updatebuildnumber] (tag the run with the branch name) has no GitHub equivalent: the run name is fixed.
+      - name: Build
+        run: find src -name '*.csproj' -print0 | xargs -0 -n1 dotnet build --configuration "$BUILD_CONFIGURATION" --no-restore -p:Version="$PACKAGE_VERSION"
+      - name: Test
+        run: find tests -name '*.csproj' -print0 | xargs -0 -n1 dotnet test --configuration "$BUILD_CONFIGURATION" --no-build
+      - name: Pack
+        env:
+          STAGING: ${{ runner.temp }}/packages
+        run: find src -name '*.csproj' -print0 | xargs -0 -n1 dotnet pack --configuration "$BUILD_CONFIGURATION" --no-build -p:PackageVersion="$PACKAGE_VERSION" --output "$STAGING"
+      - name: Push to the internal feed
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          STAGING: ${{ runner.temp }}/packages
+          FEED_URL: ${{ vars.ORION_NUGET_FEED_URL }}
+          FEED_API_KEY: ${{ secrets.ORION_NUGET_FEED_API_KEY }}
+        run: dotnet nuget push "$STAGING/*.nupkg" --source "$FEED_URL" --api-key "$FEED_API_KEY"
+      - name: Keep the packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages
+          path: ${{ runner.temp }}/packages

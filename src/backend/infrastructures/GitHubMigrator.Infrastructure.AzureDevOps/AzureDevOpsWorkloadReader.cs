@@ -7,18 +7,19 @@ namespace GitHubMigrator.Infrastructure.AzureDevOps;
 
 // Read-only source adapter. Never project credential payloads or variable values.
 public sealed class AzureDevOpsWorkloadReader(HttpClient client, ServerEndpointPolicy? policy = null,
-    string? serverRoot = null) : IAzureWorkloadReader, IServerAwareWorkloadReader
+    string? serverRoot = null, AzureDevOpsServicesEndpoints? services = null)
+    : IAzureWorkloadReader, IServerAwareWorkloadReader, IPipelineYamlReader
 {
     // Cloud keeps the fixed Microsoft host; a server root was already policy-checked.
     private string Collection(string organization) => serverRoot is null
-        ? $"https://dev.azure.com/{Uri.EscapeDataString(organization)}"
+        ? (services ?? AzureDevOpsServicesEndpoints.Cloud).Core(organization)
         : $"{serverRoot}/{Uri.EscapeDataString(organization)}";
     private string Api => serverRoot is null ? "7.1" : "7.0";
 
     public IAzureWorkloadReader ForServer(string baseUrl)
     {
         var normalized = (policy ?? throw new ArgumentException("Self-hosted providers are disabled.")).Normalize(baseUrl);
-        return new AzureDevOpsWorkloadReader(client, policy, normalized);
+        return new AzureDevOpsWorkloadReader(client, policy, normalized, services);
     }
 
     public async Task<AzurePipelineSource> GetPipelineAsync(
@@ -43,7 +44,7 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client, ServerEndpointP
         var groups = Property(definition.RootElement, "variableGroups");
         if (groups.ValueKind == JsonValueKind.Array)
             foreach (var g in groups.EnumerateArray().Take(30))
-                if (g.TryGetInt32(out var id) && id > 0)
+                if (GroupId(g) is { } id and > 0)
                 {
                     try
                     {
@@ -90,6 +91,35 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client, ServerEndpointP
             endpoints.Take(100).ToArray(), yaml, structure);
     }
 
+    public const int MaxPipelineYamlChars = 200_000;
+
+    public async Task<PipelineYaml> ReadPipelineYamlAsync(
+        string organization, string projectId, int pipelineId, string token, CancellationToken ct)
+    {
+        var root = $"{Collection(organization)}/{Uri.EscapeDataString(projectId)}";
+        using var pipe = await GetAsync($"{root}/_apis/pipelines/{pipelineId}?api-version={Api}", token, ct);
+        var configuration = Property(pipe.RootElement, "configuration");
+        if ((Text(configuration, "type") ?? "unknown") != "yaml") return new(null, false);
+        var path = Text(configuration, "path");
+        var repo = Text(Property(configuration, "repository"), "id");
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(repo))
+        {
+            using var definition = await GetAsync($"{root}/_apis/build/definitions/{pipelineId}?api-version={Api}", token, ct);
+            path = string.IsNullOrEmpty(path) ? Text(Property(definition.RootElement, "process"), "yamlFilename") : path;
+            repo = string.IsNullOrEmpty(repo) ? Text(Property(definition.RootElement, "repository"), "id") : repo;
+        }
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(repo)) return new(null, false);
+        try
+        {
+            var url = $"{root}/_apis/git/repositories/{Uri.EscapeDataString(repo)}/items" +
+                      $"?path={Uri.EscapeDataString(path)}&includeContent=true&$format=json&api-version={Api}";
+            using var item = await GetAsync(url, token, ct);
+            if (Text(item.RootElement, "content") is not { Length: > 0 } raw) return new(null, false);
+            return raw.Length > MaxPipelineYamlChars ? new(null, true) : new(raw, false);
+        }
+        catch (HttpRequestException) { return new(null, false); }
+    }
+
     public async Task<IReadOnlyList<AzureBoardItem>> GetBoardItemsAsync(
         string organization, string projectId, IReadOnlyList<int> ids, string token, CancellationToken ct)
     {
@@ -127,6 +157,13 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client, ServerEndpointP
         }
         return result;
     }
+
+    // The build definition lists variable groups as objects ({ "id": 3, "name": ... }) on Azure DevOps;
+    // a bare integer is the older/lab shape. Both identify the group.
+    private static int? GroupId(JsonElement group) =>
+        group.ValueKind == JsonValueKind.Number && group.TryGetInt32(out var plain) ? plain
+        : group.ValueKind == JsonValueKind.Object && group.TryGetProperty("id", out var id) &&
+          id.ValueKind == JsonValueKind.Number && id.TryGetInt32(out var nested) ? nested : null;
 
     private async Task<JsonDocument> GetAsync(string url, string token, CancellationToken ct)
     {

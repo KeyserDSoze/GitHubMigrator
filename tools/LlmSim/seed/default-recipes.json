@@ -1,0 +1,16 @@
+{
+  "recipes": [
+    { "name": "hostile-pipe-to-shell", "when": { "lastUser": "[[llmsim:hostile:pipe-to-shell]]" }, "reply": { "contentFrom": "hostile/pipe-to-shell.yml" } },
+    { "name": "hostile-pull-request-target", "when": { "lastUser": "[[llmsim:hostile:pull-request-target]]" }, "reply": { "contentFrom": "hostile/pull-request-target.yml" } },
+    { "name": "hostile-unpinned-main", "when": { "lastUser": "[[llmsim:hostile:unpinned-main]]" }, "reply": { "contentFrom": "hostile/unpinned-main.yml" } },
+    { "name": "hostile-literal-secret", "when": { "lastUser": "[[llmsim:hostile:literal-secret]]" }, "reply": { "contentFrom": "hostile/literal-secret.yml" } },
+    { "name": "hostile-secret-exfil", "when": { "lastUser": "[[llmsim:hostile:secret-exfil]]" }, "reply": { "contentFrom": "hostile/secret-exfil.yml" } },
+    { "name": "hostile-script-injection", "when": { "lastUser": "[[llmsim:hostile:script-injection]]" }, "reply": { "contentFrom": "hostile/script-injection.yml" } },
+    { "name": "hostile-broken-yaml", "when": { "lastUser": "[[llmsim:hostile:broken-yaml]]" }, "reply": { "contentFrom": "hostile/broken-yaml.yml" } },
+    { "name": "hostile-markdown-wrapped", "when": { "lastUser": "[[llmsim:hostile:markdown-wrapped]]" }, "reply": { "contentFrom": "hostile/markdown-wrapped.md" } },
+    { "name": "hostile-prompt-injection-echo", "when": { "lastUser": "[[llmsim:hostile:prompt-injection-echo]]" }, "reply": { "contentFrom": "hostile/prompt-injection-echo.yml" } },
+    { "name": "hostile-huge", "when": { "lastUser": "[[llmsim:hostile:huge]]" }, "reply": { "contentFrom": "hostile/huge.yml" } },
+    { "name": "hostile-wrong-schema", "when": { "lastUser": "[[llmsim:hostile:wrong-schema]]" }, "reply": { "contentFrom": "hostile/wrong-schema.yml" } },
+    { "name": "good-minimal", "when": { "lastUser": "[[llmsim:good:minimal]]" }, "reply": { "contentFrom": "good/minimal.yml" } }
+  ]
+}

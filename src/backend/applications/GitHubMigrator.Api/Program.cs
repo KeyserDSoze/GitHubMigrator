@@ -66,6 +66,34 @@ builder.Services.AddScoped<GitHubDestinationAccessService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IConnectionRepository, PostgresConnectionRepository>();
 builder.Services.AddScoped<ConnectionService>();
+// UI-managed AI model connections. Hosts are operator configuration (defaults to the Azure OpenAI hosts the advisory
+// reviewer always allowed); plain HTTP is for the lab simulator and is honoured in Development only.
+builder.Services.AddSingleton(AiEndpointPolicy.FromConfiguration(
+    builder.Configuration["Ai:AllowedHosts"],
+    builder.Environment.IsDevelopment() && builder.Configuration.GetValue("Ai:AllowHttp", false)));
+builder.Services.AddSingleton<IManagedIdentityTokenSource, AzureManagedIdentityTokenSource>();
+builder.Services.AddScoped<IAiConnectionRepository, PostgresAiConnectionRepository>();
+// Static analysers for model-written workflows: a configured path wins, otherwise PATH. A missing one is a gate that did not
+// run, so no proposal is approvable; the status endpoint tells the UI.
+var actionlintPath = GitHubMigrator.Infrastructure.WorkflowTools.ProcessWorkflowToolRunner.Locate("actionlint", builder.Configuration["WorkflowGates:ActionlintPath"]);
+var zizmorPath = GitHubMigrator.Infrastructure.WorkflowTools.ProcessWorkflowToolRunner.Locate("zizmor", builder.Configuration["WorkflowGates:ZizmorPath"]);
+builder.Services.AddSingleton(new WorkflowAnalyserStatus(actionlintPath is not null, zizmorPath is not null));
+builder.Services.AddSingleton<IWorkflowGatePipelineFactory>(new WorkflowGatePipelineFactory(
+    actionlintPath is null ? null : GitHubMigrator.Infrastructure.WorkflowTools.ProcessWorkflowToolRunner.Actionlint(actionlintPath),
+    zizmorPath is null ? null : GitHubMigrator.Infrastructure.WorkflowTools.ProcessWorkflowToolRunner.Zizmor(zizmorPath)));
+builder.Services.AddScoped(sp => new PipelineConverter(sp.GetRequiredService<IChatModelClient>(),
+    sp.GetRequiredService<IWorkflowGatePipelineFactory>(), sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<PipelineConversionService>();
+builder.Services.AddScoped<IWorkflowProposalRepository, PostgresWorkflowProposalRepository>();
+// Four eyes by default: whoever asked the model for a workflow is not the only person who may approve it. A single-reviewer
+// deployment turns it off explicitly with WorkflowApproval:RequireSecondApprover=false.
+builder.Services.AddScoped(sp => new WorkflowProposalService(sp.GetRequiredService<IWorkflowProposalRepository>(),
+    sp.GetRequiredService<IWorkflowGatePipelineFactory>(), sp.GetRequiredService<TimeProvider>(),
+    new WorkflowProposalOptions { RequireSecondApprover = builder.Configuration.GetValue("WorkflowApproval:RequireSecondApprover", true) }));
+builder.Services.AddScoped(sp => new AiConnectionService(
+    sp.GetRequiredService<IAiConnectionRepository>(), sp.GetRequiredService<IConnectionSecretStore>(),
+    sp.GetRequiredService<IChatModelClient>(), sp.GetRequiredService<AiEndpointPolicy>(), sp.GetRequiredService<TimeProvider>(),
+    builder.Configuration.GetValue("Ai:AllowManagedIdentity", false)));
 builder.Services.AddScoped<IDiscoveryRepository, PostgresDiscoveryRepository>();
 builder.Services.AddScoped<DiscoveryService>();
 builder.Services.AddScoped<PostgresDiscoveryPageCheckpointStore>();
@@ -337,13 +365,38 @@ builder.Services.AddScoped<IGitSourceBundleAcquirer>(provider =>
         maxStoreBytes: builder.Configuration.GetValue<long>(
             "GitSourceBundles:MaxStorageBytes",
             GitHubMigrator.Infrastructure.GitObjects.LocalGitBundleArtifactStore.DefaultMaxStorageBytes)));
+// Azure DevOps Server / TFS is opt-in: it exists only when at least one host is allow-listed.
+var serverPolicy = ServerEndpointPolicy.FromConfiguration(
+    builder.Configuration["Providers:AzureDevOpsServer:AllowedHosts"],
+    builder.Configuration.GetValue("Providers:AzureDevOpsServer:AllowHttp", false));
+builder.Services.AddSingleton(serverPolicy);
+// Self-signed lab servers only; never honoured outside Development.
+var skipServerTls = builder.Environment.IsDevelopment() &&
+    builder.Configuration.GetValue("Providers:AzureDevOpsServer:SkipTlsValidation", false);
+
+// Azure DevOps Services is Microsoft's cloud. The override exists only so the lab simulator can stand
+// in for it, is honoured in Development alone, and still needs allow-listed hosts.
+var servicesOverrideConfigured = new[] { "CoreRoot", "GraphRoot", "GitRoot" }
+    .Any(key => !string.IsNullOrWhiteSpace(builder.Configuration["Providers:AzureDevOpsServices:" + key]));
+if (servicesOverrideConfigured && !builder.Environment.IsDevelopment())
+    throw new InvalidOperationException("Providers:AzureDevOpsServices overrides are restricted to Development.");
+var azureServicesEndpoints = AzureDevOpsServicesEndpoints.FromConfiguration(
+    builder.Configuration["Providers:AzureDevOpsServices:CoreRoot"],
+    builder.Configuration["Providers:AzureDevOpsServices:GraphRoot"],
+    builder.Configuration["Providers:AzureDevOpsServices:GitRoot"],
+    ServerEndpointPolicy.FromConfiguration(
+        builder.Configuration["Providers:AzureDevOpsServices:AllowedHosts"],
+        builder.Configuration.GetValue("Providers:AzureDevOpsServices:AllowHttp", false)));
+builder.Services.AddSingleton(azureServicesEndpoints);
+var azureGitRemotePolicy = new GitHubMigrator.Infrastructure.GitObjects.AzureGitRemotePolicy(
+    azureServicesEndpoints, serverPolicy, skipServerTls);
 builder.Services.AddScoped<IAzureGitSourceLocationResolver, PostgresAzureGitSourceLocationResolver>();
 builder.Services.AddScoped<IAzureGitMirrorFetcher>(_ =>
     new GitHubMigrator.Infrastructure.GitObjects.AzureDevOpsGitMirrorFetcher(
         builder.Configuration.GetValue("GitSourceBundles:Enabled", false) &&
         builder.Configuration.GetValue("AzureGitFetch:Enabled", false)
             ? builder.Configuration["GitSourceBundles:SourceRoot"] ?? ""
-            : ""));
+            : "", null, azureGitRemotePolicy));
 builder.Services.AddScoped<AzureGitSourceAcquisitionService>();
 builder.Services.AddScoped<IAzureGitSourceAcquisition>(provider =>
     provider.GetRequiredService<AzureGitSourceAcquisitionService>());
@@ -421,7 +474,8 @@ builder.Services.AddScoped<IGitHubSandboxOneShotGitWriter>(sp =>
     new GitHubMigrator.Infrastructure.GitObjects.GitHubSandboxCreateOnlyPushRunner(
         builder.Configuration["GitSourceBundles:BundleRoot"] ?? "",
         builder.Configuration["GitHubSandboxOneShot:ScratchRoot"] ?? "",
-        sp.GetRequiredService<GitHubSandboxOneShotOptions>()));
+        sp.GetRequiredService<GitHubSandboxOneShotOptions>(),
+        sp.GetRequiredService<GitHubEndpoints>()));
 builder.Services.AddScoped<GitHubSandboxOneShotSender>();
 // F-087 is a separate, explicitly enabled, GET-only recovery capability.
 // It never depends on the F-083 sender switch or remote writer.
@@ -482,7 +536,8 @@ builder.Services.AddScoped<IGitHubReadOnlyObjectMirrorRunner>(sp =>
         builder.Configuration["GitHubTrustedRemoteRead:SourceRoot"] ?? "",
         builder.Configuration["GitHubTrustedRemoteRead:ScratchRoot"] ?? "",
         sp.GetRequiredService<GitHubReadOnlyObjectMirrorOptions>(),
-        sp.GetRequiredService<TimeProvider>()));
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<GitHubEndpoints>()));
 builder.Services.AddSingleton(new GitSourceMirrorLifecycleOptions(
     builder.Configuration.GetValue("GitHubSourceMirrorLifecycle:Enabled", false)));
 builder.Services.AddScoped<IGitSourceMirrorLifecycleJournal,
@@ -555,6 +610,14 @@ builder.Services.AddScoped<IIdentityMappingDraftRepository, PostgresIdentityMapp
 builder.Services.AddScoped<IdentityMappingService>();
 builder.Services.AddScoped<WorkloadPreviewService>();
 builder.Services.AddScoped<BoardReconciliationService>();
+// GitHub defaults to github.com. A GitHub Enterprise Server (or the lab simulator) is opt-in through
+// allow-listed operator configuration; plain HTTP is a Development-only lab setting.
+var gitHubEndpointPolicy = ServerEndpointPolicy.FromConfiguration(
+    builder.Configuration["Providers:GitHub:AllowedHosts"],
+    builder.Environment.IsDevelopment() && builder.Configuration.GetValue("Providers:GitHub:AllowHttp", false));
+builder.Services.AddSingleton(GitHubEndpoints.FromConfiguration(
+    builder.Configuration["Providers:GitHub:ApiRoot"], builder.Configuration["Providers:GitHub:WebRoot"],
+    gitHubEndpointPolicy));
 builder.Services.AddHttpClient<GitHubDestinationAccessReader>(c => c.Timeout = TimeSpan.FromSeconds(12))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IGitHubDestinationAccessReader>(s => s.GetRequiredService<GitHubDestinationAccessReader>());
@@ -609,6 +672,10 @@ builder.Services.AddHttpClient<AzureDevOpsWorkloadReader>(c => c.Timeout = TimeS
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddHttpClient<GitHubConfigurationReader>(c => c.Timeout = TimeSpan.FromSeconds(15))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+// Redirects must never be followed (they would carry the API key to another host); each attempt has its own timeout.
+builder.Services.AddHttpClient<GitHubMigrator.Infrastructure.Ai.OpenAiCompatibleChatClient>(c => c.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IChatModelClient>(s => s.GetRequiredService<GitHubMigrator.Infrastructure.Ai.OpenAiCompatibleChatClient>());
 builder.Services.AddHttpClient<FoundryPipelineReviewer>(c => c.Timeout = TimeSpan.FromSeconds(30))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddTransient<IAzureWorkloadReader>(s => s.GetRequiredService<AzureDevOpsWorkloadReader>());
@@ -624,20 +691,12 @@ builder.Services.AddHttpClient<GitHubConnectionValidator>(c => c.Timeout = TimeS
 builder.Services.AddTransient<IConnectionValidator>(s => s.GetRequiredService<AzureDevOpsConnectionValidator>());
 builder.Services.AddTransient<IConnectionValidator>(s => s.GetRequiredService<GitHubConnectionValidator>());
 
-// Azure DevOps Server / TFS is opt-in: it exists only when at least one host is allow-listed.
-var serverPolicy = ServerEndpointPolicy.FromConfiguration(
-    builder.Configuration["Providers:AzureDevOpsServer:AllowedHosts"],
-    builder.Configuration.GetValue("Providers:AzureDevOpsServer:AllowHttp", false));
-builder.Services.AddSingleton(serverPolicy);
 if (serverPolicy.Enabled)
 {
-    // Self-signed lab servers only; never honoured outside Development.
-    var skipTls = builder.Environment.IsDevelopment() &&
-        builder.Configuration.GetValue("Providers:AzureDevOpsServer:SkipTlsValidation", false);
     HttpMessageHandler ServerHandler() => new HttpClientHandler
     {
         AllowAutoRedirect = false, UseCookies = false,
-        ServerCertificateCustomValidationCallback = skipTls
+        ServerCertificateCustomValidationCallback = skipServerTls
             ? HttpClientHandler.DangerousAcceptAnyServerCertificateValidator : null
     };
     builder.Services.AddHttpClient<AzureDevOpsServerConnectionValidator>(c => c.Timeout = TimeSpan.FromSeconds(20))
@@ -798,6 +857,7 @@ if (postgresStartupMode != PostgresDatabaseStartupMode.RuntimeOnly)
     await GitHubRemoteTransmitHazardSchema.InitializeAsync(app.Services);
     // F-078 has an FK to F-055: never initialize this before the hazard table.
     await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
+    await WorkflowProposalSchema.InitializeAsync(app.Services);
     await GitHubRemoteSandboxDispatchIntentSchema.InitializeAsync(app.Services);
     await GitHubRemoteSandboxDispatchConfirmationSchema.InitializeAsync(app.Services);
     await GitHubRemoteSandboxPreSendBarrierSchema.InitializeAsync(app.Services);
@@ -921,6 +981,7 @@ app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 })).RequireAuthorization("PasswordChanged");
 
 app.MapConnectionEndpoints();
+app.MapAiConnectionEndpoints();
 app.MapDiscoveryEndpoints();
 app.MapStagingEndpoints();
 app.MapIncrementalPreparationEndpoints();
@@ -951,6 +1012,7 @@ app.MapMigrationJobEndpoints();
 app.MapIdentityMappingEndpoints();
 app.MapMigrationPlanEndpoints();
 app.MapWorkloadEndpoints();
+app.MapWorkflowProposalEndpoints();
 
 app.Run();
 

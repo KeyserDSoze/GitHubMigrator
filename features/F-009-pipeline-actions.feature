@@ -11,3 +11,52 @@ Feature: Convert pipelines to reviewed GitHub Actions
     When a conversion is requested
     Then the feature offers a deterministic/manual fallback
     And the system does not silently claim equivalence
+
+  Scenario: A model connection is created only after the model answered
+    Given an operator adds an AI model connection with an allowed endpoint and an API key
+    When the product asks the model a fixed test question
+    Then the connection is saved only if the model answered
+    And the key is stored encrypted and never returned by the API
+    And an endpoint outside the operator allow-list is refused before any request leaves
+
+  Scenario: Pipeline source goes to a model only with consent
+    Given a verified AI connection
+    When nobody with the superadmin role has allowed sending pipeline source
+    Then no pipeline source is sent to that model
+    And allowing it is recorded with who and when
+
+  Scenario: A model's answer is data, not an approval
+    Given a model returned a workflow
+    When the gates run
+    Then pinned and allow-listed actions, manual-only triggers, least-privilege permissions and plan-only secrets are enforced
+    And actionlint and zizmor must have run, otherwise the workflow is not approvable
+    And a linter-suppression comment written by the model does not silence either linter
+
+  Scenario: A conversion is a proposal with its evidence
+    Given a verified AI connection with source sending allowed
+    When the operator asks for a conversion of a pipeline
+    Then the source is redacted before it is sent and every credential is masked wherever it appears
+    And the answer is a proposal that is neither saved, approved nor published
+    And it comes with the gate results, the secrets and variables it may use, and the provenance of the question
+
+  Scenario: No step is dropped silently
+    Given a pipeline that uses Azure tasks
+    When the model returns a workflow
+    Then every task is declared converted or marked MANUAL PORT REQUIRED, otherwise the workflow is blocked
+
+  Scenario: A kept proposal is approved by a second person against its hash
+    Given a conversion proposal that passed every required gate
+    When a person other than its author approves it, sending the SHA-256 of the text they read and accepting each warning by name
+    Then the gates are run again on the kept text before anything is recorded
+    And the decision records who, when, the hash, the fresh report hash and the warnings accepted
+    And approving publishes nothing and does not re-enable the original triggers
+
+  Scenario: An approval cannot be recorded for a text that changed or a verdict that no longer holds
+    Given a kept proposal
+    When the hash sent differs, or the stored text no longer matches its hash, or the gates now block it
+    Then no approval is recorded and the proposal stays undecided
+
+  Scenario: A blocked answer is kept as evidence without its text
+    Given a model answer that the gates block
+    Then it is kept with its findings and provenance but without the workflow text
+    And it cannot be approved

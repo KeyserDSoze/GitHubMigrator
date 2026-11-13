@@ -2,11 +2,13 @@ using GitHubMigrator.Domain;
 
 namespace GitHubMigrator.Business;
 
-// F-036: fetches ONLY from a server-derived Azure DevOps Services Git URL.
-// No caller-provided URI, refspec, credential or filesystem path is accepted.
+// F-036: fetches ONLY from a server-derived Azure DevOps Git URL (Services, or an allow-listed
+// Azure DevOps Server). No caller-provided URI, refspec, credential or filesystem path is accepted.
+// For Server, Organization is the collection and ServerRoot the connection's validated server root.
 public sealed record AzureGitSourceLocation(
     Guid ConnectionId, string Organization, string ProjectName,
-    string RepositoryName, string RepositoryId);
+    string RepositoryName, string RepositoryId,
+    string SourceProvider = ProviderKeys.AzureDevOpsServices, string? ServerRoot = null);
 
 public sealed record AzureGitMirrorFetchRequest(
     AzureGitSourceLocation Location, string PersonalAccessToken,
@@ -31,6 +33,28 @@ public interface IAzureGitSourceAcquisition
 public interface IAzureGitMirrorFetcher
 {
     Task FetchAsync(AzureGitMirrorFetchRequest request, CancellationToken ct);
+}
+
+// The location comes from the immutable snapshot; the connection decides whether it may be fetched and
+// (for Azure DevOps Server) where. Nothing here is caller supplied.
+public static class AzureGitSourceBinding
+{
+    public static AzureGitSourceLocation Bind(AzureGitSourceLocation location, MigrationConnection connection)
+    {
+        if (!ProviderKeys.IsAzureDevOpsSource(connection.ProviderKey) ||
+            connection.ProviderKey != location.SourceProvider ||
+            connection.Direction != ConnectionDirection.Source ||
+            connection.ValidationCode != "Verified" ||
+            connection.Organization != location.Organization ||
+            location.ConnectionId != connection.Id)
+            throw new GitSourceBundleException("AzureGitSourceNotVerified");
+        // The server root comes from the verified connection, never from the caller; the fetcher
+        // re-validates it against the egress policy right before any network access.
+        if (!ProviderKeys.IsServer(connection.ProviderKey)) return location with { ServerRoot = null };
+        if (string.IsNullOrWhiteSpace(connection.BaseUrl))
+            throw new GitSourceBundleException("AzureGitSourceNotVerified");
+        return location with { ServerRoot = connection.BaseUrl };
+    }
 }
 
 // Fetch and local F-035 bundle export are separately bounded: a remote read
@@ -117,12 +141,7 @@ public sealed class AzureGitSourceAcquisitionService(
             plan.SourceConnectionId, pack.SourceRepositoryId, ct);
         var connection = await connections.GetAsync(plan.SourceConnectionId, ct)
             ?? throw new KeyNotFoundException("SourceConnectionNotFound");
-        if (connection.ProviderKey != "azure-devops-services" ||
-            connection.Direction != ConnectionDirection.Source ||
-            connection.ValidationCode != "Verified" ||
-            connection.Organization != location.Organization ||
-            location.ConnectionId != connection.Id)
-            throw new GitSourceBundleException("AzureGitSourceNotVerified");
+        location = AzureGitSourceBinding.Bind(location, connection);
         var token = await secrets.ReadAsync(connection.SecretReference, ct);
         if (string.IsNullOrWhiteSpace(token) || token.Length > 4096 ||
             token.Any(char.IsControl))

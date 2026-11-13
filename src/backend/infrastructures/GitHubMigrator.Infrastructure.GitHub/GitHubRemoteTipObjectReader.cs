@@ -7,9 +7,10 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 
 // F-053 is a future post-send readback adapter, not registered as a writer,
 // worker or HTTP API endpoint. All requests target fixed GitHub REST GETs.
-public sealed class GitHubRemoteTipObjectReader(HttpClient client, TimeProvider clock)
+public sealed class GitHubRemoteTipObjectReader(HttpClient client, TimeProvider clock, GitHubEndpoints? endpoints = null)
     : IGitHubRemoteTipObjectReader
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
     private const int MaxObjectResponseBytes = 262_144;
 
     public async Task<GitHubRemoteTipSnapshot> ReadAsync(
@@ -23,7 +24,7 @@ public sealed class GitHubRemoteTipObjectReader(HttpClient client, TimeProvider 
             throw new GitHubRemoteTipException("RemoteTipRequestInvalid");
         var candidates = GitHubRemoteTipIntegrity.CanonicalCandidates(
             createCandidates);
-        var refsReader = new GitHubRefObservationReader(client, clock);
+        var refsReader = new GitHubRefObservationReader(client, clock, endpoints);
         var before = await refsReader.ReadAsync(
             organization, repository, token, ct);
         var known = before.Refs.ToDictionary(x => x.Name,
@@ -98,9 +99,9 @@ public sealed class GitHubRemoteTipObjectReader(HttpClient client, TimeProvider 
             !GitHubRemoteTipIntegrity.ValidObjectId(oid))
             throw new GitHubRemoteTipException("RemoteTipRequestInvalid");
 
-        var url = "https://api.github.com/repos/" +
+        var url = Endpoints.Api("repos/" +
             Uri.EscapeDataString(organization) + "/" +
-            Uri.EscapeDataString(repository) + "/git/" + kind + "/" + oid;
+            Uri.EscapeDataString(repository) + "/git/" + kind + "/" + oid);
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization =
             new AuthenticationHeaderValue("Bearer", token);

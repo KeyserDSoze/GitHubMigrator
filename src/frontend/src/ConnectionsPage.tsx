@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Cloud, GitBranch, KeyRound, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { api, type Connection, type ConnectionDraft, type ValidationResult } from './api';
+import AiConnectionsPanel from './AiConnectionsPanel';
 
 function validationExplanation(code: string, t: (key: string) => string): string {
   if (code === 'Unauthorized') return t('connUnauthorized');
@@ -11,7 +12,7 @@ function validationExplanation(code: string, t: (key: string) => string): string
   return t('connUnavailable');
 }
 
-export default function ConnectionsPage({ token, isAdmin }: { token: string; isAdmin: boolean }) {
+export default function ConnectionsPage({ token, isAdmin, isSuperAdmin = false }: { token: string; isAdmin: boolean; isSuperAdmin?: boolean }) {
   const { t } = useTranslation();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [draft, setDraft] = useState<ConnectionDraft>({ name: '', providerKey: 'azure-devops-services', organization: '', personalAccessToken: '' });
@@ -95,7 +96,8 @@ export default function ConnectionsPage({ token, isAdmin }: { token: string; isA
 
   if (!isAdmin) return <section className="empty-card"><ShieldAlert size={30} /><p>{t('accessDenied')}</p></section>;
 
-  return <div className="connection-layout">
+  return <>
+  <div className="connection-layout">
     <section className="connection-form" aria-label={t('connNew')}>
       <h2>{t('connNew')}</h2>
       <p>{t('connIntro')}</p>
@@ -170,5 +172,8 @@ export default function ConnectionsPage({ token, isAdmin }: { token: string; isA
             </div>}
           </article>)}
     </section>
-  </div>;
+  </div>
+  <h2 className="ai-connections-title">{t('aiTitle')}</h2>
+  <AiConnectionsPanel token={token} isSuperAdmin={isSuperAdmin} />
+  </>;
 }

@@ -1,0 +1,112 @@
+# azure-tasks: converted=TerraformInstaller@1,AzureCLI@2,Kubernetes@1 manual=none
+name: orion-infra Terraform
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Target environment
+        type: choice
+        default: dev
+        options:
+          - dev
+          - staging
+          - prod
+      environments:
+        description: Environments to plan (JSON array)
+        type: string
+        default: '["dev","staging"]'
+      terraformVersion:
+        description: Terraform version
+        type: string
+        default: 1.9.5
+permissions:
+  contents: read
+env:
+  TF_STATE_RESOURCE_GROUP: rg-orion-tfstate
+  TF_WORKSPACE: ${{ inputs.env }}
+  TF_STATE_STORAGE: ${{ vars.TF_STATE_STORAGE }}
+  TF_STATE_CONTAINER: ${{ vars.TF_STATE_CONTAINER }}
+jobs:
+  plan:
+    name: Plan ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(inputs.environments) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ inputs.terraformVersion }}
+          terraform_wrapper: false
+      - name: Login to Azure (orion-azure-dev)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Terraform plan
+        working-directory: terraform
+        env:
+          TARGET_ENVIRONMENT: ${{ matrix.environment }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: 'true'
+        run: |
+          terraform init -input=false -backend-config="key=${TARGET_ENVIRONMENT}.tfstate"
+          terraform plan -input=false -var-file="env/${TARGET_ENVIRONMENT}.tfvars.json" -out=tfplan
+      - name: Publish plan
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tfplan-${{ matrix.environment }}
+          path: terraform/tfplan
+
+  apply-prod:
+    name: Terraform apply (prod)
+    needs: plan
+    if: ${{ inputs.env == 'prod' }}
+    runs-on: ubuntu-latest
+    environment: infra-prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ inputs.terraformVersion }}
+          terraform_wrapper: false
+      - name: Login to Azure (orion-azure-prod)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Terraform apply
+        working-directory: terraform
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: 'true'
+        run: |
+          terraform init -input=false -backend-config="key=prod.tfstate"
+          terraform apply -input=false -auto-approve -var-file="env/prod.tfvars.json"
+      - name: Select the production cluster (orion-aks-prod)
+        uses: azure/aks-set-context@883bdc8d8d1d0fd87e66cc4ba6f0b618f9eb5281 # v5.0.1
+        with:
+          resource-group: ${{ vars.ORION_AKS_PROD_RESOURCE_GROUP }}
+          cluster-name: ${{ vars.ORION_AKS_PROD_CLUSTER }}
+      - name: Roll the ingress controller
+        run: kubectl rollout restart deployment/ingress-nginx-controller -n ingress-nginx

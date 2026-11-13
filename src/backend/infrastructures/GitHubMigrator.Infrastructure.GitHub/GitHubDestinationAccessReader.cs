@@ -6,13 +6,14 @@ using GitHubMigrator.Business;
 namespace GitHubMigrator.Infrastructure.GitHub;
 
 // Cloud-only, fixed-host read adapter. Provider JSON is never returned wholesale to the client.
-public sealed class GitHubDestinationAccessReader(HttpClient client) : IGitHubDestinationAccessReader
+public sealed class GitHubDestinationAccessReader(HttpClient client, GitHubEndpoints? endpoints = null) : IGitHubDestinationAccessReader
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
     public async Task<GitHubDestinationAccessEvidence> ReadAsync(
         string organization, string expectedLogin, string token, CancellationToken ct)
     {
         using var member = await GetAsync(
-            $"https://api.github.com/user/memberships/orgs/{Uri.EscapeDataString(organization)}",
+            Endpoints.Api($"user/memberships/orgs/{Uri.EscapeDataString(organization)}"),
             token, ct);
         var status = member.StatusCode;
         if (status == HttpStatusCode.Unauthorized) return Unknown("Unauthorized");
@@ -53,7 +54,7 @@ public sealed class GitHubDestinationAccessReader(HttpClient client) : IGitHubDe
         string organization, string token, CancellationToken ct)
     {
         using var response = await GetAsync(
-            $"https://api.github.com/orgs/{Uri.EscapeDataString(organization)}", token, ct);
+            Endpoints.Api($"orgs/{Uri.EscapeDataString(organization)}"), token, ct);
         if (response.StatusCode != HttpStatusCode.OK) return "Unverified";
         using var document = await ReadBoundedJsonAsync(response, ct);
         if (document is null || document.RootElement.ValueKind != JsonValueKind.Object)

@@ -9,9 +9,14 @@ namespace GitHubMigrator.Infrastructure.GitObjects;
 // DI, no endpoint, no worker. The internal F-083 service must commit F-082
 // before calling this adapter. NEVER call the adapter on its own.
 public sealed class GitHubSandboxCreateOnlyPushRunner(
-    string bundleRoot, string scratchRoot, GitHubSandboxOneShotOptions options)
+    string bundleRoot, string scratchRoot, GitHubSandboxOneShotOptions options,
+    GitHubEndpoints? endpoints = null)
     : IGitHubSandboxOneShotGitWriter
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
+    // https for github.com; http only when the operator allow-listed a plain-HTTP lab endpoint.
+    private string GitScheme => new Uri(Endpoints.WebRoot).Scheme;
+
     // A test-only local bare origin is inaccessible to production DI.
     // It runs the SAME --atomic and empty-lease refspecs as GitHub.
     private readonly string? testLocalOrigin;
@@ -101,9 +106,8 @@ public sealed class GitHubSandboxCreateOnlyPushRunner(
             // One fixed GitHub Cloud host, org/repo from server allowlist.
             // Tokens are NEVER interpolated into command-line arguments,
             // remote URL, logfile, exception message or Git config files.
-            var remote = testLocalOrigin ?? ("https://github.com/" +
-                options.AllowedOrganization + "/" + options.AllowedRepository +
-                ".git");
+            var remote = testLocalOrigin ?? Endpoints.GitUrl(
+                options.AllowedOrganization, options.AllowedRepository);
             string? auth = testLocalOrigin is null ?
                 "AUTHORIZATION: basic " + Convert.ToBase64String(
                     Encoding.UTF8.GetBytes(
@@ -216,14 +220,14 @@ public sealed class GitHubSandboxCreateOnlyPushRunner(
         env["GIT_CONFIG_NOSYSTEM"] = "1";
         env["GIT_TERMINAL_PROMPT"] = "0";
         env["GIT_NO_REPLACE_OBJECTS"] = "1";
-        env["GIT_ALLOW_PROTOCOL"] = authHeader is null ? "file" : "https";
+        env["GIT_ALLOW_PROTOCOL"] = authHeader is null ? "file" : GitScheme;
         env["GIT_CONFIG_COUNT"] = authHeader is null ? "4" : "7";
         env["GIT_CONFIG_KEY_0"] = "core.hooksPath";
         env["GIT_CONFIG_VALUE_0"] = "/dev/null";
         env["GIT_CONFIG_KEY_1"] = "protocol.allow";
         env["GIT_CONFIG_VALUE_1"] = "never";
         env["GIT_CONFIG_KEY_2"] = authHeader is null
-            ? "protocol.file.allow" : "protocol.https.allow";
+            ? "protocol.file.allow" : "protocol." + GitScheme + ".allow";
         env["GIT_CONFIG_VALUE_2"] = "always";
         env["GIT_CONFIG_KEY_3"] = "http.followRedirects";
         env["GIT_CONFIG_VALUE_3"] = "false";
@@ -233,7 +237,7 @@ public sealed class GitHubSandboxCreateOnlyPushRunner(
             env["GIT_CONFIG_VALUE_4"] = "true";
             env["GIT_CONFIG_KEY_5"] = "credential.helper";
             env["GIT_CONFIG_VALUE_5"] = "";
-            env["GIT_CONFIG_KEY_6"] = "http.https://github.com/" +
+            env["GIT_CONFIG_KEY_6"] = "http." + Endpoints.WebRoot + "/" +
                 options.AllowedOrganization + "/" + options.AllowedRepository +
                 ".git.extraHeader";
             env["GIT_CONFIG_VALUE_6"] = authHeader;

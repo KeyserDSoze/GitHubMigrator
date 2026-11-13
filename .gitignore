@@ -31,3 +31,6 @@ Thumbs.db
 # Runtime
 .artifacts/
 tmp/
+
+# Live smoke test fidelity report (generated)
+live-smoke-report.json

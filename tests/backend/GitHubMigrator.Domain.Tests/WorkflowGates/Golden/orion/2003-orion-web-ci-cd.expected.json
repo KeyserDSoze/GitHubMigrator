@@ -1,0 +1,96 @@
+{
+  "pipelineId": 2003,
+  "name": "orion-web CI-CD",
+  "source": {
+    "repo": "orion-web",
+    "path": "/azure-pipelines.yml"
+  },
+  "equivalence": "partial",
+  "originalTriggers": [
+    "push: main, develop, feature/* (README.md and docs/* excluded)",
+    "pull request: main, develop",
+    "schedule: cron 0 3 * * 1-5 on main, always: false (only when there are changes)"
+  ],
+  "plan": {
+    "secrets": [
+      "ORION_NPM_FEED_TOKEN",
+      "ORION_NPM_REGISTRY_TOKEN",
+      "ORION_SSH_WEB_KEY",
+      "ORION_SSH_WEB_KNOWN_HOSTS",
+      "npmToken"
+    ],
+    "variables": [
+      "AZURE_REGION",
+      "ENVIRONMENT_NAME",
+      "LOG_LEVEL",
+      "ORION_NPM_FEED_URL",
+      "ORION_NPM_REGISTRY_URL",
+      "ORION_SSH_WEB_HOST",
+      "ORION_SSH_WEB_USER",
+      "PUBLIC_API_URL"
+    ]
+  },
+  "taskMap": [
+    {
+      "azure": "NodeTool@0",
+      "github": "actions/setup-node with the matrix version"
+    },
+    {
+      "azure": "Cache@2",
+      "github": "actions/cache (same key shape: npm | os | hash of package-lock.json)"
+    },
+    {
+      "azure": "Npm@1",
+      "github": "run steps: npm install (registry token via NODE_AUTH_TOKEN), npm run build, npm publish",
+      "note": "endpoints orion-npm-registry and orion-npm-feed become a URL variable and a token secret each"
+    },
+    {
+      "azure": "PublishBuildArtifacts@1",
+      "github": "actions/upload-artifact (web-dist)"
+    },
+    {
+      "azure": "CopyFilesOverSSH@0",
+      "github": "run: rsync -az --delete over ssh with a pinned known_hosts",
+      "note": "host, user, key and known_hosts come from the orion-ssh-web connection and must be provided as variables/secrets"
+    },
+    {
+      "azure": "SSH@0",
+      "github": "run: ssh ... sudo systemctl reload nginx"
+    }
+  ],
+  "unsupported": [
+    {
+      "azure": "PublishTestResults@2",
+      "reason": "Azure shows a Tests tab per matrix leg; only junit.xml is kept as an artifact per Node version",
+      "suggestion": "add a reviewed test-report action (needs checks: write) if the tab is wanted"
+    }
+  ],
+  "acceptedWarnings": [
+    {
+      "code": "ZIZMOR_SECRETS_OUTSIDE_ENV",
+      "why": "The source gives these jobs no environment and keeps the credentials at repository level (Azure variable groups are not environment-scoped). Scoping them to a GitHub environment is a hardening choice for the reviewer; it would add approvals and deployment records the source does not have."
+    },
+    {
+      "code": "SELF_HOSTED_RUNNER",
+      "why": "The source runs on a self-hosted pool; a self-hosted runner group has to exist at the destination."
+    },
+    {
+      "code": "ZIZMOR_SELF_HOSTED_RUNNER",
+      "why": "Same fact reported by zizmor: self-hosted runners are persistent and need hardening that is outside this workflow."
+    }
+  ],
+  "notes": [
+    "NOT executed on GitHub.",
+    "The deploy job needs a self-hosted runner group providing docker and npm (the source's demands); custom runner labels are rejected by actionlint, so only [self-hosted, linux] is declared (see GATE_FINDINGS.md).",
+    "The SSH deployment key is written to the runner's home for the job and removed by an always() step; a persistent self-hosted runner makes that window a risk to review.",
+    "The deployment job of the source checks out no sources, so its npm publish ran in an empty directory; the converted step publishes from the downloaded web-dist directory and needs a human to confirm it is the intended package.",
+    "NODE_ENV=production is exported as in the source, which makes npm install skip devDependencies for the lint and test steps; keep or fix deliberately.",
+    "Pipeline variable SENTRY_AUTH_TOKEN (secret) and group secrets SENTRY_DSN and CDN_PURGE_KEY are not referenced by the YAML and are not created. The sharedactions repository resource and the templates variable file are unused by the YAML.",
+    "The staging environment's branch control (main, release/*) is configured on the GitHub environment."
+  ],
+  "extraAllowedHosts": [],
+  "templates": [],
+  "redaction": {
+    "findings": []
+  }
+}

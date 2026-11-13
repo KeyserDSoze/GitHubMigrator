@@ -9,8 +9,9 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 // Read-only advisory policy inspector. Never interprets 404 as proof that
 // branch protection / inherited rules do not apply. All GitHub endpoints fixed.
 public sealed class GitHubImportPolicyReader(
-    HttpClient client, TimeProvider clock) : IGitHubImportPolicyReader
+    HttpClient client, TimeProvider clock, GitHubEndpoints? endpoints = null) : IGitHubImportPolicyReader
 {
+    private GitHubEndpoints Endpoints => endpoints ?? GitHubEndpoints.Cloud;
     private static readonly Regex OrgName = new(
         "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
@@ -34,9 +35,9 @@ public sealed class GitHubImportPolicyReader(
             string.IsNullOrWhiteSpace(token) || token.Any(char.IsControl))
             throw new GitHubImportIntentException("ImportPolicyInvalidDestination");
 
-        var root = "https://api.github.com/repos/" +
+        var root = Endpoints.Api("repos/" +
             Uri.EscapeDataString(organization) + "/" +
-            Uri.EscapeDataString(repository);
+            Uri.EscapeDataString(repository));
         var now = clock.GetUtcNow();
 
         // A default branch can only come from GitHub's exact matching
