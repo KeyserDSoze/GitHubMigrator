@@ -548,6 +548,12 @@ export type PublicationPlan = {
   ready: boolean; writesPerformed: boolean; findings: { code: string; severity: 'Blocker' | 'Info'; message: string }[];
   steps: { code: string; title: string; command: string | null }[]; planSha256: string; readAtUtc: string; workflowYaml: string;
 };
+export type Publication = {
+  id: string; proposalId: string; state: string; organization: string; repository: string; baseBranch: string; baseSha: string; headBranch: string;
+  workflowPath: string; planSha256: string; commitSha: string | null; pullNumber: number | null; pullUrl: string | null; errorCode: string | null;
+  failedAtState: string | null; writesPossible: boolean; requestedBy: string; startedAtUtc: string; updatedAtUtc: string;
+};
+export type PublicationStatus = { enabled: boolean; allowedRepositories: string[] };
 export type ConversionStatus = {
   actionlint: boolean; zizmor: boolean; canBeApprovable: boolean; policyVersion: string; actionCatalogVerifiedOn: string;
 };
@@ -569,7 +575,7 @@ const base = import.meta.env.VITE_API_URL ?? '';
 
 // The message stays the machine code the API answered with; `details` carries the codes that explain it (never text from a workflow).
 export class ApiError extends Error {
-  constructor(message: string, public readonly details: string[] = [], public readonly status = 0) { super(message); }
+  constructor(message: string, public readonly details: string[] = [], public readonly status = 0, public readonly body: Record<string, unknown> | null = null) { super(message); }
 }
 
 async function call<T>(path: string, options: RequestInit): Promise<T> {
@@ -582,7 +588,7 @@ async function call<T>(path: string, options: RequestInit): Promise<T> {
   if (!response.ok) {
     const problem = await response.json().catch(() => null) as { title?: string; error?: string; details?: string[] } | null;
     throw new ApiError(problem?.error ?? problem?.title ?? `HTTP ${response.status}`,
-      Array.isArray(problem?.details) ? problem.details : [], response.status);
+      Array.isArray(problem?.details) ? problem.details : [], response.status, problem as Record<string, unknown> | null);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -977,6 +983,14 @@ export const api = {
   planPublication: (token: string, id: string, destinationConnectionId: string, repository: string, baseBranch: string) =>
     call<PublicationPlan>(`/api/workloads/pipelines/proposals/${id}/publication-plan`, {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ destinationConnectionId, repository, baseBranch: baseBranch || null })
+    }),
+  publicationStatus: (token: string) =>
+    call<PublicationStatus>('/api/workloads/pipelines/publication/status', { headers: withToken(token) }),
+  listPublications: (token: string, id: string) =>
+    call<Publication[]>(`/api/workloads/pipelines/proposals/${id}/publications`, { headers: withToken(token) }),
+  publishProposal: (token: string, id: string, destinationConnectionId: string, repository: string, baseBranch: string, planSha256: string) =>
+    call<Publication>(`/api/workloads/pipelines/proposals/${id}/publish`, {
+      method: 'POST', headers: withToken(token), body: JSON.stringify({ destinationConnectionId, repository, baseBranch: baseBranch || null, planSha256 })
     }),
   rejectProposal: (token: string, id: string, note: string) =>
     call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/reject`, {

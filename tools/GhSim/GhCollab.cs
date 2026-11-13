@@ -9,6 +9,7 @@ public static partial class GhSimApp
         {
             var (r, error) = Open(sim, ctx, org, repo, write: true);
             if (error is not null) return error;
+            if (!GhSim.HasPullRequestsAccess(GhSim.Auth(ctx), write: true)) return Error(403, "Resource not accessible by integration");
             var body = await BodyAsync(ctx);
             var title = Str(body, "title"); var head = Str(body, "head"); var baseRef = Str(body, "base");
             if (string.IsNullOrWhiteSpace(title) || head is null || baseRef is null)
@@ -44,6 +45,7 @@ public static partial class GhSimApp
         {
             var (r, error) = Open(sim, ctx, org, repo);
             if (error is not null) return error;
+            if (!GhSim.HasPullRequestsAccess(GhSim.Auth(ctx), write: false)) return Error(403, "Resource not accessible by integration");
             var state = Q(ctx, "state") is { Length: > 0 } s ? s : "open";
             // head=owner:branch and base=branch narrow the list, as on GitHub (the simulator has no forks: the owner is the repository's)
             var headFilter = Q(ctx, "head"); var baseFilter = Q(ctx, "base");
@@ -63,6 +65,7 @@ public static partial class GhSimApp
         {
             var (r, error) = Open(sim, ctx, org, repo);
             if (error is not null) return error;
+            if (!GhSim.HasPullRequestsAccess(GhSim.Auth(ctx), write: false)) return Error(403, "Resource not accessible by integration");
             GhPull? pull; lock (sim.Store.Lock) pull = r!.Pulls.FirstOrDefault(p => p.Number == number);
             if (pull is null) return NotFound();
             await RefreshPullsAsync(sim, r!, [pull]);
@@ -73,6 +76,7 @@ public static partial class GhSimApp
         {
             var (r, error) = Open(sim, ctx, org, repo, write: true);
             if (error is not null) return error;
+            if (!GhSim.HasPullRequestsAccess(GhSim.Auth(ctx), write: true)) return Error(403, "Resource not accessible by integration");
             var body = await BodyAsync(ctx);
             lock (sim.Store.Lock)
             {
@@ -94,6 +98,7 @@ public static partial class GhSimApp
         {
             var (r, error) = Open(sim, ctx, org, repo, write: true);
             if (error is not null) return error;
+            if (!GhSim.HasPullRequestsAccess(GhSim.Auth(ctx), write: true)) return Error(403, "Resource not accessible by integration");
             var body = await BodyAsync(ctx);
             var method = Str(body, "merge_method") ?? "merge";
             if (method is not ("merge" or "squash")) return Error(405, "Merge method not supported by this simulator");

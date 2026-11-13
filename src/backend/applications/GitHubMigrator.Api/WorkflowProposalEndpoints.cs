@@ -12,6 +12,30 @@ public static class WorkflowProposalEndpoints
             .RequireAuthorization("PasswordChanged")
             .RequireAuthorization(new AuthorizeAttribute { Roles = "superadmin,admin" });
 
+        // Whether this deployment may write pull requests at all, and where. Names only: never the app, the installation or the key reference.
+        app.MapGet("/api/workloads/pipelines/publication/status", (WorkflowPublicationExecutor executor) =>
+                Results.Ok(new PublicationStatusResponse(executor.Enabled, executor.AllowedRepositories)))
+            .RequireAuthorization("PasswordChanged").RequireAuthorization(new AuthorizeAttribute { Roles = "superadmin,admin" });
+
+        // Mints and checks the publication credential for one allow-listed repository and discards it. Writes nothing.
+        app.MapPost("/api/workloads/pipelines/publication/credential-check", async Task<IResult> (CredentialCheckInput input, WorkflowPublicationExecutor executor,
+                ILoggerFactory logs, CancellationToken ct) =>
+            {
+                var parts = (input.Repository ?? "").Split('/');
+                if (parts.Length != 2 || parts.Any(string.IsNullOrWhiteSpace)) return Results.BadRequest(new { error = "InvalidRepository" });
+                try
+                {
+                    var seen = await executor.CheckCredentialAsync(parts[0], parts[1], ct);
+                    logs.CreateLogger("WorkflowPublication").LogInformation("Publication credential checked Repository={Repository} Installation={Installation}", input.Repository, seen.InstallationId);
+                    return Results.Ok(new { ok = true, installationId = seen.InstallationId, repositoryId = seen.RepositoryId, permissions = seen.Permissions, tokenExpiresAtUtc = seen.TokenExpiresAtUtc });
+                }
+                catch (WorkflowPublicationException ex)
+                {
+                    return ex.Code is "PublicationDisabled" or "PublicationRepositoryNotAllowed"
+                        ? Results.Json(new { error = ex.Code }, statusCode: StatusCodes.Status403Forbidden) : Results.UnprocessableEntity(new { error = ex.Code });
+                }
+            }).RequireAuthorization("PasswordChanged").RequireAuthorization(new AuthorizeAttribute { Roles = "superadmin" }).RequireRateLimiting("external");
+
         group.MapGet("", async Task<IResult> (Guid sourceConnectionId, string? projectId, int pipelineId, WorkflowProposalService service, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(projectId) || projectId.Length > 100 || pipelineId < 1) return Results.BadRequest(new { error = "InvalidProposalQuery" });
@@ -57,6 +81,41 @@ public static class WorkflowProposalEndpoints
             catch (WorkflowProposalException ex) { return Refused(ex, logs, id, actor, "plan"); }
             catch (WorkloadInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
         }).RequireRateLimiting("external");
+
+        // The only place the product writes to a destination. Superadmin only, off unless the operator enabled it, one allow-listed repository, and only
+        // the plan the person confirms by its hash: the plan is made again here and must still be the same, with nothing in the way.
+        group.MapPost("/{id:guid}/publish", async Task<IResult> (Guid id, PublishInput input, WorkflowPublicationExecutor executor,
+            ClaimsPrincipal user, ILoggerFactory logs, CancellationToken ct) =>
+        {
+            var actor = ActorOf(user);
+            if (actor is null) return Results.Forbid();
+            var log = logs.CreateLogger("WorkflowPublication");
+            try
+            {
+                var record = await executor.PublishAsync(actor, id, input.DestinationConnectionId, input.Repository ?? "",
+                    string.IsNullOrWhiteSpace(input.BaseBranch) ? null : input.BaseBranch.Trim(), input.PlanSha256, ct);
+                log.LogInformation("Workflow published Proposal={ProposalId} Repository={Organization}/{Repository} Pull={Pull} Commit={Commit} Plan={Plan} By={Actor}",
+                    id, record.Organization, record.Repository, record.PullNumber, record.CommitSha, record.PlanSha256, actor.Id);
+                return Results.Ok(PublicationResponse.From(record));
+            }
+            catch (WorkflowPublicationException ex)
+            {
+                log.LogWarning("Workflow publication refused Proposal={ProposalId} Code={Code} Written={Written} By={Actor}", id, ex.Code, ex.Record?.WritesPossible, actor.Id);
+                return ex.Code switch
+                {
+                    "PublicationDisabled" or "PublicationRepositoryNotAllowed" => Results.Json(new { error = ex.Code }, statusCode: StatusCodes.Status403Forbidden),
+                    "PlanConfirmationRequired" => Results.BadRequest(new { error = ex.Code }),
+                    "PublicationPlanChanged" or "PublicationPlanNotReady" or "PublicationAlreadyAttempted" or "PublicationLedgerConflict" =>
+                        Results.Conflict(new { error = ex.Code, details = ex.Details }),
+                    _ => Results.UnprocessableEntity(new { error = ex.Code, details = ex.Details, publication = ex.Record is null ? null : PublicationResponse.From(ex.Record) })
+                };
+            }
+            catch (WorkflowProposalException ex) { return Refused(ex, logs, id, actor, "publish"); }
+            catch (WorkloadInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
+        }).RequireAuthorization(new AuthorizeAttribute { Roles = "superadmin" }).RequireRateLimiting("external");
+
+        group.MapGet("/{id:guid}/publications", async Task<IResult> (Guid id, WorkflowPublicationExecutor executor, CancellationToken ct) =>
+            Results.Ok((await executor.ListAsync(id, ct)).Select(PublicationResponse.From)));
 
         group.MapPost("/{id:guid}/reject", (Guid id, DecisionInput input, WorkflowProposalService service, ClaimsPrincipal user, ILoggerFactory logs, CancellationToken ct) =>
             DecideAsync("reject", id, input, service, user, logs, ct, (a, i, n, c) => service.RejectAsync(a, i, n, c)));
@@ -126,6 +185,16 @@ public sealed record ProposalDetailResponse(Guid Id, string State, string? Reaso
     DateTimeOffset CreatedAtUtc, bool CreatedByMe, bool RequiresSecondApprover, bool CanApprove, IReadOnlyList<GateResponse> Gates,
     IReadOnlyList<FindingResponse> Findings, PlanResponse Plan, ProvenanceResponse? Provenance, IReadOnlyList<ProposalEventResponse> Events);
 
+public sealed record PublishInput(Guid DestinationConnectionId, string? Repository, string? BaseBranch, string? PlanSha256);
+public sealed record PublicationStatusResponse(bool Enabled, IReadOnlyList<string> AllowedRepositories);
+public sealed record CredentialCheckInput(string? Repository);
+public sealed record PublicationResponse(Guid Id, Guid ProposalId, string State, string Organization, string Repository, string BaseBranch, string BaseSha, string HeadBranch,
+    string WorkflowPath, string PlanSha256, string? CommitSha, int? PullNumber, string? PullUrl, string? ErrorCode, string? FailedAtState, bool WritesPossible, string RequestedBy,
+    DateTimeOffset StartedAtUtc, DateTimeOffset UpdatedAtUtc)
+{
+    public static PublicationResponse From(PublicationRecord r) => new(r.Id, r.ProposalId, r.State, r.Organization, r.Repository, r.BaseBranch, r.BaseSha, r.HeadBranch,
+        r.WorkflowPath, r.PlanSha256, r.CommitSha, r.PullNumber, r.PullUrl, r.ErrorCode, r.FailedAtState, r.WritesPossible, r.RequestedBy, r.StartedAtUtc, r.UpdatedAtUtc);
+}
 public sealed record PublicationPlanInput(Guid DestinationConnectionId, string? Repository, string? BaseBranch);
 public sealed record PublicationFindingResponse(string Code, string Severity, string Message);
 public sealed record PublicationStepResponse(string Code, string Title, string? Command);

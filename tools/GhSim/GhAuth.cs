@@ -17,6 +17,8 @@ public sealed class Principal(PrincipalKind kind)
     public string? InstallationOrg { get; init; }
     public HashSet<long> RepositoryIds { get; init; } = [];
     public string Contents { get; init; } = "none";
+    public string PullRequests { get; init; } = "none";
+    public string Workflows { get; init; } = "none";
     public string Name => User?.Login ?? (App is null ? "anonymous" : $"app:{App.Slug}");
 }
 
@@ -27,6 +29,8 @@ public sealed class InstallationToken
     public required GhInstallation Installation { get; init; }
     public required HashSet<long> RepositoryIds { get; init; }
     public required string Contents { get; init; }
+    public string PullRequests { get; init; } = "none";
+    public string Workflows { get; init; } = "none";
     public required DateTimeOffset ExpiresAt { get; init; }
 }
 
@@ -97,7 +101,8 @@ public sealed class GhSim(GhSimOptions options, GhStore store)
             return new(PrincipalKind.Installation)
             {
                 App = minted.App, InstallationId = minted.Installation.Id, InstallationOrg = minted.Installation.Org,
-                RepositoryIds = minted.RepositoryIds, Contents = minted.Contents
+                RepositoryIds = minted.RepositoryIds, Contents = minted.Contents,
+                PullRequests = minted.PullRequests, Workflows = minted.Workflows
             };
         }
         if (secret.Count(c => c == '.') == 2 && TryVerifyJwt(secret, out var app))
@@ -165,6 +170,16 @@ public sealed class GhSim(GhSimOptions options, GhStore store)
         if (!CanRead(who, repo) || repo.Archived || repo.Disabled) return false;
         return who.Kind == PrincipalKind.User ? !who.User!.ReadOnly : who.Contents == "write";
     }
+
+    // Pull requests need their own permission for an installation token (a user token has what its user has). Contents alone is not enough.
+    public static bool HasPullRequestsAccess(Principal who, bool write) =>
+        who.Kind != PrincipalKind.Installation || (write ? who.PullRequests == "write" : who.PullRequests is "read" or "write");
+
+    // A file under .github/workflows needs the `workflow` scope (classic token) or the Workflows permission (installation), on top of write access.
+    public static bool CanWriteWorkflowFiles(Principal who) =>
+        who.Kind == PrincipalKind.User ? who.User!.WorkflowScope : who.Kind == PrincipalKind.Installation && who.Workflows == "write";
+
+    public static bool IsWorkflowPath(string path) => path.StartsWith(".github/workflows/", StringComparison.Ordinal);
 
     public bool CanAdmin(Principal who, GhRepo repo)
     {

@@ -86,6 +86,13 @@ services:
       # Approval of an AI-converted workflow: the person who asked for it is not the only one who may approve it. A single-reviewer
       # sandbox can set WORKFLOW_APPROVAL_REQUIRE_SECOND_APPROVER=false; the decision and who took it are recorded either way.
       WorkflowApproval__RequireSecondApprover: ${WORKFLOW_APPROVAL_REQUIRE_SECOND_APPROVER:-true}
+      # Writing the pull request is OFF. To turn it on: a GitHub App installed on the repositories below with contents, pull_requests and workflows
+      # write, its signing key saved in the secret store under the reference, and the repositories it may write to (org/repo, comma separated).
+      WorkflowPublication__Enabled: ${WORKFLOW_PUBLICATION_ENABLED:-false}
+      WorkflowPublication__AppId: ${WORKFLOW_PUBLICATION_APP_ID:-0}
+      WorkflowPublication__InstallationId: ${WORKFLOW_PUBLICATION_INSTALLATION_ID:-0}
+      WorkflowPublication__PrivateKeySecretReference: ${WORKFLOW_PUBLICATION_KEY_REFERENCE:-}
+      WorkflowPublication__AllowedRepositories: ${WORKFLOW_PUBLICATION_ALLOWED_REPOSITORIES:-}
     ports:
       - "${HOST_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8080}:8080"
     depends_on:

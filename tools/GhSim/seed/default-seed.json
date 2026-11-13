@@ -2,13 +2,14 @@
   "users": [
     { "login": "sim-admin", "token": "gh-sim-pat" },
     { "login": "sim-member", "token": "gh-sim-member-pat" },
-    { "login": "sim-readonly", "token": "gh-sim-readonly-pat", "readOnly": true }
+    { "login": "sim-readonly", "token": "gh-sim-readonly-pat", "readOnly": true },
+    { "login": "sim-no-workflow", "token": "gh-sim-no-workflow-pat", "workflowScope": false }
   ],
   "orgs": [
     {
       "login": "orion-org",
       "membersCanCreatePrivateRepositories": true,
-      "members": { "sim-admin": "admin", "sim-member": "member", "sim-readonly": "member" }
+      "members": { "sim-admin": "admin", "sim-member": "member", "sim-readonly": "member", "sim-no-workflow": "member" }
     },
     {
       "login": "locked-org",

@@ -71,6 +71,9 @@ public sealed class ApiHarness : IAsyncLifetime
     public string? AzureServicesSimOrigin { get; set; }
     // When set (origin of a running tools/LlmSim), AI connections may point at that loopback host over plain HTTP.
     public string? LlmSimOrigin { get; set; }
+    // When set, the pull-request publication is enabled for this host: the GitHub App (ids and the secret reference of its signing key) and the
+    // repositories it may write to. The key itself is saved by the test (it must match the app registered in the simulator).
+    public (long AppId, long InstallationId, string KeyReference, string Repositories)? Publication { get; set; }
     // When true the person who asked for a conversion may also approve it (WorkflowApproval:RequireSecondApprover=false).
     public bool SingleReviewer { get; set; }
 
@@ -197,6 +200,14 @@ public sealed class ApiHarness : IAsyncLifetime
             values["Providers__AzureDevOpsServices__AllowHttp"] = "true";
         }
         if (SingleReviewer) values["WorkflowApproval__RequireSecondApprover"] = "false";
+        if (Publication is { } publication)
+        {
+            values["WorkflowPublication__Enabled"] = "true";
+            values["WorkflowPublication__AppId"] = publication.AppId.ToString();
+            values["WorkflowPublication__InstallationId"] = publication.InstallationId.ToString();
+            values["WorkflowPublication__PrivateKeySecretReference"] = publication.KeyReference;
+            values["WorkflowPublication__AllowedRepositories"] = publication.Repositories;
+        }
         if (LlmSimOrigin is not null)
         {
             values["Ai__AllowedHosts"] = "127.0.0.1";

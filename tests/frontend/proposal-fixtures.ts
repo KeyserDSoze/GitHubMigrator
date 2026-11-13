@@ -34,12 +34,13 @@ export function convertAnswer(d: Detail) {
 
 // An API that behaves like the real one for the parts the screen depends on, so the tests read the requests it receives.
 export async function setup(page: Page, initial: Detail, options: { history?: Detail[]; refuse?: { status: number; body: Record<string, unknown> }; listFails?: boolean;
-  plan?: Detail; planRefuse?: { status: number; body: Record<string, unknown> } } = {}) {
-  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[] };
+  plan?: Detail; planRefuse?: { status: number; body: Record<string, unknown> };
+  role?: string; publication?: { enabled: boolean; allowed: string[] }; attempts?: Detail[]; published?: Detail; publishRefuse?: { status: number; body: Record<string, unknown> } } = {}) {
+  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])] };
   const summaries = () => [store.current, ...store.kept.filter(k => k.id !== store.current.id)].map(d => ({
     id: d.id, state: d.state, reason: d.reason, workflowSha256: d.workflowSha256, createdBy: d.createdBy, createdAtUtc: d.createdAtUtc }));
 
-  await page.route('**/api/auth/login', route => route.fulfill({ json: { accessToken: 't', mustChangePassword: false, username: 'reviewer', role: 'superadmin' } }));
+  await page.route('**/api/auth/login', route => route.fulfill({ json: { accessToken: 't', mustChangePassword: false, username: 'reviewer', role: options.role ?? 'superadmin' } }));
   await page.route('**/api/connections', route => route.fulfill({ json: [
     { id: sourceId, providerKey: 'azure-devops-services', direction: 'source', name: 'DevOps', organization: 'source', validationCode: 'Verified' },
     { id: destinationId, providerKey: 'github-enterprise-cloud', direction: 'destination', name: 'GitHub', organization: 'target-org', validationCode: 'Verified' }] }));
@@ -47,6 +48,8 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
     id: aiId, name: 'Corporate model', provider: 'OpenAICompatible', endpoint: 'https://llm.corp.example/v1', model: 'gpt-4.1', auth: 'ApiKey', verificationCode: 'Verified', sendSourceContent: true }] }));
   await page.route('**/api/workloads/pipelines/convert/status', route => route.fulfill({ json: { actionlint: true, zizmor: true, canBeApprovable: true, policyVersion: 'x', actionCatalogVerifiedOn: 'y' } }));
   await page.route('**/api/workloads/pipelines/convert', route => route.fulfill({ json: convertAnswer(store.current) }));
+  await page.route('**/api/workloads/pipelines/publication/status', route => route.fulfill({ json: {
+    enabled: options.publication?.enabled ?? false, allowedRepositories: options.publication?.allowed ?? [] } }));
   await page.route(/\/api\/workloads\/pipelines\/proposals/, async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -56,9 +59,17 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
     const id = /proposals\/([0-9a-f-]{36})/.exec(path)?.[1];
     const target = [store.current, ...store.kept].find(d => d.id === id);
     if (!target) return route.fulfill({ status: 404, json: {} });
+    if (request.method() === 'GET' && path.endsWith('/publications')) return route.fulfill({ json: store.attempts });
     if (request.method() === 'GET') return route.fulfill({ json: target });
     const verb = path.split('/').pop()!;
     const body = request.postDataJSON() as Record<string, any>;
+    if (verb === 'publish') {
+      store.publishes.push(body);
+      if (options.publishRefuse) return route.fulfill({ status: options.publishRefuse.status, json: options.publishRefuse.body });
+      const record = options.published ?? publicationRecord();
+      store.attempts = [record, ...store.attempts];
+      return route.fulfill({ json: record });
+    }
     if (verb === 'publication-plan') {
       store.plans.push(body);
       if (options.planRefuse) return route.fulfill({ status: options.planRefuse.status, json: options.planRefuse.body });
@@ -109,5 +120,14 @@ export function publicationPlan(repository = 'orion-api', overrides: Detail = {}
     planSha256: 'd'.repeat(64), readAtUtc: '2026-11-13T14:00:00Z',
     workflowYaml: '# azure-tasks: converted=UseDotNet@2 manual=none\nname: demo\non:\n  workflow_dispatch:\njobs: {}\n',
     ...overrides
+  };
+}
+
+export function publicationRecord(overrides: Detail = {}): Detail {
+  return {
+    id: '9c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f', proposalId, state: 'Published', organization: 'target-org', repository: 'orion-api', baseBranch: 'main', baseSha: 'c'.repeat(40),
+    headBranch: 'migrate/azdo-123-abababab', workflowPath: '.github/workflows/azdo-123-orion-api.yml', planSha256: 'd'.repeat(64), commitSha: 'e'.repeat(40), pullNumber: 7,
+    pullUrl: 'https://github.com/target-org/orion-api/pull/7', errorCode: null, failedAtState: null, writesPossible: false, requestedBy: 'reviewer',
+    startedAtUtc: '2026-11-13T14:00:00Z', updatedAtUtc: '2026-11-13T14:00:05Z', ...overrides
   };
 }

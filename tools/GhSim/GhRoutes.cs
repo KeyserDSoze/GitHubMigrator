@@ -400,6 +400,8 @@ public static partial class GhSimApp
             var (r, error) = Open(sim, ctx, org, repo, write: true);
             if (error is not null) return error;
             path = Uri.UnescapeDataString(path).Trim('/');
+            if (GhSim.IsWorkflowPath(path) && !GhSim.CanWriteWorkflowFiles(GhSim.Auth(ctx)))
+                return Error(403, WorkflowRefusal(ctx, path));
             var body = await BodyAsync(ctx);
             var message = Str(body, "message"); var encoded = Str(body, "content");
             if (string.IsNullOrWhiteSpace(message) || encoded is null)
@@ -414,12 +416,18 @@ public static partial class GhSimApp
         {
             var (r, error) = Open(sim, ctx, org, repo, write: true);
             if (error is not null) return error;
+            if (GhSim.IsWorkflowPath(Uri.UnescapeDataString(path).Trim('/')) && !GhSim.CanWriteWorkflowFiles(GhSim.Auth(ctx)))
+                return Error(403, WorkflowRefusal(ctx, Uri.UnescapeDataString(path).Trim('/')));
             var body = await BodyAsync(ctx);
             var message = Str(body, "message");
             if (string.IsNullOrWhiteSpace(message) || Str(body, "sha") is null) return Error(422, "Invalid request.");
             return await WriteContentsAsync(sim, ctx, r!, Uri.UnescapeDataString(path).Trim('/'), null, message, Str(body, "branch"), Str(body, "sha"), body);
         });
     }
+
+    // The wording of GitHub's refusal. The status code of the API answer (the sandbox assumes 403) is not confirmed against github.com.
+    private static string WorkflowRefusal(HttpContext ctx, string path) =>
+        $"refusing to allow {(GhSim.Auth(ctx).Kind == PrincipalKind.Installation ? "a GitHub App" : "a Personal Access Token")} to create or update workflow `{path}` without `{(GhSim.Auth(ctx).Kind == PrincipalKind.Installation ? "workflows" : "workflow")}` {(GhSim.Auth(ctx).Kind == PrincipalKind.Installation ? "permission" : "scope")}";
 
     private static (string Name, string Email) IdentityFrom(HttpContext ctx, System.Text.Json.JsonElement body, string key)
     {

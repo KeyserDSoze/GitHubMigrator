@@ -202,7 +202,7 @@ function App() {
             setPage('recovery');
           }} />}
         {page === 'plans' && <MigrationPlanPage token={session.accessToken} isAdmin={isAdmin} />}
-        {page === 'pipelines' && <WorkloadsPage mode="pipelines" token={session.accessToken} isAdmin={isAdmin} />}
+        {page === 'pipelines' && <WorkloadsPage mode="pipelines" token={session.accessToken} isAdmin={isAdmin} isSuperAdmin={session.role === 'superadmin'} />}
         {page === 'boards' && <WorkloadsPage mode="boards" token={session.accessToken} isAdmin={isAdmin} />}
         {page === 'identities' && <IdentityMappingPage token={session.accessToken} isAdmin={isAdmin} />}
         {page !== 'overview' && page !== 'users' && page !== 'connections' && page !== 'repositories' && page !== 'identities' && page !== 'plans' && page !== 'reconciliation' && page !== 'recovery' && page !== 'sync' && page !== 'pipelines' && page !== 'boards' && (() => {

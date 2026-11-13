@@ -23,7 +23,7 @@ Decision:
 Consequences:
 - Nothing is written to GitHub by this feature. `writesPerformed` is always false in the answer, and an integration test checks that the simulator saw
   GET requests only, and only for that repository.
-- **The executor is a separate decision, and it needs a new credential.** Pushing under `.github/workflows/` needs the `workflow` scope (token) or
+- **The executor is a separate decision, and it needs a new credential** (ADR-014 builds it, opt-in and off by default). Pushing under `.github/workflows/` needs the `workflow` scope (token) or
   *Workflows: write* (GitHub App); the pull request needs *Pull requests: write*. F-043 attests `Contents: write` only, on purpose. A publication credential
   would be its own repository-scoped attestation behind the same kind of guards, and GhSim would have to model `workflows` and `pull_requests`
   permissions first, otherwise a write path would be tested against something more permissive than GitHub.

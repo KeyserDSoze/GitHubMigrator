@@ -1,7 +1,8 @@
 # AI conversion: model connections and workflow gates
 
-Status: **model connections, gates, a converter that returns a *proposal*, the kept proposals, the human approval and a read-only *publication plan* are
-implemented. Writing the branch and the pull request to GitHub is not: a person does it with the plan.** The conversion itself never approves or publishes anything. See
+Status: **model connections, gates, a converter that returns a *proposal*, the kept proposals, the human approval, a read-only *publication plan* and an
+opt-in, allow-listed publisher of the pull request are implemented. The publisher is OFF by default and has only been exercised against the GitHub
+simulator.** The conversion itself never approves or publishes anything. See
 [ADR-011](../ADR/ADR-011-ai-conversion-gates-and-model-connections.md) and [ADR-012](../ADR/ADR-012-kept-proposals-and-human-approval.md).
 
 ## Model connections (UI: Connections → *AI model connections*)
@@ -136,6 +137,44 @@ heading, a link or a mention.
 GitHub simulator does not model those two permissions either (`tools/GhSim` knows `contents` only), so a write path tested against it would be tested
 against something more permissive than GitHub. See [ADR-013](../ADR/ADR-013-publication-plan-before-publication.md).
 
+## Publishing the pull request (opt-in): `POST /api/workloads/pipelines/proposals/{id}/publish`
+
+**Off by default.** With nothing configured the product cannot write to GitHub, says `PublicationDisabled`, and the plan keeps working. To enable it an operator sets
+`WorkflowPublication:Enabled`, `:AppId`, `:InstallationId`, `:PrivateKeySecretReference` (the App's signing key in the secret store, like F-043's) and
+`:AllowedRepositories` (`org/repo,org/repo`). In Compose: `WORKFLOW_PUBLICATION_*`. The credential is **a GitHub App installed with exactly Contents, Pull requests and
+Workflows write**; it is never the destination connection's PAT (the same secret reference for both is refused: `PublicationCredentialSeparationFailed`) and nothing falls
+back to it. `GET …/publication/status` (admin) says whether it is on and where; `POST …/publication/credential-check` (superadmin) mints and checks the credential for one
+allow-listed repository and discards it, writing nothing.
+
+Body `{ destinationConnectionId, repository, baseBranch?, planSha256 }`, **superadmin only**, rate limited. Every guard below is checked before the first write, in this order:
+
+1. the operator enabled it and configured it completely;
+2. the person sends `planSha256`, the hash of the plan they saw (`PlanConfirmationRequired` otherwise);
+3. **the plan is made again now** (approved proposal, intact text, verified destination, valid repository and branch) and must be the same hash (`PublicationPlanChanged`: the base
+   moved, or anything else the plan covers) and ready, with nothing in the way (`PublicationPlanNotReady` with the finding codes);
+4. the repository is on the operator's allow-list (`PublicationRepositoryNotAllowed`);
+5. the attempt is **written to the ledger before any write** (`workflow_publications`). One live attempt per plan: a second, even a simultaneous one, gets `PublicationAlreadyAttempted`;
+6. the writer mints a one-repository token with **exactly** contents, pull_requests and workflows write (anything broader or different is refused), re-checks the installation, the
+   repository (same id, not archived) and **the base commit with that credential**.
+
+Then it writes, recording the state before and after each write, one step at a time: **create the branch** at the planned commit → **commit the one file** on it → **open the pull
+request** → read the pull request (open, from our branch at our commit into our base) and the file at that commit (the approved text) back. The writer only writes a file named
+`.github/workflows/azdo-{n}-{name}.yml` on a branch named `migrate/azdo-{n}-{hash8}`, for text that hashes to the approved hash. It **never merges, updates, deletes or force-pushes,
+and never repeats a write**.
+
+| Ledger state | Meaning |
+| --- | --- |
+| `Started` … `PullRequestOpened` | how far it got (the state is recorded before a write is attempted and again after it) |
+| `Published` | all of it written and read back: a pull request is open; nothing is merged |
+| `Failed` + `writesPossible: false` | refused before anything was written (credential, base moved, a definite refusal of the first write): **the same plan may be tried again** |
+| `Failed` + `writesPossible: true` | something may exist at the destination (the branch was created, a 5xx or a lost answer, a read-back that failed): **the product will not retry**; a person looks. The plan then reports `HeadBranchExists`, so it cannot be published over |
+
+The database enforces the order (no skipped step, no way back, `Published`/`Failed` are final), the shape of the path and branch, the unique live attempt, and refuses deletion.
+
+**Not verified online.** Everything above runs against `tools/GhSim`, which models the `pull_requests` and `workflows` permissions and the `workflow` scope but whose refusal for a
+workflow file (status code 403 and its wording) is an assumption, and against scripted answers. The Contents API's behaviour for a workflow file, GitHub's exact answers to a lost write,
+and App-token rules have not been confirmed against github.com: that needs a sandbox repository and a throw-away App.
+
 ## What may be sent to a model
 
 `SourceRedactor.Redact(text)`: credentials (AWS keys, GitHub/Slack/npm/NuGet/Google/Stripe tokens, JWTs, `Authorization: Basic/Bearer` values, connection-string
@@ -168,9 +207,9 @@ they are missing; CI sets `GITHUBMIGRATOR_REQUIRE_TOOLS=true`.
 | `tests/backend/GitHubMigrator.Domain.Tests/WorkflowGates` | gates, hostile corpus, redactor, extractor, fake and real analysers, process runner |
 | `…/Ai` | client against a stub handler (URL, auth, retries, errors, timeouts), connection service, **client against LlmSim** (faults, no credential reaches the model, every hostile answer stopped) |
 | `tests/integration/AiConnectionsAgainstSimApiTests.cs` | the real API with PostgreSQL, encrypted secrets and LlmSim |
-| `…/Ai/WorkflowPublicationTests.cs` | the plan (naming, findings, hash, injection-proof description, quoting, order of checks) and the destination reader against scripted GitHub answers |\n| `…/Ai/WorkflowProposalTests.cs` | the approval rules with an in-memory store: binding to the hash, four eyes, gates run again, warnings by name, races, release of the approved text |
+| `…/Ai/GitHubPublicationWriterTests.cs`, `WorkflowPublicationExecutionTests.cs` | the writer against scripted GitHub answers (what it sends, every way a step can fail and whether something may exist) and the executor's guards with an in-memory ledger |\n| `…/Ai/WorkflowPublicationTests.cs` | the plan (naming, findings, hash, injection-proof description, quoting, order of checks) and the destination reader against scripted GitHub answers |\n| `…/Ai/WorkflowProposalTests.cs` | the approval rules with an in-memory store: binding to the hash, four eyes, gates run again, warnings by name, races, release of the approved text |
 | `…/Ai/ConversionTests.cs`, `OrionConverterEvaluationTests.cs`, `PipelineYamlReaderTests.cs` | plan, prompt, orchestrator (fake model), the converter on the ten Orion pipelines with the real analysers (golden answers must reach `ReadyForReview`; 40 hostile edits must be blocked with the expected code), the YAML reader |
-| `tests/integration/WorkflowPublicationPlanApiTests.cs` | approved workflow → plan against GhSim over real HTTP: GETs only and only that repository, every conflict from what the destination really holds, no read for an unapproved proposal |\n| `tests/integration/WorkflowProposalApprovalApiTests.cs` | kept proposals and approval on the real API and PostgreSQL: the whole decision flow, concurrent approvals, and the database refusing rewrites and skipped states (needs the analysers; CI installs them) |
+| `tests/integration/WorkflowPublicationApiTests.cs` | the publisher on the real API, PostgreSQL ledger and GhSim: branch + file + pull request that match the plan and exactly three writes, every guard, a refusal that frees the plan, a write that fails halfway and is never repeated, simultaneous publishes, the database refusing rewrites and skipped steps, disabled by default |\n| `tests/integration/WorkflowPublicationPlanApiTests.cs` | approved workflow → plan against GhSim over real HTTP: GETs only and only that repository, every conflict from what the destination really holds, no read for an unapproved proposal |\n| `tests/integration/WorkflowProposalApprovalApiTests.cs` | kept proposals and approval on the real API and PostgreSQL: the whole decision flow, concurrent approvals, and the database refusing rewrites and skipped states (needs the analysers; CI installs them) |
 | `tests/integration/PipelineConversionAgainstSimApiTests.cs` | the endpoint on the real API: end to end with LlmSim, no source secret reaches the model, consent, failures, access |
 | `tests/frontend/ai-connections.spec.ts`, `pipeline-conversion.spec.ts`, `proposal-review.spec.ts`, `publication-plan.spec.ts` | the UI against mocked endpoints |
 | `…/WorkflowGates/Golden/orion` + `OrionGoldenCorpusTests` | ten Orion pipelines converted by hand: gates (policy and real analysers), plan accounting, task coverage, honesty rules, redaction; see its `README.md` and `GATE_FINDINGS.md`. **Never executed on GitHub** |

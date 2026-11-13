@@ -39,6 +39,7 @@ REST under `/api/v3`, using GitHub's documented shapes (snake_case, explicit nul
 - repositories: create (`POST /orgs/{org}/repos`, name/case/policy validation), get, patch (default branch, archive), delete, branches, tags, commits
 - Git data: `matching-refs` (annotated tags reported as type `tag`), `git/ref(s)` create/update/delete with fast-forward checks, `git/commits|tags|trees|blobs`
 - contents: get (base64/raw/dir), put/delete with `sha` conflict rules, real commits on a branch (creating the first commit of an empty repository)
+- GitHub App installations carry `contents`, `pull_requests` (`read`/`write`) and `workflows` (`write`) permissions that are granted, asked for and reported as on GitHub; a pull request needs `pull_requests`, and a file under `.github/workflows/` needs the `workflows` permission (App) or the `workflow` scope (classic token, seed `workflowScope: false` to take it away). The status and wording of that refusal (403) are an assumption, not confirmed against github.com.
 - pull requests (create, list — filtered by `state`, `head=owner:branch` and `base` —, get, patch, real merge/squash) and issues (+comments), sharing the number space like GitHub
 - Actions: repository secrets (public key, **sealed-box size validation: plaintext uploads are rejected**), variables, environments (+ environment secrets/variables by repository id), workflows discovered from `.github/workflows` on the default branch
 - rulesets (`/rulesets`, `/rules/branches/{branch}`), enforced on REST writes **and on pushes**

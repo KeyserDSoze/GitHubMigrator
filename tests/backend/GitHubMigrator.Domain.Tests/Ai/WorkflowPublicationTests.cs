@@ -37,16 +37,16 @@ internal sealed class FakeDestinations(params MigrationConnection[] items) : ICo
 
 public sealed class WorkflowPublicationPlanTests
 {
-    private const string Token = "pat-token-never-in-a-plan";
-    private static readonly Guid DestinationId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+    internal const string Token = "pat-token-never-in-a-plan";
+    internal static readonly Guid DestinationId = Guid.Parse("33333333-3333-3333-3333-333333333333");
 
-    private static MigrationConnection Destination(string provider = ProviderKeys.GitHubEnterpriseCloud, ConnectionDirection direction = ConnectionDirection.Destination,
+    internal static MigrationConnection Destination(string provider = ProviderKeys.GitHubEnterpriseCloud, ConnectionDirection direction = ConnectionDirection.Destination,
         string validation = "Verified") => new(DestinationId, "Target", provider, direction, "target-org", "ref-1", Now, Now, validation, "bot", "Verified");
 
-    private sealed record Setup(WorkflowPublicationService Service, FakePublicationReader Reader, WorkflowProposal Proposal, WorkflowProposalService Proposals,
-        InMemoryProposalRepository Repo);
+    internal sealed record Setup(WorkflowPublicationService Service, FakePublicationReader Reader, WorkflowProposal Proposal, WorkflowProposalService Proposals,
+        InMemoryProposalRepository Repo, MemorySecrets Secrets, IConnectionRepository Connections, MigrationConnection Destination);
 
-    private static async Task<Setup> ApprovedAsync(string? yaml = null, string[]? warnings = null, MigrationConnection? destination = null, string? token = Token, bool approve = true,
+    internal static async Task<Setup> ApprovedAsync(string? yaml = null, string[]? warnings = null, MigrationConnection? destination = null, string? token = Token, bool approve = true,
         string? name = null, string? notes = null)
     {
         var repo = new InMemoryProposalRepository();
@@ -58,12 +58,14 @@ public sealed class WorkflowPublicationPlanTests
         var secrets = new MemorySecrets();
         if (token is not null) secrets.Values["ref-1"] = token;
         var reader = new FakePublicationReader();
-        return new(new(proposals, new FakeDestinations(destination ?? Destination()), secrets, reader, new FixedClock()), reader, kept, proposals, repo);
+        var connection = destination ?? Destination();
+        var connections = new FakeDestinations(connection);
+        return new(new(proposals, connections, secrets, reader, new FixedClock()), reader, kept, proposals, repo, secrets, connections, connection);
     }
 
     private sealed class FixedClock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now.AddHours(2); }
 
-    private static async Task<PublicationPlan> PlanAsync(Setup s, string repository = "orion-api", string? baseBranch = null) =>
+    internal static async Task<PublicationPlan> PlanAsync(Setup s, string repository = "orion-api", string? baseBranch = null) =>
         (await s.Service.PlanAsync(s.Proposal.Id, DestinationId, repository, baseBranch, default)).Plan;
 
     [Fact]

@@ -6,12 +6,12 @@ import { api, ApiError, type Connection, type ProposalDetail } from './api';
 
 type Props = {
   token: string; detail: ProposalDetail; onChanged: (detail: ProposalDetail) => void;
-  destinations: Connection[]; defaultDestinationId: string; defaultRepository: string;
+  destinations: Connection[]; defaultDestinationId: string; defaultRepository: string; isSuperAdmin: boolean;
 };
 
 // The human step. Approving binds a person to ONE text, named by its SHA-256, after the server ran the gates again; it publishes
 // nothing and re-enables nothing. Warnings are accepted by name, one by one, because they are what a reviewer is there to weigh.
-export default function ProposalReview({ token, detail, onChanged, destinations, defaultDestinationId, defaultRepository }: Props) {
+export default function ProposalReview({ token, detail, onChanged, destinations, defaultDestinationId, defaultRepository, isSuperAdmin }: Props) {
   const { t, i18n } = useTranslation();
   const [ack, setAck] = useState<Set<string>>(new Set());
   const [late, setLate] = useState<string[]>([]);
@@ -76,7 +76,7 @@ export default function ProposalReview({ token, detail, onChanged, destinations,
     </>}
 
     {detail.state === 'Approved' && <>
-      <PublicationPlanPanel token={token} proposalId={detail.id} destinations={destinations} defaultDestinationId={defaultDestinationId} defaultRepository={defaultRepository} />
+      <PublicationPlanPanel token={token} proposalId={detail.id} destinations={destinations} defaultDestinationId={defaultDestinationId} defaultRepository={defaultRepository} isSuperAdmin={isSuperAdmin} />
       <p className="connection-hint">{t('reviewApprovedHint')}</p>
       <label>{t('reviewNote')}
         <textarea value={note} maxLength={500} rows={2} onChange={e => setNote(e.target.value)} />

@@ -405,7 +405,7 @@ public sealed class GhSimAppTests(GhSimFixture sim) : IClassFixture<GhSimFixture
         return header + "." + payload + "." + Base64Url(signature);
     }
 
-    private async Task<(RSA Key, long AppId, long InstallationId)> RegisterAppAsync(string contents = "write")
+    private async Task<(RSA Key, long AppId, long InstallationId)> RegisterAppAsync(string contents = "write", string pullRequests = "none", string workflows = "none")
     {
         var key = RSA.Create(2048);
         var appId = Random.Shared.NextInt64(10_000, 900_000);
@@ -413,7 +413,7 @@ public sealed class GhSimAppTests(GhSimFixture sim) : IClassFixture<GhSimFixture
         var registered = await sim.Post("/_sim/apps", new
         {
             id = appId, slug = "migrator-" + appId, publicKeyPem = key.ExportSubjectPublicKeyInfoPem(),
-            installations = new[] { new { id = installationId, org = "orion-org", repositorySelection = "selected", contents } }
+            installations = new[] { new { id = installationId, org = "orion-org", repositorySelection = "selected", contents, pullRequests, workflows } }
         });
         Assert.Equal(201, registered.Status);
         return (key, appId, installationId);
@@ -492,6 +492,111 @@ public sealed class GhSimAppTests(GhSimFixture sim) : IClassFixture<GhSimFixture
         Assert.NotEqual(0, push.Exit);
         Assert.Contains("403", push.Output);
         Assert.Equal(0, Git(source, "ls-remote", sim.RemoteUrl(slug, token)).Exit);
+    }
+
+    private async Task<string> TokenAsync(RSA key, long appId, long installationId, string repo, object permissions) =>
+        (await sim.Post($"/app/installations/{installationId}/access_tokens", new { repositories = new[] { repo }, permissions }, Jwt(key, appId)))
+            .Json.GetProperty("token").GetString()!;
+
+    [Fact]
+    public async Task Pull_requests_and_workflows_are_permissions_that_are_granted_then_asked_for_and_then_reported()
+    {
+        var (key, appId, installationId) = await RegisterAppAsync(pullRequests: "write", workflows: "write");
+        var name = (await sim.CreateRepoAsync(Unique("perm"))).Split('/')[1];
+        var jwt = Jwt(key, appId);
+
+        var granted = (await sim.Get($"/app/installations/{installationId}", jwt)).Json.GetProperty("permissions");
+        Assert.Equal(("write", "write", "write", "read"), (granted.GetProperty("contents").GetString(), granted.GetProperty("pull_requests").GetString(),
+            granted.GetProperty("workflows").GetString(), granted.GetProperty("metadata").GetString()));
+
+        var full = await sim.Post($"/app/installations/{installationId}/access_tokens",
+            new { repositories = new[] { name }, permissions = new { contents = "write", pull_requests = "write", workflows = "write" } }, jwt);
+        Assert.Equal(201, full.Status);
+        var asked = full.Json.GetProperty("permissions");
+        Assert.Equal(("write", "write", "write"), (asked.GetProperty("contents").GetString(), asked.GetProperty("pull_requests").GetString(), asked.GetProperty("workflows").GetString()));
+
+        // a token has what it was asked for and nothing more, even from an installation that was granted more
+        var narrow = await sim.Post($"/app/installations/{installationId}/access_tokens", new { repositories = new[] { name }, permissions = new { contents = "write" } }, jwt);
+        Assert.False(narrow.Json.GetProperty("permissions").TryGetProperty("pull_requests", out _));
+        Assert.False(narrow.Json.GetProperty("permissions").TryGetProperty("workflows", out _));
+
+        // what the installation was not granted cannot be asked for; GitHub has no "read" level for workflows
+        var (bareKey, bareApp, bareInstallation) = await RegisterAppAsync();
+        var bare = Jwt(bareKey, bareApp);
+        Assert.Equal(422, (await sim.Post($"/app/installations/{bareInstallation}/access_tokens", new { repositories = new[] { name }, permissions = new { contents = "write", pull_requests = "read" } }, bare)).Status);
+        Assert.Equal(422, (await sim.Post($"/app/installations/{bareInstallation}/access_tokens", new { repositories = new[] { name }, permissions = new { contents = "write", workflows = "write" } }, bare)).Status);
+        Assert.Equal(422, (await sim.Post($"/app/installations/{installationId}/access_tokens", new { repositories = new[] { name }, permissions = new { contents = "write", workflows = "read" } }, jwt)).Status);
+        var (readKey, readApp, readInstallation) = await RegisterAppAsync(pullRequests: "read");
+        Assert.Equal(422, (await sim.Post($"/app/installations/{readInstallation}/access_tokens", new { repositories = new[] { name }, permissions = new { contents = "write", pull_requests = "write" } }, Jwt(readKey, readApp))).Status);
+        Assert.Equal(201, (await sim.Post($"/app/installations/{readInstallation}/access_tokens", new { repositories = new[] { name }, permissions = new { contents = "write", pull_requests = "read" } }, Jwt(readKey, readApp))).Status);
+        Assert.False((await sim.Get($"/app/installations/{bareInstallation}", bare)).Json.GetProperty("permissions").TryGetProperty("pull_requests", out _));
+    }
+
+    [Fact]
+    public async Task A_file_under_github_workflows_needs_the_workflows_permission_or_the_workflow_scope()
+    {
+        var (key, appId, installationId) = await RegisterAppAsync(workflows: "write");
+        var slug = await sim.CreateRepoAsync(Unique("wf"));
+        var name = slug.Split('/')[1];
+        await sim.Put($"/repos/{slug}/contents/README.md", new { message = "init", content = Base64("# r\n") });
+        var plain = await TokenAsync(key, appId, installationId, name, new { contents = "write" });
+        var withWorkflows = await TokenAsync(key, appId, installationId, name, new { contents = "write", workflows = "write" });
+        var file = new { message = "add", content = Base64("name: x\non:\n  workflow_dispatch:\njobs: {}\n") };
+
+        var refused = await sim.Put($"/repos/{slug}/contents/.github/workflows/ci.yml", file, plain);
+        Assert.Equal(403, refused.Status);
+        Assert.Contains("workflows", refused.Json.GetProperty("message").GetString());
+        Assert.Equal(404, (await sim.Get($"/repos/{slug}/contents/.github/workflows/ci.yml")).Status); // nothing was written
+        // everything else is still allowed with the same token, workflow-looking names included
+        Assert.Equal(201, (await sim.Put($"/repos/{slug}/contents/docs/ci.yml", file, plain)).Status);
+        Assert.Equal(201, (await sim.Put($"/repos/{slug}/contents/.github/ci-notes.md", file, plain)).Status);
+        Assert.Equal(201, (await sim.Put($"/repos/{slug}/contents/.github/workflows-notes/readme.md", file, plain)).Status);
+
+        Assert.Equal(201, (await sim.Put($"/repos/{slug}/contents/.github/workflows/ci.yml", file, withWorkflows)).Status);
+        var current = (await sim.Get($"/repos/{slug}/contents/.github/workflows/ci.yml")).Json.GetProperty("sha").GetString();
+        Assert.Equal(403, (await sim.Put($"/repos/{slug}/contents/.github/workflows/ci.yml", new { message = "edit", content = Base64("name: y\n"), sha = current }, plain)).Status);
+        Assert.Equal(403, (await sim.SendAsync("DELETE", $"/repos/{slug}/contents/.github/workflows/ci.yml", new { message = "rm", sha = current }, plain)).Status);
+        Assert.Equal(200, (await sim.SendAsync("DELETE", $"/repos/{slug}/contents/.github/workflows/ci.yml", new { message = "rm", sha = current }, withWorkflows)).Status);
+
+        // a classic token without the workflow scope is refused the same way, a user who has it is not
+        var noScope = await sim.Put($"/repos/{slug}/contents/.github/workflows/other.yml", file, "gh-sim-no-workflow-pat");
+        Assert.Equal(403, noScope.Status);
+        Assert.Contains("scope", noScope.Json.GetProperty("message").GetString());
+        Assert.Equal(201, (await sim.Put($"/repos/{slug}/contents/docs/other.yml", file, "gh-sim-no-workflow-pat")).Status);
+        Assert.Equal(201, (await sim.Put($"/repos/{slug}/contents/.github/workflows/other.yml", file)).Status);
+    }
+
+    [Fact]
+    public async Task Pull_requests_need_the_pull_requests_permission_for_an_installation_token()
+    {
+        var (key, appId, installationId) = await RegisterAppAsync(pullRequests: "write");
+        var slug = await sim.CreateRepoAsync(Unique("prperm"));
+        var name = slug.Split('/')[1];
+        await sim.Put($"/repos/{slug}/contents/README.md", new { message = "init", content = Base64("# r\n") });
+        var tip = (await sim.Get($"/repos/{slug}/git/ref/heads/main")).Json.GetProperty("object").GetProperty("sha").GetString();
+        var contentsOnly = await TokenAsync(key, appId, installationId, name, new { contents = "write" });
+        var reader = await TokenAsync(key, appId, installationId, name, new { contents = "write", pull_requests = "read" });
+        var writer = await TokenAsync(key, appId, installationId, name, new { contents = "write", pull_requests = "write" });
+
+        // the branch and its commit need contents only
+        Assert.Equal(201, (await sim.Post($"/repos/{slug}/git/refs", new { @ref = "refs/heads/work", sha = tip }, contentsOnly)).Status);
+        Assert.Equal(201, (await sim.Put($"/repos/{slug}/contents/CHANGES.md", new { message = "change", content = Base64("c\n"), branch = "work" }, contentsOnly)).Status);
+        var pull = new { title = "Add changes", head = "work", @base = "main" };
+
+        Assert.Equal(403, (await sim.Post($"/repos/{slug}/pulls", pull, contentsOnly)).Status);
+        Assert.Equal(403, (await sim.Get($"/repos/{slug}/pulls", contentsOnly)).Status);
+        Assert.Equal(403, (await sim.Post($"/repos/{slug}/pulls", pull, reader)).Status);
+        Assert.Equal(200, (await sim.Get($"/repos/{slug}/pulls", reader)).Status);
+
+        var opened = await sim.Post($"/repos/{slug}/pulls", pull, writer);
+        Assert.Equal(201, opened.Status);
+        Assert.Equal(200, (await sim.Get($"/repos/{slug}/pulls/1", reader)).Status);
+        Assert.Equal(403, (await sim.Get($"/repos/{slug}/pulls/1", contentsOnly)).Status);
+        Assert.Equal(403, (await sim.SendAsync("PATCH", $"/repos/{slug}/pulls/1", new { title = "x" }, reader)).Status);
+        Assert.Equal(200, (await sim.SendAsync("PATCH", $"/repos/{slug}/pulls/1", new { title = "Renamed" }, writer)).Status);
+        Assert.Equal(403, (await sim.Put($"/repos/{slug}/pulls/1/merge", new { merge_method = "merge" }, reader)).Status);
+        // a user's token has what the user has: the existing behaviour is unchanged
+        Assert.Equal(200, (await sim.Get($"/repos/{slug}/pulls")).Status);
     }
 }
 

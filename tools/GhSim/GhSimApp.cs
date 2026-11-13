@@ -55,7 +55,7 @@ public static partial class GhSimApp
         {
             var state = sim.Store.State;
             foreach (var u in seed.Users ?? [])
-                state.Users.Add(new GhUser { Login = u.Login, Id = state.NextAccountId++, Token = u.Token, ReadOnly = u.ReadOnly });
+                state.Users.Add(new GhUser { Login = u.Login, Id = state.NextAccountId++, Token = u.Token, ReadOnly = u.ReadOnly, WorkflowScope = u.WorkflowScope });
             foreach (var o in seed.Orgs ?? [])
             {
                 var org = new GhOrg { Login = o.Login, Id = state.NextAccountId++, MembersCanCreatePrivateRepositories = o.MembersCanCreatePrivateRepositories };
@@ -89,7 +89,7 @@ public static partial class GhSimApp
     {
         Id = a.Id, Slug = a.Slug, PublicKeyPem = a.PublicKeyPem,
         Installations = (a.Installations ?? []).Select(i => new GhInstallation
-        { Id = i.Id, Org = i.Org, RepositorySelection = i.RepositorySelection, Contents = i.Contents }).ToList()
+        { Id = i.Id, Org = i.Org, RepositorySelection = i.RepositorySelection, Contents = i.Contents, PullRequests = i.PullRequests, Workflows = i.Workflows }).ToList()
     };
 
     public static readonly (string Name, string Email) SeedIdentity = ("Sim Seed", "seed@example.test");

@@ -85,6 +85,19 @@ builder.Services.AddScoped(sp => new PipelineConverter(sp.GetRequiredService<ICh
     sp.GetRequiredService<IWorkflowGatePipelineFactory>(), sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped<PipelineConversionService>();
 builder.Services.AddScoped<WorkflowPublicationService>();
+// Writing the pull request is OFF unless the operator turns it on with a credential of its own (a GitHub App installed on the allow-listed
+// repositories with contents, pull_requests and workflows write) and names the repositories it may write to. Nothing falls back to the read-only PAT.
+builder.Services.AddSingleton(new WorkflowPublicationOptions(
+    builder.Configuration.GetValue("WorkflowPublication:Enabled", false),
+    builder.Configuration.GetValue("WorkflowPublication:AppId", 0L),
+    builder.Configuration.GetValue("WorkflowPublication:InstallationId", 0L),
+    builder.Configuration["WorkflowPublication:PrivateKeySecretReference"] ?? "",
+    WorkflowPublicationOptions.ParseRepositories(builder.Configuration["WorkflowPublication:AllowedRepositories"])));
+builder.Services.AddHttpClient<GitHubPublicationWriter>(c => c.Timeout = TimeSpan.FromSeconds(20))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubPublicationWriter>(s => s.GetRequiredService<GitHubPublicationWriter>());
+builder.Services.AddScoped<IPublicationLedger, PostgresPublicationLedger>();
+builder.Services.AddScoped<WorkflowPublicationExecutor>();
 builder.Services.AddScoped<IWorkflowProposalRepository, PostgresWorkflowProposalRepository>();
 // Four eyes by default: whoever asked the model for a workflow is not the only person who may approve it. A single-reviewer
 // deployment turns it off explicitly with WorkflowApproval:RequireSecondApprover=false.
@@ -862,6 +875,7 @@ if (postgresStartupMode != PostgresDatabaseStartupMode.RuntimeOnly)
     // F-078 has an FK to F-055: never initialize this before the hazard table.
     await GitHubRemoteSandboxReviewSessionSchema.InitializeAsync(app.Services);
     await WorkflowProposalSchema.InitializeAsync(app.Services);
+    await WorkflowPublicationSchema.InitializeAsync(app.Services);
     await GitHubRemoteSandboxDispatchIntentSchema.InitializeAsync(app.Services);
     await GitHubRemoteSandboxDispatchConfirmationSchema.InitializeAsync(app.Services);
     await GitHubRemoteSandboxPreSendBarrierSchema.InitializeAsync(app.Services);

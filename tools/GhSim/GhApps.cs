@@ -32,7 +32,7 @@ public static partial class GhSimApp
                 ["target_type"] = "Organization", ["repository_selection"] = installation.RepositorySelection,
                 ["suspended_at"] = null,
                 ["account"] = new { login = org.Login, id = org.Id, type = "Organization" },
-                ["permissions"] = new { contents = installation.Contents, metadata = "read" },
+                ["permissions"] = Granted(installation.Contents, installation.PullRequests, installation.Workflows),
                 ["events"] = Array.Empty<string>()
             });
         });
@@ -42,16 +42,18 @@ public static partial class GhSimApp
             var who = GhSim.Auth(ctx);
             if (who.Kind != PrincipalKind.App) return Error(401, "A JSON web token could not be decoded");
             var body = await BodyAsync(ctx);
-            var requested = "write";
+            var requested = "write"; string? pullRequests = null, workflows = null;
             if (body.ValueKind == System.Text.Json.JsonValueKind.Object && body.TryGetProperty("permissions", out var permissions) &&
                 permissions.ValueKind == System.Text.Json.JsonValueKind.Object)
             {
                 foreach (var p in permissions.EnumerateObject())
-                    if (p.Name != "contents" && p.Name != "metadata")
+                    if (p.Name is not ("contents" or "metadata" or "pull_requests" or "workflows"))
                         return Error(422, $"The permission {p.Name} is not granted to this installation.");
                 requested = Str(permissions, "contents") ?? "read";
+                pullRequests = Str(permissions, "pull_requests"); workflows = Str(permissions, "workflows");
             }
-            if (requested is not ("read" or "write")) return Error(422, "Validation Failed");
+            if (requested is not ("read" or "write") || pullRequests is not (null or "read" or "write") || workflows is not (null or "write"))
+                return Error(422, "Validation Failed");
 
             GhInstallation? installation;
             List<GhRepo> repos;
@@ -61,6 +63,10 @@ public static partial class GhSimApp
                 if (installation is null) return NotFound();
                 if (requested == "write" && installation.Contents != "write")
                     return Error(422, "The permission contents is not granted to this installation.");
+                if (pullRequests is not null && (installation.PullRequests == "none" || (pullRequests == "write" && installation.PullRequests != "write")))
+                    return Error(422, "The permission pull_requests is not granted to this installation.");
+                if (workflows is not null && installation.Workflows != "write")
+                    return Error(422, "The permission workflows is not granted to this installation.");
                 var inOrg = sim.Store.State.Repos.Where(r => r.Org.Equals(installation.Org, StringComparison.OrdinalIgnoreCase)).ToList();
                 if (body.ValueKind == System.Text.Json.JsonValueKind.Object && body.TryGetProperty("repositories", out var names) &&
                     names.ValueKind == System.Text.Json.JsonValueKind.Array)
@@ -78,12 +84,12 @@ public static partial class GhSimApp
             sim.InstallationTokens[token] = new InstallationToken
             {
                 Token = token, App = who.App!, Installation = installation, Contents = requested,
-                RepositoryIds = repos.Select(r => r.Id).ToHashSet(), ExpiresAt = expires
+                PullRequests = pullRequests ?? "none", Workflows = workflows ?? "none", RepositoryIds = repos.Select(r => r.Id).ToHashSet(), ExpiresAt = expires
             };
             return Results.Json(new Dictionary<string, object?>
             {
                 ["token"] = token, ["expires_at"] = Iso(expires),
-                ["permissions"] = new { contents = requested, metadata = "read" },
+                ["permissions"] = Granted(requested, pullRequests ?? "none", workflows ?? "none"),
                 ["repository_selection"] = repos.Count == 0 ? installation.RepositorySelection : "selected",
                 ["repositories"] = repos.Select(r => new
                 {
@@ -92,5 +98,14 @@ public static partial class GhSimApp
                 }).ToArray()
             }, statusCode: 201);
         });
+    }
+
+    // Only what is granted is listed, as on GitHub; metadata is always read.
+    private static Dictionary<string, string> Granted(string contents, string pullRequests, string workflows)
+    {
+        var granted = new Dictionary<string, string> { ["contents"] = contents, ["metadata"] = "read" };
+        if (pullRequests != "none") granted["pull_requests"] = pullRequests;
+        if (workflows != "none") granted["workflows"] = workflows;
+        return granted;
     }
 }

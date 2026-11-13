@@ -33,7 +33,7 @@ public sealed class RequiresAnalysersFactAttribute : FactAttribute
 // Kept proposals and human approval on the real API (PostgreSQL, JWT, the database constraints and triggers, production DI),
 // with a model that is LlmSim over real HTTP and the real analysers. Approval records who accepted which text; nothing here
 // publishes anything.
-public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = false) : IAsyncLifetime
+public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = false, bool publication = false) : IAsyncLifetime
 {
     protected const string Key = "llm-sim-key";
     private WebApplication _sim = null!;
@@ -42,6 +42,10 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
     protected ApiHarness Api = null!;
     // when asked for, the destination is the GitHub simulator over real HTTP (Providers:GitHub:*), not the in-process fake
     protected GhSimFixture? GitHub;
+    // the GitHub App the publication uses: its ids are configuration of the API under test, its key is made and registered by each test
+    protected const long PublicationAppId = 424200;
+    protected const string PublicationKeyReference = "workflow-publication-key";
+    protected const string PublicationRepositories = "orion-org/pub-ok,orion-org/pub-two,orion-org/pub-race,orion-org/pub-moved,orion-org/pub-fail,orion-org/pub-late";
 
     private static string CatalogSha(string repository) => ActionCatalog.All.Single(a => a.Repository == repository).Sha;
 
@@ -80,7 +84,11 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
         Origin = _sim.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
         Control.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Key);
         if (githubSim) { GitHub = new GhSimFixture(); await GitHub.InitializeAsync(); }
-        Api = new ApiHarness { LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin };
+        Api = new ApiHarness
+        {
+            LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin,
+            Publication = publication ? (PublicationAppId, PublicationAppId + 1, PublicationKeyReference, PublicationRepositories) : null
+        };
         await Api.InitializeAsync();
         await using var scope = Api.Host.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();

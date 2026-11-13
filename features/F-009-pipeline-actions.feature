@@ -73,3 +73,24 @@ Feature: Convert pipelines to reviewed GitHub Actions
     Given a proposal that is pending, rejected, revoked or blocked
     When a publication plan is requested
     Then it is refused and the destination is not contacted
+
+  Scenario: Publishing is off unless the operator enabled it and allow-listed the repository
+    Given a deployment with no publication configuration
+    When a superadmin asks to publish an approved plan
+    Then the answer is that publishing is disabled and nothing is read from or written to the destination
+
+  Scenario: Only the confirmed plan is published, once
+    Given an approved proposal, an enabled publisher and a plan that is ready
+    When the superadmin confirms the plan by its hash and publishes
+    Then the plan is made again and must have the same hash, and the attempt is recorded before any write
+    And the product creates the branch, commits the one file and opens the pull request, then reads them back, and writes nothing else
+    And nothing is merged and the same plan cannot be published a second time
+
+  Scenario: A write whose outcome is unknown is never repeated
+    Given a publication whose file write fails after the branch was created
+    Then the ledger records that something may exist at the destination and the product does not retry
+    And a plan for that repository now reports the existing branch and cannot be published over
+
+  Scenario: A refusal before any write frees the plan
+    Given a publication refused because the installation lacks a permission
+    Then nothing was written and the same plan can be published after the operator fixes the installation

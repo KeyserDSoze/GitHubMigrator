@@ -27,6 +27,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<AiConnectionRecord> AiConnections => Set<AiConnectionRecord>();
     public DbSet<WorkflowProposalRecord> WorkflowProposals => Set<WorkflowProposalRecord>();
     public DbSet<WorkflowProposalEventRecord> WorkflowProposalEvents => Set<WorkflowProposalEventRecord>();
+    public DbSet<WorkflowPublicationRecord> WorkflowPublications => Set<WorkflowPublicationRecord>();
     public DbSet<EncryptedSecretRecord> ConnectionSecrets => Set<EncryptedSecretRecord>();
     public DbSet<DiscoveryInventoryRecord> Discoveries => Set<DiscoveryInventoryRecord>();
     public DbSet<IdentityMappingDraftRecord> IdentityMappingDrafts => Set<IdentityMappingDraftRecord>();
@@ -298,6 +299,34 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.Note).HasColumnName("note").HasMaxLength(500);
             entity.Property(x => x.Detail).HasColumnName("detail").HasColumnType("jsonb");
             entity.HasIndex(x => new { x.ProposalId, x.Id }).HasDatabaseName("ix_workflow_proposal_events_proposal");
+            entity.HasOne<WorkflowProposalRecord>().WithMany().HasForeignKey(x => x.ProposalId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<WorkflowPublicationRecord>(entity =>
+        {
+            entity.ToTable("workflow_publications");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.ProposalId).HasColumnName("proposal_id");
+            entity.Property(x => x.PlanSha256).HasColumnName("plan_sha256").HasMaxLength(64);
+            entity.Property(x => x.WorkflowSha256).HasColumnName("workflow_sha256").HasMaxLength(64);
+            entity.Property(x => x.Organization).HasColumnName("organization").HasMaxLength(100);
+            entity.Property(x => x.Repository).HasColumnName("repository").HasMaxLength(100);
+            entity.Property(x => x.BaseBranch).HasColumnName("base_branch").HasMaxLength(200);
+            entity.Property(x => x.BaseSha).HasColumnName("base_sha").HasMaxLength(40);
+            entity.Property(x => x.HeadBranch).HasColumnName("head_branch").HasMaxLength(120);
+            entity.Property(x => x.WorkflowPath).HasColumnName("workflow_path").HasMaxLength(200);
+            entity.Property(x => x.State).HasColumnName("state").HasMaxLength(24);
+            entity.Property(x => x.CommitSha).HasColumnName("commit_sha").HasMaxLength(40);
+            entity.Property(x => x.PullNumber).HasColumnName("pull_number");
+            entity.Property(x => x.PullUrl).HasColumnName("pull_url").HasMaxLength(512);
+            entity.Property(x => x.ErrorCode).HasColumnName("error_code").HasMaxLength(80);
+            entity.Property(x => x.FailedAtState).HasColumnName("failed_at_state").HasMaxLength(24);
+            entity.Property(x => x.WritesPossible).HasColumnName("writes_possible");
+            entity.Property(x => x.RequestedById).HasColumnName("requested_by_id");
+            entity.Property(x => x.RequestedBy).HasColumnName("requested_by").HasMaxLength(160);
+            entity.Property(x => x.StartedAtUtc).HasColumnName("started_at_utc");
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.HasIndex(x => new { x.ProposalId, x.StartedAtUtc }).HasDatabaseName("ix_workflow_publications_proposal");
             entity.HasOne<WorkflowProposalRecord>().WithMany().HasForeignKey(x => x.ProposalId).OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<DiscoveryInventoryRecord>(entity =>

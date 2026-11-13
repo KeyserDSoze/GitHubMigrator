@@ -13,10 +13,10 @@ const fromDetail = (d: ProposalDetail): ConversionProposal => ({
 
 type Props = {
   token: string; sourceId: string; projectId: string; pipelineId: string;
-  destinations: Connection[]; defaultDestinationId: string; defaultRepository: string;
+  destinations: Connection[]; defaultDestinationId: string; defaultRepository: string; isSuperAdmin: boolean;
 };
 
-export default function PipelineConversionPanel({ token, sourceId, projectId, pipelineId, destinations, defaultDestinationId, defaultRepository }: Props) {
+export default function PipelineConversionPanel({ token, sourceId, projectId, pipelineId, destinations, defaultDestinationId, defaultRepository, isSuperAdmin }: Props) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [profiles, setProfiles] = useState<AiConnection[]>([]);
@@ -186,7 +186,7 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
 
         {/* last on purpose: a person reads the text, the findings and the evidence above, then decides */}
         {detail && detail.state !== 'Blocked' && <ProposalReview key={detail.id + detail.state} token={token} detail={detail} onChanged={decided}
-          destinations={destinations} defaultDestinationId={defaultDestinationId} defaultRepository={defaultRepository} />}
+          destinations={destinations} defaultDestinationId={defaultDestinationId} defaultRepository={defaultRepository} isSuperAdmin={isSuperAdmin} />}
       </div>}
     </div>}
   </section>;

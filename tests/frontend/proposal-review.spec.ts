@@ -19,7 +19,7 @@ test('a kept proposal is approved only after every warning is accepted, and the 
 
   await expect(page.getByText(/approvata da una persona|approved by a person/i).first()).toBeVisible();
   await expect(page.getByText(/approvata da reviewer|approved by reviewer/i)).toBeVisible();
-  await expect(page.getByText(/approvato non è pubblicato|approved is not published/i)).toBeVisible();
+  await expect(page.getByText(/approvare non pubblica nulla|approving publishes nothing/i)).toBeVisible();
   await expect(approve(page)).toHaveCount(0);
   await expect(revoke(page)).toBeVisible();
   expect(store.posts).toEqual([{ verb: 'approve', body: { workflowSha256: sha, acknowledgedWarnings: ['ACTION_PIN_NOT_VERIFIED', 'ZIZMOR_SECRETS_OUTSIDE_ENV'], note: 'Read it line by line.' } }]);

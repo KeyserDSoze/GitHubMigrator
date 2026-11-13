@@ -21,14 +21,17 @@ public sealed record GhSeed(
     public string Hash() => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(this, Json)));
 }
 
-public sealed record SeedUser(string Login, string? Token = null, bool ReadOnly = false);
+// WorkflowScope is the classic-token `workflow` scope: without it a token cannot create or update files under .github/workflows.
+public sealed record SeedUser(string Login, string? Token = null, bool ReadOnly = false, bool WorkflowScope = true);
 public sealed record SeedOrg(string Login, bool MembersCanCreatePrivateRepositories = true, Dictionary<string, string>? Members = null);
 public sealed record SeedRuleset(string Name, string Enforcement, string Target, List<string> Include, List<string> Rules);
 public sealed record SeedRepo(
     string Org, string Name, bool Private = true, string DefaultBranch = "main", bool Archived = false,
     bool Disabled = false, string? Description = null, Dictionary<string, string>? Files = null,
     List<SeedRuleset>? Rulesets = null, Dictionary<string, string>? Variables = null, List<string>? Secrets = null);
-public sealed record SeedInstallation(long Id, string Org, string RepositorySelection = "selected", string Contents = "write");
+// PullRequests: none|read|write. Workflows: none|write (GitHub has no read level for it). Both default to none: a installation is granted only what it is given.
+public sealed record SeedInstallation(long Id, string Org, string RepositorySelection = "selected", string Contents = "write",
+    string PullRequests = "none", string Workflows = "none");
 public sealed record SeedApp(long Id, string Slug, string? PublicKeyPem = null, List<SeedInstallation>? Installations = null);
 
 public sealed class GhUser
@@ -37,6 +40,7 @@ public sealed class GhUser
     public long Id { get; set; }
     public string? Token { get; set; }
     public bool ReadOnly { get; set; }
+    public bool WorkflowScope { get; set; } = true;
 }
 
 public sealed class GhOrg
@@ -141,6 +145,8 @@ public sealed class GhInstallation
     public string Org { get; set; } = "";
     public string RepositorySelection { get; set; } = "selected";
     public string Contents { get; set; } = "write";
+    public string PullRequests { get; set; } = "none";
+    public string Workflows { get; set; } = "none";
 }
 
 public sealed class GhApp
