@@ -129,7 +129,7 @@ function App() {
           <p className="auth-caption"><LockKeyhole size={14} /> Credentials are handled by the API; use HTTPS in production</p>
         </section>
       </div>
-      <footer className="auth-footer">GitHubMigrator · Foundation v0.1</footer>
+      <footer className="auth-footer">GitHubMigrator · Foundation v0.2</footer>
     </div>;
   }
 
@@ -226,7 +226,7 @@ function App() {
             </form>
           </>}
         </section>}
-        <footer className="content-footer"><span>GitHubMigrator · v0.1</span><span><Globe2 size={15} /> GitHub Enterprise <span className="footer-divider">•</span> <CheckCircle2 size={15} /> {t('safe')}</span></footer>
+        <footer className="content-footer"><span>GitHubMigrator · v0.2</span><span><Globe2 size={15} /> GitHub Enterprise <span className="footer-divider">•</span> <CheckCircle2 size={15} /> {t('safe')}</span></footer>
       </div>
     </main>
   </div>;
