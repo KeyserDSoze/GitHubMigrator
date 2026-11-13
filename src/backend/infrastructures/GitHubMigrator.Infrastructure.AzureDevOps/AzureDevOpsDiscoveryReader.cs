@@ -10,37 +10,50 @@ namespace GitHubMigrator.Infrastructure.AzureDevOps;
 
 // F-003 read-only inventory. Every request is built from a fixed Microsoft hostname.
 // No custom URL, redirects, cookies, or user-provided request path is accepted.
-public sealed class AzureDevOpsDiscoveryReader(
+public class AzureDevOpsDiscoveryReader(
     HttpClient client, TimeProvider clock, IDiscoveryPageCheckpointStore? checkpoints = null)
-    : IResumableDiscoveryReader
+    : IResumableDiscoveryReader, IEndpointAwareDiscoveryReader
 {
-    public string ProviderKey => "azure-devops-services";
+    public virtual string ProviderKey => ProviderKeys.AzureDevOpsServices;
+    protected HttpClient Http => client;
     private const int MaxPages = 30;
     private const int MaxProjects = 2000;
     private const int MaxRefsPerRepository = 30000;
     private const int MaxUsers = 15000;
 
+    // Cloud: fixed Microsoft hosts. Self-hosted subclasses resolve and re-validate the server root.
+    protected virtual Task<AzureDevOpsEndpoints> ResolveEndpointsAsync(
+        string organization, string? baseUrl, string accessToken, CancellationToken ct) =>
+        Task.FromResult(AzureDevOpsEndpoints.Services(organization));
+
+    protected virtual SourceSystemKind SourceSystem => SourceSystemKind.AzureDevOpsServices;
+
     public Task<DiscoveryInventory> DiscoverAsync(
         Guid connectionId, string organization, string accessToken, CancellationToken ct) =>
-        DiscoverCoreAsync(connectionId, organization, accessToken, null, ct);
+        DiscoverCoreAsync(connectionId, organization, null, accessToken, null, ct);
+
+    public Task<DiscoveryInventory> DiscoverAsync(Guid connectionId, string organization,
+        string? baseUrl, string accessToken, DiscoveryLeaseContext? lease, CancellationToken ct)
+    {
+        if (lease is { } l && (l.JobId == Guid.Empty || l.LeaseToken == Guid.Empty ||
+            l.Attempt < 1 || checkpoints is not IDiscoveryIdentityObservationStore))
+            throw new DiscoveryCheckpointException("InvalidDiscoveryLeaseContext");
+        return DiscoverCoreAsync(connectionId, organization, baseUrl, accessToken, lease, ct);
+    }
 
     public Task<DiscoveryInventory> DiscoverWithCheckpointsAsync(
         Guid connectionId, string organization, string accessToken,
-        DiscoveryLeaseContext lease, CancellationToken ct)
-    {
-        if (lease.JobId == Guid.Empty || lease.LeaseToken == Guid.Empty ||
-            lease.Attempt < 1 || checkpoints is not IDiscoveryIdentityObservationStore)
-            throw new DiscoveryCheckpointException("InvalidDiscoveryLeaseContext");
-        return DiscoverCoreAsync(connectionId, organization, accessToken, lease, ct);
-    }
+        DiscoveryLeaseContext lease, CancellationToken ct) =>
+        DiscoverAsync(connectionId, organization, null, accessToken, lease, ct);
 
     private async Task<DiscoveryInventory> DiscoverCoreAsync(
-        Guid connectionId, string organization, string accessToken,
+        Guid connectionId, string organization, string? baseUrl, string accessToken,
         DiscoveryLeaseContext? lease, CancellationToken ct)
     {
         if (connectionId == Guid.Empty || string.IsNullOrWhiteSpace(organization) ||
-            !System.Text.RegularExpressions.Regex.IsMatch(organization, @"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$"))
+            !System.Text.RegularExpressions.Regex.IsMatch(organization, @"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$"))
             throw new ArgumentException("Invalid source connection.");
+        var endpoints = await ResolveEndpointsAsync(organization, baseUrl, accessToken, ct);
         var issues = new List<DiscoveryIssue>();
         var projects = new List<SourceProject>();
         // Only synchronous/legacy requests materialize refs in .NET memory.
@@ -50,10 +63,10 @@ public sealed class AzureDevOpsDiscoveryReader(
         var refCount = 0;
         var identities = new List<SourceIdentity>();
         var identityCount = 0;
-        var root = $"https://dev.azure.com/{Uri.EscapeDataString(organization)}";
-        var graphRoot = $"https://vssps.dev.azure.com/{Uri.EscapeDataString(organization)}";
+        var root = endpoints.Root;
+        var api = endpoints.Api;
 
-        var projectItems = await ReadProjectsAsync(root, accessToken, issues, lease, ct);
+        var projectItems = await ReadProjectsAsync(root, api, accessToken, issues, lease, ct);
         foreach (var project in projectItems)
         {
             ct.ThrowIfCancellationRequested();
@@ -67,7 +80,7 @@ public sealed class AzureDevOpsDiscoveryReader(
             try
             {
                 using var details = await GetCheckpointedProjectCapabilitiesAsync(
-                    $"{root}/_apis/projects/{Uri.EscapeDataString(projectId)}?includeCapabilities=true&api-version=7.1",
+                    $"{root}/_apis/projects/{Uri.EscapeDataString(projectId)}?includeCapabilities=true&api-version={api}",
                     accessToken, lease, projectId, ct);
                 if (details.Json.RootElement.TryGetProperty("capabilities", out var capabilities) &&
                     capabilities.TryGetProperty("versioncontrol", out var versionControl))
@@ -82,7 +95,7 @@ public sealed class AzureDevOpsDiscoveryReader(
             try
             {
                 using var repos = await GetPageAsync(
-                    $"{projectUri}/_apis/git/repositories?api-version=7.1",
+                    $"{projectUri}/_apis/git/repositories?api-version={api}",
                     accessToken, lease, "repos:" + projectId, 0, ["id", "name"], ct);
                 foreach (var entry in Items(repos.Json))
                 {
@@ -93,7 +106,7 @@ public sealed class AzureDevOpsDiscoveryReader(
                     try
                     {
                         refCount = checked(refCount + await ReadRefsAsync(
-                            projectUri, repoId, accessToken, issues, lease,
+                            projectUri, api, repoId, accessToken, issues, lease,
                             lease is null ? references : null, ct));
                     }
                     catch (DiscoveryProviderException ex)
@@ -114,7 +127,7 @@ public sealed class AzureDevOpsDiscoveryReader(
                 // REST returns TFVC branch ROOTS, not all versioned paths or full changeset history.
                 try
                 {
-                    using var branches = await GetAsync($"{projectUri}/_apis/tfvc/branches?includeChildren=true&api-version=7.1",
+                    using var branches = await GetAsync($"{projectUri}/_apis/tfvc/branches?includeChildren=true&api-version={api}",
                         accessToken, ct);
                     var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var branch in Items(branches.Json)) CollectTfvcPaths(branch, paths, 0);
@@ -146,7 +159,7 @@ public sealed class AzureDevOpsDiscoveryReader(
         var identitiesComplete = true;
         try
         {
-            identities.AddRange(await ReadUsersAsync(graphRoot, accessToken, issues, lease, ct));
+            identities.AddRange(await ReadUsersAsync(endpoints, accessToken, issues, lease, ct));
             identityCount = lease is { } active
                 ? (await ((IDiscoveryIdentityObservationStore)checkpoints!)
                     .GetProgressAsync(active.JobId, ct)).ObservedUsers
@@ -162,7 +175,7 @@ public sealed class AzureDevOpsDiscoveryReader(
 
         // Capture raw group/ACE evidence; it must not be confused with effective permissions.
         var security = await new AzureDevOpsSecurityReader(client, checkpoints, clock).ReadAsync(
-            organization, accessToken, projects, ct, lease);
+            endpoints, accessToken, projects, ct, lease);
         issues.AddRange(security.Issues);
         issues.Add(new("EffectivePermissionsNotVerified"));
         var timestamp = clock.GetUtcNow();
@@ -170,7 +183,7 @@ public sealed class AzureDevOpsDiscoveryReader(
         var snapshot = new DiscoverySnapshot
         {
             SnapshotId = snapshotId,
-            SourceSystem = SourceSystemKind.AzureDevOpsServices,
+            SourceSystem = SourceSystem,
             CollectedAt = timestamp,
             Projects = projects,
             Identities = lease is null ? identities : [],
@@ -208,7 +221,7 @@ public sealed class AzureDevOpsDiscoveryReader(
     }
 
     private async Task<IReadOnlyList<JsonElement>> ReadProjectsAsync(
-        string root, string token, List<DiscoveryIssue> issues,
+        string root, string api, string token, List<DiscoveryIssue> issues,
         DiscoveryLeaseContext? lease, CancellationToken ct)
     {
         var items = new List<JsonElement>();
@@ -217,7 +230,7 @@ public sealed class AzureDevOpsDiscoveryReader(
         var seen = new HashSet<string>();
         for (var page = 0; page < MaxPages; page++)
         {
-            var path = $"{root}/_apis/projects?$top=100&$skip={skip}&api-version=7.1";
+            var path = $"{root}/_apis/projects?$top=100&$skip={skip}&api-version={api}";
             if (!string.IsNullOrEmpty(continuation))
                 path += $"&continuationToken={Uri.EscapeDataString(continuation)}";
             using var response = await GetPageAsync(path, token, lease,
@@ -245,7 +258,7 @@ public sealed class AzureDevOpsDiscoveryReader(
     }
 
     private async Task<int> ReadRefsAsync(
-        string projectUri, string repoId, string token, List<DiscoveryIssue> issues,
+        string projectUri, string api, string repoId, string token, List<DiscoveryIssue> issues,
         DiscoveryLeaseContext? lease, List<RepositoryRef>? collect, CancellationToken ct)
     {
         var observed = 0;
@@ -253,7 +266,7 @@ public sealed class AzureDevOpsDiscoveryReader(
         string? continuation = null;
         for (var page = 0; page < MaxPages; page++)
         {
-            var url = $"{projectUri}/_apis/git/repositories/{Uri.EscapeDataString(repoId)}/refs?$top=1000&api-version=7.1";
+            var url = $"{projectUri}/_apis/git/repositories/{Uri.EscapeDataString(repoId)}/refs?$top=1000&api-version={api}";
             if (!string.IsNullOrEmpty(continuation))
                 url += $"&continuationToken={Uri.EscapeDataString(continuation)}";
             using var response = await GetPageAsync(url, token, lease,
@@ -288,7 +301,7 @@ public sealed class AzureDevOpsDiscoveryReader(
     }
 
     private async Task<IReadOnlyList<SourceIdentity>> ReadUsersAsync(
-        string graphRoot, string token, List<DiscoveryIssue> issues,
+        AzureDevOpsEndpoints endpoints, string token, List<DiscoveryIssue> issues,
         DiscoveryLeaseContext? lease, CancellationToken ct)
     {
         // Leased jobs do not collect Graph identity records in memory.
@@ -301,12 +314,11 @@ public sealed class AzureDevOpsDiscoveryReader(
         var seen = new HashSet<string>();
         for (var page = 0; page < MaxPages; page++)
         {
-            var url = $"{graphRoot}/_apis/graph/users?api-version=7.1-preview.1";
-            if (!string.IsNullOrEmpty(continuation))
-                url += $"&continuationToken={Uri.EscapeDataString(continuation)}";
+            var url = endpoints.UsersUrl(continuation);
             using var response = await GetPageAsync(url, token, lease,
                 "graph-users", page,
-                ["descriptor", "displayName", "mailAddress", "legacyDescriptor"], ct);
+                ["descriptor", "displayName", "mailAddress", "legacyDescriptor"], ct,
+                endpoints.NormalizeUsers);
             foreach (var entry in Items(response.Json))
             {
                 var id = Text(entry, "descriptor");
@@ -368,11 +380,16 @@ public sealed class AzureDevOpsDiscoveryReader(
 
     private async Task<ResponsePage> GetPageAsync(
         string url, string token, DiscoveryLeaseContext? lease,
-        string resource, int page, string[] allowlist, CancellationToken ct)
+        string resource, int page, string[] allowlist, CancellationToken ct,
+        Func<JsonDocument, JsonDocument>? normalize = null)
     {
         // Synchronous discovery keeps the existing provider behavior. Only a
         // leased durable job can read/write immutable page checkpoints.
-        if (lease is null) return await GetAsync(url, token, ct);
+        if (lease is null)
+        {
+            var direct = await GetAsync(url, token, ct);
+            return normalize is null ? direct : new ResponsePage(normalize(direct.Json), direct.Continuation);
+        }
         if (checkpoints is null)
             throw new DiscoveryCheckpointException("CheckpointStorageUnavailable");
 
@@ -397,7 +414,8 @@ public sealed class AzureDevOpsDiscoveryReader(
         // Never write arbitrary source JSON (which may contain credentials or
         // extended fields) into page checkpoints. Keep only the metadata that
         // the existing discovery inventory already retains.
-        var items = Items(fetched.Json).Select(entry =>
+        var source = normalize is null ? fetched.Json : normalize(fetched.Json);
+        var items = Items(source).Select(entry =>
             allowlist.ToDictionary(field => field, field => Text(entry, field),
                 StringComparer.Ordinal)).ToArray();
         var safeJson = JsonSerializer.Serialize(new { value = items });

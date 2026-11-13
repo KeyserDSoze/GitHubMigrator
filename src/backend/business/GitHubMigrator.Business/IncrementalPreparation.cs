@@ -1,5 +1,7 @@
 using GitHubMigrator.Domain;
 
+using Microsoft.Extensions.Logging;
+
 namespace GitHubMigrator.Business;
 
 // F-026 produces review-only, source-pinned preparation items. There is NO
@@ -91,7 +93,7 @@ public sealed class IncrementalPreparationService(
         var destination = await connections.GetAsync(destinationId, ct)
             ?? throw new KeyNotFoundException("DestinationConnectionNotFound");
         if (source.Direction != ConnectionDirection.Source ||
-            source.ProviderKey != "azure-devops-services" ||
+            !ProviderKeys.IsAzureDevOpsSource(source.ProviderKey) ||
             source.ValidationCode != "Verified")
             throw new IncrementalPreparationException("UnverifiedPreparationSource");
         if (destination.Direction != ConnectionDirection.Destination ||
@@ -125,7 +127,8 @@ public sealed class IncrementalPreparationService(
 // Independent of the existing source discovery worker. The worker checks
 // active leases, processes only committed source journal metadata, and does
 // not even resolve a GitHub HTTP adapter or credential provider.
-public sealed class IncrementalPreparationProcessor(IIncrementalPreparationRepository repository)
+public sealed class IncrementalPreparationProcessor(IIncrementalPreparationRepository repository,
+    Microsoft.Extensions.Logging.ILogger<IncrementalPreparationProcessor>? logger = null)
 {
     public static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan ExecutionDeadline = TimeSpan.FromSeconds(90);
@@ -163,10 +166,12 @@ public sealed class IncrementalPreparationProcessor(IIncrementalPreparationRepos
         {
             await repository.FailAsync(lease, "IncrementalJournalUnavailable", true, shutdown);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // No exception messages: even infrastructure errors can contain
             // provider details or connection-string secrets.
+            logger?.LogError("Preparation {Id} attempt {Attempt} failed: {ExceptionType} at {Site}",
+                lease.Id, lease.Attempt, ex.GetType().FullName, ex.TargetSite?.DeclaringType?.Name + "." + ex.TargetSite?.Name);
             await repository.FailAsync(lease, "IncrementalPreparationFailed", false, shutdown);
         }
         return true;

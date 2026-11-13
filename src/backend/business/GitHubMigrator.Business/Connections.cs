@@ -10,6 +10,13 @@ public interface IConnectionValidator
     Task<ConnectionValidation> ValidateAsync(string organization, string personalAccessToken, CancellationToken ct);
 }
 
+// Self-hosted providers also need the (already policy-normalized) server root.
+public interface IEndpointConnectionValidator : IConnectionValidator
+{
+    Task<ConnectionValidation> ValidateAsync(string organization, string? baseUrl,
+        string personalAccessToken, CancellationToken ct);
+}
+
 public interface IConnectionRepository
 {
     Task<IReadOnlyList<MigrationConnection>> ListAsync(CancellationToken ct);
@@ -25,7 +32,8 @@ public interface IConnectionSecretStore
     Task DeleteAsync(string reference, CancellationToken ct);
 }
 
-public sealed record ConnectionDraft(string Name, string ProviderKey, string Organization, string PersonalAccessToken);
+public sealed record ConnectionDraft(string Name, string ProviderKey, string Organization,
+    string PersonalAccessToken, string? BaseUrl = null);
 
 public sealed class ConnectionValidationException(string code) : Exception("Connection validation rejected")
 {
@@ -36,9 +44,12 @@ public sealed class ConnectionService(
     IEnumerable<IConnectionValidator> validators,
     IConnectionRepository repository,
     IConnectionSecretStore secrets,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ServerEndpointPolicy? endpointPolicy = null)
 {
     private static readonly Regex OrganizationPattern = new(@"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$", RegexOptions.Compiled);
+    // Collection names of self-hosted servers may contain dots and spaces.
+    private static readonly Regex CollectionPattern = new(@"^[a-zA-Z0-9][a-zA-Z0-9 ._-]{0,99}$", RegexOptions.Compiled);
     private readonly IReadOnlyDictionary<string, IConnectionValidator> _validators =
         validators.ToDictionary(v => v.ProviderKey, StringComparer.OrdinalIgnoreCase);
 
@@ -56,8 +67,10 @@ public sealed class ConnectionService(
         if (string.IsNullOrWhiteSpace(draft.ProviderKey))
             throw new ArgumentException("Provider is required.");
         if (string.IsNullOrWhiteSpace(draft.Organization) ||
-            !OrganizationPattern.IsMatch(draft.Organization))
+            !(ProviderKeys.IsServer(draft.ProviderKey) ? CollectionPattern : OrganizationPattern).IsMatch(draft.Organization))
             throw new ArgumentException("Invalid organization identifier.");
+        if (ProviderKeys.IsServer(draft.ProviderKey) != !string.IsNullOrWhiteSpace(draft.BaseUrl))
+            throw new ArgumentException("Server URL is required for self-hosted providers only.");
         if (string.IsNullOrWhiteSpace(draft.PersonalAccessToken) ||
             draft.PersonalAccessToken.Length > 4096 ||
             draft.PersonalAccessToken.Any(char.IsControl))
@@ -69,8 +82,20 @@ public sealed class ConnectionService(
         ValidateDraft(draft);
         if (!_validators.TryGetValue(draft.ProviderKey, out var validator))
             throw new ArgumentException("Unsupported provider.");
-        return await validator.ValidateAsync(draft.Organization, draft.PersonalAccessToken, ct);
+        return await ValidateWithAsync(validator, draft.Organization, NormalizeBaseUrl(draft.ProviderKey, draft.BaseUrl),
+            draft.PersonalAccessToken, ct);
     }
+
+    private string? NormalizeBaseUrl(string providerKey, string? baseUrl) =>
+        ProviderKeys.IsServer(providerKey)
+            ? (endpointPolicy ?? throw new ArgumentException("Self-hosted providers are disabled.")).Normalize(baseUrl)
+            : null;
+
+    private static Task<ConnectionValidation> ValidateWithAsync(IConnectionValidator validator,
+        string organization, string? baseUrl, string token, CancellationToken ct) =>
+        validator is IEndpointConnectionValidator endpoint
+            ? endpoint.ValidateAsync(organization, baseUrl, token, ct)
+            : validator.ValidateAsync(organization, token, ct);
 
     public async Task<MigrationConnection> CreateAsync(ConnectionDraft draft, CancellationToken ct)
     {
@@ -81,7 +106,8 @@ public sealed class ConnectionService(
         var reference = $"connection-{id:N}";
         var connection = new MigrationConnection(id, draft.Name.Trim(), validator.ProviderKey, validator.Direction,
             draft.Organization, reference, timeProvider.GetUtcNow(), timeProvider.GetUtcNow(),
-            result.Code, result.AuthenticatedAs, result.PermissionAssessment);
+            result.Code, result.AuthenticatedAs, result.PermissionAssessment,
+            NormalizeBaseUrl(draft.ProviderKey, draft.BaseUrl));
         await secrets.SaveAsync(reference, draft.PersonalAccessToken, ct);
         try { await repository.SaveAsync(connection, ct); }
         catch
@@ -98,9 +124,16 @@ public sealed class ConnectionService(
         var connection = await repository.GetAsync(id, ct);
         if (connection is null) return null;
         var secret = await secrets.ReadAsync(connection.SecretReference, ct);
-        var result = secret is null
+        string? baseUrl = null;
+        var hostAllowed = true;
+        try { baseUrl = NormalizeBaseUrl(connection.ProviderKey, connection.BaseUrl); }
+        catch (ArgumentException) { hostAllowed = false; }
+        var result = !hostAllowed
+            ? new ConnectionValidation(false, "ServerHostNotAllowed", null, "not_verified")
+            : secret is null
             ? new ConnectionValidation(false, "CredentialMissing", null, "not_verified")
-            : await _validators[connection.ProviderKey].ValidateAsync(connection.Organization, secret, ct);
+            : await ValidateWithAsync(_validators[connection.ProviderKey], connection.Organization,
+                baseUrl, secret, ct);
         var updated = connection with
         {
             ValidatedAtUtc = timeProvider.GetUtcNow(),
@@ -117,7 +150,7 @@ public sealed class ConnectionService(
         var existing = await repository.GetAsync(id, ct);
         if (existing is null) return null;
         var result = await ValidateDraftAsync(new ConnectionDraft(existing.Name, existing.ProviderKey,
-            existing.Organization, newPersonalAccessToken), ct);
+            existing.Organization, newPersonalAccessToken, existing.BaseUrl), ct);
         if (!result.IsValid) throw new ConnectionValidationException(result.Code);
         await secrets.SaveAsync(existing.SecretReference, newPersonalAccessToken, ct);
         var updated = existing with

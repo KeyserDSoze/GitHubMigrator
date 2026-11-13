@@ -16,6 +16,7 @@
     </PackageReference>
     <ProjectReference Include="../../src/backend/business/GitHubMigrator.Business/GitHubMigrator.Business.csproj" />
     <ProjectReference Include="../../src/backend/applications/GitHubMigrator.Api/GitHubMigrator.Api.csproj" />
+    <ProjectReference Include="../../tools/AdoSim/AdoSim.csproj" />
     <ProjectReference Include="../../src/backend/infrastructures/GitHubMigrator.Infrastructure.PostgreSql/GitHubMigrator.Infrastructure.PostgreSql.csproj" />
   </ItemGroup>
 </Project>

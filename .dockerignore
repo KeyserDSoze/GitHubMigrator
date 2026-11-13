@@ -1,0 +1,16 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/TestResults/
+**/playwright-report/
+**/test-results/
+.git/
+.github/
+.vscode/
+.env
+.env.*
+infra/
+docs/
+ADR/
+features/

@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using GitHubMigrator.Domain;
+
 namespace GitHubMigrator.Business;
 
 // F-008 slice 1: durable jobs can ONLY normalize a previously saved discovery snapshot.
@@ -76,7 +79,7 @@ public sealed class MigrationJobService(
         var source = await connections.GetAsync(sourceConnectionId, ct)
             ?? throw new KeyNotFoundException("ConnectionNotFound");
         if (source.Direction != GitHubMigrator.Domain.ConnectionDirection.Source ||
-            !string.Equals(source.ProviderKey, "azure-devops-services", StringComparison.OrdinalIgnoreCase))
+            !ProviderKeys.IsAzureDevOpsSource(source.ProviderKey))
             throw new MigrationJobInputException("UnsupportedDiscoverySource");
         if (source.ValidationCode != "Verified")
             throw new MigrationJobInputException("SourceNotVerified");
@@ -99,7 +102,8 @@ public sealed class MigrationJobProcessor(
     IDiscoveryIdentityObservationStore? identityObservations = null,
     IDiscoveryGroupObservationStore? groupObservations = null,
     IDiscoveryMembershipEvidenceVerifier? membershipEvidence = null,
-    IDiscoveryAclEvidenceStore? aclEvidence = null)
+    IDiscoveryAclEvidenceStore? aclEvidence = null,
+    Microsoft.Extensions.Logging.ILogger<MigrationJobProcessor>? logger = null)
 {
     // Lease > execution deadline, ensuring normal slow work cannot run past its lease.
     // An abrupt process death is recovered after the lease expires by another worker.
@@ -225,10 +229,13 @@ public sealed class MigrationJobProcessor(
         {
             await RecordFailureAsync(lease, "SnapshotNotFound", true, shutdown);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Error types / stack traces may contain sensitive provider data.
-            // Never persist or send exception messages as job results.
+            // Messages may contain provider data: log only the exception type chain and
+            // the throwing method, never the message, and never persist them as results.
+            logger?.LogError("Job {JobId} kind {Kind} attempt {Attempt} failed: {ExceptionType} <- {Inner} at {Site}",
+                lease.Id, lease.Kind, lease.Attempt, ex.GetType().FullName,
+                ex.InnerException?.GetType().FullName ?? "-", ex.TargetSite?.DeclaringType?.Name + "." + ex.TargetSite?.Name);
             await RecordFailureAsync(lease,
                 lease.Kind == MigrationJobKinds.DiscoverSource
                     ? "DiscoveryExecutionFailed" : "StagingExecutionFailed",

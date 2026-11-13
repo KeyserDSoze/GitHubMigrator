@@ -61,6 +61,10 @@ services:
       Observability__Provider: Otlp
       OTEL_EXPORTER_OTLP_ENDPOINT: http://observability:4318
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      # Self-hosted Azure DevOps (simulator and optional Windows VM). Lab values: http + any cert.
+      Providers__AzureDevOpsServer__AllowedHosts: ${ADO_ALLOWED_HOSTS:-ado-sim,ado-server,host.docker.internal}
+      Providers__AzureDevOpsServer__AllowHttp: "true"
+      Providers__AzureDevOpsServer__SkipTlsValidation: "true"
     ports:
       - "${HOST_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8080}:8080"
     depends_on:
@@ -70,6 +74,58 @@ services:
         condition: service_started
       observability:
         condition: service_started
+
+  # Azure DevOps Server-compatible REST + git, seeded with a deterministic estate
+  # (see tools/AdoSim/seed). Connect with collection "DefaultCollection",
+  # server URL http://ado-sim:8080/tfs and PAT ${ADO_SIM_PAT}.
+  ado-sim:
+    build:
+      context: ..
+      dockerfile: docker/ado-sim.Dockerfile
+    restart: unless-stopped
+    environment:
+      ADO_SIM_PAT: ${ADO_SIM_PAT:-sim-pat}
+      ADO_SIM_REFS_PAGE: ${ADO_SIM_REFS_PAGE:-1000}
+    ports:
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${ADO_SIM_PORT:-8081}:8080"
+    volumes:
+      - ado_sim_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 20s
+
+  # Real Azure DevOps Server Express inside a Windows Server VM (needs /dev/kvm: Linux, or
+  # Windows 11 with nested virtualization). Not part of `up`: use `./script/dev.ps1 ado-server`.
+  ado-server:
+    profiles: ["ado-server"]
+    image: dockurr/windows
+    restart: unless-stopped
+    environment:
+      VERSION: "2022"
+      RAM_SIZE: ${ADO_SERVER_RAM:-10G}
+      CPU_CORES: ${ADO_SERVER_CPUS:-4}
+      DISK_SIZE: ${ADO_SERVER_DISK:-100G}
+      USERNAME: ${ADO_SERVER_ADMIN_USER:-labadmin}
+      PASSWORD: ${ADO_SERVER_ADMIN_PASSWORD:-LabAdmin#2026}
+      # Forward the Azure DevOps web port of the VM so other containers reach http://ado-server:8080/tfs
+      USER_PORTS: "8080"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${ADO_SERVER_CONSOLE_PORT:-8006}:8006"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${ADO_SERVER_RDP_PORT:-3389}:3389"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${ADO_SERVER_PORT:-8082}:8080"
+    volumes:
+      - ado_server_disk:/storage
+      - ./ado-server/oem:/oem
+      - ../tools/AdoSim/seed:/oem/seed:ro
+    stop_grace_period: 2m
 
   frontend:
     image: node:22-alpine
@@ -97,6 +153,34 @@ services:
       postgres:
         condition: service_healthy
 
+  # Disposable database: the integration suite TRUNCATEs tables, so it must never share the dev one.
+  postgres-tests:
+    profiles: ["test"]
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: migrator_tests
+      POSTGRES_USER: migrator_test
+      POSTGRES_PASSWORD: ci-local-only-password
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U migrator_test -d migrator_tests"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  integration-tests:
+    profiles: ["test"]
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+      target: integration
+    environment:
+      GITHUBMIGRATOR_TEST_POSTGRES: "Host=postgres-tests;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false"
+    depends_on:
+      postgres-tests:
+        condition: service_healthy
+
   frontend-tests:
     profiles: ["test"]
     image: mcr.microsoft.com/playwright:v1.55.0-noble
@@ -117,6 +201,8 @@ services:
 
 volumes:
   postgres_data:
+  ado_sim_data:
+  ado_server_disk:
   azurite_data:
   observability_data:
   frontend_node_modules:

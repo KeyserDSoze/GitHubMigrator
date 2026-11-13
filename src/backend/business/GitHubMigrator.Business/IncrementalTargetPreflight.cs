@@ -140,7 +140,7 @@ public sealed class IncrementalTargetPreflightService(
             destination.ProviderKey != "github-enterprise-cloud" ||
             destination.ValidationCode != "Verified" ||
             source.Direction != ConnectionDirection.Source ||
-            source.ProviderKey != "azure-devops-services" ||
+            !ProviderKeys.IsAzureDevOpsSource(source.ProviderKey) ||
             source.ValidationCode != "Verified" ||
             !string.Equals(preview.TargetOrganization, destination.Organization,
                 StringComparison.OrdinalIgnoreCase))

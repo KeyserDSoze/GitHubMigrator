@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text;
+using System.Threading.RateLimiting;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.RateLimiting;
@@ -123,6 +124,30 @@ builder.Services.AddHttpClient<GitHubConnectionValidator>(c => c.Timeout = TimeS
 builder.Services.AddTransient<IConnectionValidator>(s => s.GetRequiredService<AzureDevOpsConnectionValidator>());
 builder.Services.AddTransient<IConnectionValidator>(s => s.GetRequiredService<GitHubConnectionValidator>());
 
+// Azure DevOps Server / TFS is opt-in: it exists only when at least one host is allow-listed.
+var serverPolicy = ServerEndpointPolicy.FromConfiguration(
+    builder.Configuration["Providers:AzureDevOpsServer:AllowedHosts"],
+    builder.Configuration.GetValue("Providers:AzureDevOpsServer:AllowHttp", false));
+builder.Services.AddSingleton(serverPolicy);
+if (serverPolicy.Enabled)
+{
+    // Self-signed lab servers only; never honoured outside Development.
+    var skipTls = builder.Environment.IsDevelopment() &&
+        builder.Configuration.GetValue("Providers:AzureDevOpsServer:SkipTlsValidation", false);
+    HttpMessageHandler ServerHandler() => new HttpClientHandler
+    {
+        AllowAutoRedirect = false, UseCookies = false,
+        ServerCertificateCustomValidationCallback = skipTls
+            ? HttpClientHandler.DangerousAcceptAnyServerCertificateValidator : null
+    };
+    builder.Services.AddHttpClient<AzureDevOpsServerConnectionValidator>(c => c.Timeout = TimeSpan.FromSeconds(20))
+        .ConfigurePrimaryHttpMessageHandler(ServerHandler);
+    builder.Services.AddHttpClient<AzureDevOpsServerDiscoveryReader>(c => c.Timeout = TimeSpan.FromSeconds(30))
+        .ConfigurePrimaryHttpMessageHandler(ServerHandler);
+    builder.Services.AddTransient<IConnectionValidator>(s => s.GetRequiredService<AzureDevOpsServerConnectionValidator>());
+    builder.Services.AddTransient<IDiscoveryReader>(s => s.GetRequiredService<AzureDevOpsServerDiscoveryReader>());
+}
+
 var credentialProvider = builder.Configuration["Secrets:Provider"] ??
     (builder.Environment.IsDevelopment() ? "EncryptedPostgreSql" : "KeyVault");
 if (credentialProvider.Equals("KeyVault", StringComparison.OrdinalIgnoreCase))
@@ -172,49 +197,29 @@ var frontendOrigin = builder.Configuration["Frontend:Origin"] ?? "http://localho
 builder.Services.AddCors(options =>
     options.AddPolicy("Frontend", policy => policy.WithOrigins(frontendOrigin).AllowAnyMethod().AllowAnyHeader()));
 
+// Budgets are per authenticated user (per client IP for anonymous login) so one caller
+// cannot exhaust the limit for every administrator.
 builder.Services.AddRateLimiter(options =>
 {
-    options.AddFixedWindowLimiter("login", limiter =>
-    {
-        limiter.PermitLimit = 8;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueLimit = 0;
-    });
-    options.AddFixedWindowLimiter("external", limiter =>
-    {
-        limiter.PermitLimit = 12;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueLimit = 0;
-    });
+    void Policy(string name, int limit) => options.AddPolicy(name, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            (name == "login" ? null : context.User.FindFirstValue(ClaimTypes.NameIdentifier))
+                ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = limit, Window = TimeSpan.FromMinutes(1), QueueLimit = 0
+            }));
+    Policy("login", 8);
+    Policy("external", 12);
     // Isolated provider lookup budget: preflight must not starve migration/Boards/Pipelines.
-    options.AddFixedWindowLimiter("target-preflight", limiter =>
-    {
-        limiter.PermitLimit = 6;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueLimit = 0;
-    });
-    options.AddFixedWindowLimiter("staging-sync", limiter =>
-    {
-        limiter.PermitLimit = 20;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueLimit = 0;
-    });
+    Policy("target-preflight", 6);
+    Policy("staging-sync", 20);
     // Separate bounded budget: multi-step human review cannot exhaust the
     // snapshot staging limiter or starve migration queues.
-    options.AddFixedWindowLimiter("incremental-review", limiter =>
-    {
-        limiter.PermitLimit = 30;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueLimit = 0;
-    });
+    Policy("incremental-review", 30);
     // Enqueueing work is cheap; it must not consume the shared external-API
     // budget used by Boards, Pipelines and legacy synchronous discovery.
-    options.AddFixedWindowLimiter("discovery-queue", limiter =>
-    {
-        limiter.PermitLimit = 30;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueLimit = 0;
-    });
+    Policy("discovery-queue", 30);
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 
@@ -241,9 +246,10 @@ if (!builder.Environment.IsDevelopment() &&
 var app = builder.Build();
 
 app.UseCors("Frontend");
-app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+// After authentication so per-user partitions can read the principal.
+app.UseRateLimiter();
 
 await Bootstrap.InitializeAsync(app.Services, builder.Configuration, builder.Environment, app.Logger);
 
@@ -310,7 +316,7 @@ app.MapPost("/api/users", async Task<IResult> (CreateUserRequest request, Claims
 app.MapGet("/api/providers", (ConnectionService service) => Results.Ok(new
 {
     available = service.SupportedProviders(),
-    planned = new[] { "azure-devops-server", "tfs-server", "github-enterprise-server" }
+    planned = new[] { "tfs-server", "github-enterprise-server" }
 })).RequireAuthorization("PasswordChanged");
 
 app.MapConnectionEndpoints();

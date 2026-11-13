@@ -67,7 +67,7 @@ public sealed class PostgresIncrementalTargetPreflightRepository(
             destination.ValidationCode != "Verified" ||
             source.Direction != ConnectionDirection.Source ||
             destination.Direction != ConnectionDirection.Destination ||
-            source.ProviderKey != "azure-devops-services" ||
+            !ProviderKeys.IsAzureDevOpsSource(source.ProviderKey) ||
             destination.ProviderKey != "github-enterprise-cloud" ||
             source.ValidatedAtUtc != evidence.SourceValidatedAtUtc ||
             destination.ValidatedAtUtc != evidence.DestinationValidatedAtUtc ||

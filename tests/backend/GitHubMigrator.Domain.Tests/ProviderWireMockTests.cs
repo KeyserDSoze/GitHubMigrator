@@ -214,7 +214,7 @@ public sealed class ProviderWireMockTests
             new AzureDevOpsWorkloadReader(new HttpClient(azure))
                 .GetPipelineAsync("az-org", "project", 42, Pat, CancellationToken.None));
         Assert.Single(azure.Requests);
-        Assert.DoesNotContain(azure.Requests, x => x.Uri.Host == "evil.example");
+        Assert.DoesNotContain(azure.Requests, x => x.Uri.Host == new Uri(location).Host);
     }
 
     private WorkloadPreviewService Service(MockHttp azure, MockHttp github, IPipelineAiReviewer ai) =>

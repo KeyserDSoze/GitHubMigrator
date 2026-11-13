@@ -9,19 +9,24 @@ using GitHubMigrator.Business;
 // and the deliberately disabled output scaffold enter the prompt, never source YAML or secrets.
 public sealed class FoundryPipelineReviewer(HttpClient client, IConfiguration config) : IPipelineAiReviewer
 {
+    private static readonly DefaultAzureCredential Credential = new();
+    private static readonly string[] AllowedHostSuffixes =
+        [".openai.azure.com", ".cognitiveservices.azure.com", ".services.ai.azure.com"];
+
     public async Task<AiReview> ReviewAsync(string sourceSummary, string workflow,
         IReadOnlyList<ConfigurationStep> steps, CancellationToken ct)
     {
-        var endpoint = config["Ai:AzureOpenAiEndpoint"];
-        var deployment = config["Ai:Deployment"];
+        // "Foundry:*" is what infra/terraform sets; "Ai:*" stays supported for local use.
+        var endpoint = config["Ai:AzureOpenAiEndpoint"] ?? config["Foundry:Endpoint"];
+        var deployment = config["Ai:Deployment"] ?? config["Foundry:Deployment"];
         if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(deployment))
-            return new("not-configured", ["Configure Ai:AzureOpenAiEndpoint and Ai:Deployment for AI review."]);
+            return new("not-configured", ["Configure Ai:AzureOpenAiEndpoint (or Foundry:Endpoint) and a deployment for AI review."]);
         if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
-            !uri.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase) ||
+            !AllowedHostSuffixes.Any(s => uri.Host.EndsWith(s, StringComparison.OrdinalIgnoreCase)) ||
             !System.Text.RegularExpressions.Regex.IsMatch(deployment, @"^[A-Za-z0-9_-]{1,80}$"))
             return new("invalid-configuration", ["Invalid Azure AI endpoint or deployment configuration."]);
 
-        var token = await new DefaultAzureCredential().GetTokenAsync(
+        var token = await Credential.GetTokenAsync(
             new TokenRequestContext(["https://cognitiveservices.azure.com/.default"]), ct);
         var url = new Uri(uri, $"/openai/deployments/{Uri.EscapeDataString(deployment)}/chat/completions?api-version=2024-10-21");
         var payload = JsonSerializer.Serialize(new

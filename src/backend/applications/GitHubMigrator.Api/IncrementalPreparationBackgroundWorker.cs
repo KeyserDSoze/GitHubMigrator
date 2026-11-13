@@ -22,11 +22,11 @@ public sealed class IncrementalPreparationBackgroundWorker(
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             { break; }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // PostgreSQL/transport errors can include credentials.
                 // Intentionally emit neither exception messages nor stacktraces.
-                logger.LogWarning("Incremental preparation poll failed; retry scheduled");
+                logger.LogWarning("Incremental preparation poll failed; retry scheduled ({ExceptionType})", ex.GetType().FullName);
                 try { await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken); }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 { break; }

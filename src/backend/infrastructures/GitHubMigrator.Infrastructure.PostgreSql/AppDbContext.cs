@@ -85,6 +85,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.ValidationCode).HasColumnName("validation_code").HasMaxLength(64);
             entity.Property(x => x.AuthenticatedAs).HasColumnName("authenticated_as").HasMaxLength(160);
             entity.Property(x => x.PermissionAssessment).HasColumnName("permission_assessment").HasMaxLength(64);
+            entity.Property(x => x.BaseUrl).HasColumnName("base_url").HasMaxLength(512);
         });
         builder.Entity<DiscoveryInventoryRecord>(entity =>
         {

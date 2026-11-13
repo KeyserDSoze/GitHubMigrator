@@ -26,7 +26,7 @@ fi
 compose() { docker compose --env-file "$ENV_FILE" -f "$ROOT/docker/docker-compose.yml" "$@"; }
 case "$COMMAND" in
   up)
-    compose up -d --build postgres azurite observability api frontend
+    compose up -d --build postgres azurite observability ado-sim api frontend
     compose ps
     ;;
   down)
@@ -43,12 +43,12 @@ case "$COMMAND" in
     compose ps
     ;;
   test)
-    compose up -d --build postgres azurite observability api frontend
+    compose up -d --build postgres azurite observability ado-sim api frontend
     compose --profile test run --build --rm backend-tests
     compose --profile test run --rm frontend-tests
     ;;
   *)
-    echo "Usage: $0 {up|down|reset|logs|ps|test} [local|test]" >&2
+    echo "Usage: $0 {up|down|reset|logs|ps|test|ado-server} [local|test]" >&2
     exit 2
     ;;
 esac

@@ -30,11 +30,11 @@ public sealed class MigrationJobBackgroundWorker(
             {
                 break; // held lease will expire and be recoverable by another worker
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // Provider exceptions can contain tokens or request paths. Never log
                 // raw exception text or stack traces for this generic work loop.
-                logger.LogWarning("Migration job worker failed to poll or process a job; retry scheduled");
+                logger.LogWarning("Migration job worker failed to poll or process a job; retry scheduled ({ExceptionType})", ex.GetType().FullName);
                 try { await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken); }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             }

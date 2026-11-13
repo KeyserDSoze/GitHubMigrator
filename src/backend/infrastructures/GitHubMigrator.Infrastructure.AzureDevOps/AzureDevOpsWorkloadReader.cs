@@ -6,14 +6,28 @@ using GitHubMigrator.Business;
 namespace GitHubMigrator.Infrastructure.AzureDevOps;
 
 // Read-only source adapter. Never project credential payloads or variable values.
-public sealed class AzureDevOpsWorkloadReader(HttpClient client) : IAzureWorkloadReader
+public sealed class AzureDevOpsWorkloadReader(HttpClient client, ServerEndpointPolicy? policy = null,
+    string? serverRoot = null) : IAzureWorkloadReader, IServerAwareWorkloadReader
 {
+    // Cloud keeps the fixed Microsoft host; a server root was already policy-checked.
+    private string Collection(string organization) => serverRoot is null
+        ? $"https://dev.azure.com/{Uri.EscapeDataString(organization)}"
+        : $"{serverRoot}/{Uri.EscapeDataString(organization)}";
+    private string Api => serverRoot is null ? "7.1" : "7.0";
+
+    public IAzureWorkloadReader ForServer(string baseUrl)
+    {
+        var normalized = (policy ?? throw new ArgumentException("Self-hosted providers are disabled.")).Normalize(baseUrl);
+        return new AzureDevOpsWorkloadReader(client, policy, normalized);
+    }
+
     public async Task<AzurePipelineSource> GetPipelineAsync(
         string organization, string projectId, int pipelineId, string token, CancellationToken ct)
     {
-        var root = $"https://dev.azure.com/{Uri.EscapeDataString(organization)}/{Uri.EscapeDataString(projectId)}";
-        using var pipe = await GetAsync($"{root}/_apis/pipelines/{pipelineId}?api-version=7.1", token, ct);
-        using var definition = await GetAsync($"{root}/_apis/build/definitions/{pipelineId}?api-version=7.1", token, ct);
+        var root = $"{Collection(organization)}/{Uri.EscapeDataString(projectId)}";
+        var api = Api;
+        using var pipe = await GetAsync($"{root}/_apis/pipelines/{pipelineId}?api-version={api}", token, ct);
+        using var definition = await GetAsync($"{root}/_apis/build/definitions/{pipelineId}?api-version={api}", token, ct);
         var configuration = Property(pipe.RootElement, "configuration");
         var kind = Text(configuration, "type") ?? "unknown";
         var path = Text(configuration, "path") ?? Text(Property(definition.RootElement, "process"), "yamlFilename");
@@ -33,7 +47,7 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client) : IAzureWorkloa
                 {
                     try
                     {
-                        using var group = await GetAsync($"{root}/_apis/distributedtask/variablegroups/{id}?api-version=7.1", token, ct);
+                        using var group = await GetAsync($"{root}/_apis/distributedtask/variablegroups/{id}?api-version={api}", token, ct);
                         var groupName = Text(group.RootElement, "name") ?? $"group-{id}";
                         var values = Property(group.RootElement, "variables");
                         if (values.ValueKind == JsonValueKind.Object)
@@ -47,7 +61,7 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client) : IAzureWorkloa
         try
         {
             using var serviceEndpoints = await GetAsync(
-                $"{root}/_apis/serviceendpoint/endpoints?api-version=7.1", token, ct);
+                $"{root}/_apis/serviceendpoint/endpoints?api-version={api}", token, ct);
             foreach (var e in Items(serviceEndpoints))
                 if (Text(e, "name") is { Length: > 0 } name)
                     endpoints.Add(new(name, Text(e, "type") ?? "unknown"));
@@ -61,7 +75,7 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client) : IAzureWorkloa
             try
             {
                 var url = $"{root}/_apis/git/repositories/{Uri.EscapeDataString(repo)}/items" +
-                          $"?path={Uri.EscapeDataString(path)}&includeContent=true&$format=json&api-version=7.1";
+                          $"?path={Uri.EscapeDataString(path)}&includeContent=true&$format=json&api-version={api}";
                 using var item = await GetAsync(url, token, ct);
                 if (Text(item.RootElement, "content") is { Length: > 0 } raw)
                 {
@@ -79,8 +93,8 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client) : IAzureWorkloa
     public async Task<IReadOnlyList<AzureBoardItem>> GetBoardItemsAsync(
         string organization, string projectId, IReadOnlyList<int> ids, string token, CancellationToken ct)
     {
-        var url = $"https://dev.azure.com/{Uri.EscapeDataString(organization)}/{Uri.EscapeDataString(projectId)}/_apis/wit/workitems" +
-                  $"?ids={string.Join(",", ids)}&$expand=Relations&errorPolicy=Omit&api-version=7.1";
+        var url = $"{Collection(organization)}/{Uri.EscapeDataString(projectId)}/_apis/wit/workitems" +
+                  $"?ids={string.Join(",", ids)}&$expand=Relations&errorPolicy=Omit&api-version={Api}";
         using var doc = await GetAsync(url, token, ct);
         var result = new List<AzureBoardItem>();
         foreach (var item in Items(doc))

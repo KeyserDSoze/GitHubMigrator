@@ -335,7 +335,7 @@ public sealed class PostgresIncrementalReviewRepository(AppDbContext db, TimePro
             .SingleOrDefaultAsync(x => x.Id == run.DestinationConnectionId, ct);
         if (source is null || destination is null ||
             source.Direction != ConnectionDirection.Source ||
-            source.ProviderKey != "azure-devops-services" ||
+            !ProviderKeys.IsAzureDevOpsSource(source.ProviderKey) ||
             source.ValidationCode != "Verified" ||
             destination.Direction != ConnectionDirection.Destination ||
             destination.ProviderKey != "github-enterprise-cloud" ||

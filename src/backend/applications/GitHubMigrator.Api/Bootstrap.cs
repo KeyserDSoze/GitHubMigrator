@@ -27,6 +27,7 @@ public static class Bootstrap
                 authenticated_as varchar(160) NULL,
                 permission_assessment varchar(64) NOT NULL
             );
+            ALTER TABLE migration_connections ADD COLUMN IF NOT EXISTS base_url varchar(512) NULL;
             CREATE TABLE IF NOT EXISTS migration_discoveries (
                 id uuid PRIMARY KEY,
                 connection_id uuid NOT NULL,

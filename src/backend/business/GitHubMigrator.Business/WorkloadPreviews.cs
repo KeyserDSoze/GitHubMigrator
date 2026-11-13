@@ -31,6 +31,20 @@ public sealed record BoardIssueDraft(int SourceId, string Title, string Body, st
 public sealed record BoardsPreview(IReadOnlyList<BoardIssueDraft> Issues,
     IReadOnlyList<WorkloadIssue> GlobalWarnings, bool ReadyToPublish);
 
+// Self-hosted sources: returns a reader bound to the (egress-checked) server root.
+public interface IServerAwareWorkloadReader { IAzureWorkloadReader ForServer(string baseUrl); }
+
+public static class WorkloadSources
+{
+    public static IAzureWorkloadReader For(IAzureWorkloadReader reader, MigrationConnection source)
+    {
+        if (source.BaseUrl is null) return reader;
+        if (reader is not IServerAwareWorkloadReader aware) throw new WorkloadInputException("UnsupportedSource");
+        try { return aware.ForServer(source.BaseUrl); }
+        catch (ArgumentException) { throw new WorkloadInputException("SourceHostNotAllowed"); }
+    }
+}
+
 public interface IAzureWorkloadReader
 {
     Task<AzurePipelineSource> GetPipelineAsync(string organization, string projectId,
@@ -79,7 +93,7 @@ public sealed class WorkloadPreviewService(
         if (pipelineId < 1) throw new WorkloadInputException("InvalidPipelineId");
         var (src, srcToken) = await SourceAsync(sourceId, ct);
         var (dst, dstToken) = await DestinationAsync(destinationId, ct);
-        var pipeline = await source.GetPipelineAsync(src.Organization, projectId, pipelineId, srcToken, ct);
+        var pipeline = await WorkloadSources.For(source, src).GetPipelineAsync(src.Organization, projectId, pipelineId, srcToken, ct);
         var warnings = new List<WorkloadIssue>();
         if (pipeline.Kind != "yaml")
             warnings.Add(new("ClassicPipelineUnsupported", "Classic build/release tasks need a manual workflow rewrite.", "blocker"));
@@ -187,7 +201,7 @@ public sealed class WorkloadPreviewService(
         if (ids is null || ids.Count is < 1 or > 100 || ids.Any(x => x <= 0) || ids.Distinct().Count() != ids.Count)
             throw new WorkloadInputException("InvalidWorkItemIds");
         var (src, srcToken) = await SourceAsync(sourceId, ct);
-        var items = await source.GetBoardItemsAsync(src.Organization, projectId, ids, srcToken, ct);
+        var items = await WorkloadSources.For(source, src).GetBoardItemsAsync(src.Organization, projectId, ids, srcToken, ct);
         var byId = items.ToDictionary(i => i.Id);
         var drafts = new List<BoardIssueDraft>();
         foreach (var id in ids)
@@ -203,7 +217,7 @@ public sealed class WorkloadPreviewService(
             body.AppendLine($"**Azure DevOps ID:** {id}");
             body.AppendLine($"**Original type:** {Safe(item.Type)}");
             body.AppendLine($"**Original state:** {Safe(item.State)}");
-            body.AppendLine($"**Source:** https://dev.azure.com/{src.Organization}/{Uri.EscapeDataString(projectId)}/_workitems/edit/{id}");
+            body.AppendLine($"**Source:** {(src.BaseUrl ?? "https://dev.azure.com")}/{Uri.EscapeDataString(src.Organization)}/{Uri.EscapeDataString(projectId)}/_workitems/edit/{id}");
             body.AppendLine();
             if (!string.IsNullOrWhiteSpace(item.Description))
             {
@@ -257,7 +271,7 @@ public sealed class WorkloadPreviewService(
     private async Task<(MigrationConnection, string)> SourceAsync(Guid id, CancellationToken ct)
     {
         var c = await connections.GetAsync(id, ct) ?? throw new WorkloadInputException("SourceNotFound");
-        if (c.Direction != ConnectionDirection.Source || c.ProviderKey != "azure-devops-services")
+        if (c.Direction != ConnectionDirection.Source || !ProviderKeys.IsAzureDevOpsSource(c.ProviderKey))
             throw new WorkloadInputException("UnsupportedSource");
         var token = await secrets.ReadAsync(c.SecretReference, ct);
         if (string.IsNullOrEmpty(token)) throw new WorkloadInputException("SourceCredentialMissing");

@@ -3,15 +3,24 @@ WORKDIR /workspace
 COPY global.json ./
 COPY src/backend/ src/backend/
 COPY tests/backend/ tests/backend/
+COPY tools/ tools/
 RUN dotnet restore src/backend/GitHubMigrator.slnx
 RUN dotnet publish src/backend/applications/GitHubMigrator.Api/GitHubMigrator.Api.csproj -c Release --no-restore -o /app/publish
 
 FROM build AS test
 ENTRYPOINT ["dotnet", "test", "src/backend/GitHubMigrator.slnx", "--no-restore", "--verbosity", "normal"]
 
+# PostgreSQL + Azure DevOps simulator suite; the simulator serves real git repositories.
+FROM build AS integration
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+COPY tools/ tools/
+COPY tests/integration/ tests/integration/
+RUN dotnet restore tests/integration/GitHubMigrator.Integration.Tests.csproj
+ENTRYPOINT ["dotnet", "test", "tests/integration/GitHubMigrator.Integration.Tests.csproj", "--no-restore", "--verbosity", "normal"]
+
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
-RUN adduser --disabled-password --home /app --gecos "" appuser
+RUN useradd --system --home-dir /app --shell /usr/sbin/nologin appuser
 USER appuser
 COPY --from=build /app/publish .
 EXPOSE 8080

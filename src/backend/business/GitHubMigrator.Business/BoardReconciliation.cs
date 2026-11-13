@@ -56,7 +56,7 @@ public sealed class BoardReconciliationService(
         var sourceConnection = await connections.GetAsync(sourceConnectionId, ct);
         var destination = await connections.GetAsync(destinationConnectionId, ct);
         if (sourceConnection is null || sourceConnection.Direction != ConnectionDirection.Source ||
-            sourceConnection.ProviderKey != "azure-devops-services" ||
+            !ProviderKeys.IsAzureDevOpsSource(sourceConnection.ProviderKey) ||
             destination is null || destination.Direction != ConnectionDirection.Destination ||
             destination.ProviderKey != "github-enterprise-cloud" ||
             destination.ValidationCode != "Verified")
@@ -67,7 +67,7 @@ public sealed class BoardReconciliationService(
         if (string.IsNullOrWhiteSpace(sourceToken) || string.IsNullOrWhiteSpace(destinationToken))
             throw new WorkloadInputException("MissingConnectionCredential");
 
-        var items = await source.GetBoardItemsAsync(sourceConnection.Organization, projectId,
+        var items = await WorkloadSources.For(source, sourceConnection).GetBoardItemsAsync(sourceConnection.Organization, projectId,
             workItemIds, sourceToken, ct);
         var found = items.ToDictionary(x => x.Id);
         var links = new List<BoardLinkCheck>();

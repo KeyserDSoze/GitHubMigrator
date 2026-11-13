@@ -24,6 +24,13 @@ public interface IResumableDiscoveryReader : IDiscoveryReader
         DiscoveryLeaseContext lease, CancellationToken ct);
 }
 
+// Self-hosted sources need the stored server root; the lease is optional (null = synchronous).
+public interface IEndpointAwareDiscoveryReader : IDiscoveryReader
+{
+    Task<DiscoveryInventory> DiscoverAsync(Guid connectionId, string organization, string? baseUrl,
+        string accessToken, DiscoveryLeaseContext? lease, CancellationToken ct);
+}
+
 // Page data is strictly allowlisted discovery metadata. Opaque continuation
 // markers stay in the database, never in job status, events or API responses.
 public sealed record DiscoveryPageCheckpoint(
@@ -178,7 +185,10 @@ public sealed class DiscoveryService(
         // Reader can only access this transient token during the operation, never through the persisted inventory.
         // Checkpoints are enabled only for a leased worker attempt, never for
         // a synchronous request that has no exclusive source-job ownership.
-        var inventory = checkpointLease is { } lease && reader is IResumableDiscoveryReader resumable
+        var inventory = reader is IEndpointAwareDiscoveryReader endpointReader
+            ? await endpointReader.DiscoverAsync(
+                connection.Id, connection.Organization, connection.BaseUrl, token, checkpointLease, ct)
+            : checkpointLease is { } lease && reader is IResumableDiscoveryReader resumable
             ? await resumable.DiscoverWithCheckpointsAsync(
                 connection.Id, connection.Organization, token, lease, ct)
             : await reader.DiscoverAsync(connection.Id, connection.Organization, token, ct);

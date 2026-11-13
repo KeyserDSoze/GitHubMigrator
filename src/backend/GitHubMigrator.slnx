@@ -18,4 +18,7 @@
   <Folder Name="/tests/">
     <Project Path="../../tests/backend/GitHubMigrator.Domain.Tests/GitHubMigrator.Domain.Tests.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="../../tools/AdoSim/AdoSim.csproj" />
+  </Folder>
 </Solution>

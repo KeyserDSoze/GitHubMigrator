@@ -61,6 +61,8 @@ public sealed class ApiHarness : IAsyncLifetime
             ["Observability__Provider"] = "None",
             // Integration requests control when the worker processes a job.
             ["Jobs__Enabled"] = "false",
+            ["Providers__AzureDevOpsServer__AllowedHosts"] = "127.0.0.1",
+            ["Providers__AzureDevOpsServer__AllowHttp"] = "true",
             ["ASPNETCORE_ENVIRONMENT"] = "Development",
             ["DOTNET_ENVIRONMENT"] = "Development"
         };

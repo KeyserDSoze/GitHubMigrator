@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('up', 'down', 'reset', 'logs', 'ps', 'test')]
+  [ValidateSet('up', 'down', 'reset', 'logs', 'ps', 'test', 'ado-server')]
   [string]$Action = 'up',
   [ValidateSet('local', 'test')]
   [string]$Mode = 'local'
@@ -35,7 +35,7 @@ function Invoke-Compose {
 
 switch ($Action) {
   'up' {
-    Invoke-Compose up -d --build postgres azurite observability api frontend
+    Invoke-Compose up -d --build postgres azurite observability ado-sim api frontend
     Invoke-Compose ps
   }
   'down' { Invoke-Compose down }
@@ -46,8 +46,14 @@ switch ($Action) {
   'logs' { Invoke-Compose logs -f --tail=150 }
   'ps' { Invoke-Compose ps }
   'test' {
-    Invoke-Compose up -d --build postgres azurite observability api frontend
+    Invoke-Compose up -d --build postgres azurite observability ado-sim api frontend
     Invoke-Compose --profile test run --build --rm backend-tests
     Invoke-Compose --profile test run --rm frontend-tests
+    Invoke-Compose --profile test run --build --rm integration-tests
+  }
+  'ado-server' {
+    Write-Host 'Starting the Azure DevOps Server VM (first boot downloads Windows and installs the server: ~1h).'
+    Write-Host 'Console: http://localhost:8006  |  progress: docker compose logs -f ado-server'
+    Invoke-Compose --profile ado-server up -d ado-server
   }
 }

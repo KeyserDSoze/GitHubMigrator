@@ -1,0 +1,94 @@
+{
+  "collection": "DefaultCollection",
+  "users": [
+    { "name": "alice", "display": "Alice Rossi", "mail": "alice@example.test" },
+    { "name": "bob", "display": "Bob Bianchi", "mail": "bob@example.test" },
+    { "name": "carol", "display": "Carol Verdi", "mail": null },
+    { "name": "dave", "display": "Dave Neri", "mail": "dave@example.test" },
+    { "name": "sam1", "display": "Sam Smith", "mail": "sam.smith@example.test" },
+    { "name": "sam2", "display": "Sam Smith", "mail": "sam.smith@other.example.test" },
+    { "name": "erin", "display": "Erin Gialli", "mail": "erin@example.test" }
+  ],
+  "groups": [
+    { "name": "[DefaultCollection]\\Project Collection Administrators", "members": ["alice"] },
+    { "name": "[Alpha Platform]\\Contributors", "members": ["alice", "bob"] },
+    { "name": "[Alpha Platform]\\Readers", "members": ["[Alpha Platform]\\Contributors", "carol"] },
+    { "name": "[Delta Mixed]\\Contributors", "members": ["dave", "sam1", "sam2"] }
+  ],
+  "projects": [
+    {
+      "name": "Alpha Platform",
+      "sourceControl": "Git",
+      "acl": [ { "principal": "[Alpha Platform]\\Contributors", "allow": 6, "deny": 0 } ],
+      "repos": [
+        {
+          "name": "alpha-api", "commits": 6,
+          "branches": ["feature/auth/login", "feature/ui", "release/1.0", "hotfix/2024-01"],
+          "tags": ["v1.0.0", "v1.1.0"], "annotatedTags": ["v2.0.0", "v2.0.1"],
+          "files": {
+            "azure-pipelines.yml": "trigger:\n- main\nsteps:\n- checkout: self\n- task: UseDotNet@2\n  inputs:\n    version: 8.x\n- script: dotnet build\n- template: templates/deploy.yml\n"
+          },
+          "acl": [
+            { "principal": "[Alpha Platform]\\Readers", "allow": 0, "deny": 4 },
+            { "principal": "bob", "allow": 2, "deny": 0 },
+            { "principal": "S-1-9-orphan-descriptor", "allow": 2, "deny": 0 }
+          ],
+          "inheritPermissions": false
+        },
+        { "name": "alpha-web", "defaultBranch": "master", "commits": 3, "branches": ["develop"], "tags": ["web-1"] },
+        { "name": "Alpha.Shared.Lib", "commits": 2 },
+        { "name": "legacy tools", "commits": 2 },
+        { "name": "alpha-docs", "empty": true },
+        { "name": "alpha-archive", "commits": 1, "disabled": true }
+      ],
+      "pipelines": [
+        {
+          "id": 11, "name": "Alpha API CI", "repo": "alpha-api", "path": "/azure-pipelines.yml",
+          "variables": [ { "name": "BUILD_CONFIG", "secret": false }, { "name": "DEPLOY_PASSWORD", "secret": true } ],
+          "variableGroups": [ 3 ]
+        }
+      ]
+    },
+    {
+      "name": "Beta Ünïcode",
+      "sourceControl": "Git",
+      "repos": [
+        { "name": "beta-svc", "commits": 3, "branches": ["feature/ünïcode", "release/2024.1"], "tags": ["β-1"] }
+      ]
+    },
+    {
+      "name": "Gamma Legacy",
+      "sourceControl": "Tfvc",
+      "tfvcBranches": ["$/Gamma Legacy/Main", "$/Gamma Legacy/Main/Dev", "$/Gamma Legacy/Main/Release-1"]
+    },
+    {
+      "name": "Delta Mixed",
+      "sourceControl": "Git",
+      "repos": [
+        { "name": "alpha-api", "commits": 2, "branches": ["main-copy"] },
+        { "name": "bulk-refs", "commits": 2, "extraBranches": 120, "extraTags": 30 }
+      ]
+    },
+    { "name": "Epsilon Empty", "sourceControl": "Git", "repos": [] }
+  ],
+  "variableGroups": [
+    { "id": 3, "name": "prod-secrets", "variables": [ { "name": "APP_TOKEN", "secret": true }, { "name": "REGION", "secret": false } ] }
+  ],
+  "serviceEndpoints": [ { "name": "azure-prod", "type": "azurerm" }, { "name": "npm-feed", "type": "externalnpmregistry" } ],
+  "workItems": [
+    { "id": 101, "project": "Alpha Platform", "type": "Epic", "title": "Platform modernization", "state": "Active",
+      "description": "<div>Modernize the <b>platform</b></div>", "links": [ { "kind": "child", "to": 102 } ] },
+    { "id": 102, "project": "Alpha Platform", "type": "Feature", "title": "Authentication", "state": "New",
+      "description": "SSO support", "links": [ { "kind": "child", "to": 103 }, { "kind": "parent", "to": 101 } ] },
+    { "id": 103, "project": "Alpha Platform", "type": "User Story", "title": "Login page", "state": "Active",
+      "description": null, "links": [ { "kind": "child", "to": 104 }, { "kind": "parent", "to": 102 } ] },
+    { "id": 104, "project": "Alpha Platform", "type": "Task", "title": "Wire OIDC", "state": "Closed",
+      "description": "<p>done</p>", "links": [ { "kind": "parent", "to": 103 } ] },
+    { "id": 105, "project": "Alpha Platform", "type": "Bug", "title": "Crash on logout", "state": "Active",
+      "description": "<script>alert(1)</script>Steps: logout", "links": [
+        { "kind": "commit", "repo": "alpha-api", "ref": "refs/heads/main" },
+        { "kind": "pullrequest", "repo": "alpha-api", "to": 301 } ] },
+    { "id": 107, "project": "Alpha Platform", "type": "Task", "title": "Cycle A", "state": "New", "description": "", "links": [ { "kind": "related", "to": 108 } ] },
+    { "id": 108, "project": "Alpha Platform", "type": "Task", "title": "Cycle B", "state": "New", "description": "", "links": [ { "kind": "related", "to": 107 } ] }
+  ]
+}

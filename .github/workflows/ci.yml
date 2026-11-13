@@ -40,12 +40,12 @@ jobs:
       - name: Install frontend dependencies and build
         working-directory: src/frontend
         run: |
-          npm install
+          npm ci
           npm run build
       - name: Install Playwright tests and browser
         working-directory: tests/frontend
         run: |
-          npm install
+          npm ci
           npx playwright install --with-deps chromium
       - name: Run UI contract tests
         working-directory: tests/frontend

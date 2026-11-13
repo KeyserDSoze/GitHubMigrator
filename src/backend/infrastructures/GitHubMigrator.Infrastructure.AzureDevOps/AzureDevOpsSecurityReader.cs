@@ -31,8 +31,13 @@ public sealed class AzureDevOpsSecurityReader(
     private const int MaxRepositories = 1500;
     private const int MaxAclEntries = 30000;
 
-    public async Task<SecurityEvidenceResult> ReadAsync(
+    public Task<SecurityEvidenceResult> ReadAsync(
         string organization, string token, IReadOnlyList<SourceProject> projects,
+        CancellationToken ct, DiscoveryLeaseContext? lease = null) =>
+        ReadAsync(AzureDevOpsEndpoints.Services(organization), token, projects, ct, lease);
+
+    public async Task<SecurityEvidenceResult> ReadAsync(
+        AzureDevOpsEndpoints endpoints, string token, IReadOnlyList<SourceProject> projects,
         CancellationToken ct, DiscoveryLeaseContext? lease = null)
     {
         var groups = new List<DiscoveryGroup>();
@@ -50,19 +55,16 @@ public sealed class AzureDevOpsSecurityReader(
         var observedAces = 0;
         var issues = new List<DiscoveryIssue>();
         bool groupsComplete = true, membershipsComplete = true, aclsCollected = true;
-        var graphRoot = $"https://vssps.dev.azure.com/{Uri.EscapeDataString(organization)}";
-        var root = $"https://dev.azure.com/{Uri.EscapeDataString(organization)}";
+        var root = endpoints.Root;
         try
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
             string? continuation = null;
             for (var page = 0; page < MaxGroupPages; page++)
             {
-                var url = $"{graphRoot}/_apis/graph/groups?api-version=7.1-preview.1";
-                if (!string.IsNullOrEmpty(continuation))
-                    url += $"&continuationToken={Uri.EscapeDataString(continuation)}";
+                var url = endpoints.GroupsUrl(continuation);
                 using var response = await ReadCheckpointedAsync(
-                    url, token, lease, "security-groups", page, "groups", ct);
+                    url, token, lease, "security-groups", page, "groups", ct, endpoints.NormalizeGroups);
                 foreach (var group in Values(response.Document))
                 {
                     var descriptor = Text(group, "descriptor");
@@ -123,13 +125,11 @@ public sealed class AzureDevOpsSecurityReader(
                 string? continuation = null;
                 for (var page = 0; page < MaxMembershipPages; page++)
                 {
-                    var url = $"{graphRoot}/_apis/graph/Memberships/{Uri.EscapeDataString(group.Descriptor)}" +
-                        "?direction=down&depth=1&api-version=7.1-preview.1";
-                    if (!string.IsNullOrEmpty(continuation))
-                        url += $"&continuationToken={Uri.EscapeDataString(continuation)}";
+                    var url = endpoints.MembershipsUrl(group.Descriptor, continuation);
                     using var response = await ReadCheckpointedAsync(
                         url, token, lease, "security-members:" + Hash(group.Descriptor),
-                        page, "memberships", ct);
+                        page, "memberships", ct,
+                        document => endpoints.NormalizeMemberships(document, group.Descriptor));
                     foreach (var membership in Values(response.Document))
                     {
                         var container = Text(membership, "containerDescriptor");
@@ -138,7 +138,7 @@ public sealed class AzureDevOpsSecurityReader(
                         if (!externalize &&
                             string.Equals(container, group.Descriptor, StringComparison.Ordinal) &&
                             !string.IsNullOrWhiteSpace(member))
-                            edges.Add(new(container, member));
+                            edges.Add(new(group.Descriptor, member));
                     }
                     observedMemberships = externalize
                         ? (await membershipStore!.GetProgressAsync(lease!.Value.JobId, ct)).ObservedMemberships
@@ -195,7 +195,7 @@ public sealed class AzureDevOpsSecurityReader(
             IReadOnlyList<AclRow> parentRows = [];
             try
             {
-                parentRows = await ReadAclAsync(root, token, projectToken, lease, ct);
+                parentRows = await ReadAclAsync(root, endpoints.Api, token, projectToken, lease, ct);
             }
             catch (DiscoveryProviderException ex)
                 when (lease is null || ex.Code is not ("ProviderUnavailable" or "ProviderTimeout"))
@@ -212,7 +212,7 @@ public sealed class AzureDevOpsSecurityReader(
                 try
                 {
                     var repoToken = $"{projectToken}/{repository.ProviderId}";
-                    foreach (var row in await ReadAclAsync(root, token, repoToken, lease, ct))
+                    foreach (var row in await ReadAclAsync(root, endpoints.Api, token, repoToken, lease, ct))
                         acls.Add(new(repository.ProviderId, row.Token, row.Descriptor, row.Allow, row.Deny,
                             row.InheritPermissions, "repository"));
                 }
@@ -248,10 +248,10 @@ public sealed class AzureDevOpsSecurityReader(
             observedGroupCount, externalizeGroups);
     }
 
-    private async Task<IReadOnlyList<AclRow>> ReadAclAsync(string root, string token, string securityToken,
+    private async Task<IReadOnlyList<AclRow>> ReadAclAsync(string root, string api, string token, string securityToken,
         DiscoveryLeaseContext? lease, CancellationToken ct)
     {
-        var url = $"{root}/_apis/accesscontrollists/{GitNamespace}?token={Uri.EscapeDataString(securityToken)}&api-version=7.1";
+        var url = $"{root}/_apis/accesscontrollists/{GitNamespace}?token={Uri.EscapeDataString(securityToken)}&api-version={api}";
         using var response = await ReadCheckpointedAsync(
             url, token, lease, "security-acl:" + Hash(securityToken), 0, "acls", ct);
         // Sanitization and the canonical ACE/schema check already occurred
@@ -280,7 +280,7 @@ public sealed class AzureDevOpsSecurityReader(
                 if (!ace.TryGetProperty("allow", out var allow) || !allow.TryGetInt64(out var allowMask) ||
                     !ace.TryGetProperty("deny", out var deny) || !deny.TryGetInt64(out var denyMask))
                     throw new DiscoveryProviderException("UnexpectedResponse");
-                items.Add(new(returnedToken, descriptor, allowMask, denyMask, inherit));
+                items.Add(new(securityToken, descriptor, allowMask, denyMask, inherit));
                 if (items.Count > MaxAclEntries) throw new DiscoveryProviderException("AclEntriesTruncated");
             }
         }
@@ -299,9 +299,14 @@ public sealed class AzureDevOpsSecurityReader(
 
     private async Task<JsonPage> ReadCheckpointedAsync(
         string url, string token, DiscoveryLeaseContext? lease, string resource,
-        int page, string kind, CancellationToken ct)
+        int page, string kind, CancellationToken ct,
+        Func<JsonDocument, JsonDocument>? normalize = null)
     {
-        if (lease is null) return await ReadAsync(url, token, ct);
+        if (lease is null)
+        {
+            var direct = await ReadAsync(url, token, ct);
+            return normalize is null ? direct : new JsonPage(normalize(direct.Document), direct.Continuation);
+        }
         if (checkpoints is null)
             throw new DiscoveryCheckpointException("CheckpointStorageUnavailable");
         var requestHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(url)));
@@ -316,7 +321,9 @@ public sealed class AzureDevOpsSecurityReader(
             catch (JsonException) { throw new DiscoveryCheckpointException("CheckpointPayloadInvalid"); }
         }
 
-        using var response = await ReadAsync(url, token, ct);
+        using var fetched = await ReadAsync(url, token, ct);
+        using var response = new JsonPage(normalize is null ? fetched.Document : normalize(fetched.Document),
+            fetched.Continuation);
         // Strict projections only. The full Graph/ACL responses may contain
         // unexpected fields; those must never enter PostgreSQL checkpoints.
         var safe = kind switch

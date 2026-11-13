@@ -71,16 +71,16 @@ public static class ConnectionEndpoints
     private static ConnectionResponse ToResponse(MigrationConnection x) =>
         new(x.Id, x.Name, x.ProviderKey, x.Direction.ToString().ToLowerInvariant(),
             x.Organization, x.CreatedAtUtc, x.ValidatedAtUtc, x.ValidationCode,
-            x.AuthenticatedAs, x.PermissionAssessment);
+            x.AuthenticatedAs, x.PermissionAssessment, x.BaseUrl);
 }
 
 public sealed record ConnectionInput(string? Name, string? ProviderKey, string? Organization,
-    string? PersonalAccessToken)
+    string? PersonalAccessToken, string? BaseUrl = null)
 {
     public ConnectionDraft ToDraft() => new(Name ?? "", ProviderKey ?? "", Organization ?? "",
-        PersonalAccessToken ?? "");
+        PersonalAccessToken ?? "", string.IsNullOrWhiteSpace(BaseUrl) ? null : BaseUrl);
 }
 public sealed record RotateCredentialInput(string? PersonalAccessToken);
 public sealed record ConnectionResponse(Guid Id, string Name, string ProviderKey, string Direction,
     string Organization, DateTimeOffset CreatedAtUtc, DateTimeOffset? ValidatedAtUtc,
-    string ValidationCode, string? AuthenticatedAs, string PermissionAssessment);
+    string ValidationCode, string? AuthenticatedAs, string PermissionAssessment, string? BaseUrl = null);

@@ -18,6 +18,7 @@ public sealed class ConnectionRecord
     public string ValidationCode { get; set; } = "";
     public string? AuthenticatedAs { get; set; }
     public string PermissionAssessment { get; set; } = "";
+    public string? BaseUrl { get; set; }
 }
 
 public sealed class EncryptedSecretRecord
@@ -54,6 +55,7 @@ public sealed class PostgresConnectionRepository(AppDbContext db) : IConnectionR
         stored.ValidationCode = connection.ValidationCode;
         stored.AuthenticatedAs = connection.AuthenticatedAs;
         stored.PermissionAssessment = connection.PermissionAssessment;
+        stored.BaseUrl = connection.BaseUrl;
         await db.SaveChangesAsync(ct);
     }
 
@@ -64,7 +66,8 @@ public sealed class PostgresConnectionRepository(AppDbContext db) : IConnectionR
 
     private static MigrationConnection Map(ConnectionRecord x) =>
         new(x.Id, x.Name, x.ProviderKey, x.Direction, x.Organization, x.SecretReference,
-            x.CreatedAtUtc, x.ValidatedAtUtc, x.ValidationCode, x.AuthenticatedAs, x.PermissionAssessment);
+            x.CreatedAtUtc, x.ValidatedAtUtc, x.ValidationCode, x.AuthenticatedAs, x.PermissionAssessment,
+            x.BaseUrl);
 }
 
 // Development-only: AES-256-GCM, one random nonce per write. Key comes from ignored .env.local.
