@@ -1,0 +1,656 @@
+using System.Data;
+using GitHubMigrator.Business;
+using Microsoft.EntityFrameworkCore;
+
+namespace GitHubMigrator.Infrastructure.PostgreSql;
+
+// #113: sole-main v2 local bundle coordination. This store writes
+// ONLY local F-035v2 PostgreSQL evidence after independently verifying
+// trusted Git bundle bytes under a fenced source-locked transaction.
+// It never writes a remote GitHub ref. A lease is NOT execution authority.
+public sealed record GitIncrementalLaterCheckpointBundleLeaseOptions(bool Enabled);
+
+public sealed record GitIncrementalLaterCheckpointBundleLeaseClaim(
+    Guid WorkpackId, Guid LeaseToken, long Generation, Guid ActorId,
+    string BundlePlanSha256, DateTimeOffset ExpiresAtUtc,
+    bool CanAcquireBundle, bool CanPush, bool CanRetry,
+    bool CanDispatch, bool MigrationComplete);
+
+public sealed class PostgresGitIncrementalLaterCheckpointBundleLeaseStore(
+    AppDbContext db, TimeProvider clock,
+    GitIncrementalLaterCheckpointBundleLeaseOptions options,
+    IGitIncrementalLaterCheckpointBundleReadPreflight preflight,
+    IGitSourceBundleAcquirer trustedGitAcquirer,
+    IGitSourceBundleOrphanQuarantine orphanQuarantine)
+{
+    public static readonly TimeSpan MaxLease = TimeSpan.FromMinutes(3);
+    public static readonly TimeSpan MinLease = TimeSpan.FromSeconds(30);
+
+    private static GitSourceBundleException Refused(string code) => new(code);
+
+    public async Task<GitIncrementalLaterCheckpointBundleLeaseClaim> ClaimAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        Guid targetObservationId, Guid workpackId, string sourceRepositoryId,
+        string expectedTargetReceiptSha256, Guid actorId, TimeSpan duration,
+        CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("LaterCheckpointBundleLeaseDisabled");
+        if (actorId == Guid.Empty || duration < MinLease ||
+            duration > MaxLease)
+            throw Refused("LaterCheckpointBundleLeaseRequestInvalid");
+        var plan = await preflight.ReadAsync(preparationId, planId,
+            checkpointId, targetObservationId, workpackId, sourceRepositoryId,
+            expectedTargetReceiptSha256, ct);
+        RequirePlan(plan, preparationId, planId, checkpointId,
+            targetObservationId, workpackId, sourceRepositoryId,
+            expectedTargetReceiptSha256);
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
+        var expires = now.Add(duration);
+        var token = Guid.NewGuid();
+
+        // Shared advisory locks cover the SOURCE and the plan (source
+        // first, matching F-029/F-091/F-032v2). Never execute Git while
+        // holding these locks: only a short database-only lease claim.
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted, ct);
+        await LockAsync(plan.SourceOnlyRequest.SourceConnectionId, planId, ct);
+        await RequireLiveLockedAsync(plan, actorId, ct);
+        var held = await db.GitLaterCheckpointBundleLeases.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.WorkpackId == workpackId, ct);
+        if (held is null)
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO git_later_checkpoint_bundle_leases (
+                    workpack_id, preparation_id, plan_id, checkpoint_id,
+                    source_snapshot_id, source_connection_id,
+                    target_observation_id, source_repository_id,
+                    bundle_plan_sha256, workpack_evidence_sha256,
+                    full_ref_proof_sha256, target_receipt_sha256,
+                    lease_token, generation, actor_id, state,
+                    acquired_at_utc, lease_until_utc, updated_at_utc,
+                    durable_evidence_persisted, can_push, can_retry,
+                    can_dispatch, migration_complete)
+                VALUES ({workpackId}, {preparationId}, {planId},
+                    {checkpointId}, {plan.SourceSnapshotId},
+                    {plan.SourceOnlyRequest.SourceConnectionId},
+                    {targetObservationId}, {sourceRepositoryId},
+                    {plan.EvidenceSha256}, {plan.WorkpackEvidenceSha256},
+                    {plan.SourceFullRefProofSha256},
+                    {plan.TargetReceiptSha256}, {token}, {1L}, {actorId},
+                    'Held', {now}, {expires}, {now},
+                    false, false, false, false, false)
+                """, ct);
+            await EventAsync(workpackId, 1L, actorId, "Acquired",
+                plan.EvidenceSha256, now, ct);
+            await tx.CommitAsync(ct);
+            return Claim(workpackId, token, 1L, actorId,
+                plan.EvidenceSha256, expires);
+        }
+
+        RequireMatch(held, plan);
+        if (held.State == "Held" && held.LeaseUntilUtc <= now)
+        {
+            // CRASH/EXPIRED is quarantined: no silent takeover of an
+            // existing UUID.bundle file or of a possibly dead worker.
+            var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE git_later_checkpoint_bundle_leases
+                SET state = 'RecoveryRequired', lease_until_utc = NULL,
+                    updated_at_utc = {now}
+                WHERE workpack_id = {workpackId} AND state = 'Held'
+                    AND generation = {held.Generation}
+                    AND lease_token = {held.LeaseToken}
+                """, ct);
+            if (changed != 1)
+                throw Refused("LaterCheckpointBundleLeaseLost");
+            await EventAsync(workpackId, held.Generation, actorId,
+                "Quarantined", plan.EvidenceSha256, now, ct);
+            await tx.CommitAsync(ct);
+            throw Refused("LaterCheckpointBundleLeaseRecoveryRequired");
+        }
+        if (held.State == "Held")
+            throw Refused("LaterCheckpointBundleLeaseBusy");
+        if (held.State == "RecoveryRequired")
+            throw Refused("LaterCheckpointBundleLeaseRecoveryRequired");
+        if (held.State == "Recorded")
+            throw Refused("LaterCheckpointBundleLeaseAlreadyRecorded");
+        if (held.State != "Released" || held.Generation >= long.MaxValue - 1)
+            throw Refused("LaterCheckpointBundleLeaseStateInvalid");
+        var generation = checked(held.Generation + 1);
+        var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE git_later_checkpoint_bundle_leases
+            SET lease_token = {token}, generation = {generation},
+                actor_id = {actorId}, state = 'Held',
+                acquired_at_utc = {now}, lease_until_utc = {expires},
+                updated_at_utc = {now}
+            WHERE workpack_id = {workpackId} AND state = 'Released'
+                AND generation = {held.Generation}
+                AND lease_token = {held.LeaseToken}
+                AND bundle_plan_sha256 = {plan.EvidenceSha256}
+                AND durable_evidence_persisted = false
+                AND can_push = false AND can_retry = false
+                AND can_dispatch = false AND migration_complete = false
+            """, ct);
+        if (updated != 1)
+            throw Refused("LaterCheckpointBundleLeaseLost");
+        await EventAsync(workpackId, generation, actorId, "Acquired",
+            plan.EvidenceSha256, now, ct);
+        await tx.CommitAsync(ct);
+        return Claim(workpackId, token, generation, actorId,
+            plan.EvidenceSha256, expires);
+    }
+
+    // Released requires the exact token, generation, owner and still-live
+    // time window; stale or expired workers may not release another lease.
+    public async Task<bool> ReleaseAsync(
+        Guid workpackId, Guid leaseToken, long generation, Guid actorId,
+        string bundlePlanSha256, CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("LaterCheckpointBundleLeaseDisabled");
+        RequireHandle(workpackId, leaseToken, generation, actorId,
+            bundlePlanSha256);
+        var row = await db.GitLaterCheckpointBundleLeases.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.WorkpackId == workpackId, ct);
+        if (row is null) return false;
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted, ct);
+        await LockAsync(row.SourceConnectionId, row.PlanId, ct);
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
+        var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE git_later_checkpoint_bundle_leases
+            SET state = 'Released', lease_until_utc = NULL,
+                updated_at_utc = {now}
+            WHERE workpack_id = {workpackId} AND state = 'Held'
+                AND lease_token = {leaseToken}
+                AND generation = {generation} AND actor_id = {actorId}
+                AND bundle_plan_sha256 = {bundlePlanSha256}
+                AND lease_until_utc > {now}
+                AND durable_evidence_persisted = false
+                AND can_push = false AND can_retry = false
+                AND can_dispatch = false AND migration_complete = false
+            """, ct);
+        if (changed == 1)
+            await EventAsync(workpackId, generation, actorId, "Released",
+                bundlePlanSha256, now, ct);
+        await tx.CommitAsync(ct);
+        return changed == 1;
+    }
+
+    // An unsuccessful or cancelled local export can leave UUID.bundle
+    // bytes without a DB receipt. Quarantine the exact still-held lease,
+    // rather than releasing it for automatic orphan adoption. Idempotent
+    // on an already-quarantined generation, with no Git or remote I/O.
+    public async Task<bool> QuarantineAsync(
+        Guid workpackId, Guid token, long generation, Guid actorId,
+        string bundlePlanSha256, CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("LaterCheckpointBundleLeaseDisabled");
+        RequireHandle(workpackId, token, generation, actorId, bundlePlanSha256);
+        var parent = await db.GitLaterCheckpointBundleLeases.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.WorkpackId == workpackId, ct);
+        if (parent is null) return false;
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted, ct);
+        await LockAsync(parent.SourceConnectionId, parent.PlanId, ct);
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
+        var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE git_later_checkpoint_bundle_leases
+            SET state = 'RecoveryRequired', lease_until_utc = NULL,
+                updated_at_utc = {now}
+            WHERE workpack_id = {workpackId} AND state = 'Held'
+                AND lease_token = {token} AND generation = {generation}
+                AND actor_id = {actorId}
+                AND bundle_plan_sha256 = {bundlePlanSha256}
+                AND durable_evidence_persisted = false
+                AND can_push = false AND can_retry = false
+                AND can_dispatch = false AND migration_complete = false
+            """, ct);
+        if (changed == 1)
+            await EventAsync(workpackId, generation, actorId, "Quarantined",
+                bundlePlanSha256, now, ct);
+        await tx.CommitAsync(ct);
+        return changed == 1;
+    }
+
+    // Explicit operator-mediated release of a QUARANTINED worker lease.
+    // Only the actual immutable F-031 independent human reviewer may
+    // recover a crashed source actor's workpack; NOT the old worker.
+    // This still does not adopt orphan bytes, create evidence or acquire
+    // a new lease. Caller must separately request a fresh claim.
+    public async Task<bool> RecoverAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        Guid targetObservationId, Guid workpackId, string sourceRepositoryId,
+        string expectedTargetReceiptSha256, Guid recoveryReviewerId,
+        long expectedGeneration, string expectedBundlePlanSha256,
+        CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("LaterCheckpointBundleLeaseDisabled");
+        if (recoveryReviewerId == Guid.Empty || expectedGeneration < 1 ||
+            !GitSourceBundleStorageCheck.ValidSha(expectedBundlePlanSha256))
+            throw Refused("LaterCheckpointBundleRecoveryInvalid");
+        var plan = await preflight.ReadAsync(preparationId, planId,
+            checkpointId, targetObservationId, workpackId,
+            sourceRepositoryId, expectedTargetReceiptSha256, ct);
+        RequirePlan(plan, preparationId, planId, checkpointId,
+            targetObservationId, workpackId, sourceRepositoryId,
+            expectedTargetReceiptSha256);
+        if (plan.EvidenceSha256 != expectedBundlePlanSha256)
+            throw Refused("LaterCheckpointBundleRecoveryProofChanged");
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted, ct);
+        await LockAsync(plan.SourceOnlyRequest.SourceConnectionId, planId, ct);
+        var row = await db.GitLaterCheckpointBundleLeases.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.WorkpackId == workpackId, ct);
+        if (row is null || row.Generation != expectedGeneration ||
+            row.State != "RecoveryRequired")
+            return false;
+        RequireMatch(row, plan);
+        await RequireLiveLockedAsync(plan, row.ActorId, ct);
+        var human = await db.GitCheckpointTargetHumanReviews.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.CheckpointId == checkpointId &&
+                x.SourceRepositoryId == sourceRepositoryId, ct);
+        if (human is null ||
+            human.ReviewedBy != recoveryReviewerId ||
+            recoveryReviewerId == row.ActorId ||
+            human.Decision !=
+                GitCheckpointTargetHumanReviewStates.ApprovedForObservation)
+            throw Refused("LaterCheckpointBundleRecoveryReviewerRequired");
+        if (row.Generation >= long.MaxValue - 1 ||
+            await db.GitLaterCheckpointBundleEvidence.AsNoTracking()
+                .AnyAsync(x => x.WorkpackId == workpackId, ct))
+            throw Refused("LaterCheckpointBundleRecoveryBlocked");
+
+        // A short atomic local rename under the SOURCE -> PLAN SQL
+        // transaction locks is safe: no Git subprocess or remote I/O.
+        // Release the DB quarantine ONLY AFTER any non-durable physical
+        // UUID.bundle has been moved outside the canonical namespace.
+        // If the DB transaction rolls back, the file remains safely
+        // quarantined and no new claim can be admitted.
+        await orphanQuarantine.QuarantineOrphanAsync(workpackId, ct);
+
+        var next = checked(row.Generation + 1);
+        var token = Guid.NewGuid();
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
+        var changed = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE git_later_checkpoint_bundle_leases
+            SET state = 'Released', lease_token = {token},
+                generation = {next}, actor_id = {recoveryReviewerId},
+                lease_until_utc = NULL, updated_at_utc = {now}
+            WHERE workpack_id = {workpackId} AND state = 'RecoveryRequired'
+                AND generation = {expectedGeneration}
+                AND lease_token = {row.LeaseToken}
+                AND actor_id = {row.ActorId}
+                AND bundle_plan_sha256 = {expectedBundlePlanSha256}
+                AND durable_evidence_persisted = false
+                AND can_push = false AND can_retry = false
+                AND can_dispatch = false AND migration_complete = false
+            """, ct);
+        if (changed == 1)
+            await EventAsync(workpackId, next, recoveryReviewerId,
+                "Recovered", expectedBundlePlanSha256, now, ct);
+        await tx.CommitAsync(ct);
+        return changed == 1;
+    }
+
+    // The ONLY F-035v2 evidence INSERT. Both the original claim and this
+    // final phase are bounded, source-locked PostgreSQL transactions. Git
+    // subprocesses run only between them, outside any SQL transaction.
+    public async Task<GitIncrementalLaterCheckpointBundleReceipt> CommitAsync(
+        GitIncrementalLaterCheckpointBundleLeaseClaim lease,
+        GitIncrementalLaterCheckpointLocalBundleResult checkedFile,
+        Guid preparationId, Guid planId, Guid checkpointId,
+        Guid targetObservationId, string sourceRepositoryId,
+        string expectedTargetReceiptSha256,
+        IGitSourceBundleArtifactVerifier fileVerifier, CancellationToken ct)
+    {
+        if (!options.Enabled)
+            throw Refused("LaterCheckpointBundleLeaseDisabled");
+        if (lease is null || checkedFile is null)
+            throw Refused("LaterCheckpointBundleCommitInvalid");
+        RequireHandle(lease.WorkpackId, lease.LeaseToken,
+            lease.Generation, lease.ActorId, lease.BundlePlanSha256);
+        if (lease.CanAcquireBundle || lease.CanPush || lease.CanRetry ||
+            lease.CanDispatch || lease.MigrationComplete ||
+            fileVerifier is null)
+            throw Refused("LaterCheckpointBundleCommitInvalid");
+
+        // The independent expensive source/target proof validation is run
+        // before the transaction; below, mutable gates are rechecked under
+        // the same source-first locks as F-032v2 and the lease claim.
+        var plan = await preflight.ReadAsync(preparationId, planId,
+            checkpointId, targetObservationId, lease.WorkpackId,
+            sourceRepositoryId, expectedTargetReceiptSha256, ct);
+        RequirePlan(plan, preparationId, planId, checkpointId,
+            targetObservationId, lease.WorkpackId, sourceRepositoryId,
+            expectedTargetReceiptSha256);
+        if (lease.BundlePlanSha256 != plan.EvidenceSha256 ||
+            checkedFile.WorkpackId != lease.WorkpackId ||
+            checkedFile.ReadPlanSha256 != plan.EvidenceSha256 ||
+            checkedFile.CheckpointId != checkpointId ||
+            checkedFile.SourceSnapshotId != plan.SourceSnapshotId ||
+            checkedFile.SourceFullRefProofSha256 !=
+                plan.SourceFullRefProofSha256 ||
+            checkedFile.TargetReceiptSha256 != expectedTargetReceiptSha256 ||
+            checkedFile.DurableEvidencePersisted || checkedFile.CanPush ||
+            checkedFile.CanRetry || checkedFile.CanDispatch ||
+            checkedFile.MigrationComplete)
+            throw Refused("LaterCheckpointBundleCommitPlanChanged");
+
+        // A caller-provided record and a checksum of arbitrary bytes
+        // are insufficient. Reopen the existing file and independently
+        // run trusted Git fsck, full-ref/OID matching and git bundle
+        // verify/list-heads against ONLY F-097b refs. No SQL transaction
+        // is held while any Git process executes.
+        var source = plan.SourceOnlyRequest;
+        var read = new GitSourceBundleView(
+            lease.WorkpackId, planId, Guid.Empty,
+            sourceRepositoryId, source.SourceEvidenceSha256,
+            source.ReconciliationSha256, checkedFile.BundleFileName,
+            checkedFile.BundleSha256, checkedFile.BundleBytes,
+            checkedFile.RefCount, checkedFile.AcquiredAtUtc, false, false);
+        await fileVerifier.VerifyAsync(read, ct);
+        var gitVerified = await trustedGitAcquirer.AcquireAsync(source, ct);
+        if (gitVerified.WorkpackId != lease.WorkpackId ||
+            gitVerified.BundleFileName != checkedFile.BundleFileName ||
+            gitVerified.BundleSha256 != checkedFile.BundleSha256 ||
+            gitVerified.BundleBytes != checkedFile.BundleBytes ||
+            gitVerified.RefCount != checkedFile.RefCount ||
+            gitVerified.SourceEvidenceSha256 != source.SourceEvidenceSha256)
+            throw Refused("LaterCheckpointBundleCommitGitVerificationFailed");
+
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted, ct);
+        await LockAsync(plan.SourceOnlyRequest.SourceConnectionId, planId, ct);
+        await RequireLiveLockedAsync(plan, lease.ActorId, ct);
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
+        var current = await db.GitLaterCheckpointBundleLeases.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.WorkpackId == lease.WorkpackId, ct);
+        if (current is null)
+            throw Refused("LaterCheckpointBundleCommitLeaseMissing");
+        RequireMatch(current, plan);
+        if (current.State != "Held" ||
+            current.LeaseToken != lease.LeaseToken ||
+            current.Generation != lease.Generation ||
+            current.ActorId != lease.ActorId ||
+            current.LeaseUntilUtc <= now || lease.ExpiresAtUtc <= now ||
+            current.LeaseUntilUtc != lease.ExpiresAtUtc ||
+            current.BundlePlanSha256 != lease.BundlePlanSha256)
+            throw Refused("LaterCheckpointBundleCommitLeaseFenced");
+
+        // Rehash actual on-disk bytes under the final short database lock.
+        // This is NOT a Git subprocess. Never trust the old in-memory
+        // artifact SHA, client path, or a prior completed rehearsal.
+        var verified = await fileVerifier.VerifyAsync(read, ct);
+        if (verified.WorkpackId != lease.WorkpackId ||
+            verified.BundleSha256 != checkedFile.BundleSha256 ||
+            verified.BundleBytes != checkedFile.BundleBytes ||
+            verified.IsCurrent || verified.ReadyForExecution)
+            throw Refused("LaterCheckpointBundleCommitFileCorrupt");
+
+        var proof = GitIncrementalLaterCheckpointBundleReceiptIntegrity.Seal(
+            plan, checkedFile, lease.ActorId, clock.GetUtcNow());
+        var existing = await db.GitLaterCheckpointBundleEvidence
+            .AsNoTracking().AnyAsync(x => x.WorkpackId == lease.WorkpackId, ct);
+        if (existing)
+            throw Refused("LaterCheckpointBundleCommitAlreadyRecorded");
+
+        db.GitLaterCheckpointBundleEvidence.Add(new() {
+            WorkpackId = proof.WorkpackId,
+            PreparationId = proof.PreparationId,
+            PlanId = proof.PlanId,
+            CheckpointId = proof.CheckpointId,
+            SourceSnapshotId = proof.SourceSnapshotId,
+            TargetObservationId = proof.TargetObservationId,
+            SourceRepositoryId = proof.SourceRepositoryId,
+            WorkpackEvidenceSha256 = proof.WorkpackEvidenceSha256,
+            BundlePlanSha256 = proof.BundlePlanSha256,
+            FullRefProofSha256 = proof.FullRefProofSha256,
+            SourceEvidenceSha256 = proof.SourceEvidenceSha256,
+            SourceManifestRootSha256 = proof.SourceManifestRootSha256,
+            TargetReceiptSha256 = proof.TargetReceiptSha256,
+            ReconciliationSha256 = proof.ReconciliationSha256,
+            BundleFileName = proof.BundleFileName,
+            BundleSha256 = proof.BundleSha256,
+            BundleBytes = proof.BundleBytes,
+            RefCount = proof.RefCount,
+            AcquiredAtUtc = proof.AcquiredAtUtc,
+            RecordedAtUtc = proof.RecordedAtUtc,
+            RecordedBy = proof.RecordedBy,
+            EvidenceSha256 = proof.EvidenceSha256,
+            ReadyForExecution = false,
+            CanPush = false, CanRetry = false,
+            CanDispatch = false, MigrationComplete = false
+        });
+        db.GitLaterCheckpointBundleEvents.Add(new() {
+            WorkpackId = proof.WorkpackId, ActorId = proof.RecordedBy,
+            Type = "Recorded", EvidenceSha256 = proof.EvidenceSha256,
+            OccurredAtUtc = proof.RecordedAtUtc
+        });
+        await db.SaveChangesAsync(ct);
+        var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE git_later_checkpoint_bundle_leases
+            SET state = 'Recorded', lease_until_utc = NULL,
+                updated_at_utc = {proof.RecordedAtUtc}
+            WHERE workpack_id = {lease.WorkpackId} AND state = 'Held'
+                AND lease_token = {lease.LeaseToken}
+                AND generation = {lease.Generation}
+                AND actor_id = {lease.ActorId}
+                AND bundle_plan_sha256 = {lease.BundlePlanSha256}
+                AND lease_until_utc > {proof.RecordedAtUtc}
+                AND durable_evidence_persisted = false
+                AND can_push = false AND can_retry = false
+                AND can_dispatch = false AND migration_complete = false
+            """, ct);
+        if (updated != 1)
+            throw Refused("LaterCheckpointBundleCommitLeaseFenced");
+        await EventAsync(lease.WorkpackId, lease.Generation, lease.ActorId,
+            "Recorded", lease.BundlePlanSha256, proof.RecordedAtUtc, ct);
+        await tx.CommitAsync(ct);
+        // Still source-only: does not allow migration or destination writes.
+        return proof;
+    }
+
+    private async Task RequireLiveLockedAsync(
+        GitIncrementalLaterCheckpointBundlePlan plan, Guid actorId,
+        CancellationToken ct)
+    {
+        var req = plan.SourceOnlyRequest;
+        var storedPlan = await db.IncrementalOperationPlans.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == plan.PlanId &&
+                x.PreparationId == plan.PreparationId &&
+                x.SourceConnectionId == req.SourceConnectionId, ct);
+        var lastSnapshot = await db.StagingSnapshotSyncs.AsNoTracking()
+            .Where(x => x.SourceConnectionId == req.SourceConnectionId)
+            .OrderByDescending(x => x.SourceCollectedAtUtc)
+            .ThenByDescending(x => x.SnapshotId)
+            .Select(x => x.SnapshotId).FirstOrDefaultAsync(ct);
+        var latest = await (
+            from cp in db.GitHubSourceSyncCheckpoints.AsNoTracking()
+            join snap in db.StagingSnapshotSyncs.AsNoTracking()
+                on cp.SnapshotId equals snap.SnapshotId
+            where cp.PlanId == plan.PlanId
+            orderby snap.SourceCollectedAtUtc descending, cp.Id descending
+            select cp).FirstOrDefaultAsync(ct);
+        var pack = await db.GitLaterCheckpointWorkpacks.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == req.WorkpackId, ct);
+        var source = await db.GitHubSourceCheckpointGitRefLedgers.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.CheckpointId == plan.CheckpointId &&
+                x.SourceRepositoryId == req.SourceRepositoryId, ct);
+        var reconciliation = await db.GitLaterCheckpointReconciliations
+            .AsNoTracking().SingleOrDefaultAsync(x =>
+                x.Id == (pack == null ? Guid.Empty : pack.ReconciliationId), ct);
+        var target = await db.GitCheckpointTargetObservations.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == plan.TargetObservationId, ct);
+        var human = await db.GitCheckpointTargetHumanReviews.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.CheckpointId == plan.CheckpointId &&
+                x.SourceRepositoryId == req.SourceRepositoryId, ct);
+        var review = await db.IncrementalReviews.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.PreparationId == plan.PreparationId, ct);
+        var dest = storedPlan is null ? null :
+            await db.Connections.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id ==
+                    storedPlan.DestinationConnectionId, ct);
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
+        if (storedPlan is null ||
+            storedPlan.SnapshotId != plan.BaselineSnapshotId ||
+            storedPlan.SourceConnectionId != req.SourceConnectionId ||
+            lastSnapshot != plan.SourceSnapshotId ||
+            latest is null || latest.Id != plan.CheckpointId ||
+            latest.SnapshotId != plan.SourceSnapshotId ||
+            latest.PreparationId != plan.PreparationId ||
+            latest.SourceConnectionId != req.SourceConnectionId ||
+            latest.CanPush || latest.CanRetry ||
+            latest.CanDispatch || latest.MigrationComplete ||
+            pack is null || pack.PlanId != plan.PlanId ||
+            pack.PreparationId != plan.PreparationId ||
+            pack.CheckpointId != plan.CheckpointId ||
+            pack.SourceRepositoryId != req.SourceRepositoryId ||
+            pack.SourceSnapshotId != plan.SourceSnapshotId ||
+            pack.TargetObservationId != plan.TargetObservationId ||
+            pack.TargetReceiptSha256 != plan.TargetReceiptSha256 ||
+            pack.FullRefProofSha256 != plan.SourceFullRefProofSha256 ||
+            pack.EvidenceSha256 != plan.WorkpackEvidenceSha256 ||
+            pack.RecordedBy != actorId ||
+            pack.State != "Blocked" || pack.Phase != "WriteBlocked" ||
+            pack.ReadyForExecution || pack.CanPush ||
+            pack.CanRetry || pack.CanDispatch || pack.MigrationComplete ||
+            source is null || source.PlanId != plan.PlanId ||
+            source.SnapshotId != plan.SourceSnapshotId ||
+            source.SourceConnectionId != req.SourceConnectionId ||
+            source.EvidenceSha256 != plan.SourceFullRefProofSha256 ||
+            source.SourceManifestRootSha256 != plan.SourceManifestRootSha256 ||
+            reconciliation is null ||
+            reconciliation.PlanId != plan.PlanId ||
+            reconciliation.CheckpointId != plan.CheckpointId ||
+            reconciliation.SourceSnapshotId != plan.SourceSnapshotId ||
+            reconciliation.TargetObservationId != plan.TargetObservationId ||
+            reconciliation.SourceRepositoryId != req.SourceRepositoryId ||
+            reconciliation.ReconciliationSha256 != req.ReconciliationSha256 ||
+            reconciliation.SourceEvidenceSha256 != req.SourceEvidenceSha256 ||
+            reconciliation.FullRefProofSha256 != plan.SourceFullRefProofSha256 ||
+            reconciliation.TargetReceiptSha256 != plan.TargetReceiptSha256 ||
+            reconciliation.RecordedBy != actorId ||
+            reconciliation.ReadyForExecution ||
+
+            source.RecordedBy != actorId ||
+            target is null || target.PlanId != plan.PlanId ||
+            target.CheckpointId != plan.CheckpointId ||
+            target.SourceSnapshotId != plan.SourceSnapshotId ||
+            target.DestinationConnectionId != storedPlan.DestinationConnectionId ||
+            target.SourceRepositoryId != req.SourceRepositoryId ||
+            target.EvidenceSha256 != plan.TargetReceiptSha256 ||
+            target.CanObserveTarget || target.CanPush ||
+            target.CanRetry || target.CanDispatch || target.MigrationComplete ||
+            human is null || human.PreparationId != plan.PreparationId ||
+            human.PlanId != plan.PlanId ||
+            human.CheckpointId != plan.CheckpointId ||
+            human.SourceSnapshotId != plan.SourceSnapshotId ||
+            human.SourceRepositoryId != req.SourceRepositoryId ||
+            human.EvidenceSha256 != target.HumanReviewEvidenceSha256 ||
+            human.Decision !=
+                GitCheckpointTargetHumanReviewStates.ApprovedForObservation ||
+            human.ReviewedBy != target.ReviewedBy ||
+            human.CanObserveTarget || human.CanPush ||
+            human.CanRetry || human.CanDispatch || human.MigrationComplete ||
+            review is null ||
+            review.State != IncrementalReviewStates.ApprovedForPlanning ||
+            review.DryRunSha256 != storedPlan.ReviewSha256 ||
+            dest is null || dest.ValidationCode != "Verified" ||
+            dest.ValidatedAtUtc is null || now < dest.ValidatedAtUtc ||
+            now - dest.ValidatedAtUtc >= TimeSpan.FromMinutes(5) ||
+            now < target.ObservedAtUtc ||
+            now - target.ObservedAtUtc >= TimeSpan.FromMinutes(5))
+            throw Refused("LaterCheckpointBundleLeaseContextChanged");
+    }
+
+    private static void RequirePlan(
+        GitIncrementalLaterCheckpointBundlePlan? plan, Guid prep, Guid planId,
+        Guid checkpoint, Guid observation, Guid workpack, string repository,
+        string targetSha)
+    {
+        if (plan is null || plan.EvidenceVersion != 1 ||
+            plan.PreparationId != prep || plan.PlanId != planId ||
+            plan.CheckpointId != checkpoint ||
+            plan.TargetObservationId != observation ||
+            plan.BaselineSnapshotId == plan.SourceSnapshotId ||
+            plan.SourceOnlyRequest is null ||
+            plan.SourceOnlyRequest.WorkpackId != workpack ||
+            plan.SourceOnlyRequest.SourceConnectionId == Guid.Empty ||
+            plan.SourceOnlyRequest.SourceRepositoryId != repository ||
+            plan.TargetReceiptSha256 != targetSha ||
+            !GitSourceBundleStorageCheck.ValidSha(plan.EvidenceSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(plan.WorkpackEvidenceSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(plan.SourceFullRefProofSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(plan.TargetReceiptSha256) ||
+            !GitSourceBundleStorageCheck.ValidSha(plan.SourceManifestRootSha256) ||
+            plan.CanAcquireBundle || plan.CanPush || plan.CanRetry ||
+            plan.CanDispatch || plan.MigrationComplete)
+            throw Refused("LaterCheckpointBundleLeasePlanInvalid");
+    }
+
+    private static void RequireMatch(
+        GitLaterCheckpointBundleLeaseRecord held,
+        GitIncrementalLaterCheckpointBundlePlan plan)
+    {
+        var req = plan.SourceOnlyRequest;
+        if (held.PreparationId != plan.PreparationId ||
+            held.PlanId != plan.PlanId ||
+            held.CheckpointId != plan.CheckpointId ||
+            held.SourceSnapshotId != plan.SourceSnapshotId ||
+            held.SourceConnectionId != req.SourceConnectionId ||
+            held.TargetObservationId != plan.TargetObservationId ||
+            held.SourceRepositoryId != req.SourceRepositoryId ||
+            held.BundlePlanSha256 != plan.EvidenceSha256 ||
+            held.WorkpackEvidenceSha256 != plan.WorkpackEvidenceSha256 ||
+            held.FullRefProofSha256 != plan.SourceFullRefProofSha256 ||
+            held.TargetReceiptSha256 != plan.TargetReceiptSha256 ||
+            held.DurableEvidencePersisted || held.CanPush ||
+            held.CanRetry || held.CanDispatch || held.MigrationComplete)
+            throw Refused("LaterCheckpointBundleLeaseScopeChanged");
+    }
+
+    private static void RequireHandle(Guid workpack, Guid token, long generation,
+        Guid actor, string planSha)
+    {
+        if (workpack == Guid.Empty || token == Guid.Empty ||
+            generation < 1 || actor == Guid.Empty ||
+            !GitSourceBundleStorageCheck.ValidSha(planSha))
+            throw Refused("LaterCheckpointBundleLeaseHandleInvalid");
+    }
+
+    private static GitIncrementalLaterCheckpointBundleLeaseClaim Claim(
+        Guid workpack, Guid token, long generation, Guid actor,
+        string sha, DateTimeOffset expires) =>
+        new(workpack, token, generation, actor, sha, expires,
+            false, false, false, false, false);
+
+    private Task LockAsync(Guid connection, Guid plan, CancellationToken ct) =>
+        LockBothAsync(connection, plan, ct);
+
+    private async Task LockBothAsync(Guid connection, Guid plan, CancellationToken ct)
+    {
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtext({connection.ToString()}), 732911)", ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtext({plan.ToString()}), 732990)", ct);
+    }
+
+    private Task<int> EventAsync(Guid workpack, long generation, Guid actor,
+        string type, string sha, DateTimeOffset now, CancellationToken ct) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO git_later_checkpoint_bundle_lease_events (
+                workpack_id, generation, actor_id, type,
+                bundle_plan_sha256, occurred_at_utc)
+            VALUES ({workpack}, {generation}, {actor},
+                {type}, {sha}, {now})
+            """, ct);
+}

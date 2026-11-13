@@ -2,7 +2,7 @@
 
 An extensible, feature-driven platform to migrate source control and (later) pipelines and work tracking from Azure DevOps Services, Azure DevOps Server / TFS, and other systems to GitHub Enterprise.
 
-**Status: Phase 1, F-002 connections + F-003 read-only discovery + F-004 identity mapping drafts + F-005 read-only plan preview.** Azure DevOps Services and GitHub Enterprise Cloud credential connections can be verified and managed. **F-003 read-only inventory** now discovers projects, Git repositories/refs, TFVC roots, Graph users/groups and direct memberships, plus Git ACL allow/deny evidence from Azure DevOps Services. Effective repository permissions, verified GitHub organization membership, full TFVC history and real migrations are **not yet implemented**. The platform must never claim a migration completed without verification.
+**Engineering status (through F-092):** Azure DevOps Services read-only discovery, PostgreSQL staging and durable source sync, Git ref/identity/ACL evidence, versioned source-only checkpoints, per-ref SHA-256 attestation, and read-only paged ref-change inspection are implemented with automated tests. Local Git sandbox transfer and tightly guarded remote-send/recovery foundations exist but are **not an approved, unattended, production GitHub migration flow**. Effective grants, complete TFVC conversion, automatic destination sync and end-to-end verified migration remain open. Never claim a migration completed without independent verification.
 
 ## Architecture
 
@@ -22,6 +22,36 @@ Destination adapters (GitHub Enterprise Cloud / Server / future)
 - Local: Docker Compose, PostgreSQL, Azurite, Grafana LGTM (OpenTelemetry).
 - Azure: Static Web Apps, App Service container, Container Registry, PostgreSQL Flexible Server, Blob Storage, Key Vault, Application Insights and Foundry.
 - Tests: xUnit and Playwright. Feature specs in `features/`, decisions in `ADR/`.
+
+## Verified source sync checkpoints and GitHub review (F-090–F-093)
+
+The Source sync workbench captures explicitly reviewed immutable source snapshots. New F-091 receipts preserve the original F-090 digest while binding a versioned SHA-256 of every changed source Git ref in the F-025 journal. **F-092** adds a superadmin-only, read-only API and React preview that page through recorded branch/tag changes using an exact PostgreSQL keyset cursor, with their previous/current fingerprints and reviewed target mapping. Historical count-only F-090 receipts remain readable, but cannot impersonate F-091 attested per-ref history. No feature in this section dispatches a GitHub push.
+
+**F-093** adds a superadmin-only, GET-only cross-observation review: select a current, previously verified F-031 GitHub target observation from the Source sync panel and compare its recorded ref names with an F-091 source checkpoint. The comparison distinguishes names present/absent at observation time, while source changes remain classified independently. No equality of Git object IDs, ancestry, safe push or actual migration completion is inferred.
+
+See [F-091 fingerprint attestation](docs/github-source-ref-fingerprint-manifest-f091.md), [F-092 bounded ref delta pages](docs/github-checkpoint-ref-delta-pages-f092.md), and [F-093 source/GitHub name-only review](docs/f093-checkpoint-github-target-name-review.md). Full SHA verification is rerun on each page, so end-to-end page cost still scales with checkpoint and target observation sizes until a persisted verified cursor is added.
+
+## F-094 offline Git object ancestry foundation
+
+A separate, **disabled-by-default local-only audit** now checks physical Git commit ancestry between two self-contained bare mirrors. The bounded audit is SHA-1/SHA-256 aware and can classify identical ref tips, possible fast-forward, target-ahead, divergent history, missing objects, target-only refs and changed tags. It seals the decisions to the source checkpoint and destination observation proof identities and performs strict fsck/closed-object checks before and after graph inspection.
+
+This is **not yet wired to an externally actionable source-sync endpoint or GitHub remote push**. Offline fast-forward candidates stay blocked until the independently verified GitHub destination, live object closure, policy, authorization and replay fences can be enforced. See [F-094 design, limits and real Git tests](docs/f094-local-incremental-git-ancestry-audit.md).
+
+## F-095 durable local-only ancestry evidence
+
+The internal F-095 ledger binds an offline F-094 Git object ancestry receipt
+to a verified F-091 source checkpoint, an F-032/F-014 original source ref/OID
+proof and a previously sealed F-031 GitHub observation. PostgreSQL records
+one immutable receipt plus its append-only event atomically, rejects stale
+observations and forbids write/retry/dispatch/migration-success flags.
+**F-096** now requires an independently verified, workpack-specific F-060/F-061
+local bare mirror for new durable ancestry audits: the original F-060
+SHA-256, ref/OID set, lifecycle event and local object closure must match.
+Legacy F-094/F-095 receipts retain their original content hashes.
+The ledger and physical auditor remain **off by default**. Only F-029
+baseline snapshots with sealed F-014 ref manifests are supported;
+there is still no automatic GitHub destination update. See
+[F-095/F-096 ancestry ledger](docs/f095-durable-offline-git-ancestry-ledger.md).
 
 ## Quick start
 

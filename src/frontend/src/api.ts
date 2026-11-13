@@ -1,4 +1,200 @@
 export type Session = { accessToken: string; mustChangePassword: boolean; username: string; role: string };
+
+export type SourceSyncCheckpointDelta = {
+  sourceRepositoryId: string; targetRepositoryName: string;
+  added: number; changed: number; restored: number;
+  missing: number; total: number;
+};
+export type SourceSyncCheckpointProof = {
+  preparationId: string; planId: string; sourceConnectionId: string;
+  snapshotId: string; baselineSnapshotId: string;
+  previousCheckpointId: string | null;
+  previousEvidenceSha256: string | null;
+  manifestSha256: string; sourceCollectedAtUtc: string;
+  stagingAppliedAtUtc: string; sourceInventoryComplete: boolean;
+  isBaselineSnapshot: boolean;
+  journalAdded: number; journalChanged: number;
+  journalRestored: number; journalMissing: number;
+  totalRefChanges: number; unmappedRefChanges: number;
+  repositories: SourceSyncCheckpointDelta[];
+};
+export type SourceRefChangeManifest = {
+  sourceConnectionId: string; snapshotId: string;
+  added: number; changed: number; restored: number; missing: number;
+  total: number; evidenceSha256: string;
+};
+export type SourceSyncCheckpointReceipt = {
+  id: string; proof: SourceSyncCheckpointProof;
+  evidenceSha256: string; recordedBy: string;
+  recordedAtUtc: string; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+  evidenceVersion: 1 | 2;
+  refChangeManifest: SourceRefChangeManifest | null;
+  refChangeAttestationSha256: string | null;
+};
+export type SourceSyncCheckpointPage = {
+  preparationId: string; planId: string;
+  items: SourceSyncCheckpointReceipt[];
+  nextAfter: string | null; latestCheckpointId: string | null;
+  nextEligibleSnapshotId: string | null;
+  latestEvidenceSha256: string | null;
+  canPush: false; canRetry: false; canDispatch: false;
+  migrationComplete: false;
+};
+
+export type SourceCheckpointRefChange = {
+  sourceId: string; sourceRepositoryId: string; refName: string;
+  kind: 'Added' | 'Changed' | 'Restored' | 'Missing';
+  previousFingerprint: string | null;
+  currentFingerprint: string | null;
+  revision: number; targetRepositoryName: string | null;
+};
+export type SourceCheckpointRefChangePage = {
+  checkpointId: string; snapshotId: string;
+  refManifestSha256: string; refAttestationSha256: string;
+  totalRefChanges: number; items: SourceCheckpointRefChange[];
+  nextAfter: string | null;
+  canPush: false; canRetry: false; canDispatch: false;
+  migrationComplete: false;
+};
+
+export type CheckpointTargetReviewItem = {
+  sourceChange: SourceCheckpointRefChange;
+  targetRefObserved: boolean;
+  reviewState: string;
+};
+export type CheckpointTargetRefReviewPage = {
+  checkpointId: string; sourceSnapshotId: string;
+  targetObservationId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; sourceRefManifestSha256: string;
+  sourceRefAttestationSha256: string; targetEvidenceSha256: string;
+  targetObservedAtUtc: string; repositoryRefChanges: number;
+  items: CheckpointTargetReviewItem[]; nextAfter: string | null;
+  canPush: false; canRetry: false; canDispatch: false;
+  migrationComplete: false;
+};
+
+// F-097c.4c.0c: safe projection of the independently verified later-epoch
+// candidate and immutable audit decision. All authority fields are false.
+export type CheckpointHumanReviewCandidate = {
+  preparationId: string; planId: string; checkpointId: string;
+  sourceSnapshotId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; evidenceSha256: string;
+  canObserveTarget: false; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+};
+export type CheckpointHumanReviewReceipt = {
+  id: string; evidenceVersion: 1;
+  preparationId: string; planId: string; checkpointId: string;
+  sourceSnapshotId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; candidateEvidenceSha256: string;
+  requestedBy: string; reviewedBy: string;
+  reviewedAtUtc: string; evidenceSha256: string;
+  decision: 'ApprovedForObservation' | 'Rejected';
+  canObserveTarget: false; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+};
+
+// #109 later-F-031 server-verified immutable GitHub GET (no raw refs,
+// OIDs or credentials in browser response, no execution authority).
+export type CheckpointTargetObservation = {
+  id: string; evidenceVersion: 1;
+  preparationId: string; planId: string; checkpointId: string;
+  sourceSnapshotId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; organization: string;
+  objectFormat: 'sha1' | 'sha256';
+  candidateEvidenceSha256: string; humanReviewEvidenceSha256: string;
+  targetEvidenceSha256: string; observedAtUtc: string; refCount: number;
+  evidenceSha256: string;
+  canObserveTarget: false; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+};
+
+// #111 strictly redacted history of an immutable later-epoch workpack.
+// No ref/OID arrays, credential, filesystem path, actor or current permit.
+export type LaterCheckpointWorkpackHistory = {
+  evidenceVersion: 2; preparationId: string; planId: string;
+  checkpointId: string; sourceSnapshotId: string;
+  targetObservationId: string; reconciliationId: string;
+  workpackId: string; evidenceSha256: string;
+  reconciliationSha256: string; sourceFullRefProofSha256: string;
+  targetReceiptSha256: string; recordedAtUtc: string;
+  sourceRefCount: number; targetRefCount: number;
+  matchingCount: number; createCandidateCount: number;
+  divergedCount: number; targetOnlyCount: number;
+  state: 'Blocked'; phase: 'WriteBlocked';
+  historicalOnly: true; currentApprovalVerified: false;
+  readyForExecution: false; canPush: false; canRetry: false;
+  canDispatch: false; migrationComplete: false;
+};
+
+export type RepositorySyncSourceDelta = {
+  sourceRepositoryId: string; targetRepositoryName: string;
+  addedRefs: number; changedRefs: number; restoredRefs: number;
+  missingRefs: number; plannedRefChanges: number;
+  totalRefChanges: number;
+  stepState: 'Blocked'; stepBlocker: string;
+  recoveryTracking: 'NotMonitored' | 'NoMarkerRecorded' | 'PossibleSendEvidence';
+  recoveryState: RemoteRecoveryState | null;
+  latestBarrierId: string | null; latestPossibleSendUtc: string | null;
+  canOpenRecovery: boolean; canPush: false; canRetry: false;
+  migrationComplete: false;
+};
+export type MultiRepositorySyncPulse = {
+  preparationId: string; planId: string; sourceConnectionId: string;
+  snapshotId: string; organization: string; manifestSha256: string;
+  planIsCurrent: boolean; readyForExecution: false;
+  preparationState: string;
+  stagingState: 'LatestRecordedSnapshot' | 'SupersededInPostgres';
+  latestKnownSnapshotId: string;
+  sourceCollectedAtUtc: string; stagingAppliedAtUtc: string;
+  latestKnownStagingAppliedAtUtc: string; sourceInventoryComplete: boolean;
+  stagingObserved: number; stagingAdded: number; stagingChanged: number;
+  stagingUnchanged: number; stagingMarkedMissing: number;
+  journalAdded: number; journalChanged: number; journalRestored: number;
+  journalMissing: number; latestStageJobId: string | null;
+  stageJobState: string; stageJobErrorCode: string | null;
+  stageJobUpdatedAtUtc: string | null;
+  repositories: RepositorySyncSourceDelta[];
+  providerSourceFreshnessVerified: false;
+  canPush: false; canRetry: false; migrationComplete: false;
+};
+
+export type RemoteRecoveryState =
+  | 'AwaitingIndependentReadback'
+  | 'OperatorReviewRequired'
+  | 'TipsObservedNeedsClosure'
+  | 'IndependentClosureObserved'
+  | 'CheckpointedIndependentClosure';
+export type RemoteRecoveryNextAction =
+  | 'ObserveTipsReadOnly' | 'VerifyFullObjectsReadOnly'
+  | 'CertifyIndependentClosure' | 'OperatorReviewRequired' | 'None';
+export type RemoteRecoveryItem = {
+  barrierId: string; confirmationId: string; intentId: string; sessionId: string;
+  preparationId: string; planId: string; scopeId: string; hazardId: string;
+  grantId: string; repositoryId: number; organization: string; repository: string;
+  possibleSendRecordedAtUtc: string; state: RemoteRecoveryState;
+  recommendedNextAction: RemoteRecoveryNextAction; needsOperatorAttention: boolean;
+  typedBaselineAvailable: boolean; baselineRefCount: number | null;
+  createCandidateCount: number | null; barrierEvidenceSha256: string;
+  typedBaselineEvidenceSha256: string | null;
+  readbackId: string | null; readbackEvidenceSha256: string | null;
+  reconciliationId: string | null; reconciliationEvidenceSha256: string | null;
+  fullObjectClosureSha256: string | null;
+  closureCheckpointId: string | null; closureCheckpointEvidenceSha256: string | null;
+  canPush: false; canRetry: false; canDispatch: false; migrationComplete: false;
+};
+export type RemoteRecoveryWorkbenchPage = {
+  preparationId: string; planId: string; repositoryId: number;
+  items: RemoteRecoveryItem[]; nextAfter: string | null;
+  canPush: false; canRetry: false; canDispatch: false; migrationComplete: false;
+};
+export type RemoteRecoveryActionResult = {
+  state: string; evidenceSha256?: string; readbackId?: string;
+  reconciliationId?: string; canRetry?: false; canPush?: false;
+  migrationComplete: false;
+};
+
 export type Connection = {
   id: string; name: string; providerKey: string; direction: 'source' | 'destination';
   organization: string; createdAtUtc: string; validatedAtUtc: string | null;
@@ -78,6 +274,54 @@ export type StagingSyncResult = {
   snapshotId: string; sourceConnectionId: string; sourceCollectedAtUtc: string;
   appliedAtUtc: string; observed: number; added: number; changed: number;
   unchanged: number; markedMissing: number; sourceInventoryComplete: boolean;
+};
+export type IncrementalOperationPlan = {
+  id: string; preparationId: string; snapshotId: string;
+  sourceConnectionId: string; destinationConnectionId: string;
+  organization: string; reviewSha256: string;
+  preparationEvidenceSha256: string; preflightEvidenceSha256: string;
+  manifestSha256: string; createdAtUtc: string; createdBy: string;
+  repositoryCount: number; stepCount: number; changedRefCount: number;
+  sensitiveChangeCount: number; isCurrent: boolean; readyForExecution: boolean;
+  blockers: string[];
+  steps: { ordinal: number; dependsOnOrdinal: number | null;
+    sourceRepositoryId: string; targetRepositoryName: string;
+    kind: string; state: 'Blocked'; blockerCode: string;
+    changedRefs: number }[];
+};
+// F-031/F-032: immutable, non-executable evidence from the real ASP.NET API.
+export type GitHubTargetRefEvidence = {
+  id: string; planId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; organization: string;
+  manifestSha256: string; evidenceSha256: string;
+  observedAtUtc: string; refCount: number; isCurrent: boolean;
+  readyForExecution: false;
+};
+export type GitHubTargetRefEvidencePage = {
+  evidence: GitHubTargetRefEvidence;
+  items: { name: string; objectId: string; objectType: 'commit' | 'tag' }[];
+  nextAfter: string | null;
+};
+export type GitRefDisposition = 0 | 1 | 2 | 3;
+export type GitRefComparison = {
+  name: string; sourceObjectId: string | null;
+  targetObjectId: string | null; disposition: GitRefDisposition;
+  blockerCode: string;
+};
+export type GitRefReconciliation = {
+  id: string; planId: string; sourceRepositoryId: string;
+  targetRepositoryName: string; targetObservationId: string;
+  snapshotId: string; manifestSha256: string; sourceEvidenceSha256: string;
+  sourceManifestRootSha256: string | null; targetEvidenceSha256: string;
+  reconciliationSha256: string; createdAtUtc: string;
+  sourceRefCount: number; targetRefCount: number; matchingCount: number;
+  createCandidateCount: number; divergedCount: number; targetOnlyCount: number;
+  isCurrent: boolean; readyForExecution: false;
+};
+export type GitRefReconciliationPage = {
+  reconciliation: GitRefReconciliation;
+  items: GitRefComparison[];
+  nextAfter: string | null;
 };
 export type IncrementalTargetPreflight = {
   preparationId: string; snapshotId: string; destinationConnectionId: string;
@@ -386,6 +630,128 @@ export const api = {
     }),
   getStagingSync: (token: string, snapshotId: string) =>
     call<StagingSyncResult>(`/api/staging/snapshots/${encodeURIComponent(snapshotId)}`,
+      { headers: withToken(token) }),
+  createIncrementalOperationPlan: (token: string, id: string,
+      expectedPreflightSha256: string) =>
+    call<IncrementalOperationPlan>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans`,
+      { method: 'POST', headers: withToken(token),
+        body: JSON.stringify({ expectedPreflightSha256 }) }),
+  listIncrementalOperationPlans: (token: string, id: string) =>
+    call<IncrementalOperationPlan[]>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans`,
+      { headers: withToken(token) }),
+  getMultiRepositorySyncPulse: (token: string, preparationId: string,
+      planId: string) =>
+    call<MultiRepositorySyncPulse>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/repository-sync-pulse`,
+      { headers: withToken(token) }),
+  listSourceSyncCheckpoints: (token: string,
+      preparationId: string, planId: string,
+      after?: string | null, take = 10) =>
+    call<SourceSyncCheckpointPage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  listSourceCheckpointRefChanges: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      after?: string | null, take = 50) =>
+    call<SourceCheckpointRefChangePage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/ref-changes?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  reviewCheckpointTargetRefNames: (
+      token: string, preparationId: string, planId: string,
+      checkpointId: string, targetObservationId: string,
+      sourceRepositoryId: string, expectedTargetEvidenceSha256: string,
+      after?: string | null, take = 50) =>
+    call<CheckpointTargetRefReviewPage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-ref-review/${encodeURIComponent(targetObservationId)}?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}&expectedTargetEvidenceSha256=${encodeURIComponent(expectedTargetEvidenceSha256)}&take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  readCheckpointHumanReview: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      sourceRepositoryId: string) =>
+    call<CheckpointHumanReviewReceipt>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-human-review?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}`,
+      { headers: withToken(token) }),
+  previewCheckpointHumanReview: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      sourceRepositoryId: string) =>
+    call<CheckpointHumanReviewCandidate>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-human-review/candidate?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}`,
+      { headers: withToken(token) }),
+  readCheckpointTargetObservation: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      sourceRepositoryId: string) =>
+    call<CheckpointTargetObservation>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/target-ref-observations?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}`,
+      { headers: withToken(token) }),
+  readLaterCheckpointWorkpackHistory: (token: string,
+      preparationId: string, planId: string, checkpointId: string,
+      workpackId: string, sourceRepositoryId: string,
+      targetObservationId: string, expectedTargetReceiptSha256: string) =>
+    call<LaterCheckpointWorkpackHistory>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(checkpointId)}/later-workpacks/${encodeURIComponent(workpackId)}/history?sourceRepositoryId=${encodeURIComponent(sourceRepositoryId)}&targetObservationId=${encodeURIComponent(targetObservationId)}&expectedTargetReceiptSha256=${encodeURIComponent(expectedTargetReceiptSha256)}`,
+      { headers: withToken(token) }),
+  captureSourceSyncCheckpoint: (token: string,
+      preparationId: string, planId: string, snapshotId: string,
+      expectedManifestSha256: string,
+      expectedPreviousCheckpointId: string | null) =>
+    call<SourceSyncCheckpointReceipt>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/source-sync-checkpoints/${encodeURIComponent(snapshotId)}`, {
+        method: 'POST', headers: withToken(token),
+        body: JSON.stringify({
+          expectedManifestSha256, expectedPreviousCheckpointId
+        })
+      }),
+  listRemoteRecoveryWorkbench: (token: string, preparationId: string,
+      planId: string, after?: string | null, take = 12) =>
+    call<RemoteRecoveryWorkbenchPage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/remote-recovery-workbench?take=${take}` +
+        (after ? `&after=${encodeURIComponent(after)}` : ''),
+      { headers: withToken(token) }),
+  executeIndependentRecoveryAction: (token: string, epoch: RemoteRecoveryItem,
+      action: 'observe-tips' | 'verify-full-objects' | 'closure-checkpoints') => {
+    const root = `/api/incremental-preparations/${encodeURIComponent(epoch.preparationId)}/operation-plans/${encodeURIComponent(epoch.planId)}/github-app-scopes/${encodeURIComponent(epoch.scopeId)}/remote-sandbox-review-sessions/${encodeURIComponent(epoch.sessionId)}/dispatch-intents/${encodeURIComponent(epoch.intentId)}/confirmations/${encodeURIComponent(epoch.confirmationId)}`;
+    const path = action === 'closure-checkpoints'
+      ? `${root}/post-send-recovery/${encodeURIComponent(epoch.barrierId)}/closure-checkpoints`
+      : `${root}/independent-recovery/${encodeURIComponent(epoch.barrierId)}/${action}`;
+    return call<RemoteRecoveryActionResult>(path, {
+      method: 'POST', headers: withToken(token)
+    });
+  },
+  getIncrementalOperationPlan: (token: string, id: string, planId: string) =>
+    call<IncrementalOperationPlan>(
+      `/api/incremental-preparations/${encodeURIComponent(id)}/operation-plans/${encodeURIComponent(planId)}`,
+      { headers: withToken(token) }),
+  listGitHubTargetRefEvidence: (token: string, preparationId: string, planId: string) =>
+    call<GitHubTargetRefEvidence[]>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/target-ref-evidence`,
+      { headers: withToken(token) }),
+  captureGitHubTargetRefEvidence: (token: string, preparationId: string,
+      planId: string, expectedManifestSha256: string, sourceRepositoryId: string) =>
+    call<GitHubTargetRefEvidence>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/target-ref-evidence`,
+      { method: 'POST', headers: withToken(token),
+        body: JSON.stringify({ expectedManifestSha256, sourceRepositoryId }) }),
+  listGitRefReconciliations: (token: string, preparationId: string, planId: string) =>
+    call<GitRefReconciliation[]>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/ref-reconciliations`,
+      { headers: withToken(token) }),
+  createGitRefReconciliation: (token: string, preparationId: string, planId: string,
+      sourceRepositoryId: string, targetObservationId: string, expectedManifestSha256: string,
+      expectedTargetEvidenceSha256: string) =>
+    call<GitRefReconciliation>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/ref-reconciliations`,
+      { method: 'POST', headers: withToken(token),
+        body: JSON.stringify({ sourceRepositoryId, targetObservationId,
+          expectedManifestSha256, expectedTargetEvidenceSha256 }) }),
+  getGitRefReconciliationPage: (token: string, preparationId: string,
+      planId: string, reconciliationId: string, after?: string | null, take = 50) =>
+    call<GitRefReconciliationPage>(
+      `/api/incremental-preparations/${encodeURIComponent(preparationId)}/operation-plans/${encodeURIComponent(planId)}/ref-reconciliations/${encodeURIComponent(reconciliationId)}?take=${take}` +
+      (after ? `&after=${encodeURIComponent(after)}` : ''),
       { headers: withToken(token) }),
   runLiveTargetPreflight: (token: string, id: string, expectedReviewSha256: string,
       repositories: { sourceRepositoryId: string; targetRepositoryName: string;

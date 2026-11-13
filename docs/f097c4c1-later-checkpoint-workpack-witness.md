@@ -1,0 +1,412 @@
+# F-097c.4c.1 — Source-locked workpack witness, without target write authority
+
+Tracks [#104](https://github.com/KeyserDSoze/GitHubMigrator/issues/104)
+under [#103](https://github.com/KeyserDSoze/GitHubMigrator/issues/103)
+and [#100](https://github.com/KeyserDSoze/GitHubMigrator/issues/100).
+The verified checkpoint-scoped reviewed-target dependency is
+[#105](https://github.com/KeyserDSoze/GitHubMigrator/issues/105).
+
+## Implemented
+
+- `GitIncrementalCheckpointWorkpackIntegrity` produces a **new v1
+  SHA-256 domain** from F-029 baseline plan identity, the exact later
+  F-091 checkpoint, F-097b full ref/OID evidence SHA and F-014 root,
+  the current F-031 target observation, F-032 reconciliation ID/SHA,
+  F-038 workpack ID, actor and four permanent `false` execution flags.
+- The disabled-by-default internal PostgreSQL journal re-fetches
+  independent F-091/F-097b/F-031 proof **before** the write transaction.
+  Under the same source advisory lock used by staging/F-029/F-090/F-097,
+  it checks the plan, newest checkpoint, persisted immutable source
+  proof, latest target observation/actor and exact SHA identity again.
+  It atomically creates a F-032 comparison, **WriteBlocked** F-038
+  workpack/event and append-only versioned workpack receipt/event.
+  Exact same-actor replay compares full stored proof and F-032 item
+  semantics; arbitrary ref names/OIDs, local paths and remote GitHub
+  addresses are never taken from callers.
+- The additive PostgreSQL schema has SHA/false-flag checks and mutation-
+  reject triggers, including for any existing EF-created table.
+  Historical F-032/F-038 baseline receipts are not changed, and F-035
+  source bundle acquisition is explicitly **not implemented** here.
+
+## Crucial current blocker (real two-epoch integration)
+
+A real, second completed F-014 Git ref discovery and F-091/F-097b
+source checkpoint can be verified with SHA-1 and SHA-256. But the
+**existing F-029 plan must become non-current** when F-025 applies a
+later snapshot: `PostgresIncrementalTargetPreflightRepository.GetAsync`
+requires its original F-029 snapshot to remain the latest staging sync.
+Existing `PostgresGitHubTargetRefEvidenceStore.SaveAsync` therefore
+correctly refuses a *new* F-031 target observation under that stale
+baseline plan. This invalidates F-097c.2's baseline-scoped preflight
+for real later epochs.
+
+It would be unsafe to force `IsCurrent = true`, reuse an older F-031
+observation, or infer Git OIDs from the F-091 fingerprint delta.
+**Issue #105** requires a separately versioned, source-locked
+checkpoint-scoped reviewed plan and read-only target observation;
+only then may this journal's **disabled** later-epoch capture be
+admitted and positively tested. Existing baseline current/expiry and
+write barriers must not be weakened.
+
+This is a non-executable internal building block; it is NOT a working
+end-to-end later checkpoint workpack. Subsequent F-035/F-060/F-061
+integration remains #103/#100, and F-095 v3 ancestry remains #96.
+
+## Verification
+
+The SHA-1/SHA-256 real PostgreSQL test intentionally verifies that a
+later checkpoint **fails closed** under stale F-029 target review and
+creates zero F-032/F-038 workpack rows or F-097c4c1 receipts. Separate
+v1 digest/unit tests verify deterministic seals, cross-snapshot
+refusal, tamper rejection and false write flags. A positive, truly
+later-epoch PostgreSQL readback and concurrency test is **not possible
+until #105 is completed**. The issue checklist must remain OPEN until
+that path is safe and verified.
+
+## V2 checkpoint F-031 read-only join (2026-11-09)
+
+After [#109](https://github.com/KeyserDSoze/GitHubMigrator/issues/109)
+closed with CI 4/4 on main, [29bcfb6](https://github.com/KeyserDSoze/GitHubMigrator/commit/29bcfb687f858f650ffbd3ab4a5dc00709d59938)
+adds `GitIncrementalCheckpointTargetJoin.ForReadOnlyComparison`.
+It accepts the immutable historical F-029 mapping **with IsCurrent=false**,
+a verified-later-epoch F-091 receipt, F-097b source ref/OID proof,
+and the separately versioned immutable checkpoint F-031 observation. The
+method refuses mixed SHA1/SHA256 OIDs, changed target approval seals,
+foreign checkpoint/snapshot, invalid ref collisions, baseline epochs,
+and changed or executable planning authority. It returns a **version 2**
+`GitIncrementalCheckpointAuditInputs` whose target evidence digest is the
+**full checkpoint F-031 receipt digest**, not merely the target-ref hash.
+
+**Security boundary:** this is a *pure, non-authorizing* domain join,
+not a verified PostgreSQL latest-epoch reader. The existing
+`PostgresGitIncrementalCheckpointAuditPreflight` and
+`PostgresGitIncrementalCheckpointWorkpackJournal` still require the
+historical **version 1/current F-029** gate and remain fail-closed for
+real second epochs. No F-032/F-038 row is produced; all execution flags
+stay false. Source-locking, F-031 audit revalidation, safe append-only
+F-032/F-038 storage, replay and real PostgreSQL positive tests are the
+next #104 work; #103/#100/#96/#92 remain open.
+
+## Independently verified PostgreSQL v2 reader (2026-11-09)
+
+Implemented on main in [b68a21c](https://github.com/KeyserDSoze/GitHubMigrator/commit/b68a21c6a6797edbff6a9a2c40a708e2635bbeb3)
+and [693749c](https://github.com/KeyserDSoze/GitHubMigrator/commit/693749c95f0f7d6da332c8337d724b1cc3ffa3be).
+The new internal `PostgresGitIncrementalLaterCheckpointAuditPreflight`
+requires an **independent, default-OFF** setting
+`GitIncrementalLaterCheckpointAudit:Enabled=true`.
+The separate #109 checkpoint-target observation and read-preflight
+switches and current source checkpoint/ledger switches remain required.
+It is deliberately **not** exposed as an HTTP mutation or worker.
+
+Given only scoped immutable IDs and an expected **full F-031 receipt**
+SHA-256, the reader independently loads verified F-091/F-097b and
+checkpoint F-031 data from PostgreSQL. It revalidates the existing
+independent human reviewer and original F-027 mapping through #109's
+source-locked gate, requires a latest later source epoch, bounds the
+saved target observation age to under five minutes and enforces matching
+SHA-1/SHA-256 object formats. Finally it takes the source lock before
+the plan lock, re-reads current mutable source/target/review/validation
+state and returns only non-authorizing version-2 comparison inputs.
+
+A new gate witness is **not** compared to the historical F-031 receipt's
+original time-sensitive preflight digest: that digest intentionally
+changes on a fresh validation. Instead the saved observation's original
+SHA-256 seal/audit and its candidate/reviewer identities are verified,
+and the independent newly checked live gate must match those identities.
+A failed, revoked, superseded, foreign, stale or tampered read closes
+without F-032/F-038 rows. The legacy F-029/current-v1 reader and writer
+are untouched. **No F-032/F-038/F-035 writer is enabled by this feature.**
+
+The new actual SHA-1/SHA-256 two-epoch PostgreSQL/JWT integration checks
+positive v2 comparison, wrong target UUID/digest/repository, later
+review revocation and continued absence of F-032/F-038 rows. A future
+separately authorized writer must reverify all evidence while holding
+its own source-first advisory lock, then use distinct, compatible v2
+foreign keys and append-only target provenance: it MUST NOT point a
+checkpoint F-031 ID at historical `incremental_target_ref_evidence`.
+
+## Distinct source-locked F-032v2/F-038v2 write-blocked capture (2026-11-09)
+
+Newly implemented under #104 on sole `main`:
+
+- [871490b](https://github.com/KeyserDSoze/GitHubMigrator/commit/871490b1916af4ea6c2b373e2e996acdf6489473) defines an **independent version-2 SHA-256 workpack receipt**, binding the immutable F-029 baseline mapping, genuine later F-091/F-097b full source OIDs/root, **entire approved F-031 checkpoint receipt digest**, F-032v2 reconciliation ID/SHA, F-038v2 workpack ID, source actor and permanent `Blocked` / `WriteBlocked` / false authority flags.
+- [9ef7948](https://github.com/KeyserDSoze/GitHubMigrator/commit/9ef794872021f978044a149295efe01313a67958), [12087a8](https://github.com/KeyserDSoze/GitHubMigrator/commit/12087a8817f6d680b53cd87c8ee614ffc36ccf32): additive **separate** `git_later_checkpoint_reconciliations`, `git_later_checkpoint_workpacks` and `git_later_checkpoint_workpack_events` tables, with F-031 FK to `git_checkpoint_target_observations` (NOT old `incremental_target_ref_evidence`), SQL CHECK/UNIQUE and mutation-blocking triggers. Same relationships exist in EF-created fixtures.
+- [996199a](https://github.com/KeyserDSoze/GitHubMigrator/commit/996199ae8acae63cc141fd062503db9790b184af): `PostgresGitIncrementalLaterCheckpointWorkpackJournal`, an **internal synchronous** atomic capture with source-first and plan-second transaction locks; it revalidates latest staging, F-091 attestation, F-097b persisted source root/actor, reviewed F-031 receipt/audit, immutable human review/audit, original F-027 approval, destination validation and five-minute observation freshness **under lock**. It stores F-032v2/F-038v2 + single audit atomically and verifies exact actor/evidence/child semantics on replay.
+- [0d55097](https://github.com/KeyserDSoze/GitHubMigrator/commit/0d55097fa049e3b5f22a3c297e9f60676166344f), [19aecd3](https://github.com/KeyserDSoze/GitHubMigrator/commit/19aecd379857761fb23914b8aa05caecfa8c86c8): separately register `GitIncrementalLaterCheckpointWorkpack:Enabled=false` by default; test fixtures explicitly opt in.
+- [81c8469](https://github.com/KeyserDSoze/GitHubMigrator/commit/81c84693887f5d543a2427102759af9911e5dcc7): adds real SHA1/SHA256 **two-epoch** PostgreSQL integration for atomic persisted capture, exact replay, actor/digest refusal, SQL mutation rejection and F-027 revocation, with explicit zero rows in legacy F-032/F-038.
+
+**Architecture boundary:** These are **F-032v2 and F-038v2 logically equivalent but isolated durable records**, not rows inserted into legacy `incremental_git_ref_reconciliations` / `git_transfer_workpacks`. The legacy worker, GitHub remote sender and F-035 source-bundle acquirer cannot see the new rows. This is deliberate: the old F-032 FK binds the historical F-031 and could not safely represent a later checkpoint. The new writer exposes **no HTTP mutation endpoint, no worker registration and no destination credentials/provider call**. No F-095 proof, physical ancestry or migration completion is claimed. Subsequent #103 must add independently authenticated/read-only v2 readback and F-035 / F-060 / F-061 safe acquisition without granting remote writes.
+
+CI for latest integration [42661512812](https://github.com/KeyserDSoze/GitHubMigrator/actions/runs/42661512812) must be confirmed 4/4 before considering this scoped slice complete. Keep #104 open until verified.
+
+## F-097c.4c.2 — historical GET-only F-032v2/F-038v2 readback (2026-11-09)
+
+Implemented as a separate, default-**OFF** feature `GitIncrementalLaterCheckpointHistory:Enabled=false`, independent of the F-032v2/F-038v2 writer switch. The only endpoint is an authenticated **superadmin GET**:
+
+`/api/incremental-preparations/{id}/operation-plans/{planId}/source-sync-checkpoints/{checkpointId}/later-workpacks/{workpackId}/history?sourceRepositoryId=...&targetObservationId=...&expectedTargetReceiptSha256=...`
+
+Every handle is an exact, previously issued immutable scope. No caller raw refs, object IDs, actor/reviewer UUIDs, local Git paths, PATs or mutable destination URL are accepted. The endpoint is GET-only and is not attached to any F-035 worker or remote sender.
+
+The reader independently verifies the **stored** F-091/F-097b complete source ref/OID chain, original F-029 reviewed mapping, #109 immutable F-031 checkpoint observation and audit, separately approved historical human review and audit, the original SHA-256 F-032v2 canonical comparison, the full version-2 workpack receipt, one F-038v2 event, F-032v2/F-038v2 record linkage and false execution flags. A mismatched target digest or tampered child row returns a conflict, never a fallback to legacy F-031.
+
+The returned projection contains **only** checkpoint/target/workpack/reconciliation IDs, SHA-256 digests, bounded category counts, record time and `Blocked` / `WriteBlocked` state; `historicalOnly=true`, `currentApprovalVerified=false`, and all other execution flags are false. This is intentionally different from a live admission: historical signed evidence remains inspectable after an F-027 revocation, expiry or superseding source epoch, but a historical receipt is **never** a current permission, a retry token or migration-completion evidence. Any future action must recheck current source, human review and GitHub target under a new source-locked gate. See #111 and parent #103.
+
+The frontend exposes an explicit UUID-driven **read-only inspector** under the saved F-031 target observation. No auto-load, POST or provider GET occurs. The UI requires an exact allowlist of response fields and rejects any forged push, retry, dispatch, non-`WriteBlocked`, raw ref/OID or extra actor information rather than rendering it. Actual two-epoch SHA-1 and SHA-256 PostgreSQL tests check JWT role/default-OFF, positive history, wrong target/receipt, redaction, and the original approval's revocation. Playwright checks that the browser makes exactly one GET and rejects executable server responses. CI must pass **4/4** before closing #111.
+
+## #112 F-035v2 source-only preparation contract (2026-11-09)
+
+The new `GitIncrementalLaterCheckpointBundleIntegrity.Prepare/Verify`
+produces a **domain-only, non-authorizing F-035v2 read plan** from an
+independently loaded and sealed later F-091/F-097b checkpoint, original
+F-029 mapping, exact #109 F-031 receipt, F-032v2 canonical reconciliation
+and F-038v2 permanently `Blocked/WriteBlocked` receipt. The versioned
+SHA-256 plan binds the full F-038v2 digest, checkpoint, source snapshot,
+source manifest root, F-097b full-ref proof, F-031 reviewed observation
+and all canonical source branch/tag Git ref names + **real object IDs**.
+It supports homogeneous SHA-1 and SHA-256 OIDs and limits bundle inputs
+to 128 refs. Changed digests, ref names/OIDs, source scope, target
+observation, baseline/current plan, and all authority flags fail closed.
+
+The nested `GitSourceBundleRequest` is **internal only**. No API, caller
+bundle path, GitHub credential/URL or local acquirer/worker is exposed;
+`CanAcquireBundle=false` and every destination write flag is false.
+The existing baseline F-035 contract/storage/hash and legacy sender
+remain unchanged. Self-sealed synthetic input is not database
+provenance: a later source-first locked PostgreSQL verifier must reload
+current F-091/F-097b, F-031, F-032v2, F-038v2, latest snapshot and
+human gate before any actual local Git export, then verify source mirror
+refs/OIDs with fsck and persist bundle SHA/bytes and lease fencing.
+This future physical acquisition/replay is **still open** under #112/#103,
+as are F-061 and F-095 under #100/#96. See [issue #112](https://github.com/KeyserDSoze/GitHubMigrator/issues/112).
+
+## #112 internal PostgreSQL F-035v2 live read gate (2026-11-09)
+
+`PostgresGitIncrementalLaterCheckpointBundleReadPreflight` is now a distinct
+default-**OFF** internal reader (`GitIncrementalLaterCheckpointBundleRead:Enabled=false`).
+The caller supplies **only persisted identifiers** (preparation, plan,
+F-091 checkpoint, F-031 observation, F-038v2 workpack, repository source ID
+and full expected F-031 receipt digest). It first requires the verified
+F-032v2/F-038v2 historical store/readback, then independently rechecks the
+**current** F-091/F-097b source chain, latest snapshot, reviewer approval,
+F-031 target observation and destination validation via the existing
+source-locked v2 audit gate. It reloads and compares the workpack receipt,
+F-032v2 SHA, source manifest and exact original OIDs, and produces the
+domain F-035v2 preparation only when historical **and** live gates agree.
+
+This is not a capability, not an exposed HTTP operation, and not a physical
+Git bundle. It deliberately includes `CanAcquireBundle=false` and all
+write flags false. The existing local bare-mirror acquirer is NOT invoked.
+A future **physical** F-035v2 writer still needs its own source-first lock
+and lease fencing across staging, local mirror fsck/object closure, canonical
+ref comparison, restricted `UUID.bundle` path, file SHA-256 and byte length
+persistence, fault recovery and idempotent replay. A prior historical receipt
+cannot authorize this after reviewer revocation or source supersession.
+
+SHA-1/SHA-256 two-epoch PostgreSQL tests check successful read-only
+preparation, wrong F-031 SHA/scope and F-027 revocation. #112 and #103
+remain open for the physical source-only acquisition. The closed #111
+history readback remains safe and available as *history* even when
+the new current F-035v2 gate rejects a bundle.
+
+## #112 F-035v2 local-only rehearsal (2026-11-09)
+
+A new **internal, separate, default-OFF** `GitIncrementalLaterCheckpointLocalBundleAcquisition`
+is registered under `GitIncrementalLaterCheckpointLocalBundle:Enabled=false`.
+It has **no HTTP route, job queue, worker, GitHub credential or destination
+write authorization**. It is explicitly **not durable F-035v2 evidence**.
+
+When invoked by a trusted host with both the source-only F-035v2 PostgreSQL
+read gate and the local filesystem adapter intentionally enabled, it:
+
+1. Loads the **current** F-091/F-097b/#109 F-031 and historical F-032v2/F-038v2
+   evidence through the independent source-locked PostgreSQL reader.
+2. Passes only these verified real Git ref/OID entries and server-derived
+   source repository/workpack IDs to the existing sandboxed
+   `LocalGitSourceBundleAcquirer`: this adapter checks *all* bare-mirror
+   refs, verifies strict `git fsck`, enforces bounded size/quota/symlink
+   limits, creates a binary Git bundle to a generated `UUID.bundle`
+   with no shell or network and verifies `git bundle verify/list-heads`.
+3. Rechecks the **current** approval, source checkpoint/snapshot and immutable
+   target receipt after export. The before/after plan digests and **full**
+   canonical source refs/OIDs must still match. A revoked/superseded gate
+   refuses the rehearsal even if a local orphan bundle file was created.
+4. Independently rehashes the **on-disk** file using the existing
+   `IGitSourceBundleArtifactVerifier`, checks expected bundle SHA/bytes,
+   workpack UUID and false authority flags. A successful result explicitly
+   says `DurableEvidencePersisted=false`, and all
+   `CanPush/CanRetry/CanDispatch/MigrationComplete` fields are false.
+
+Real local Git SHA-1/SHA-256 tests exercise actual binary export, clone
+from the bundle, filesystem SHA-256, deterministic orphan-file replay,
+wrong ref/OID denial and mid-export approval revocation; an API-host
+fixture confirms the independent feature flag denies access by default.
+**This is intentionally a rehearsal only**, not an F-061 import admission.
+The missing next step under #112/#103 is a fenced, source-first
+PostgreSQL lease/commit transaction for F-035v2 file SHA, length and
+immutable event with crash recovery, corruption quarantine and
+fresh local Git fsck, including an actual two-epoch PostgreSQL + Git
+integration test. Never re-use the baseline F-035 storage foreign key
+to point to an F-038v2 workpack.
+
+## #112 additive F-035v2 PostgreSQL storage (2026-11-09)
+
+New separate `git_later_checkpoint_bundle_evidence` and
+`git_later_checkpoint_bundle_events` tables prepare future append-only
+source-bundle metadata. Their F-038 foreign key points to **v2**
+`git_later_checkpoint_workpacks(id)`, **never** the legacy F-038
+`git_transfer_workpacks`. Bundle filenames are SQL-restricted to the
+server-derived `{workpack-id:N}.bundle`; the SHA-256 of the **actual
+binary file**, bundle length (1–512 MiB), ref count (1–128), entire
+F-035v2 read plan, F-097b source proof/manifest, checkpoint F-031
+target digest, F-032v2 reconciliation and F-038v2 workpack digest are
+separate metadata fields. PostgreSQL CHECK constraints require all
+destination execution flags `false`, single-shot event identity,
+valid lower-case SHA-256 fields and immutable UPDATE/DELETE triggers.
+Entity Framework's `EnsureCreated` mappings include these foreign keys;
+`InitializeAsync` creates and backfills CHECKs/triggers in existing DBs.
+
+The schema was introduced **before** the #113 writer and did not by itself
+make a file durable. The implementation and audit boundary added subsequently
+are described below. No bundle or receipt is eligible for F-060/F-061
+on the strength of this metadata alone; no public route, worker or GitHub
+destination operation is enabled.
+
+
+## #113 local source-fenced durable F-035v2 writer and crash recovery
+
+The F-035v2 **internal, default-OFF** durable journal now has a separate
+feature `GitIncrementalLaterCheckpointDurableBundle:Enabled=false`, in
+addition to independent read, local Git and lease switches. A normal
+installation creates the schema but **does not run** the writer. There is no
+HTTP operation, background job, provider transport, or permission to push
+to GitHub.
+
+Its protected source-only sequence is:
+
+1. Independently re-verify the original immutable F-091/F-097b Git
+   ref/object proof, approved human F-031 checkpoint target observation,
+   F-032v2 canonical reconciliation and permanently `Blocked/WriteBlocked`
+   F-038v2. Under PostgreSQL source-first, plan-second advisory locks,
+   persist the time-limited, non-authorizing `Held` lease with
+   UUID token, monotonically increasing generation and actor. Never
+   hold a transaction lock across a Git subprocess.
+2. Verify the trusted local bare mirror's **complete** source refs/OIDs,
+   strict `git fsck`, and actual binary `UUID.bundle` via a sandboxed
+   Git process. Re-check current approval and snapshot **after** export.
+3. Re-run the full historical/current proof preflight and trusted Git
+   inspection **outside** the final SQL transaction. Inside a new short
+   transaction, reacquire source/plan locks, re-check mutable source,
+   target, reviewer and connection state, and compare the exact lease
+   token/generation/actor/expiry. Independently **rehash the real file
+   bytes** before inserting precisely one immutable F-035v2 receipt row,
+   one F-035v2 event and one lease `Recorded` event atomically.
+4. Historical replay independently recomputes the sealed F-035v2 digest,
+   verifies one immutable event, exact F-038v2 and recorded lease linkage
+   and rehashes the file. This remains historical-only after F-027
+   revocation, with every execution flag false.
+
+**Crash and expiry handling:** an aborted export now attempts to atomically
+mark its lease `RecoveryRequired` rather than silently release it. The
+next claim for an expired `Held` lease also commits
+`RecoveryRequired` with a unique append-only `Quarantined` event.
+The orphan file is **logically quarantined by the database** and not
+considered durable evidence; it is not automatically deleted or
+silently adopted. When the independently reviewed recovery is authorized,
+the trusted local store now also atomically **moves** an existing
+`UUID.bundle` to `UUID.<random>.quarantine` on the SAME volume, under
+its cross-process file lock and the short source-first recovery transaction.
+No bytes are deleted or overwritten; failure leaves the DB lease
+quarantined and cannot activate a new one. No git subprocess runs under
+that transaction. A subsequent fresh claim must regenerate and verify
+the canonical `UUID.bundle`, never use the quarantined file.
+An explicit recovery requires the original approved
+independent F-031 reviewer, different from the stale worker, and renewed
+proof of the current source/target/human gate. The recovery operation
+increments the generation, changes the token and appends a
+`Recovered` audit event; the source actor must then acquire a fresh
+lease, and any original token is permanently fenced.
+
+The PostgreSQL + real Linux Git integration exercises two source epochs
+for SHA-1 and SHA-256; stored F-035v2 receipt and append-only events;
+idempotent history after reviewer revocation; altered/missing binary
+refusal; quarantined and expired workers; independent reviewer recovery;
+and parallel competing PostgreSQL leases. **Issue #113 remains open
+until the newest HEAD is verified 4/4 and any additional crash/fencing
+acceptance gaps are resolved.** No F-061/F-095 import/ancestry or remote
+GitHub writes are implied.
+
+
+### F-035v2 physical orphan quarantine follow-up
+
+`LocalGitBundleArtifactStore.QuarantineOrphanAsync` accepts **only** an
+internal workpack UUID, never an arbitrary filesystem path. It refuses
+symlink or unexpected directory entries, uses the existing global
+local-volume write lock and atomically renames an uncommitted
+`UUID.bundle` to `UUID.<random>.quarantine`. The bytes remain
+on disk, continue counting against the storage quota, and cannot
+satisfy historical replay or the normal acquirer's canonical filename.
+For an already absent file it is idempotent and makes no changes.
+The only production call is the independently reviewer-verified
+`RecoverAsync` path, inside short source-first PostgreSQL locks,
+**before** moving the lease to `Released`. A failed SQL commit after
+file renaming remains safe: the file stays quarantined and the lease
+cannot silently grant import or GitHub write authority.
+
+Real local SHA-1/SHA-256 tests prove preserved file size/SHA, absence
+from the canonical name, no implicit reuse and a fresh export. Real
+two-epoch PostgreSQL/Git tests simulate an orphan after export but
+before F-035v2 INSERT, then verify exactly one physical quarantine
+during independently reviewed recovery, audit generations and final
+durable regenerated bundle. #113 closure requires green CI for this
+latest slice.
+
+## #100 F-060v2 later-checkpoint physical mirror staging (2026-11-09)
+
+The legacy F-060 local importer and F-061 PostgreSQL lifecycle **only**
+understand the **current original F-029** baseline and its legacy F-035
+bundle; neither can safely receive a later F-091/F-097b source epoch
+whose baseline `IncrementalOperationPlan.IsCurrent=false`. It is unsafe
+to set the legacy bundle `IsCurrent=true` or rebind its F-038 key.
+
+The new **versioned, source-only, non-authorizing**
+`GitIncrementalLaterCheckpointMirrorStagingPlan` instead binds:
+
+- the original F-029 repository mapping and intentionally stale baseline
+  snapshot, with the **new** F-091/F-097b source snapshot and checkpoint;
+- original **complete** F-097b canonical branch/tag Git ref names **and
+  actual SHA-1 or SHA-256 object OIDs**, 1–128 refs, homogenous format;
+- the independently reviewed current checkpoint F-031 exact observation,
+  full F-032v2 reconciliation and immutable `Blocked/WriteBlocked`
+  F-038v2 workpack, with recomputed domain-separated seal;
+- the persisted and independently verified F-035v2 bundle receipt,
+  actual binary file SHA-256, length and matching workpack UUID;
+- a deterministic **F-060 physical mirror UUID derived from the later
+  source snapshot and F-038v2 workpack**, never the baseline snapshot.
+
+The staging SHA-256 hashes the version/domain, every identifier/digest,
+the full ordered source ref/OID list, bundle SHA+size and all authority
+flags. `F061LeaseGeneration=0`; `CanMaterialize=false`, `CanPush=false`,
+`CanRetry=false`, `CanDispatch=false` and `MigrationComplete=false`.
+This is deliberately **not** an `IGitSourceSnapshotMirrorMaterializer`
+request and **not an F-061 lease token**. It produces no source Git
+repository and cannot authorize remote GitHub writes.
+
+The independent, default-OFF
+`PostgresGitIncrementalLaterCheckpointMirrorStagingPreflight`
+(`GitIncrementalLaterCheckpointMirrorStaging:Enabled=false`) reads the
+live source/target/human gate from existing source-scoped preflight,
+F-035v2 durable historical history with **on-disk bundle rehash**, original
+immutable F-038v2 receipt and latest F-097b source OIDs, then repeats
+the live gate after assembling the staging plan. Missing, superseded,
+revoked or mismatched evidence fails closed. This is an internal
+read-side comparison, **not source-locked F-061 admission**; no Git
+subprocess, HTTP endpoint, job, destination API or import write is created.
+
+Synthetic SHA1/SHA256 domain regression tests cover deterministic mirror
+identity, no baseline substitution, OID/ref forgery, wrong F-031,
+digest/workpack tamper and execution flags. Real two-epoch PostgreSQL 17
+and local Git SHA1/SHA256 integration verifies that a committed F-035v2
+receipt generates the same source-only staging proof with the correct
+later snapshot. The actual **offline F-060v2 import, F-061 generation
+lease + Verified event and recovery** remain open in #100; F-095 v3
+ancestry remains in #96 and completion in #92. No GitHub push is enabled.

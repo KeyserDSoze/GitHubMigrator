@@ -306,7 +306,7 @@ public sealed class PostgresIncrementalReviewTests(PostgresDraftFixture fixture)
         var normalized = StagingAssetNormalizer.Normalize(snapshot);
         await new PostgresStagingRepository(db, clock)
             .ApplyAsync(snapshot, normalized.Assets, normalized.CompleteTypes, default);
-        var queue = new PostgresIncrementalPreparationRepository(db, clock);
+        var queue = new PostgresIncrementalPreparationRepository(db, clock, useDatabaseClock: false);
         var queued = await queue.EnqueueAsync(id, source, destination, author, default);
         var lease = await queue.ClaimAsync(Guid.NewGuid(), TimeSpan.FromMinutes(5), default, source);
         Assert.NotNull(lease);

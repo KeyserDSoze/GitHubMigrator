@@ -9,10 +9,18 @@ namespace GitHubMigrator.Infrastructure.PostgreSql;
 
 // The entire F-026 workflow is PostgreSQL-only. It NEVER resolves a GitHub
 // credential, HttpClient, destination writer, or deployment adapter.
-public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, TimeProvider clock)
+// Production uses PostgreSQL as the single authority for lease decisions
+// and append-only events. The explicit false override is reserved for
+// deterministic legacy test clocks; DI always uses the database default.
+public sealed class PostgresIncrementalPreparationRepository(
+    AppDbContext db, TimeProvider clock, bool useDatabaseClock = true)
     : IIncrementalPreparationRepository
 {
-    private static DateTimeOffset UtcNow(TimeProvider clock) => clock.GetUtcNow();
+    private Task<DateTimeOffset> UtcNowAsync(CancellationToken ct) =>
+        useDatabaseClock
+            ? db.Database.SqlQueryRaw<DateTimeOffset>(
+                "SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct)
+            : Task.FromResult(clock.GetUtcNow());
 
     public async Task<IncrementalPreparationView> EnqueueAsync(
         Guid snapshotId, Guid sourceConnectionId, Guid destinationConnectionId,
@@ -22,6 +30,14 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
             destinationConnectionId == Guid.Empty || actorId == Guid.Empty ||
             sourceConnectionId == destinationConnectionId)
             throw new IncrementalPreparationException("InvalidPreparationContext");
+
+        // F-070: use the SAME source-scoped transactional advisory lock
+        // as PostgresStagingRepository.ApplyAsync and PrepareAsync. Reading
+        // 'latest snapshot' outside that lock allows a concurrent source
+        // sync to supersede it before a stale preparation is enqueued.
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtext({sourceConnectionId.ToString()}), 732911)", ct);
 
         var sync = await db.StagingSnapshotSyncs.AsNoTracking()
             .SingleOrDefaultAsync(x => x.SnapshotId == snapshotId, ct);
@@ -36,7 +52,7 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
             throw new IncrementalPreparationException("IncrementalSnapshotSuperseded");
 
         var id = Guid.NewGuid();
-        var now = UtcNow(clock);
+        var now = await UtcNowAsync(ct);
         // Concurrent administrators and API replicas converge on exactly one
         // (snapshot, destination) preparation, including an audit event.
         await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -63,6 +79,7 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
                 x.DestinationConnectionId == destinationConnectionId, ct);
         if (record.SourceConnectionId != sourceConnectionId)
             throw new IncrementalPreparationException("IncrementalSourceMismatch");
+        await transaction.CommitAsync(ct);
         return View(record);
     }
 
@@ -120,35 +137,54 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
         if (token == Guid.Empty || duration <= TimeSpan.Zero ||
             duration > TimeSpan.FromMinutes(5))
             throw new IncrementalPreparationException("InvalidPreparationLease");
-        var now = UtcNow(clock);
-        var until = now.Add(duration);
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        // Recovery of a crashed fifth attempt must not leave a stuck Running
-        // record forever, and the terminal failure is audited exactly once.
+        // Observe a fresh PostgreSQL instant *inside* the transaction,
+        // not before its start. Do not use now() (transaction-start time).
+        var now = await UtcNowAsync(ct);
+        var until = now.Add(duration);
+        // F-069: only a bounded number of exhausted fifth-attempt leases
+        // can be finalized per poll. SKIP LOCKED means an active replica
+        // never causes the janitor to block behind another owner's row.
+        // The terminal state and one Failed audit event commit atomically.
         await db.Database.ExecuteSqlInterpolatedAsync($"""
-            WITH exhausted AS (
-                UPDATE incremental_preparations SET
-                    state = 'Failed', last_error_code = 'LeaseExpiredAfterMaxAttempts',
-                    updated_at_utc = {now}, lease_token = NULL, lease_until_utc = NULL
+            WITH expired AS MATERIALIZED (
+                SELECT id FROM incremental_preparations
                 WHERE state = 'Running' AND lease_until_utc <= {now}
                   AND attempts >= max_attempts
                   AND ({sourceConnectionId} = {Guid.Empty}
                       OR source_connection_id = {sourceConnectionId})
-                RETURNING id, attempts
+                ORDER BY lease_until_utc, id
+                FOR UPDATE SKIP LOCKED LIMIT 64
+            ), exhausted AS (
+                UPDATE incremental_preparations p SET
+                    state = 'Failed',
+                    last_error_code = 'LeaseExpiredAfterMaxAttempts',
+                    updated_at_utc = {now},
+                    lease_token = NULL, lease_until_utc = NULL
+                FROM expired
+                WHERE p.id = expired.id
+                  AND p.state = 'Running'
+                  AND p.lease_until_utc <= {now}
+                  AND p.attempts >= p.max_attempts
+                RETURNING p.id, p.attempts
             )
             INSERT INTO incremental_preparation_events (
                 preparation_id, event_type, attempt, occurred_at_utc, error_code)
-            SELECT id, 'Failed', attempts, {now}, 'LeaseExpiredAfterMaxAttempts'
+            SELECT id, 'Failed', attempts, {now},
+                'LeaseExpiredAfterMaxAttempts'
             FROM exhausted
             """, ct);
 
+        // F-069: capture the old state under SKIP LOCKED BEFORE claiming it.
+        // Previous Running means a worker crashed or lost its lease.
+        // The recovery marker is written in the SAME transaction as the
+        // next generation and strictly BEFORE its Claimed event.
+        // Queued retry/admission keeps the original single Claimed event.
         var affected = await db.Database.ExecuteSqlInterpolatedAsync($"""
-            UPDATE incremental_preparations
-            SET state = 'Running', lease_token = {token},
-                lease_until_utc = {until}, attempts = attempts + 1,
-                updated_at_utc = {now}
-            WHERE id = (
-                SELECT id FROM incremental_preparations
+            WITH candidate AS MATERIALIZED (
+                SELECT id, state AS previous_state,
+                    attempts AS previous_attempt
+                FROM incremental_preparations
                 WHERE (
                     (state = 'Queued' AND available_at_utc <= {now})
                     OR (state = 'Running' AND lease_until_utc <= {now})
@@ -158,7 +194,24 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
                     OR source_connection_id = {sourceConnectionId})
                 ORDER BY available_at_utc, created_at_utc, id
                 FOR UPDATE SKIP LOCKED LIMIT 1
+            ), claimed AS (
+                UPDATE incremental_preparations p
+                SET state = 'Running', lease_token = {token},
+                    lease_until_utc = {until}, attempts = p.attempts + 1,
+                    updated_at_utc = {now}
+                FROM candidate c WHERE p.id = c.id
+                RETURNING p.id, p.attempts,
+                    c.previous_state, c.previous_attempt
             )
+            INSERT INTO incremental_preparation_events (
+                preparation_id, event_type, attempt, occurred_at_utc, error_code)
+            SELECT id,
+                CASE WHEN previous_state = 'Running'
+                    THEN 'LeaseReclaimed' ELSE 'Claimed' END,
+                CASE WHEN previous_state = 'Running'
+                    THEN previous_attempt ELSE attempts END,
+                {now}, NULL
+            FROM claimed
             """, ct);
         if (affected == 0)
         {
@@ -168,11 +221,24 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
 
         var run = await db.IncrementalPreparations.AsNoTracking()
             .SingleAsync(x => x.LeaseToken == token, ct);
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO incremental_preparation_events (
-                preparation_id, event_type, attempt, occurred_at_utc, error_code)
-            VALUES ({run.Id}, 'Claimed', {run.Attempts}, {now}, NULL)
-            """, ct);
+        var claimEvent = await db.IncrementalPreparationEvents.AsNoTracking()
+            .Where(x => x.PreparationId == run.Id)
+            .OrderByDescending(x => x.Id)
+            .Select(x => x.EventType).FirstAsync(ct);
+        if (claimEvent == "LeaseReclaimed")
+        {
+            // Two separately ordered immutable events. The first captures
+            // the fenced-out attempt; the second starts the successor.
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO incremental_preparation_events (
+                    preparation_id, event_type, attempt,
+                    occurred_at_utc, error_code)
+                VALUES ({run.Id}, 'Claimed', {run.Attempts}, {now}, NULL)
+                """, ct);
+        }
+        else if (claimEvent != "Claimed")
+            throw new IncrementalPreparationException(
+                "IncrementalRecoveryAuditMismatch");
         await transaction.CommitAsync(ct);
         return new(run.Id, run.SnapshotId, run.SourceConnectionId,
             run.DestinationConnectionId, token, run.Attempts);
@@ -191,7 +257,7 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
         // snapshot from replacing the current source catalog mid-preparation.
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock(hashtext({lease.SourceConnectionId.ToString()}), 732911)", ct);
-        var began = UtcNow(clock);
+        var began = await UtcNowAsync(ct);
         var locked = await db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE incremental_preparations SET updated_at_utc = {began}
             WHERE id = {lease.Id} AND snapshot_id = {lease.SnapshotId}
@@ -274,7 +340,7 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
         if (reviewed != actual)
             throw new IncrementalPreparationException("IncrementalJournalMismatch");
         var root = Convert.ToHexStringLower(digest.GetHashAndReset());
-        var now = UtcNow(clock);
+        var now = await UtcNowAsync(ct);
         var finished = await db.Database.ExecuteSqlInterpolatedAsync($"""
             WITH completed AS (
                 UPDATE incremental_preparations SET
@@ -308,7 +374,14 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
         if (errorCode.Length is < 1 or > 70 ||
             errorCode.Any(c => !char.IsAsciiLetterOrDigit(c)))
             throw new IncrementalPreparationException("UnsafePreparationErrorCode");
-        var now = UtcNow(clock);
+        // Another replica might be completing or renewing this row.
+        // Wait for its row lock BEFORE sampling the authoritative time.
+        // Otherwise an expiring lease could be accepted using stale now.
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT id FROM incremental_preparations WHERE id = {lease.Id} FOR UPDATE",
+            ct);
+        var now = await UtcNowAsync(ct);
         var seconds = Math.Min(300, 5 * (1 << Math.Min(lease.Attempt, 6)));
         var retryAt = now.AddSeconds(seconds);
         var finished = await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -332,6 +405,7 @@ public sealed class PostgresIncrementalPreparationRepository(AppDbContext db, Ti
             SELECT id, CASE WHEN state = 'Queued' THEN 'RetryScheduled' ELSE 'Failed' END,
                 attempts, {now}, {errorCode} FROM failed
             """, ct);
+        await transaction.CommitAsync(ct);
         return finished == 1;
     }
 

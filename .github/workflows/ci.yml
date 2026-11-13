@@ -7,6 +7,18 @@ on:
 permissions:
   contents: read
 
+# #132: never cancel an already RUNNING 55-minute PG17 main gate
+# when the next commit arrives on the sole main branch. Otherwise frequent
+# main-only development can perpetually prevent full 4/4 certification.
+# GitHub Actions concurrency permits at most one active and one pending
+# workflow in this group; a newer push may replace a PENDING run, not
+# terminate the already-running full physical-Git/PG17 tests.
+# Keep cancel-in-progress for PRs so only their current head is tested.
+# Ref-scoping prevents PR checks from blocking main.
+concurrency:
+  group: quality-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   backend:
     name: .NET 10 / xUnit
@@ -16,6 +28,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Fail fast on EF Core F-061 SQL brace regression
+        run: python3 script/check_f061_sql_format.py
       - name: Restore and test domain + business logic
         run: dotnet test src/backend/GitHubMigrator.slnx --verbosity normal --collect:"XPlat Code Coverage"
       - name: Compile actual ASP.NET API entrypoint
@@ -42,11 +56,18 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Install Playwright tests and browser
+      # The ubuntu-24.04 runner already carries Chromium's runtime
+      # libraries. --with-deps invokes apt, and the Ubuntu archive DNS
+      # can be unavailable even after npm + the production build succeed
+      # (run 43044355844). Browser-only installation avoids that flaky
+      # external apt dependency while keeping the real Chromium E2E gate.
+      # --only-shell matches Playwright's headless CI browser launch and
+      # avoids fetching the unused headed Chromium build.
+      - name: Install Playwright Chromium headless shell
         working-directory: tests/frontend
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          npx playwright install --only-shell chromium
       - name: Run UI contract tests
         working-directory: tests/frontend
         env:
@@ -102,11 +123,62 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - name: Verify ASP.NET API + PostgreSQL persistence, security and concurrency
+      - name: Verify F-061 bootstrap SQL formatting before integration
+        run: python3 script/check_f061_sql_format.py
+      - name: Verify safe TRX timing summarizer
+        run: python3 -m unittest discover -s script -p 'test_pg17_trx_timing_summary.py'
+      # #132: fail fast on permission/owner/runtime-host regressions
+      # before the expensive ~55-minute real SHA1/SHA256 Git suite.
+      # A second UNFILTERED dotnet test below still runs EVERY PG17 case.
+      # This smoke job runs on the same disposable PG17 service and its
+      # role/owner integration tests clean up test-only grants and roles.
+      # #130 immutable three-row historical readback is also tested early;
+      # its tests never write a protected F-061 journal or bypass a trigger.
+      - name: Smoke PostgreSQL role separation and restricted runtime HTTP
         env:
           GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
-        run: dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj --verbosity normal --collect:"XPlat Code Coverage"
-      - name: Upload PostgreSQL integration coverage
+        run: |
+          dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj \
+            --verbosity normal \
+            --filter "FullyQualifiedName~PostgresRestrictedRuntimeIdentityGrantTests|FullyQualifiedName~PostgresF061SecondReviewOwnerBoundaryTests|FullyQualifiedName~PostgresGitIncrementalLaterCheckpointMirrorRoleBoundaryTests|FullyQualifiedName~PostgresGitIncrementalLaterCheckpointMirrorSecondReviewJournalReadbackTests" \
+            --results-directory tests/integration/TestResults \
+            --logger "trx;LogFileName=pg17-runtime-role-smoke.trx"
+      - name: Verify ASP.NET API + PostgreSQL persistence, security and concurrency
+        id: full-pg17
+        env:
+          GITHUBMIGRATOR_TEST_POSTGRES: Host=localhost;Port=5432;Database=migrator_tests;Username=migrator_test;Password=ci-local-only-password;Pooling=false
+        # #132: retain complete, per-case xUnit durations as a TRX artifact,
+        # including failed runs. Keep ALL real PG17 tests and coverage.
+        # The explicit results directory matches the artifact upload glob.
+        run: |
+          dotnet test tests/integration/GitHubMigrator.Integration.Tests.csproj \
+            --verbosity normal \
+            --results-directory tests/integration/TestResults \
+            --logger "trx;LogFileName=postgres17-integration.trx" \
+            --collect:"XPlat Code Coverage"
+      # #132: no source Git ref/OID, local paths, raw test output or
+      # parameter values leave this aggregate report. Full test execution
+      # above stays unfiltered; even failed runs publish the TRX artifact.
+      - name: Summarize full PostgreSQL17 per-method durations
+        if: always()
+        env:
+          FULL_PG17_OUTCOME: ${{ steps.full-pg17.outcome }}
+        run: |
+          if [ "$FULL_PG17_OUTCOME" = "success" ]; then
+            # If the full suite succeeded, a missing TRX is a CI defect.
+            python3 script/pg17_trx_timing_summary.py \
+              tests/integration/TestResults/postgres17-integration.trx \
+              --output tests/integration/TestResults/postgres17-duration-summary.json \
+              --require-f097-physical-coverage
+          else
+            # On early failures the full integration test may never run.
+            # Existing partial TRX (when present) still gets summarized.
+            python3 script/pg17_trx_timing_summary.py \
+              tests/integration/TestResults/postgres17-integration.trx \
+              --output tests/integration/TestResults/postgres17-duration-summary.json \
+              --allow-missing
+          fi
+      - name: Upload PostgreSQL integration coverage and TRX timings
         if: always()
         uses: actions/upload-artifact@v4
         with:

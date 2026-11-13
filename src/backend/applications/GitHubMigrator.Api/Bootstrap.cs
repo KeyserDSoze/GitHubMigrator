@@ -135,6 +135,21 @@ public static class Bootstrap
                 ON incremental_preparations(snapshot_id, destination_connection_id);
             CREATE INDEX IF NOT EXISTS ix_incremental_preparations_ready
                 ON incremental_preparations(state, available_at_utc, created_at_utc);
+            -- F-066 source-scoped operational queue health. Never scan
+            -- unrelated organizations to produce diagnostic counters.
+            CREATE INDEX IF NOT EXISTS ix_f066_incremental_health_source_state
+                ON incremental_preparations(source_connection_id, state);
+            -- F-067 phase timings only visit recently prepared runs
+            -- belonging to the requested source. The immutable event
+            -- lookup already uses the (preparation_id, id) index.
+            CREATE INDEX IF NOT EXISTS ix_f067_incremental_prepared_source_time
+                ON incremental_preparations(source_connection_id, prepared_at_utc DESC)
+                WHERE state = 'Prepared';
+            -- F-069 recovery workers only inspect expired Running leases
+            -- and skip rows currently locked by another replica.
+            CREATE INDEX IF NOT EXISTS ix_f069_incremental_running_expiry
+                ON incremental_preparations(lease_until_utc, id)
+                WHERE state = 'Running';
             CREATE TABLE IF NOT EXISTS incremental_preparation_items (
                 preparation_id uuid NOT NULL REFERENCES incremental_preparations(id)
                     ON DELETE CASCADE,
@@ -233,6 +248,111 @@ public static class Bootstrap
             );
             CREATE INDEX IF NOT EXISTS ix_incremental_target_preflight_events
                 ON incremental_target_preflight_events(preparation_id, id);
+            -- F-029: immutable read-only operation specifications and explicit
+            -- denied-only execution-authorization attempts. No permit/outbox.
+            CREATE TABLE IF NOT EXISTS incremental_operation_plans (
+                id uuid PRIMARY KEY,
+                preparation_id uuid NOT NULL REFERENCES incremental_preparations(id)
+                    ON DELETE CASCADE,
+                snapshot_id uuid NOT NULL,
+                source_connection_id uuid NOT NULL,
+                destination_connection_id uuid NOT NULL,
+                organization varchar(100) NOT NULL,
+                review_sha256 varchar(64) NOT NULL,
+                preparation_sha256 varchar(64) NOT NULL,
+                preflight_sha256 varchar(64) NOT NULL,
+                manifest_sha256 varchar(64) NOT NULL,
+                created_at_utc timestamptz NOT NULL,
+                created_by uuid NOT NULL,
+                repository_count integer NOT NULL CHECK
+                    (repository_count BETWEEN 1 AND 10),
+                step_count integer NOT NULL CHECK (step_count BETWEEN 6 AND 60),
+                changed_ref_count integer NOT NULL CHECK (changed_ref_count >= 0),
+                sensitive_change_count integer NOT NULL CHECK (sensitive_change_count >= 0),
+                UNIQUE (preparation_id, preflight_sha256)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_incremental_operation_plans_proof
+                ON incremental_operation_plans(preparation_id, preflight_sha256);
+            CREATE TABLE IF NOT EXISTS incremental_operation_plan_steps (
+                plan_id uuid NOT NULL REFERENCES incremental_operation_plans(id)
+                    ON DELETE CASCADE,
+                ordinal integer NOT NULL CHECK (ordinal BETWEEN 1 AND 60),
+                depends_on_ordinal integer NULL,
+                source_repository_id varchar(256) NOT NULL,
+                target_repository_name varchar(100) NOT NULL,
+                kind varchar(40) NOT NULL,
+                state varchar(20) NOT NULL CHECK (state = 'Blocked'),
+                blocker_code varchar(64) NOT NULL,
+                changed_refs integer NOT NULL CHECK (changed_refs >= 0),
+                PRIMARY KEY (plan_id, ordinal)
+            );
+            -- F-031: append-only, digest-bound target Git ref observations.
+            -- The schema forbids publication of execution-ready evidence.
+            CREATE TABLE IF NOT EXISTS incremental_target_ref_evidence (
+                id uuid PRIMARY KEY,
+                plan_id uuid NOT NULL REFERENCES incremental_operation_plans(id)
+                    ON DELETE CASCADE,
+                source_repository_id varchar(256) NOT NULL,
+                target_repository_name varchar(100) NOT NULL,
+                organization varchar(100) NOT NULL,
+                manifest_sha256 varchar(64) NOT NULL,
+                evidence_sha256 varchar(64) NOT NULL,
+                observed_at_utc timestamptz NOT NULL,
+                destination_validated_at_utc timestamptz NULL,
+                ref_count integer NOT NULL CHECK (ref_count BETWEEN 0 AND 25000),
+                refs_json jsonb NOT NULL,
+                created_by uuid NOT NULL,
+                ready_for_execution boolean NOT NULL DEFAULT false
+                    CHECK (ready_for_execution = false),
+                UNIQUE (plan_id, source_repository_id, evidence_sha256)
+            );
+            CREATE INDEX IF NOT EXISTS ix_target_ref_evidence_latest
+                ON incremental_target_ref_evidence(plan_id, source_repository_id, observed_at_utc);
+            -- F-032: immutable, non-executable comparison of F-014 source
+            -- refs and F-031 target observations. No GitHub command outbox.
+            CREATE TABLE IF NOT EXISTS incremental_git_ref_reconciliations (
+                id uuid PRIMARY KEY,
+                plan_id uuid NOT NULL REFERENCES incremental_operation_plans(id)
+                    ON DELETE CASCADE,
+                snapshot_id uuid NOT NULL,
+                source_repository_id varchar(256) NOT NULL,
+                target_repository_name varchar(100) NOT NULL,
+                target_observation_id uuid NOT NULL REFERENCES incremental_target_ref_evidence(id)
+                    ON DELETE RESTRICT,
+                manifest_sha256 varchar(64) NOT NULL,
+                source_evidence_sha256 varchar(64) NOT NULL,
+                source_manifest_root_sha256 varchar(64) NULL,
+                target_evidence_sha256 varchar(64) NOT NULL,
+                reconciliation_sha256 varchar(64) NOT NULL,
+                created_at_utc timestamptz NOT NULL,
+                created_by uuid NOT NULL,
+                source_ref_count integer NOT NULL CHECK (source_ref_count BETWEEN 0 AND 25000),
+                target_ref_count integer NOT NULL CHECK (target_ref_count BETWEEN 0 AND 25000),
+                matching_count integer NOT NULL CHECK (matching_count >= 0),
+                create_candidate_count integer NOT NULL CHECK (create_candidate_count >= 0),
+                diverged_count integer NOT NULL CHECK (diverged_count >= 0),
+                target_only_count integer NOT NULL CHECK (target_only_count >= 0),
+                items_json jsonb NOT NULL,
+                ready_for_execution boolean NOT NULL DEFAULT false
+                    CHECK (ready_for_execution = false),
+                UNIQUE (plan_id, source_repository_id,
+                        target_observation_id, source_evidence_sha256)
+            );
+            CREATE INDEX IF NOT EXISTS ix_git_ref_reconciliations_latest
+                ON incremental_git_ref_reconciliations(plan_id,
+                    source_repository_id, created_at_utc);
+            CREATE TABLE IF NOT EXISTS incremental_execution_authorization_attempts (
+                id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                plan_id uuid NOT NULL REFERENCES incremental_operation_plans(id)
+                    ON DELETE CASCADE,
+                actor_id uuid NOT NULL,
+                at_utc timestamptz NOT NULL,
+                manifest_sha256 varchar(64) NOT NULL,
+                decision varchar(16) NOT NULL CHECK (decision = 'Denied'),
+                reason_code varchar(64) NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_incremental_execution_authorization_events
+                ON incremental_execution_authorization_attempts(plan_id, id);
             CREATE TABLE IF NOT EXISTS migration_jobs (
                 id uuid PRIMARY KEY,
                 kind varchar(40) NOT NULL,

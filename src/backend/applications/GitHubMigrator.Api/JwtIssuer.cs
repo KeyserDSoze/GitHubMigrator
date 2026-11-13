@@ -14,7 +14,16 @@ public sealed class JwtIssuer(UserManager<ApplicationUser> users, IConfiguration
         {
             new(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new(ClaimTypes.Name, user.UserName ?? ""),
-            new("password_changed", (!user.MustChangePassword).ToString().ToLowerInvariant())
+            new("password_changed", (!user.MustChangePassword).ToString().ToLowerInvariant()),
+            // #129: per-login revocation witness. Its ID is not proof
+            // of one-time use; the eventual writer must atomically
+            // consume a unique JTI in its own locked SQL transaction.
+            new("f061_review_session_id", Guid.NewGuid().ToString("N")),
+            new("f061_review_issued_at",
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(
+                    System.Globalization.CultureInfo.InvariantCulture)),
+            new("f061_review_security_stamp",
+                await users.GetSecurityStampAsync(user))
         };
         claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:SigningKey"]!));

@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace GitHubMigrator.Integration.Tests;
@@ -27,14 +28,46 @@ public sealed class ApiHarness : IAsyncLifetime
     public const string AdminPassword = "Admin-Test#1234";
     public const string UserPassword = "User-Test#1234";
     public const string PendingPassword = "Pending-Test#1234";
+    public const string SuperadminPassword = "Superadmin-Test#1234";
     public const string SourceToken = "AZDO-INTEGRATION-PAT-DO-NOT-LEAK";
     public const string TargetToken = "GITHUB-INTEGRATION-PAT-DO-NOT-LEAK";
     public const string SourceValue = "SENSITIVE_SOURCE_VALUE_DO_NOT_LEAK";
     public const string Sha = "aaaabbbbccccddddeeeeffff0000111122223333";
 
+    // Opt in only for dedicated API authorization tests. The default
+    // fixture must continue exercising the production default OFF.
+    public bool EnableCheckpointHumanReview { get; set; }
+    public bool EnableCheckpointTargetReadPreflight { get; set; }
+    public bool EnableCheckpointTargetObservation { get; set; }
+    public bool EnableLaterCheckpointAuditRead { get; set; }
+    public bool EnableLaterCheckpointWorkpack { get; set; }
+    public bool EnableLaterCheckpointHistory { get; set; }
+    public bool EnableLaterCheckpointBundleRead { get; set; }
+    public bool EnableLaterCheckpointBundleLease { get; set; }
+    public bool EnableLaterCheckpointLocalBundle { get; set; }
+    public bool EnableLaterCheckpointDurableBundle { get; set; }
+    public bool EnableLaterCheckpointMirrorStaging { get; set; }
+    public bool EnableLaterCheckpointMirrorAdmission { get; set; }
+    public bool EnableLaterCheckpointMirrorLease { get; set; }
+    public bool EnableLaterCheckpointMirrorVerified { get; set; }
+    public string? TrustedLocalVerifiedMirrorRoot { get; set; }
+    public bool EnableLaterCheckpointMirrorImportWorker { get; set; }
+    public bool EnableLaterCheckpointMirrorRecoveryInspection { get; set; }
+    public bool EnableLaterCheckpointMirrorRecoveryReview { get; set; }
+    public int LaterCheckpointMirrorHeartbeatMilliseconds { get; set; } = 250;
+    public string? TrustedLocalBundleSourceRoot { get; set; }
+    public string? TrustedLocalBundleOutputRoot { get; set; }
+    // Only integration fixtures may supply a deterministic clock. Normal
+    // production and default test hosts retain TimeProvider.System.
+    public TimeProvider? IntegrationClockOverride { get; set; }
+    public int TargetObjectIdLength { get; set; } = 40;
+    // Fake fixed-host provider fault injection; no real outbound network.
+    public string TargetObservationFault { get; set; } = "";
+
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
     public string PendingName { get; } = "pending-" + Guid.NewGuid().ToString("N");
+    public string SuperadminName { get; } = "reviewer-" + Guid.NewGuid().ToString("N");
     public Guid SourceConnectionId { get; } = Guid.NewGuid();
     public Guid DestinationConnectionId { get; } = Guid.NewGuid();
     public ConcurrentQueue<(string Method, Uri Url, string? AuthScheme)> Calls { get; } = new();
@@ -66,6 +99,78 @@ public sealed class ApiHarness : IAsyncLifetime
             ["ASPNETCORE_ENVIRONMENT"] = "Development",
             ["DOTNET_ENVIRONMENT"] = "Development"
         };
+        if (EnableCheckpointHumanReview)
+        {
+            values["GitCheckpointTargetHumanReview__Enabled"] = "true";
+            values["GitCheckpointTargetReReview__Enabled"] = "true";
+            values["GitHubSourceCheckpointGitRefLedger__Enabled"] = "true";
+            values["GitHubSourceSyncCheckpoints__Enabled"] = "true";
+        }
+        if (EnableCheckpointTargetReadPreflight)
+        {
+            values["GitCheckpointTargetReadPreflight__Enabled"] = "true";
+            values["GitCheckpointTargetHumanReview__Enabled"] = "true";
+            values["GitCheckpointTargetReReview__Enabled"] = "true";
+            values["GitHubSourceCheckpointGitRefLedger__Enabled"] = "true";
+            values["GitHubSourceSyncCheckpoints__Enabled"] = "true";
+        }
+        if (EnableLaterCheckpointAuditRead)
+            values["GitIncrementalLaterCheckpointAudit__Enabled"] = "true";
+        if (EnableLaterCheckpointWorkpack)
+            values["GitIncrementalLaterCheckpointWorkpack__Enabled"] = "true";
+        if (EnableLaterCheckpointHistory)
+            values["GitIncrementalLaterCheckpointHistory__Enabled"] = "true";
+        if (EnableLaterCheckpointBundleRead)
+            values["GitIncrementalLaterCheckpointBundleRead__Enabled"] = "true";
+        if (EnableLaterCheckpointBundleLease)
+            values["GitIncrementalLaterCheckpointBundleLease__Enabled"] = "true";
+        if (EnableLaterCheckpointLocalBundle)
+            values["GitIncrementalLaterCheckpointLocalBundle__Enabled"] = "true";
+        if (EnableLaterCheckpointDurableBundle)
+            values["GitIncrementalLaterCheckpointDurableBundle__Enabled"] = "true";
+        if (EnableLaterCheckpointMirrorStaging)
+            values["GitIncrementalLaterCheckpointMirrorStaging__Enabled"] = "true";
+        if (EnableLaterCheckpointMirrorAdmission)
+            values["GitIncrementalLaterCheckpointMirrorAdmission__Enabled"] = "true";
+        if (EnableLaterCheckpointMirrorLease)
+            values["GitIncrementalLaterCheckpointMirrorLease__Enabled"] = "true";
+        if (EnableLaterCheckpointMirrorVerified)
+        {
+            values["GitIncrementalLaterCheckpointMirrorVerified__Enabled"] = "true";
+            values["GitIncrementalLaterCheckpointMirrorVerified__PhysicalAuditEnabled"] = "true";
+        }
+        if (TrustedLocalVerifiedMirrorRoot is not null)
+            values["GitIncrementalLaterCheckpointMirrorVerified__MirrorRoot"] =
+                TrustedLocalVerifiedMirrorRoot;
+        if (EnableLaterCheckpointMirrorRecoveryInspection)
+            values["GitIncrementalLaterCheckpointMirrorRecoveryInspection__Enabled"] = "true";
+        if (EnableLaterCheckpointMirrorRecoveryReview)
+            values["GitIncrementalLaterCheckpointMirrorRecoveryReview__Enabled"] = "true";
+        if (EnableLaterCheckpointMirrorImportWorker)
+        {
+            values["GitIncrementalLaterCheckpointMirrorImportWorker__Enabled"] = "true";
+            values["GitIncrementalLaterCheckpointMirrorImportWorker__LocalImportEnabled"] = "true";
+            values["GitIncrementalLaterCheckpointMirrorImportWorker__LeaseSeconds"] = "180";
+            values["GitIncrementalLaterCheckpointMirrorImportWorker__HeartbeatMilliseconds"] =
+                LaterCheckpointMirrorHeartbeatMilliseconds.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture);
+        }
+        if (TrustedLocalBundleSourceRoot is not null &&
+            TrustedLocalBundleOutputRoot is not null)
+        {
+            values["GitSourceBundles__Enabled"] = "true";
+            values["GitSourceBundles__SourceRoot"] = TrustedLocalBundleSourceRoot;
+            values["GitSourceBundles__BundleRoot"] = TrustedLocalBundleOutputRoot;
+        }
+        if (EnableCheckpointTargetObservation)
+        {
+            values["GitCheckpointTargetObservation__Enabled"] = "true";
+            values["GitCheckpointTargetReadPreflight__Enabled"] = "true";
+            values["GitCheckpointTargetHumanReview__Enabled"] = "true";
+            values["GitCheckpointTargetReReview__Enabled"] = "true";
+            values["GitHubSourceCheckpointGitRefLedger__Enabled"] = "true";
+            values["GitHubSourceSyncCheckpoints__Enabled"] = "true";
+        }
         foreach (var pair in values)
         {
             _savedEnvironment[pair.Key] = Environment.GetEnvironmentVariable(pair.Key);
@@ -79,6 +184,13 @@ public sealed class ApiHarness : IAsyncLifetime
             builder.UseEnvironment("Development");
             builder.ConfigureTestServices(services =>
             {
+                // A single explicitly opted-in long-running physical Git
+                // fixture controls wall-time freshness while retaining all
+                // real PostgreSQL transactions and live source checks.
+                // Never change the default clock used by other tests.
+                if (IntegrationClockOverride is not null)
+                    services.Replace(ServiceDescriptor.Singleton<TimeProvider>(
+                        IntegrationClockOverride));
                 // App constructs the actual typed readers; their outbound transport is a strict stub.
                 services.AddHttpClient<AzureDevOpsWorkloadReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => azure);
@@ -90,6 +202,10 @@ public sealed class ApiHarness : IAsyncLifetime
                     .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubTargetRepositoryProbe>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
+                services.AddHttpClient<GitHubRefObservationReader>()
+                    .ConfigurePrimaryHttpMessageHandler(() => github);
+                services.AddHttpClient<GitHubImportRepositoryReader>()
+                    .ConfigurePrimaryHttpMessageHandler(() => github);
                 services.AddHttpClient<GitHubDestinationAccessReader>()
                     .ConfigurePrimaryHttpMessageHandler(() => github);
             });
@@ -100,11 +216,20 @@ public sealed class ApiHarness : IAsyncLifetime
         await AddUserAsync(users, AdminName, AdminPassword, "admin", false);
         await AddUserAsync(users, UserName, UserPassword, "user", false);
         await AddUserAsync(users, PendingName, PendingPassword, "admin", true);
+        await AddUserAsync(users, SuperadminName, SuperadminPassword, "superadmin", false);
         var connections = scope.ServiceProvider.GetRequiredService<IConnectionRepository>();
         var secrets = scope.ServiceProvider.GetRequiredService<IConnectionSecretStore>();
         var now = DateTimeOffset.UtcNow;
         await secrets.SaveAsync("mock-api-source-" + SourceConnectionId.ToString("N"), SourceToken, default);
         await secrets.SaveAsync("mock-api-target-" + DestinationConnectionId.ToString("N"), TargetToken, default);
+        if (EnableCheckpointTargetObservation)
+        {
+            // Independent real two-epoch F-029 test fixtures have a
+            // PostgreSQL-owned destination connection named "dest-secret".
+            // Only this explicit test host supplies its encrypted credential.
+            // The target-ref endpoint still has NO caller PAT or URL.
+            await secrets.SaveAsync("dest-secret", TargetToken, default);
+        }
         await connections.SaveAsync(new(SourceConnectionId, "Source Fixture", "azure-devops-services",
             ConnectionDirection.Source, "az-org", "mock-api-source-" + SourceConnectionId.ToString("N"),
             now, now, "Verified", "test", "not_verified"), default);
@@ -123,11 +248,13 @@ public sealed class ApiHarness : IAsyncLifetime
         Assert.True(added.Succeeded, string.Join(", ", added.Errors.Select(x => x.Code)));
     }
 
-    public async Task<string> LoginAsync(string name, string password)
+    public async Task<string> LoginAsync(
+        string name, string password, bool forceFresh = false)
     {
         // Reuse each real-login token across independent endpoint checks. The API login
         // limiter is intentionally only 8/minute; tests must not inadvertently exhaust it.
-        if (_issuedTokens.TryGetValue(name, out var existing)) return existing;
+        if (!forceFresh && _issuedTokens.TryGetValue(name, out var existing))
+            return existing;
         using var response = await Client.PostAsJsonAsync("/api/auth/login", new { username = name, password });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -214,7 +341,7 @@ public sealed class ApiHarness : IAsyncLifetime
         throw new InvalidOperationException("Unmocked Azure route: " + path);
     }
 
-    private static HttpResponseMessage ReplyGitHub(HttpRequestMessage req)
+    private HttpResponseMessage ReplyGitHub(HttpRequestMessage req)
     {
         var path = req.RequestUri!.AbsolutePath;
         if (path.EndsWith("/actions/secrets", StringComparison.Ordinal))
@@ -231,8 +358,54 @@ public sealed class ApiHarness : IAsyncLifetime
             return Json("""{"state":"active","role":"admin","user":{"login":"test"},"organization":{"login":"gh-org"}}""");
         if (path == "/orgs/gh-org")
             return Json("""{"login":"gh-org","members_can_create_private_repositories":true}""");
+        if (path == "/repos/gh-org/migration-one/git/matching-refs/heads")
+        {
+            if (TargetObservationFault == "hidden")
+                return new(HttpStatusCode.NotFound);
+            if (TargetObservationFault == "denied")
+                return new(HttpStatusCode.Forbidden);
+            if (TargetObservationFault == "rate-limited")
+                return new(HttpStatusCode.TooManyRequests);
+            if (TargetObservationFault == "redirect")
+                return new(HttpStatusCode.Redirect) {
+                    Headers = { Location = new Uri("https://outside.invalid/secret") }
+                };
+            if (TargetObservationFault == "malformed")
+                return Json("""{"unexpected":"response"}""");
+            var result = Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/heads/main",
+                    @object = new {
+                        sha = new string('c', TargetObservationFault == "wrong-oid"
+                            ? (TargetObjectIdLength == 40 ? 64 : 40)
+                            : TargetObjectIdLength),
+                        type = "commit"
+                    } }
+            }));
+            if (TargetObservationFault == "partial")
+                result.Headers.TryAddWithoutValidation(
+                    "Link", "<https://api.github.com/next>; rel=\"next\"");
+            return result;
+        }
+        if (path == "/repos/gh-org/migration-one/git/matching-refs/tags")
+            return Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/tags/v1",
+                    @object = new {
+                        sha = new string('d', TargetObjectIdLength),
+                        type = "tag"
+                    } }
+            }));
+        if (path == "/repos/gh-org/occupied/git/matching-refs/heads")
+            return Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/heads/main",
+                    @object = new { sha = Sha, type = "commit" } }
+            }));
+        if (path == "/repos/gh-org/occupied/git/matching-refs/tags")
+            return Json(JsonSerializer.Serialize(new[] {
+                new { @ref = "refs/tags/v1",
+                    @object = new { sha = Sha, type = "tag" } }
+            }));
         if (path == "/repos/gh-org/occupied")
-            return Json("""{"full_name":"gh-org/occupied"}""");
+            return Json("""{"full_name":"gh-org/occupied","owner":{"login":"gh-org"},"archived":false,"disabled":false,"permissions":{"push":true}}""");
         if (path == "/repos/gh-org/hidden")
             return new(HttpStatusCode.NotFound);
         if (path == "/repos/gh-org/denied")

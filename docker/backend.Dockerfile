@@ -20,6 +20,11 @@ ENTRYPOINT ["dotnet", "test", "tests/integration/GitHubMigrator.Integration.Test
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
+# Required only for verified F-035/036 local Git object acquisition.
+# Install in the root build phase, never run Git as root at runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+# aspnet:10.0 is Ubuntu 24.04 and ships useradd, not adduser.
 RUN useradd --system --home-dir /app --shell /usr/sbin/nologin appuser
 USER appuser
 COPY --from=build /app/publish .

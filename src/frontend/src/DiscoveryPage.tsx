@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, RefreshCw, ShieldAlert, Users } from 'lucide-react';
-import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type StagingChangeSummary, type IncrementalPreparation, type IncrementalReview, type IncrementalTargetPreflight, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
+import { api, type Connection, type DiscoveryDetail, type DiscoverySummary, type MigrationJob, type StagingSyncResult, type StagingChangeSummary, type IncrementalPreparation, type IncrementalReview, type IncrementalTargetPreflight, type IncrementalOperationPlan, type DiscoveryRefIngestProgress, type DiscoveryRefManifest, type DiscoveryIdentityProgress, type DiscoveryGroupProgress, type DiscoveryMembershipProgress, type DiscoveryAclProgress } from './api';
 
 type Tab = 'projects' | 'users' | 'security' | 'issues';
 
-export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: {
+export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false, onViewReconciliation }: {
   token: string; isAdmin: boolean; isSuperAdmin?: boolean;
+  onViewReconciliation?: (preparationId: string, planId: string) => void;
 }) {
   const { t } = useTranslation();
   const [sources, setSources] = useState<Connection[]>([]);
@@ -22,6 +23,7 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
   const [review, setReview] = useState<IncrementalReview | null>(null);
   const [targetPreflight, setTargetPreflight] =
     useState<IncrementalTargetPreflight | null>(null);
+  const [operationPlan, setOperationPlan] = useState<IncrementalOperationPlan | null>(null);
   const [targetSelections, setTargetSelections] =
     useState<Record<string, { selected: boolean; name: string }>>({});
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
@@ -91,6 +93,7 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
   async function viewSnapshot(id: string) {
     setSelectedId(id); setDetail(null); setStaging(null); setJob(null); setTab('projects'); setError('');
     setPreparation(null); setReview(null); setTargetPreflight(null);
+    setOperationPlan(null);
     setRiskAcknowledged(false); setReviewReason('');
     try {
       const data = await api.getDiscovery(token, id);
@@ -139,7 +142,7 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
     try {
       const run = await api.enqueueIncrementalPreparation(token, selectedId, destinationId);
       setPreparation(run);
-      setReview(null); setTargetPreflight(null);
+      setReview(null); setTargetPreflight(null); setOperationPlan(null);
       setRiskAcknowledged(false); setReviewReason('');
       setNotice(t('incrementalQueued'));
     } catch (e) {
@@ -192,8 +195,22 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
       const result = await api.runLiveTargetPreflight(
         token, preparation.id, review.dryRunSha256, selections);
       setTargetPreflight(result);
+      setOperationPlan(null);
       setNotice(t('targetPreflightSaved'));
     } catch { setError(t('targetPreflightError')); }
+    finally { setBusy(false); }
+  }
+
+  async function createOperationalPlan() {
+    if (!preparation || !targetPreflight?.isCurrent ||
+        review?.state !== 'ApprovedForPlanning') return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const plan = await api.createIncrementalOperationPlan(
+        token, preparation.id, targetPreflight.evidenceSha256);
+      setOperationPlan(plan);
+      setNotice(t('operationPlanSaved'));
+    } catch { setError(t('operationPlanError')); }
     finally { setBusy(false); }
   }
 
@@ -242,6 +259,18 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
       .catch(() => { if (active) setTargetPreflight(null); });
     return () => { active = false; };
   }, [preparation?.id, review?.state, review?.isCurrent, token]);
+
+  useEffect(() => {
+    if (!preparation || !targetPreflight ||
+        review?.state !== 'ApprovedForPlanning') {
+      setOperationPlan(null); return;
+    }
+    let active = true;
+    void api.listIncrementalOperationPlans(token, preparation.id)
+      .then(items => { if (active) setOperationPlan(items[0] ?? null); })
+      .catch(() => { if (active) setOperationPlan(null); });
+    return () => { active = false; };
+  }, [preparation?.id, targetPreflight?.evidenceSha256, review?.state, token]);
 
   useEffect(() => {
     if (!preparation || preparation.state !== 'Prepared') {
@@ -548,6 +577,40 @@ export default function DiscoveryPage({ token, isAdmin, isSuperAdmin = false }: 
           {targetPreflight.repositories.map(r => <p key={r.sourceRepositoryId}>
             {r.targetRepositoryName}: {r.status}
           </p>)}
+        </>}
+      </section>}
+    {preparation?.snapshotId === selectedId &&
+      review?.state === 'ApprovedForPlanning' && targetPreflight && <section
+        className="notice" aria-label={t('operationPlanTitle')}>
+        <strong>{t('operationPlanTitle')}</strong>
+        <p>{t('operationPlanSafety')}</p>
+        <button type="button" className="plan-secondary"
+          disabled={busy || !targetPreflight.isCurrent}
+          onClick={() => { void createOperationalPlan(); }}>
+          {t('operationPlanBuild')}
+        </button>
+        {operationPlan && <>
+          <p>{t('operationPlanDigest')}: <code>
+            {operationPlan.manifestSha256.slice(0, 16)}…
+          </code>
+            {' · '}{operationPlan.repositoryCount} {t('operationPlanRepositories')}
+            {' · '}{operationPlan.stepCount} {t('operationPlanSteps')}
+            {' · '}{operationPlan.changedRefCount} {t('operationPlanChangedRefs')}
+            {' · '}{operationPlan.isCurrent
+              ? t('incrementalDryRunCurrent') : t('incrementalDryRunStale')}
+          </p>
+          <p>{t('operationPlanBlockers')}: {operationPlan.blockers.join(', ')}</p>
+          {preparation && onViewReconciliation && <button type="button" className="plan-secondary"
+            onClick={() => onViewReconciliation(preparation.id, operationPlan.id)}>
+            {t('refOpenWorkbench')}
+          </button>}
+          <details>
+            <summary>{t('operationPlanSteps')}</summary>
+            <ol>{operationPlan.steps.map(s => <li key={s.ordinal}>
+              {s.sourceRepositoryId} → {s.targetRepositoryName}:
+              {' '}{s.kind} ({s.blockerCode})
+            </li>)}</ol>
+          </details>
         </>}
       </section>}
     {changeSummary?.snapshotId === selectedId && <section

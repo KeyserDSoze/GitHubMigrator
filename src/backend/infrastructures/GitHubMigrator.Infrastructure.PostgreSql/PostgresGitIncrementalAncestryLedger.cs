@@ -1,0 +1,437 @@
+using System.Data;
+using System.Text.Json;
+using GitHubMigrator.Business;
+using Microsoft.EntityFrameworkCore;
+
+namespace GitHubMigrator.Infrastructure.PostgreSql;
+
+// F-095 internal only, default disabled. The public HTTP layer has no
+// endpoint for issuing this audit, accepting OIDs or allowing GitHub writes.
+// Physical F-094 checks are performed BEFORE publication, then source/target
+// proofs are re-read under one PostgreSQL source lock and atomically recorded.
+public sealed class PostgresGitIncrementalAncestryLedger(
+    AppDbContext db, TimeProvider clock,
+    GitIncrementalAncestryLedgerOptions options,
+    IIncrementalOperationPlanRepository plans,
+    IGitHubSourceSyncCheckpointJournal checkpoints,
+    IVerifiedSourceGitRefReader sourceRefs,
+    ILocalGitIncrementalAncestryAuditor physical)
+    : IGitIncrementalAncestryLedger
+{
+    private static GitIncrementalAncestryLedgerException Refused(string code) =>
+        new(code);
+
+    private void RequireEnabled()
+    {
+        if (!options.Enabled)
+            throw Refused("GitAncestryLedgerDisabled");
+    }
+
+    private static bool Sha(string? value) =>
+        value is { Length: 64 } &&
+        value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    public async Task<GitIncrementalAncestryLedgerEntry> AuditAndRecordAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        Guid targetObservationId, string sourceRepositoryId,
+        string expectedTargetEvidenceSha256,
+        Guid targetSandboxId, Guid actorId, CancellationToken ct,
+        Guid? sourceWorkpackId = null)
+    {
+        RequireEnabled();
+        if (preparationId == Guid.Empty || planId == Guid.Empty ||
+            checkpointId == Guid.Empty || targetObservationId == Guid.Empty ||
+            targetSandboxId == Guid.Empty || actorId == Guid.Empty ||
+            sourceRepositoryId is not { Length: >= 1 and <= 256 } ||
+            !Sha(expectedTargetEvidenceSha256))
+            throw Refused("GitAncestryLedgerRequestInvalid");
+
+        // No client-supplied source OIDs, destination OIDs, filesystem paths,
+        // URLs, tokens, refspecs, audit result or evidence fingerprints.
+        // Every byte of expected refs comes from verified DB snapshots.
+        var first = await ReadTrustedAsync(preparationId, planId,
+            checkpointId, targetObservationId,
+            sourceRepositoryId, expectedTargetEvidenceSha256,
+            requireCurrent: true, ct);
+        GitIncrementalSourceMirrorBinding? mirror = null;
+        if (options.RequireBoundSourceMirror)
+        {
+            if (sourceWorkpackId is null || sourceWorkpackId == Guid.Empty)
+                throw Refused("GitAncestryLedgerWorkpackRequired");
+            mirror = await ReadSourceMirrorAsync(first.Plan, first.Source, first.Target,
+                sourceWorkpackId.Value, requireFresh: true, ct);
+        }
+        var request = new GitIncrementalAncestryRequest(
+            first.Checkpoint.Proof.SnapshotId, targetSandboxId,
+            checkpointId, first.Checkpoint.RefChangeAttestationSha256!,
+            targetObservationId, first.Target.View.EvidenceSha256,
+            first.Source.Refs,
+            first.Target.Observation.AsMirrorRefs(),
+            mirror?.MirrorId, mirror?.MirrorProofSha256);
+
+        // The runner is offline, deployment-owned and independently gated.
+        // A broken/missing mirror aborts without inserting any ledger row.
+        var audited = await physical.AuditAsync(request, ct);
+        try
+        {
+            GitIncrementalAncestryLedgerIntegrity.VerifyBinding(
+                first.Plan, first.Checkpoint, first.Source,
+                first.Target.View, first.Target.Observation,
+                audited, true);
+        }
+        catch (GitIncrementalAncestryLedgerException) { throw; }
+        catch (Exception e) when (e is GitIncrementalAncestryException
+            or IncrementalGitRefReconciliationException)
+        { throw Refused("GitAncestryLedgerEvidenceInvalid"); }
+
+        if (mirror is not null)
+            GitIncrementalSourceMirrorBindingIntegrity.VerifyAudit(
+                first.Plan, first.Source, mirror, audited,
+                clock.GetUtcNow(), requireFresh: true);
+
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted, ct);
+        // Same source-scoped fencing key used by F-029/F-031/F-090.
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtext({first.Plan.SourceConnectionId.ToString()}), 732911)",
+            ct);
+        var trusted = await ReadTrustedAsync(preparationId, planId,
+            checkpointId, targetObservationId, sourceRepositoryId,
+            expectedTargetEvidenceSha256, requireCurrent: true, ct);
+
+        GitIncrementalAncestryLedgerIntegrity.VerifyBinding(
+            trusted.Plan, trusted.Checkpoint, trusted.Source,
+            trusted.Target.View, trusted.Target.Observation,
+            audited, true);
+        if (mirror is not null)
+        {
+            var reloadedMirror = await ReadSourceMirrorAsync(
+                trusted.Plan, trusted.Source, trusted.Target,
+                mirror.WorkpackId, requireFresh: true, ct);
+            GitIncrementalSourceMirrorBindingIntegrity.VerifyAudit(
+                trusted.Plan, trusted.Source, reloadedMirror, audited,
+                clock.GetUtcNow(), requireFresh: true);
+        }
+
+        var existing = await db.GitIncrementalAncestryLedgers.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.PlanId == planId &&
+                x.CheckpointId == checkpointId &&
+                x.TargetObservationId == targetObservationId &&
+                x.SourceRepositoryId == sourceRepositoryId, ct);
+        if (existing is not null)
+        {
+            if (existing.ReceiptSha256 != audited.EvidenceSha256)
+                throw Refused("GitAncestryLedgerReplayConflict");
+            var replay = await VerifiedAsync(existing, trusted, ct);
+            await tx.CommitAsync(ct);
+            return replay;
+        }
+
+        var at = DateTimeOffset.FromUnixTimeMilliseconds(
+            clock.GetUtcNow().ToUnixTimeMilliseconds());
+        var record = new GitIncrementalAncestryLedgerRecord
+        {
+            Id = Guid.NewGuid(), PreparationId = preparationId,
+            PlanId = planId, CheckpointId = checkpointId,
+            TargetObservationId = targetObservationId,
+            SourceRepositoryId = sourceRepositoryId,
+            TargetRepositoryName = trusted.Target.View.TargetRepositoryName,
+            OperationManifestSha256 = trusted.Plan.ManifestSha256,
+            SourceEvidenceSha256 = trusted.Source.SourceEvidenceSha256,
+            SourceCheckpointAttestationSha256 =
+                trusted.Checkpoint.RefChangeAttestationSha256!,
+            TargetEvidenceSha256 = trusted.Target.View.EvidenceSha256,
+            ReceiptSha256 = audited.EvidenceSha256,
+            ReceiptJson = JsonSerializer.Serialize(audited),
+            RecordedBy = actorId, RecordedAtUtc = at,
+            CanPush = false, CanRetry = false, CanDispatch = false,
+            MigrationComplete = false
+        };
+        db.GitIncrementalAncestryLedgers.Add(record);
+        db.GitIncrementalAncestryLedgerEvents.Add(
+            new GitIncrementalAncestryLedgerEventRecord
+            {
+                LedgerId = record.Id, Type = "Recorded", ActorId = actorId,
+                ReceiptSha256 = audited.EvidenceSha256,
+                OccurredAtUtc = at
+            });
+        await db.SaveChangesAsync(ct);
+        var saved = await VerifiedAsync(record, trusted, ct);
+        await tx.CommitAsync(ct);
+        return saved;
+    }
+
+    public async Task<GitIncrementalAncestryLedgerEntry?> GetAsync(
+        Guid preparationId, Guid planId, Guid ledgerId,
+        CancellationToken ct)
+    {
+        RequireEnabled();
+        if (preparationId == Guid.Empty || planId == Guid.Empty ||
+            ledgerId == Guid.Empty)
+            throw Refused("GitAncestryLedgerRequestInvalid");
+
+        await using var tx = await db.Database.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead, ct);
+        var row = await db.GitIncrementalAncestryLedgers.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == ledgerId &&
+                x.PlanId == planId && x.PreparationId == preparationId, ct);
+        if (row is null) return null;
+        // Historic evidence stays readable when F-031 freshness expires or
+        // later F-090 source checkpoints are captured. Never label as live.
+        var trusted = await ReadTrustedAsync(preparationId, planId,
+            row.CheckpointId, row.TargetObservationId,
+            row.SourceRepositoryId, row.TargetEvidenceSha256,
+            requireCurrent: false, ct);
+        var entry = await VerifiedAsync(row, trusted, ct);
+        if (entry.Receipt.Request.SourcePhysicalMirrorId is Guid mirrorId)
+        {
+            var sourceMirror = await db.GitSourceMirrorLifecycles.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.MirrorId == mirrorId, ct)
+                ?? throw Refused("GitAncestryLedgerMirrorHistoryCorrupt");
+            var verifiedMirror = await ReadSourceMirrorAsync(
+                trusted.Plan, trusted.Source, trusted.Target,
+                sourceMirror.WorkpackId, requireFresh: false, ct);
+            try
+            {
+                GitIncrementalSourceMirrorBindingIntegrity.VerifyAudit(
+                    trusted.Plan, trusted.Source, verifiedMirror,
+                    entry.Receipt, clock.GetUtcNow(), requireFresh: false);
+            }
+            catch (GitIncrementalAncestryLedgerException)
+            { throw Refused("GitAncestryLedgerMirrorHistoryCorrupt"); }
+        }
+        await tx.CommitAsync(ct);
+        return entry;
+    }
+
+    private async Task<(
+        IncrementalOperationPlan Plan,
+        GitHubSourceSyncCheckpointReceipt Checkpoint,
+        VerifiedSourceGitRefs Source,
+        (GitHubTargetRefEvidenceView View, GitHubRefObservation Observation) Target
+        )> ReadTrustedAsync(
+        Guid preparationId, Guid planId, Guid checkpointId,
+        Guid targetObservationId, string sourceRepositoryId,
+        string expectedTargetEvidenceSha256,
+        bool requireCurrent, CancellationToken ct)
+    {
+        var plan = await plans.GetAsync(preparationId, planId, ct)
+            ?? throw Refused("GitAncestryLedgerPlanNotFound");
+        if ((requireCurrent && !plan.IsCurrent) ||
+            plan.ReadyForExecution)
+            throw Refused("GitAncestryLedgerPlanStale");
+        var checkpoint = await checkpoints.GetVerifiedAsync(
+            preparationId, planId, checkpointId, ct)
+            ?? throw Refused("GitAncestryLedgerCheckpointNotFound");
+        if (checkpoint.EvidenceVersion != 2 ||
+            checkpoint.Proof.SnapshotId != plan.SnapshotId ||
+            !checkpoint.Proof.IsBaselineSnapshot ||
+            checkpoint.RefChangeAttestationSha256 is null)
+            throw Refused("GitAncestryLedgerSourceEpochUnsupported");
+
+        if (requireCurrent)
+        {
+            // Never publish a proof for a superseded F-090 epoch.
+            var latest = await (from cp in db.GitHubSourceSyncCheckpoints.AsNoTracking()
+                join sync in db.StagingSnapshotSyncs.AsNoTracking()
+                    on cp.SnapshotId equals sync.SnapshotId
+                where cp.PlanId == planId
+                orderby sync.SourceCollectedAtUtc descending, cp.Id descending
+                select cp.Id).FirstOrDefaultAsync(ct);
+            if (latest != checkpointId)
+                throw Refused("GitAncestryLedgerSourceEpochStale");
+        }
+
+        VerifiedSourceGitRefs source;
+        try { source = await sourceRefs.ReadAsync(plan, sourceRepositoryId, ct); }
+        catch (Exception e) when (e is IncrementalGitRefReconciliationException
+            or DiscoveryRefManifestException
+            or StagingSyncInputException)
+        { throw Refused("GitAncestryLedgerSourceEvidenceUnavailable"); }
+
+        (GitHubTargetRefEvidenceView View, GitHubRefObservation Observation)? target;
+        try
+        {
+            target = await new PostgresGitHubTargetRefEvidenceStore(db, clock)
+                .ReadVerifiedSnapshotAsync(preparationId, planId,
+                    targetObservationId, ct);
+        }
+        catch (GitHubTargetRefEvidenceException)
+        { throw Refused("GitAncestryLedgerTargetEvidenceCorrupt"); }
+        if (target is null)
+            throw Refused("GitAncestryLedgerTargetObservationNotFound");
+        if (target.Value.View.EvidenceSha256 != expectedTargetEvidenceSha256 ||
+            (requireCurrent && !target.Value.View.IsCurrent))
+            throw Refused("GitAncestryLedgerTargetEvidenceStale");
+
+        return (plan, checkpoint, source, target.Value);
+    }
+
+    // F-096: resolve the physical F-060 mirror only by the internal
+    // F-035 workpack key, never by a user-provided local path. All fields
+    // are independently checked again under the source lock after fsck.
+    private async Task<GitIncrementalSourceMirrorBinding> ReadSourceMirrorAsync(
+        IncrementalOperationPlan plan, VerifiedSourceGitRefs source,
+        (GitHubTargetRefEvidenceView View, GitHubRefObservation Observation) target,
+        Guid workpackId, bool requireFresh, CancellationToken ct)
+    {
+        if (workpackId == Guid.Empty)
+            throw Refused("GitAncestryLedgerWorkpackRequired");
+        var mirrorId = GitSourceSnapshotMirrorIntegrity.PhysicalMirrorId(
+            plan.SnapshotId, workpackId);
+        var row = await db.GitSourceMirrorLifecycles.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.MirrorId == mirrorId, ct)
+            ?? throw Refused("GitAncestryLedgerMirrorNotVerified");
+        var bundle = await db.GitSourceBundleEvidence.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.WorkpackId == workpackId &&
+                x.PlanId == plan.Id, ct)
+            ?? throw Refused("GitAncestryLedgerBundleNotFound");
+        var workpack = await db.GitTransferWorkpacks.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == workpackId &&
+                x.PlanId == plan.Id, ct)
+            ?? throw Refused("GitAncestryLedgerWorkpackInvalid");
+        var reconciliation = await db.IncrementalGitRefReconciliations
+            .AsNoTracking().SingleOrDefaultAsync(x =>
+                x.Id == bundle.ReconciliationId && x.PlanId == plan.Id, ct)
+            ?? throw Refused("GitAncestryLedgerReconciliationInvalid");
+        GitMirrorRefReconciliation compared;
+        try
+        {
+            compared = GitMirrorRefReconciler.Compare(new(
+                plan.Id, plan.ManifestSha256,
+                source.SourceEvidenceSha256, target.View.EvidenceSha256,
+                source.Refs, target.Observation.AsMirrorRefs()));
+        }
+        catch (GitMirrorRefReconciliationException)
+        { throw Refused("GitAncestryLedgerReconciliationInvalid"); }
+        GitMirrorRefComparison[] storedComparisons;
+        try
+        {
+            storedComparisons = JsonSerializer.Deserialize<
+                GitMirrorRefComparison[]>(reconciliation.ItemsJson)
+                ?? throw new JsonException();
+        }
+        catch (JsonException)
+        { throw Refused("GitAncestryLedgerReconciliationInvalid"); }
+
+        var lastEvent = await db.GitSourceMirrorLifecycleEvents.AsNoTracking()
+            .Where(x => x.MirrorId == mirrorId)
+            .OrderByDescending(x => x.Id).FirstOrDefaultAsync(ct);
+        if (row.State != GitSourceMirrorLifecycleStates.Verified ||
+            row.SourceSnapshotId != plan.SnapshotId ||
+            row.PlanId != plan.Id || row.WorkpackId != workpackId ||
+            row.LeaseGeneration < 1 || row.LeasedBy is not null ||
+            row.LeaseToken is not null || row.LeaseExpiresAtUtc is not null ||
+            row.FailureCode is not null ||
+            row.ObjectSetSha256 is null || row.ObjectCount is null ||
+            row.MirrorProofSha256 is null || row.VerifiedAtUtc is null ||
+            row.ReconciliationId != bundle.ReconciliationId ||
+            reconciliation.SnapshotId != plan.SnapshotId ||
+            reconciliation.SourceRepositoryId != source.SourceRepositoryId ||
+            reconciliation.TargetRepositoryName != target.View.TargetRepositoryName ||
+            reconciliation.TargetObservationId != target.View.Id ||
+            reconciliation.ManifestSha256 != plan.ManifestSha256 ||
+            reconciliation.SourceEvidenceSha256 != source.SourceEvidenceSha256 ||
+            reconciliation.TargetEvidenceSha256 != target.View.EvidenceSha256 ||
+            reconciliation.ReconciliationSha256 != compared.ReconciliationSha256 ||
+            reconciliation.SourceRefCount != compared.SourceRefCount ||
+            reconciliation.TargetRefCount != compared.TargetRefCount ||
+            reconciliation.MatchingCount != compared.MatchingCount ||
+            reconciliation.CreateCandidateCount != compared.CreateCandidateCount ||
+            reconciliation.DivergedCount != compared.DivergedCount ||
+            reconciliation.TargetOnlyCount != compared.TargetOnlyCount ||
+            !storedComparisons.SequenceEqual(compared.Items) ||
+            reconciliation.ReadyForExecution ||
+            workpack.ReconciliationId != reconciliation.Id ||
+            workpack.SourceConnectionId != plan.SourceConnectionId ||
+            workpack.SourceRepositoryId != source.SourceRepositoryId ||
+            workpack.TargetRepositoryName != target.View.TargetRepositoryName ||
+            workpack.ManifestSha256 != plan.ManifestSha256 ||
+            workpack.TargetEvidenceSha256 != target.View.EvidenceSha256 ||
+            workpack.ReconciliationSha256 != reconciliation.ReconciliationSha256 ||
+            workpack.State != GitTransferWorkpackStates.Blocked ||
+            workpack.Phase != GitTransferWorkpackPhases.WriteBlocked ||
+            workpack.BlockedAtUtc is null ||
+            workpack.LastErrorCode != "DestinationWritesNotAuthorized" ||
+            workpack.ReadyForExecution ||
+            row.BundleSha256 != bundle.BundleSha256 ||
+            row.SourceEvidenceSha256 != bundle.SourceEvidenceSha256 ||
+            row.ReconciliationId == Guid.Empty ||
+            bundle.SourceRepositoryId != source.SourceRepositoryId ||
+            bundle.ReconciliationSha256 != reconciliation.ReconciliationSha256 ||
+            bundle.SourceEvidenceSha256 != source.SourceEvidenceSha256 ||
+            bundle.BundleFileName != workpackId.ToString("N") + ".bundle" ||
+            bundle.BundleBytes is < 1 or > 536_870_912 ||
+            bundle.ReadyForExecution ||
+            lastEvent is null || lastEvent.Type != "Verified" ||
+            lastEvent.Generation != row.LeaseGeneration ||
+            lastEvent.WorkerId == Guid.Empty ||
+            lastEvent.OccurredAtUtc != row.UpdatedAtUtc)
+            throw Refused("GitAncestryLedgerMirrorNotVerified");
+
+        var bridge = new GitIncrementalSourceMirrorBinding(
+            row.MirrorId, row.SourceSnapshotId, row.WorkpackId,
+            row.PlanId, row.ReconciliationId, bundle.SourceRepositoryId,
+            row.SourceEvidenceSha256, row.BundleSha256,
+            bundle.RefCount, row.RefsSha256,
+            row.ObjectSetSha256, row.ObjectCount.Value,
+            row.MirrorProofSha256, row.VerifiedAtUtc.Value,
+            row.State, row.RemotePushInvoked, row.RemoteWritesAuthorized,
+            row.MayAutomaticallyRetry, row.MigrationComplete);
+        GitIncrementalSourceMirrorBindingIntegrity.VerifyContext(
+            plan, source, bridge, clock.GetUtcNow(), requireFresh);
+        return bridge;
+    }
+
+    private async Task<GitIncrementalAncestryLedgerEntry> VerifiedAsync(
+        GitIncrementalAncestryLedgerRecord row,
+        (IncrementalOperationPlan Plan,
+         GitHubSourceSyncCheckpointReceipt Checkpoint,
+         VerifiedSourceGitRefs Source,
+         (GitHubTargetRefEvidenceView View, GitHubRefObservation Observation) Target
+        ) trusted,
+        CancellationToken ct)
+    {
+        GitIncrementalAncestryReceipt audited;
+        try
+        {
+            audited = JsonSerializer.Deserialize<GitIncrementalAncestryReceipt>(
+                row.ReceiptJson) ?? throw new JsonException();
+        }
+        catch (JsonException)
+        { throw Refused("GitAncestryLedgerHistoryCorrupt"); }
+
+        var entry = new GitIncrementalAncestryLedgerEntry(
+            row.Id, row.PreparationId, row.PlanId,
+            row.SourceRepositoryId, row.TargetRepositoryName,
+            row.OperationManifestSha256, row.SourceEvidenceSha256, audited,
+            row.RecordedBy, row.RecordedAtUtc,
+            row.CanPush, row.CanRetry, row.CanDispatch, row.MigrationComplete);
+        try
+        {
+            GitIncrementalAncestryLedgerIntegrity.VerifyEntry(
+                entry, trusted.Plan, trusted.Checkpoint, trusted.Source,
+                trusted.Target.View, trusted.Target.Observation);
+        }
+        catch (GitIncrementalAncestryLedgerException)
+        { throw Refused("GitAncestryLedgerHistoryCorrupt"); }
+
+        if (row.CheckpointId != audited.Request.SourceCheckpointId ||
+            row.TargetObservationId != audited.Request.TargetObservationId ||
+            row.ReceiptSha256 != audited.EvidenceSha256 ||
+            row.SourceCheckpointAttestationSha256 !=
+                audited.Request.SourceCheckpointAttestationSha256 ||
+            row.TargetEvidenceSha256 !=
+                audited.Request.TargetObservationSha256)
+            throw Refused("GitAncestryLedgerHistoryCorrupt");
+
+        var events = await db.GitIncrementalAncestryLedgerEvents.AsNoTracking()
+            .Where(x => x.LedgerId == row.Id).Take(2).ToArrayAsync(ct);
+        if (events.Length != 1 || events[0].Type != "Recorded" ||
+            events[0].ActorId != row.RecordedBy ||
+            events[0].ReceiptSha256 != row.ReceiptSha256 ||
+            events[0].OccurredAtUtc != row.RecordedAtUtc)
+            throw Refused("GitAncestryLedgerHistoryCorrupt");
+        return entry;
+    }
+}

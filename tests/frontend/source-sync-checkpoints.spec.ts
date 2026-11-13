@@ -1,0 +1,751 @@
+import { expect, test, type Page, type Route } from '@playwright/test';
+
+const prep = '11111111-1111-4111-8111-111111111111';
+const plan = '22222222-2222-4222-8222-222222222222';
+const source = '33333333-3333-4333-8333-333333333333';
+const original = '44444444-4444-4444-8444-444444444444';
+const next = '55555555-5555-4555-8555-555555555555';
+const old = '66666666-6666-4666-8666-666666666666';
+const last = '77777777-7777-4777-8777-777777777777';
+const sha = (c: string) => c.repeat(64);
+const stamp = '2026-11-08T15:30:00Z';
+const operation = {
+  id: plan, preparationId: prep, snapshotId: original,
+  sourceConnectionId: source, organization: 'gh-org',
+  manifestSha256: sha('a'), repositoryCount: 2,
+  readyForExecution: false, isCurrent: true, steps: []
+};
+const repo1 = {
+  sourceRepositoryId: 'repo-1', targetRepositoryName: 'migration-one',
+  addedRefs: 2, changedRefs: 1, restoredRefs: 0, missingRefs: 0,
+  plannedRefChanges: 3, totalRefChanges: 3,
+  stepState: 'Blocked', stepBlocker: 'DestinationWritePermissionUnverified',
+  recoveryTracking: 'NotMonitored', recoveryState: null,
+  latestBarrierId: null, latestPossibleSendUtc: null,
+  canOpenRecovery: false, canPush: false, canRetry: false,
+  migrationComplete: false
+};
+const repo2 = {
+  ...repo1, sourceRepositoryId: 'repo-2',
+  targetRepositoryName: 'migration-two', addedRefs: 0,
+  changedRefs: 0, plannedRefChanges: 0, totalRefChanges: 0
+};
+const pulse = {
+  preparationId: prep, planId: plan, sourceConnectionId: source,
+  snapshotId: original, organization: 'gh-org',
+  manifestSha256: sha('a'), planIsCurrent: true,
+  readyForExecution: false, preparationState: 'Prepared',
+  stagingState: 'LatestRecordedSnapshot', latestKnownSnapshotId: original,
+  sourceCollectedAtUtc: stamp, stagingAppliedAtUtc: stamp,
+  latestKnownStagingAppliedAtUtc: stamp, sourceInventoryComplete: false,
+  stagingObserved: 6, stagingAdded: 3, stagingChanged: 1,
+  stagingUnchanged: 2, stagingMarkedMissing: 0, journalAdded: 3,
+  journalChanged: 1, journalRestored: 0, journalMissing: 0,
+  latestStageJobId: null, stageJobState: 'DirectStagingWithoutJob',
+  stageJobErrorCode: null, stageJobUpdatedAtUtc: null,
+  repositories: [repo1, repo2], providerSourceFreshnessVerified: false,
+  canPush: false, canRetry: false, migrationComplete: false
+};
+
+function epoch(index: number) {
+  const baseline = index === 0;
+  const id = baseline ? old : last;
+  const snapshotId = baseline ? original : next;
+  const previousId = baseline ? null : old;
+  const previousSha = baseline ? null : sha('b');
+  return {
+    id, proof: {
+      preparationId: prep, planId: plan, sourceConnectionId: source,
+      snapshotId, baselineSnapshotId: original,
+      previousCheckpointId: previousId,
+      previousEvidenceSha256: previousSha, manifestSha256: sha('a'),
+      sourceCollectedAtUtc: stamp, stagingAppliedAtUtc: stamp,
+      sourceInventoryComplete: false, isBaselineSnapshot: baseline,
+      journalAdded: baseline ? 3 : 1, journalChanged: baseline ? 1 : 0,
+      journalRestored: 0, journalMissing: 0,
+      totalRefChanges: baseline ? 3 : 1,
+      unmappedRefChanges: 0,
+      repositories: [
+        { sourceRepositoryId: 'repo-1', targetRepositoryName: 'migration-one',
+          added: baseline ? 2 : 0, changed: baseline ? 1 : 0,
+          restored: 0, missing: 0, total: baseline ? 3 : 0 },
+        { sourceRepositoryId: 'repo-2', targetRepositoryName: 'migration-two',
+          added: baseline ? 0 : 1, changed: 0,
+          restored: 0, missing: 0, total: baseline ? 0 : 1 }
+      ]
+    },
+    evidenceSha256: baseline ? sha('b') : sha('c'),
+    recordedBy: source, recordedAtUtc: stamp,
+    canPush: false, canRetry: false, canDispatch: false,
+    migrationComplete: false,
+    evidenceVersion: 1,
+    refChangeManifest: null,
+    refChangeAttestationSha256: null
+  };
+}
+
+function attestedEpoch(index: number, forged = false) {
+  const record = epoch(index);
+  return {
+    ...record, evidenceVersion: 2,
+    refChangeManifest: {
+      sourceConnectionId: source, snapshotId: record.proof.snapshotId,
+      added: record.proof.repositories.reduce((n, r) => n + r.added, 0),
+      changed: record.proof.repositories.reduce((n, r) => n + r.changed, 0),
+      restored: 0, missing: 0,
+      total: forged ? 999 : record.proof.totalRefChanges,
+      evidenceSha256: sha('d')
+    },
+    refChangeAttestationSha256: sha('e')
+  };
+}
+
+function mock(page: Page, mode: 'normal' | 'unsafe' | 'conflict' | 'disabled' | 'attested' | 'forged' | 'badrefpage' | 'targetreview' | 'badtargetreview' | 'humanhistory' | 'humancandidate' | 'humanrejected' | 'humanunsafe' | 'targetaudit' | 'targetauditunsafe' | 'targetauditmissing' | 'laterhistory' | 'laterhistoryunsafe' | 'laterhistorymissing' = 'normal') {
+  const requests: Array<{ path: string; method: string; body: any }> = [];
+  let records = 0;
+  void page.route('**/api/incremental-preparations/**', async (route: Route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const method = request.method();
+    requests.push({ path, method, body: request.postDataJSON?.() });
+    const base = `/api/incremental-preparations/${prep}/operation-plans`;
+    if (method === 'GET' && path === base)
+      return route.fulfill({ json: [operation] });
+    if (method === 'GET' && path === base + `/${plan}/repository-sync-pulse`)
+      return route.fulfill({ json: pulse });
+    const check = base + `/${plan}/source-sync-checkpoints`;
+    const observationId = '88888888-8888-4888-8888-888888888888';
+    if (method === 'GET' && path === base + `/${plan}/target-ref-evidence`) {
+      return route.fulfill({ json: [{
+        id: observationId, planId: plan,
+        sourceRepositoryId: 'repo-1',
+        targetRepositoryName: 'migration-one',
+        organization: 'gh-org',
+        manifestSha256: sha('a'), evidenceSha256: sha('f'),
+        observedAtUtc: stamp, refCount: 1,
+        isCurrent: true, readyForExecution: false
+      }] });
+    }
+    if (method === 'GET' &&
+        path === check + `/${old}/target-ref-review/${observationId}`) {
+      const query = new URL(request.url()).searchParams;
+      expect(query.get('sourceRepositoryId')).toBe('repo-1');
+      expect(query.get('expectedTargetEvidenceSha256')).toBe(sha('f'));
+      const after = query.get('after');
+      const change = (name: string, kind: string,
+          before: string | null, current: string | null,
+          present: boolean, state: string) => ({
+        sourceChange: {
+          sourceId: JSON.stringify(['repo-1', name]),
+          sourceRepositoryId: 'repo-1', refName: name,
+          kind, previousFingerprint: before,
+          currentFingerprint: current, revision: 1,
+          targetRepositoryName: 'migration-one'
+        },
+        targetRefObserved: present, reviewState: state
+      });
+      const first = change('refs/heads/a', 'Added', null, sha('a'),
+        true, 'SourceAddedTargetPresentReview');
+      const second = change('refs/heads/b', 'Added', null, sha('b'),
+        false, 'SourceAddedTargetAbsentReview');
+      const third = change('refs/tags/v1', 'Changed', sha('a'), sha('b'),
+        false, 'SourceChangedTargetAbsentBlocked');
+      return route.fulfill({ json: {
+        checkpointId: old, sourceSnapshotId: original,
+        targetObservationId: observationId,
+        sourceRepositoryId: 'repo-1',
+        targetRepositoryName: 'migration-one',
+        sourceRefManifestSha256: sha('d'),
+        sourceRefAttestationSha256: sha('e'),
+        targetEvidenceSha256: sha('f'),
+        targetObservedAtUtc: stamp, repositoryRefChanges: 3,
+        items: after ? [third] : [first, second],
+        nextAfter: after ? null : second.sourceChange.sourceId,
+        canPush: mode === 'badtargetreview', canRetry: false,
+        canDispatch: false, migrationComplete: false
+      } });
+    }
+    if (method === 'GET' && path === check + `/${old}/ref-changes`) {
+      const after = new URL(request.url()).searchParams.get('after');
+      const refA = JSON.stringify(['repo-1', 'refs/heads/a']);
+      const refB = JSON.stringify(['repo-1', 'refs/heads/b']);
+      const rows = [
+        { sourceId: refA, sourceRepositoryId: 'repo-1',
+          refName: 'refs/heads/a', kind: 'Added', previousFingerprint: null,
+          currentFingerprint: sha('a'), revision: 1,
+          targetRepositoryName: 'migration-one' },
+        { sourceId: refB, sourceRepositoryId: 'repo-1',
+          refName: 'refs/heads/b', kind: 'Added', previousFingerprint: null,
+          currentFingerprint: sha('b'), revision: 1,
+          targetRepositoryName: 'migration-one' },
+        { sourceId: JSON.stringify(['repo-1', 'refs/tags/v1']),
+          sourceRepositoryId: 'repo-1', refName: 'refs/tags/v1',
+          kind: 'Changed', previousFingerprint: sha('a'),
+          currentFingerprint: sha('b'), revision: 2,
+          targetRepositoryName: 'migration-one' }
+      ];
+      return route.fulfill({ json: {
+        checkpointId: old, snapshotId: original,
+        refManifestSha256: sha('d'),
+        refAttestationSha256: sha('e'), totalRefChanges: 3,
+        items: after ? rows.slice(2) : rows.slice(0, 2),
+        nextAfter: after ? null : refB,
+        canPush: mode === 'badrefpage', canRetry: false,
+        canDispatch: false, migrationComplete: false
+      } });
+    }
+    const reviewRoot = check + `/${last}/target-human-review`;
+    if (method === 'GET' &&
+        (path === reviewRoot || path === reviewRoot + '/candidate')) {
+      expect(new URL(request.url()).searchParams.get('sourceRepositoryId'))
+        .toBe('repo-1');
+      if (mode === 'humancandidate' && path === reviewRoot)
+        return route.fulfill({ status: 404,
+          json: { error: 'CheckpointHumanReviewNotFound' } });
+      const common = {
+        preparationId: prep, planId: plan, checkpointId: last,
+        sourceSnapshotId: next, sourceRepositoryId: 'repo-1',
+        targetRepositoryName: 'migration-one',
+        canObserveTarget: false, canPush: mode === 'humanunsafe',
+        canRetry: false, canDispatch: false, migrationComplete: false
+      };
+      if (path === reviewRoot + '/candidate') {
+        return route.fulfill({ json: { ...common,
+          evidenceSha256: sha('e') } });
+      }
+      return route.fulfill({ json: { ...common,
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        evidenceVersion: 1, candidateEvidenceSha256: sha('e'),
+        evidenceSha256: sha('f'),
+        requestedBy: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        reviewedBy: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        reviewedAtUtc: stamp, decision:
+          mode === 'humanrejected' ? 'Rejected' : 'ApprovedForObservation'
+      } });
+    }
+    // F-032v2/F-038v2 historical readback is GET-only. The UUID and
+    // checkpoint target SHA are server-issued handles, never OID input.
+    const laterWorkpackId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    if (method === 'GET' && path ===
+        check + `/${last}/later-workpacks/${laterWorkpackId}/history`) {
+      const params = new URL(request.url()).searchParams;
+      expect(params.get('sourceRepositoryId')).toBe('repo-1');
+      expect(params.get('targetObservationId'))
+        .toBe('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+      expect(params.get('expectedTargetReceiptSha256')).toBe(sha('b'));
+      if (mode === 'laterhistorymissing')
+        return route.fulfill({ status: 404,
+          json: { error: 'LaterCheckpointHistoryNotFound' } });
+      return route.fulfill({ json: {
+        evidenceVersion: 2, preparationId: prep, planId: plan,
+        checkpointId: last, sourceSnapshotId: next,
+        targetObservationId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        reconciliationId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        workpackId: laterWorkpackId, evidenceSha256: sha('a'),
+        reconciliationSha256: sha('c'), sourceFullRefProofSha256: sha('d'),
+        targetReceiptSha256: sha('b'), recordedAtUtc: stamp,
+        sourceRefCount: 2, targetRefCount: 1,
+        matchingCount: 1, createCandidateCount: 1,
+        divergedCount: 0, targetOnlyCount: 0,
+        state: 'Blocked',
+        phase: mode === 'laterhistoryunsafe' ? 'Ready' : 'WriteBlocked',
+        historicalOnly: true, currentApprovalVerified: false,
+        readyForExecution: false, canPush: false, canRetry: false,
+        canDispatch: false, migrationComplete: false
+      } });
+    }
+    const targetAuditRoot = check + `/${last}/target-ref-observations`;
+    if (method === 'GET' && path === targetAuditRoot) {
+      expect(new URL(request.url()).searchParams.get('sourceRepositoryId'))
+        .toBe('repo-1');
+      if (mode === 'targetauditmissing')
+        return route.fulfill({ status: 404,
+          json: { error: 'CheckpointTargetObservationNotFound' } });
+      return route.fulfill({ json: {
+        id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        evidenceVersion: 1,
+        preparationId: prep, planId: plan, checkpointId: last,
+        sourceSnapshotId: next, sourceRepositoryId: 'repo-1',
+        targetRepositoryName: 'migration-one', organization: 'gh-org',
+        objectFormat: 'sha1',
+        candidateEvidenceSha256: sha('e'),
+        humanReviewEvidenceSha256: sha('f'),
+        targetEvidenceSha256: sha('a'), evidenceSha256: sha('b'),
+        observedAtUtc: stamp, refCount: 2,
+        canObserveTarget: false,
+        canPush: mode === 'targetauditunsafe', canRetry: false,
+        canDispatch: false, migrationComplete: false
+      } });
+    }
+    if (method === 'GET' && path === check && mode === 'disabled')
+      return route.fulfill({ status: 409,
+        json: { error: 'SourceSyncCheckpointDisabled' } });
+    if (method === 'GET' && path === check)
+      return route.fulfill({ json: {
+        preparationId: prep, planId: plan,
+        items: Array.from({ length: records }, (_, i) =>
+          mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || (mode.startsWith('human') || mode.startsWith('targetaudit') || mode.startsWith('laterhistory'))
+            ? attestedEpoch(records - i - 1, mode === 'forged')
+            : epoch(records - i - 1)),
+        nextAfter: null,
+        latestCheckpointId: records === 0 ? null : records === 1 ? old : last,
+        nextEligibleSnapshotId: records === 0 ? original :
+          records === 1 ? next : null,
+        latestEvidenceSha256: records === 0 ? null :
+          records === 1 ? sha('b') : sha('c'),
+        canPush: mode === 'unsafe', canRetry: false,
+        canDispatch: false, migrationComplete: false
+      } });
+    if (method === 'POST' && path.startsWith(check + '/')) {
+      if (mode === 'conflict')
+        return route.fulfill({ status: 409,
+          json: { error: 'SourceSyncCheckpointCursorChanged' } });
+      const body = request.postDataJSON() as {
+        expectedManifestSha256: string;
+        expectedPreviousCheckpointId: string | null;
+      };
+      expect(body.expectedManifestSha256).toBe(sha('a'));
+      expect(body.expectedPreviousCheckpointId).toBe(
+        records === 0 ? null : old);
+      expect(path).toBe(check + '/' + (records === 0 ? original : next));
+      records++;
+      return route.fulfill({ json: mode === 'attested' || mode === 'forged' || mode === 'badrefpage' || mode === 'targetreview' || mode === 'badtargetreview' || (mode.startsWith('human') || mode.startsWith('targetaudit') || mode.startsWith('laterhistory'))
+        ? attestedEpoch(records - 1, mode === 'forged')
+        : epoch(records - 1) });
+    }
+    return route.fulfill({ status: 404,
+      json: { error: 'UnexpectedSourceCheckpointRoute' } });
+  });
+  return { requests: () => requests, saved: () => records };
+}
+
+async function login(page: Page, role = 'superadmin') {
+  await page.route('**/api/auth/login', route => route.fulfill({
+    json: { accessToken: 'fake', mustChangePassword: false,
+      username: role, role }
+  }));
+  await page.goto('/');
+  await page.getByRole('textbox', { name: /nome utente|username/i })
+    .fill(role);
+  await page.getByLabel(/^password$/i).fill('password');
+  await page.getByRole('button', { name: /^accedi$|^sign in$/i })
+    .click();
+  await page.getByRole('button', {
+    name: /Sincronizzazione sorgenti|Source sync/i
+  }).click();
+}
+async function open(page: Page) {
+  await page.getByRole('textbox', {
+    name: /UUID preparazione incrementale|Incremental preparation UUID/i
+  }).fill(prep);
+  await page.getByRole('button', {
+    name: /Apri sincronizzazione|Open source sync/i
+  }).click();
+}
+
+test('F-090 manual baseline and next snapshot are pinned, sequenced and never trigger GitHub push', async ({ page }) => {
+  const service = mock(page);
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await expect(page.getByText(/Checkpoint sorgente persistenti|Durable source checkpoints/i))
+    .toBeVisible();
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await expect(page.getByText(/Snapshot originale del piano|Original plan baseline/i))
+    .toBeVisible();
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await expect(page.getByText(/Snapshot incrementale sorgente|Incremental source snapshot/i))
+    .toBeVisible();
+  await expect(page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  })).toHaveCount(0);
+  expect(service.saved()).toBe(2);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+  expect(service.requests().some(x =>
+    /git-push|send|retry-push|dispatch-confirm/i.test(x.path))).toBe(false);
+});
+
+test('F-090 refuses a server page claiming GitHub write authority', async ({ page }) => {
+  const service = mock(page, 'unsafe');
+  await login(page);
+  await open(page);
+  await expect(page.getByRole('alert').getByText(
+    /SourceSyncCheckpointUnsafeResponse/)).toBeVisible();
+  await expect(page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  })).toHaveCount(0);
+  expect(service.saved()).toBe(0);
+});
+
+test('F-090 stale predecessor compare-and-set conflict is visible without replay', async ({ page }) => {
+  const service = mock(page, 'conflict');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await expect(page.getByRole('alert').getByText(
+    /SourceSyncCheckpointCursorChanged/)).toBeVisible();
+  expect(service.saved()).toBe(0);
+});
+
+test('F-090 ordinary admin cannot read or create checkpoint evidence', async ({ page }) => {
+  const service = mock(page);
+  await login(page, 'admin');
+  await expect(page.getByText(/Solo i superadmin|Only superadmins/i))
+    .toBeVisible();
+  expect(service.requests()).toHaveLength(0);
+});
+
+test('F-090 disabled checkpoints leave existing multi-repository staging monitoring usable', async ({ page }) => {
+  const service = mock(page, 'disabled');
+  await login(page);
+  await open(page);
+  await expect(page.getByText('migration-one').first()).toBeVisible();
+  await expect(page.getByText(/non è abilitata|is not enabled for this environment/i))
+    .toBeVisible();
+  await expect(page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  })).toHaveCount(0);
+  expect(service.saved()).toBe(0);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(0);
+});
+
+test('F-091 renders bound source-ref SHA without sending to GitHub', async ({ page }) => {
+  const service = mock(page, 'attested');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await expect(page.getByText(/SHA-256 dei ref sorgente|Source ref SHA-256/i))
+    .toBeVisible();
+  await expect(page.getByText(/Attestazione ref vincolata|Bound ref attestation/i))
+    .toBeVisible();
+  expect(service.saved()).toBe(1);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(1);
+});
+
+test('F-091 forged ref-digest counts are rejected as unsafe', async ({ page }) => {
+  const service = mock(page, 'forged');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await expect(page.getByRole('alert').getByText(/SourceSyncCheckpointUnsafeResponse/))
+    .toBeVisible();
+  expect(service.saved()).toBe(1);
+  expect(service.requests().some(x => /git-push|send|retry-push/i.test(x.path)))
+    .toBe(false);
+});
+
+test('F-092 inspection pages through verified ref changes without a GitHub push', async ({ page }) => {
+  const service = mock(page, 'attested');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Mostra modifiche ref sorgente|Inspect source ref changes/i
+  }).click();
+  await expect(page.getByText('refs/heads/a')).toBeVisible();
+  await expect(page.getByText('refs/heads/b')).toBeVisible();
+  await page.getByRole('button', {
+    name: /Altre modifiche ref|More ref changes/i
+  }).click();
+  await expect(page.getByText('refs/tags/v1')).toBeVisible();
+  expect(service.requests().filter(x => x.path.endsWith('/ref-changes')))
+    .toHaveLength(2);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(1);
+  expect(service.requests().some(x =>
+    /git-push|dispatch|retry-push/i.test(x.path))).toBe(false);
+});
+
+test('F-092 a forged ref page never becomes visible to the operator', async ({ page }) => {
+  const service = mock(page, 'badrefpage');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Mostra modifiche ref sorgente|Inspect source ref changes/i
+  }).click();
+  await expect(page.getByRole('alert').getByText(
+    /SourceSyncCheckpointUnsafeResponse/)).toBeVisible();
+  await expect(page.getByText('refs/heads/a')).toHaveCount(0);
+  expect(service.requests().filter(x => x.path.endsWith('/ref-changes')))
+    .toHaveLength(1);
+});
+
+test('F-092 historic F-090 checkpoints have no falsely attested ref browser', async ({ page }) => {
+  mock(page, 'normal');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await expect(page.getByText(
+    /Ricevuta storica con soli conteggi|Historical count-only receipt/i))
+    .toBeVisible();
+  await expect(page.getByRole('button', {
+    name: /Mostra modifiche ref sorgente|Inspect source ref changes/i
+  })).toHaveCount(0);
+});
+
+test('F-093 compares saved GitHub ref names without a remote write', async ({ page }) => {
+  const service = mock(page, 'targetreview');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Mostra modifiche ref sorgente|Inspect source ref changes/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Confronta con osservazioni GitHub salvate|Review against saved GitHub observations/i
+  }).click();
+  await expect(page.getByRole('combobox', {
+    name: /Osservazione GitHub e repository|GitHub observation and repository/i
+  })).toBeVisible();
+  await page.getByRole('button', {
+    name: /Confronta nomi dei ref sorgente|Compare source ref names/i
+  }).click();
+  await expect(page.getByText(
+    /Presente nell.osservazione GitHub|Observed at GitHub/i).first()).toBeVisible();
+  await expect(page.getByText(
+    /Assente nell.osservazione GitHub|Absent at GitHub observation time/i).first())
+    .toBeVisible();
+  await page.getByRole('button', { name: /Altri confronti|More comparisons/i })
+    .click();
+  await expect(page.getByText(
+    /Ref sorgente modificato|Changed source ref/i)).toBeVisible();
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-review/'))).toHaveLength(2);
+  expect(service.requests().filter(x =>
+    x.path.endsWith('/target-ref-evidence'))).toHaveLength(1);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(1);
+  expect(service.requests().some(x =>
+    /git-push|retry-push|dispatch-confirm/i.test(x.path))).toBe(false);
+});
+
+test('F-093 rejects a forged GitHub authority flag and renders no target comparison', async ({ page }) => {
+  const service = mock(page, 'badtargetreview');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page);
+  await open(page);
+  await page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Mostra modifiche ref sorgente|Inspect source ref changes/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Confronta con osservazioni GitHub salvate|Review against saved GitHub observations/i
+  }).click();
+  await page.getByRole('button', {
+    name: /Confronta nomi dei ref sorgente|Compare source ref names/i
+  }).click();
+  await expect(page.getByRole('alert').getByText(
+    /SourceSyncCheckpointUnsafeResponse/)).toBeVisible();
+  await expect(page.getByText(
+    /Presente nell.osservazione GitHub|Observed at GitHub/i)).toHaveCount(0);
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-review/'))).toHaveLength(1);
+});
+
+test('F-097c.4c.0c shows immutable independent review history using GET only', async ({ page }) => {
+  const service = mock(page, 'humanhistory');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await expect(page.getByText(
+    /Approvazione indipendente registrata|Independent approval recorded/i
+  )).toBeVisible();
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-human-review')).every(x =>
+      x.method === 'GET')).toBe(true);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+  expect(service.requests().some(x =>
+    /git-push|retry-push|dispatch|github-get/i.test(x.path))).toBe(false);
+});
+
+test('F-097c.4c.0c shows only a bounded candidate when no human review exists', async ({ page }) => {
+  const service = mock(page, 'humancandidate');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await expect(page.getByText(
+    /in attesa di revisione umana|awaiting separate human sign-off/i
+  )).toBeVisible();
+  expect(service.requests().filter(x =>
+    x.path.endsWith('/target-human-review/candidate'))).toHaveLength(1);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+});
+
+test('F-097c.4c.0c never displays forged review authority or invokes a provider', async ({ page }) => {
+  const service = mock(page, 'humanunsafe');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await expect(page.getByRole('alert').getByText(
+    /CheckpointHumanReviewUnsafeResponse/
+  )).toBeVisible();
+  await expect(page.getByText(
+    /Approvazione indipendente registrata|Independent approval recorded/i
+  )).toHaveCount(0);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+  expect(service.requests().some(x =>
+    /git-push|retry-push|dispatch|github-get/i.test(x.path))).toBe(false);
+});
+
+test('F-097c.4c.0d displays immutable checkpoint target GET evidence without provider actions', async ({ page }) => {
+  const service = mock(page, 'targetaudit');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await page.getByRole('button', {
+    name: /Mostra osservazione GitHub salvata|Inspect saved checkpoint GitHub observation/i
+  }).first().click();
+  await expect(page.getByText(
+    /Osservazione GitHub del checkpoint verificata|Verified checkpoint GitHub observation/i
+  )).toBeVisible();
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-observations'))).toHaveLength(1);
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-observations')).every(x =>
+    x.method === 'GET')).toBe(true);
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+});
+
+test('F-097c.4c.0d refuses forged F-031 authority in read-only checkpoint UI', async ({ page }) => {
+  const service = mock(page, 'targetauditunsafe');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await page.getByRole('button', {
+    name: /Mostra osservazione GitHub salvata|Inspect saved checkpoint GitHub observation/i
+  }).first().click();
+  await expect(page.getByRole('alert').getByText(
+    /CheckpointTargetObservationUnsafeResponse/
+  )).toBeVisible();
+  await expect(page.getByText(
+    /Osservazione GitHub del checkpoint verificata|Verified checkpoint GitHub observation/i
+  )).toHaveCount(0);
+  expect(service.requests().filter(x =>
+    x.path.includes('/target-ref-observations')).every(x =>
+    x.method === 'GET')).toBe(true);
+});
+
+test('F-097c.4c.2 reads only redacted, permanently blocked workpack history by UUID', async ({ page }) => {
+  const service = mock(page, 'laterhistory');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await page.getByRole('button', {
+    name: /Mostra osservazione GitHub salvata|Inspect saved checkpoint GitHub observation/i
+  }).first().click();
+  await expect(page.getByText(
+    /Osservazione GitHub del checkpoint verificata|Verified checkpoint GitHub observation/i
+  )).toBeVisible();
+  await page.getByRole('textbox', {
+    name: /UUID workpack checkpoint|Checkpoint workpack UUID/i
+  }).fill('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+  await page.getByRole('button', {
+    name: /Verifica workpack bloccato del checkpoint|Inspect blocked checkpoint workpack/i
+  }).click();
+  await expect(page.getByText(
+    /Workpack del checkpoint bloccato verificato|Verified blocked checkpoint workpack/i
+  )).toBeVisible();
+  await expect(page.getByText(/Blocked \/ WriteBlocked/)).toBeVisible();
+  const history = service.requests().filter(x =>
+    x.path.includes('/later-workpacks/'));
+  expect(history).toHaveLength(1);
+  expect(history[0].method).toBe('GET');
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+  expect(service.requests().some(x =>
+    /git-push|retry-push|dispatch|bundle-acquire/i.test(x.path))).toBe(false);
+});
+
+test('F-097c.4c.2 refuses a forged executable workpack without any POST', async ({ page }) => {
+  const service = mock(page, 'laterhistoryunsafe');
+  page.on('dialog', dialog => dialog.accept());
+  await login(page); await open(page);
+  const capture = page.getByRole('button', {
+    name: /Registra prossimo checkpoint|Record next checkpoint/i
+  });
+  await capture.click(); await capture.click();
+  await page.getByRole('button', {
+    name: /Esamina revisione umana checkpoint|Inspect independent checkpoint review/i
+  }).first().click();
+  await page.getByRole('button', {
+    name: /Mostra osservazione GitHub salvata|Inspect saved checkpoint GitHub observation/i
+  }).first().click();
+  await page.getByRole('textbox', {
+    name: /UUID workpack checkpoint|Checkpoint workpack UUID/i
+  }).fill('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+  await page.getByRole('button', {
+    name: /Verifica workpack bloccato del checkpoint|Inspect blocked checkpoint workpack/i
+  }).click();
+  await expect(page.getByRole('alert').getByText(
+    /LaterCheckpointHistoryUnsafeResponse/
+  )).toBeVisible();
+  await expect(page.getByText(
+    /Workpack del checkpoint bloccato verificato|Verified blocked checkpoint workpack/i
+  )).toHaveCount(0);
+  const history = service.requests().filter(x =>
+    x.path.includes('/later-workpacks/'));
+  expect(history).toHaveLength(1);
+  expect(history[0].method).toBe('GET');
+  expect(service.requests().filter(x => x.method === 'POST')).toHaveLength(2);
+});

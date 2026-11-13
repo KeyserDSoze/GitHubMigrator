@@ -19,4 +19,12 @@
     <ProjectReference Include="../../tools/AdoSim/AdoSim.csproj" />
     <ProjectReference Include="../../src/backend/infrastructures/GitHubMigrator.Infrastructure.PostgreSql/GitHubMigrator.Infrastructure.PostgreSql.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="../../script/postgres_runtime_identity_grants.sql"
+          Link="postgres_runtime_identity_grants.sql"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../script/postgres_f061_second_review_owner.sql"
+          Link="postgres_f061_second_review_owner.sql"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
