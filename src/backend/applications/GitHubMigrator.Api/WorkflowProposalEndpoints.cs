@@ -149,6 +149,33 @@ public static class WorkflowProposalEndpoints
         group.MapGet("/{id:guid}/publications", async Task<IResult> (Guid id, WorkflowPublicationExecutor executor, CancellationToken ct) =>
             Results.Ok((await executor.ListAsync(id, ct)).Select(PublicationResponse.From)));
 
+        // Sets one recorded attempt beside what is at the destination now: GET requests only, with the destination connection's read-only credential. It changes
+        // nothing at the destination and nothing in the ledger, and it does not retry or clean up: it says what a person would find.
+        group.MapPost("/{id:guid}/publications/{publicationId:guid}/reconcile", async Task<IResult> (Guid id, Guid publicationId, ReconcileInput input,
+            PublicationReconciliationService service, ClaimsPrincipal user, ILoggerFactory logs, CancellationToken ct) =>
+        {
+            var actor = ActorOf(user);
+            if (actor is null) return Results.Forbid();
+            try
+            {
+                var result = await service.ReconcileAsync(id, publicationId, input.DestinationConnectionId, ct);
+                logs.CreateLogger("WorkflowPublication").LogInformation(
+                    "Workflow publication reconciled Proposal={ProposalId} Publication={PublicationId} Verdict={Verdict} LedgerState={State} By={Actor}",
+                    id, publicationId, result.Verdict, result.LedgerState, actor.Id);
+                return Results.Ok(ReconciliationResponse.From(result));
+            }
+            catch (WorkflowPublicationException ex)
+            {
+                return ex.Code switch
+                {
+                    "PublicationNotFound" => Results.NotFound(),
+                    "DestinationMismatch" => Results.Conflict(new { error = ex.Code }),
+                    _ => Results.UnprocessableEntity(new { error = ex.Code })
+                };
+            }
+            catch (WorkloadInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
+        }).RequireRateLimiting("external");
+
         group.MapPost("/{id:guid}/reject", (Guid id, DecisionInput input, WorkflowProposalService service, ClaimsPrincipal user, ILoggerFactory logs, CancellationToken ct) =>
             DecideAsync("reject", id, input, service, user, logs, ct, (a, i, n, c) => service.RejectAsync(a, i, n, c)));
 
@@ -223,15 +250,32 @@ public sealed record ProposalDetailResponse(Guid Id, string State, string? Reaso
     IReadOnlyList<FindingResponse> Findings, PlanResponse Plan, ProvenanceResponse? Provenance, IReadOnlyList<ProposalEventResponse> Events,
     string Kind, Guid? ParentProposalId, TriggerMappingResponse? Triggers);
 
+public sealed record ReconcileInput(Guid DestinationConnectionId);
+public sealed record ReconciliationPullResponse(int Number, string State, bool Merged, string? HeadSha, string? MergeCommitSha);
+public sealed record ReconciliationFactsResponse(bool RepositoryExists, bool Archived, string? BaseTipSha, string? HeadBranchSha,
+    IReadOnlyList<ReconciliationPullResponse> Pulls, string FileOnHead, string FileOnBase);
+
+// A view, not an action: WritesPerformed is always false. The facts are what the destination showed; the findings are what the product makes of them.
+public sealed record ReconciliationResponse(Guid PublicationId, Guid ProposalId, string Verdict, IReadOnlyList<PublicationFindingResponse> Findings,
+    ReconciliationFactsResponse? Observed, string LedgerState, bool LedgerWritesPossible, string? LedgerCommitSha, int? LedgerPullNumber, bool WritesPerformed, DateTimeOffset ReadAtUtc)
+{
+    public static ReconciliationResponse From(PublicationReconciliation r) => new(r.PublicationId, r.ProposalId, r.Verdict,
+        r.Findings.Select(f => new PublicationFindingResponse(f.Code, f.Severity, f.Message)).ToArray(),
+        r.Observed is null ? null : new(r.Observed.RepositoryExists, r.Observed.Archived, r.Observed.BaseTipSha, r.Observed.HeadBranchSha,
+            r.Observed.Pulls.Select(p => new ReconciliationPullResponse(p.Number, p.State, p.Merged, p.HeadSha, p.MergeCommitSha)).ToArray(),
+            r.Observed.FileOnHead.ToString(), r.Observed.FileOnBase.ToString()),
+        r.LedgerState, r.LedgerWritesPossible, r.LedgerCommitSha, r.LedgerPullNumber, false, r.ReadAtUtc);
+}
 public sealed record PublishInput(Guid DestinationConnectionId, string? Repository, string? BaseBranch, string? PlanSha256);
 public sealed record PublicationStatusResponse(bool Enabled, IReadOnlyList<string> AllowedRepositories);
 public sealed record CredentialCheckInput(string? Repository);
 public sealed record PublicationResponse(Guid Id, Guid ProposalId, string State, string Organization, string Repository, string BaseBranch, string BaseSha, string HeadBranch,
     string WorkflowPath, string PlanSha256, string? CommitSha, int? PullNumber, string? PullUrl, string? ErrorCode, string? FailedAtState, bool WritesPossible, string RequestedBy,
-    DateTimeOffset StartedAtUtc, DateTimeOffset UpdatedAtUtc)
+    DateTimeOffset StartedAtUtc, DateTimeOffset UpdatedAtUtc, string Mode, string? ReplacedWorkflowSha256)
 {
     public static PublicationResponse From(PublicationRecord r) => new(r.Id, r.ProposalId, r.State, r.Organization, r.Repository, r.BaseBranch, r.BaseSha, r.HeadBranch,
-        r.WorkflowPath, r.PlanSha256, r.CommitSha, r.PullNumber, r.PullUrl, r.ErrorCode, r.FailedAtState, r.WritesPossible, r.RequestedBy, r.StartedAtUtc, r.UpdatedAtUtc);
+        r.WorkflowPath, r.PlanSha256, r.CommitSha, r.PullNumber, r.PullUrl, r.ErrorCode, r.FailedAtState, r.WritesPossible, r.RequestedBy, r.StartedAtUtc, r.UpdatedAtUtc,
+        r.Mode, r.ReplacedWorkflowSha256);
 }
 public sealed record PublicationPlanInput(Guid DestinationConnectionId, string? Repository, string? BaseBranch);
 public sealed record PublicationFindingResponse(string Code, string Severity, string Message);
@@ -240,10 +284,11 @@ public sealed record PublicationStepResponse(string Code, string Title, string? 
 // A plan, not an action: Ready says nothing stands in the way, never that anything was published.
 public sealed record PublicationPlanResponse(Guid ProposalId, string WorkflowSha256, string Organization, string Repository, string BaseBranch, string? BaseSha,
     string HeadBranch, string WorkflowPath, string CommitMessage, string PullRequestTitle, string PullRequestBody, bool Ready, bool WritesPerformed,
-    IReadOnlyList<PublicationFindingResponse> Findings, IReadOnlyList<PublicationStepResponse> Steps, string PlanSha256, DateTimeOffset ReadAtUtc, string WorkflowYaml)
+    IReadOnlyList<PublicationFindingResponse> Findings, IReadOnlyList<PublicationStepResponse> Steps, string PlanSha256, DateTimeOffset ReadAtUtc, string WorkflowYaml,
+    string Mode, string? ReplacesWorkflowSha256)
 {
     public static PublicationPlanResponse From(PublicationPlan p, string yaml) => new(p.ProposalId, p.WorkflowSha256, p.Organization, p.Repository, p.BaseBranch,
         p.BaseSha, p.HeadBranch, p.WorkflowPath, p.CommitMessage, p.PullRequestTitle, p.PullRequestBody, p.Ready, false,
         p.Findings.Select(f => new PublicationFindingResponse(f.Code, f.Severity, f.Message)).ToArray(),
-        p.Steps.Select(s => new PublicationStepResponse(s.Code, s.Title, s.Command)).ToArray(), p.PlanSha256, p.ReadAtUtc, yaml);
+        p.Steps.Select(s => new PublicationStepResponse(s.Code, s.Title, s.Command)).ToArray(), p.PlanSha256, p.ReadAtUtc, yaml, p.Mode, p.ReplacesWorkflowSha256);
 }

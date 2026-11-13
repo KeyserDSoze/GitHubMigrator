@@ -7,16 +7,27 @@ namespace GitHubMigrator.Business;
 
 // What the destination repository looks like right now, as far as publishing one workflow file on a new branch is concerned.
 // Read only. The workflow text is compared inside the reader and never returned.
-public enum WorkflowFileState { Absent, Identical, Different }
+// PriorVersion: the file is exactly the text of the conversion this proposal was derived from (and approved), so it may be replaced by this one.
+// It is only ever reported when the caller named that text; anything else that is not the approved text is Different.
+public enum WorkflowFileState { Absent, Identical, Different, PriorVersion }
 
+// How a plan puts the file in place: a new file, or the replacement of the approved text of the parent conversion, on a NEW branch either way.
+public static class PublicationModes
+{
+    public const string Create = "Create";
+    public const string Update = "Update";
+}
+
+// WorkflowFileBlobSha is git's object id of the file at the base commit, reported only for PriorVersion (the contents API needs it to replace a file).
 public sealed record PublicationTarget(bool RepositoryExists, bool Archived, string? DefaultBranch, string? BaseBranch, string? BaseSha,
-    WorkflowFileState WorkflowFile, bool HeadBranchExists, string? HeadBranchSha, IReadOnlyList<int> OpenPullRequests);
+    WorkflowFileState WorkflowFile, bool HeadBranchExists, string? HeadBranchSha, IReadOnlyList<int> OpenPullRequests, string? WorkflowFileBlobSha = null);
 
 public interface IGitHubPublicationReader
 {
     // `baseBranch` null means the repository's default branch. Only GET requests, only the one repository.
+    // `priorWorkflowSha256` is the hash of the text this one may replace (the approved parent conversion), or null when nothing may be replaced.
     Task<PublicationTarget> ReadAsync(string organization, string repository, string? baseBranch, string headBranch, string workflowPath,
-        string workflowSha256, string token, CancellationToken ct);
+        string workflowSha256, string? priorWorkflowSha256, string token, CancellationToken ct);
     string GitUrl(string organization, string repository);
 }
 
@@ -29,7 +40,8 @@ public sealed record PublicationStep(string Code, string Title, string? Command)
 // nothing anywhere: the person (or, later, an executor that has to present this hash) does the writing.
 public sealed record PublicationPlan(Guid ProposalId, string WorkflowSha256, string Organization, string Repository, string BaseBranch, string? BaseSha,
     string HeadBranch, string WorkflowPath, string CommitMessage, string PullRequestTitle, string PullRequestBody,
-    IReadOnlyList<PublicationFinding> Findings, bool Ready, IReadOnlyList<PublicationStep> Steps, string PlanSha256, DateTimeOffset ReadAtUtc);
+    IReadOnlyList<PublicationFinding> Findings, bool Ready, IReadOnlyList<PublicationStep> Steps, string PlanSha256, DateTimeOffset ReadAtUtc,
+    string Mode = PublicationModes.Create, string? ReplacesBlobSha = null, string? ReplacesWorkflowSha256 = null);
 
 public static partial class WorkflowPublicationPlanner
 {
@@ -54,27 +66,37 @@ public static partial class WorkflowPublicationPlanner
     public static string HeadBranchFor(int pipelineId, string workflowSha256) => $"migrate/azdo-{pipelineId}-{workflowSha256[..8]}";
 
     public static PublicationPlan Build(ApprovedWorkflow approved, WorkflowProposal proposal, IReadOnlyList<ProposalEvent> events,
-        string organization, string repository, string requestedBase, PublicationTarget? target, bool targetUnreadable, string gitUrl, DateTimeOffset now)
+        string organization, string repository, string requestedBase, PublicationTarget? target, bool targetUnreadable, string gitUrl, DateTimeOffset now,
+        string? priorWorkflowSha256 = null)
     {
         var path = WorkflowPathFor(proposal.PipelineId, proposal.Evidence.PipelineName);
         var head = HeadBranchFor(proposal.PipelineId, approved.WorkflowSha256);
         var baseBranch = target?.BaseBranch ?? requestedBase;
-        var findings = Findings(target, targetUnreadable);
-        var approval = events.LastOrDefault(e => e.Type == "Approved");
         var triggers = proposal.Kind == ProposalKinds.Triggers;
-        var title = Truncate($"Add GitHub Actions workflow for Azure pipeline #{proposal.PipelineId} ({Plain(proposal.Evidence.PipelineName, 60)}){(triggers ? " with automatic triggers" : "")}", 120);
-        var commit = triggers
-            ? $"ci: add Azure pipeline {proposal.PipelineId} as a GitHub Actions workflow with automatic triggers\n\nConverted by an AI model, triggers mapped from Azure by fixed rules, approved by a person. Workflow SHA-256: {approved.WorkflowSha256}"
-            : $"ci: add Azure pipeline {proposal.PipelineId} as a manual GitHub Actions workflow\n\nProposed by an AI model, approved by a person. Workflow SHA-256: {approved.WorkflowSha256}";
-        var body = Body(approved, proposal, approval, path);
+        // a file is replaced only when the caller named the text it may replace, the reader found exactly that text, and said which blob it is
+        var update = triggers && priorWorkflowSha256 is not null && target is { WorkflowFile: WorkflowFileState.PriorVersion, WorkflowFileBlobSha: { } };
+        var findings = Findings(target, targetUnreadable, update, priorWorkflowSha256);
+        var approval = events.LastOrDefault(e => e.Type == "Approved");
+        var title = update
+            ? Truncate($"Add automatic triggers to the GitHub Actions workflow for Azure pipeline #{proposal.PipelineId} ({Plain(proposal.Evidence.PipelineName, 60)})", 120)
+            : Truncate($"Add GitHub Actions workflow for Azure pipeline #{proposal.PipelineId} ({Plain(proposal.Evidence.PipelineName, 60)}){(triggers ? " with automatic triggers" : "")}", 120);
+        var commit = update
+            ? $"ci: add automatic triggers to the GitHub Actions workflow of Azure pipeline {proposal.PipelineId}\n\nReplaces the workflow approved earlier (SHA-256 {priorWorkflowSha256}) with the version that has the Azure triggers converted by fixed rules, approved by a person. Workflow SHA-256: {approved.WorkflowSha256}"
+            : triggers
+                ? $"ci: add Azure pipeline {proposal.PipelineId} as a GitHub Actions workflow with automatic triggers\n\nConverted by an AI model, triggers mapped from Azure by fixed rules, approved by a person. Workflow SHA-256: {approved.WorkflowSha256}"
+                : $"ci: add Azure pipeline {proposal.PipelineId} as a manual GitHub Actions workflow\n\nProposed by an AI model, approved by a person. Workflow SHA-256: {approved.WorkflowSha256}";
+        var body = Body(approved, proposal, approval, path, update ? priorWorkflowSha256 : null);
         var ready = findings.All(f => f.Severity != "Blocker") && target?.WorkflowFile != WorkflowFileState.Identical;
-        var steps = Steps(gitUrl, repository, baseBranch, head, path, approved.WorkflowSha256, title, commit);
-        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n',
-            PlanVersion, proposal.Id, approved.WorkflowSha256, $"{organization}/{repository}", baseBranch, target?.BaseSha ?? "", head, path, commit, title, body))));
-        return new(proposal.Id, approved.WorkflowSha256, organization, repository, baseBranch, target?.BaseSha, head, path, commit, title, body, findings, ready, steps, hash, now);
+        var steps = Steps(gitUrl, repository, baseBranch, head, path, approved.WorkflowSha256, title, commit, update);
+        // a plan that creates a file hashes exactly what it always did; the replacement of a file is part of what the person confirms
+        var parts = new List<string> { PlanVersion, proposal.Id.ToString(), approved.WorkflowSha256, $"{organization}/{repository}", baseBranch, target?.BaseSha ?? "", head, path, commit, title, body };
+        if (update) parts.AddRange(["update", target!.WorkflowFileBlobSha!, priorWorkflowSha256!]);
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', parts))));
+        return new(proposal.Id, approved.WorkflowSha256, organization, repository, baseBranch, target?.BaseSha, head, path, commit, title, body, findings, ready, steps, hash, now,
+            update ? PublicationModes.Update : PublicationModes.Create, update ? target!.WorkflowFileBlobSha : null, update ? priorWorkflowSha256 : null);
     }
 
-    private static List<PublicationFinding> Findings(PublicationTarget? t, bool unreadable)
+    private static List<PublicationFinding> Findings(PublicationTarget? t, bool unreadable, bool replace, string? priorSha256)
     {
         var list = new List<PublicationFinding>();
         if (unreadable || t is null)
@@ -94,6 +116,13 @@ public static partial class WorkflowPublicationPlanner
             case WorkflowFileState.Different:
                 list.Add(new("WorkflowPathOccupied", "Blocker", "A different file already exists at the workflow path on the base branch; this plan would overwrite it."));
                 break;
+            case WorkflowFileState.PriorVersion when replace:
+                list.Add(new("WorkflowWillBeReplaced", "Info", $"The base branch has exactly the workflow approved earlier (SHA-256 {priorSha256}). This plan replaces that file with the approved version, on a new branch: the base branch changes only when a person merges the pull request."));
+                break;
+            case WorkflowFileState.PriorVersion:
+                // the reader found a text nobody named as replaceable, or could not say which blob it is: that is somebody's file
+                list.Add(new("WorkflowPathOccupied", "Blocker", "A different file already exists at the workflow path on the base branch; this plan would overwrite it."));
+                break;
             case WorkflowFileState.Identical:
                 list.Add(new("AlreadyPublished", "Info", "The base branch already contains exactly this workflow: there is nothing to publish."));
                 break;
@@ -104,7 +133,7 @@ public static partial class WorkflowPublicationPlanner
         return list;
     }
 
-    private static string Body(ApprovedWorkflow approved, WorkflowProposal proposal, ProposalEvent? approval, string path)
+    private static string Body(ApprovedWorkflow approved, WorkflowProposal proposal, ProposalEvent? approval, string path, string? replacesSha256)
     {
         var evidence = proposal.Evidence;
         var p = evidence.Provenance;
@@ -118,6 +147,7 @@ public static partial class WorkflowPublicationPlanner
         sb.AppendLine("| --- | --- |");
         sb.AppendLine($"| Workflow | `{path}` |");
         sb.AppendLine($"| Workflow SHA-256 | `{approved.WorkflowSha256}` |");
+        if (replacesSha256 is not null) sb.AppendLine($"| Replaces | the workflow at this path approved earlier, SHA-256 `{replacesSha256}` |");
         if (approval is not null) sb.AppendLine($"| Approved by | `{Plain(approval.Actor, 60)}` on {approval.OccurredAtUtc:yyyy-MM-dd HH:mm} UTC |");
         sb.AppendLine($"| Proposed by | `{Plain(proposal.CreatedBy, 60)}` on {proposal.CreatedAtUtc:yyyy-MM-dd HH:mm} UTC |");
         if (p is not null) sb.AppendLine($"| Model | `{Plain(p.Model, 60)}` via `{Plain(p.Host, 80)}` |");
@@ -127,6 +157,8 @@ public static partial class WorkflowPublicationPlanner
         sb.AppendLine("- It is **not** proven equivalent to the Azure pipeline. Read it line by line.");
         if (proposal.Kind == ProposalKinds.Triggers)
         {
+            if (replacesSha256 is not null)
+                sb.AppendLine("- It **replaces** the file already at this path with the version that has the triggers. The file was found unchanged since it was approved (same SHA-256 as above); the pull request shows exactly what differs.");
             sb.AppendLine("- It **starts by itself** on the triggers below. They were converted from the Azure pipeline by fixed rules (no model), and the two systems differ in ways a person accepted at approval.");
             sb.AppendLine();
             sb.AppendLine("### Automatic triggers");
@@ -164,13 +196,15 @@ public static partial class WorkflowPublicationPlanner
         return sb.ToString();
     }
 
-    private static List<PublicationStep> Steps(string gitUrl, string repository, string baseBranch, string head, string path, string sha, string title, string commit)
+    private static List<PublicationStep> Steps(string gitUrl, string repository, string baseBranch, string head, string path, string sha, string title, string commit, bool replace)
     {
         var list = new List<PublicationStep>
         {
             new("Clone", "Clone the destination repository (or use an existing clone)", $"git clone {Sh(gitUrl)} && cd {Sh(repository)}"),
             new("Branch", "Start a branch from the base branch", $"git fetch origin && git checkout -b {Sh(head)} {Sh("origin/" + baseBranch)}"),
-            new("Save", "Save the workflow text exactly as shown", $"mkdir -p .github/workflows && cat > {Sh(path)}   # paste the workflow, end with Ctrl-D"),
+            replace
+                ? new("Replace", "Replace the workflow text with the text shown (the file already exists on the base branch)", $"cat > {Sh(path)}   # paste the workflow, end with Ctrl-D")
+                : new("Save", "Save the workflow text exactly as shown", $"mkdir -p .github/workflows && cat > {Sh(path)}   # paste the workflow, end with Ctrl-D"),
             new("Verify", "Check that it is the approved text", $"sha256sum {Sh(path)}   # must print {sha}"),
             new("Commit", "Commit", $"git add {Sh(path)} && git commit {string.Join(' ', commit.Split("\n\n", 2).Select(part => "-m " + Sh(part)))}"),
             new("Push", "Push the branch (the credential needs permission to write workflow files: the `workflow` scope for a token)", $"git push -u origin {Sh(head)}"),
@@ -233,13 +267,28 @@ public sealed class WorkflowPublicationService(WorkflowProposalService proposals
 
         var path = WorkflowPublicationPlanner.WorkflowPathFor(proposal.PipelineId, proposal.Evidence.PipelineName);
         var head = WorkflowPublicationPlanner.HeadBranchFor(proposal.PipelineId, approved.WorkflowSha256);
+        var prior = await ReplaceableHashAsync(proposal, ct);
         PublicationTarget? target = null;
         var unreadable = false;
-        try { target = await reader.ReadAsync(destination.Organization, repository, baseBranch, head, path, approved.WorkflowSha256, token, ct); }
+        try { target = await reader.ReadAsync(destination.Organization, repository, baseBranch, head, path, approved.WorkflowSha256, prior, token, ct); }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException) { unreadable = true; }
 
         var plan = WorkflowPublicationPlanner.Build(approved, proposal, events, destination.Organization, repository, baseBranch ?? "(default branch)", target, unreadable,
-            reader.GitUrl(destination.Organization, repository), clock.GetUtcNow());
+            reader.GitUrl(destination.Organization, repository), clock.GetUtcNow(), prior);
         return (plan, approved.WorkflowYaml);
+    }
+
+    // The one text a derived (Triggers) proposal may replace at the destination: the approved text of the conversion it was derived from, and only while that
+    // approval stands, for the same pipeline. A revoked, missing or foreign parent names nothing, so a file at the path is then somebody else's.
+    private async Task<string?> ReplaceableHashAsync(WorkflowProposal proposal, CancellationToken ct)
+    {
+        if (proposal.Kind != ProposalKinds.Triggers || proposal.ParentProposalId is not { } parentId) return null;
+        try
+        {
+            var (workflow, parent, _) = await proposals.RequireApprovedWithRecordAsync(parentId, ct);
+            return parent.Kind == ProposalKinds.Conversion && parent.SourceConnectionId == proposal.SourceConnectionId && parent.ProjectId == proposal.ProjectId &&
+                parent.PipelineId == proposal.PipelineId ? workflow.WorkflowSha256 : null;
+        }
+        catch (WorkflowProposalException) { return null; }
     }
 }

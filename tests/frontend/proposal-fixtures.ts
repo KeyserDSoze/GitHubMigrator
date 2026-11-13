@@ -36,8 +36,9 @@ export function convertAnswer(d: Detail) {
 export async function setup(page: Page, initial: Detail, options: { history?: Detail[]; refuse?: { status: number; body: Record<string, unknown> }; listFails?: boolean;
   plan?: Detail; planRefuse?: { status: number; body: Record<string, unknown> };
   role?: string; publication?: { enabled: boolean; allowed: string[] }; attempts?: Detail[]; published?: Detail; publishRefuse?: { status: number; body: Record<string, unknown> };
-  derived?: Detail; deriveRefuse?: { status: number; body: Record<string, unknown> } } = {}) {
-  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])], derives: [] as string[] };
+  derived?: Detail; deriveRefuse?: { status: number; body: Record<string, unknown> };
+  reconcile?: Detail; reconcileRefuse?: { status: number; body: Record<string, unknown>; once?: boolean } } = {}) {
+  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])], derives: [] as string[], reconciles: [] as { publication: string; body: Record<string, any> }[] };
   const summaries = () => [store.current, ...store.kept.filter(k => k.id !== store.current.id)].map(d => ({
     id: d.id, state: d.state, reason: d.reason, workflowSha256: d.workflowSha256, createdBy: d.createdBy, createdAtUtc: d.createdAtUtc, kind: d.kind ?? 'Conversion' }));
 
@@ -70,6 +71,12 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
       const record = options.published ?? publicationRecord();
       store.attempts = [record, ...store.attempts];
       return route.fulfill({ json: record });
+    }
+    if (verb === 'reconcile') {
+      store.reconciles.push({ publication: path.split('/').slice(-2)[0], body });
+      if (options.reconcileRefuse && !(options.reconcileRefuse.once && store.reconciles.length > 1))
+        return route.fulfill({ status: options.reconcileRefuse.status, json: options.reconcileRefuse.body });
+      return route.fulfill({ json: options.reconcile ?? reconciliation() });
     }
     if (verb === 'derive-triggers') {
       store.derives.push(id!);
@@ -166,3 +173,16 @@ export function triggersDetail(parentId = proposalId, overrides: Detail = {}): D
 }
 
 export const deriveButton = (page: Page) => page.getByRole('button', { name: /proponi i trigger di azure|propose the azure triggers/i });
+
+// What the destination shows for one recorded attempt (a read-only view): by default a pull request that is open and exactly as the product wrote it.
+export function reconciliation(overrides: Detail = {}): Detail {
+  return {
+    publicationId: '9c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f', proposalId, verdict: 'OpenPullRequest', findings: [],
+    observed: {
+      repositoryExists: true, archived: false, baseTipSha: 'c'.repeat(40), headBranchSha: 'e'.repeat(40),
+      pulls: [{ number: 7, state: 'open', merged: false, headSha: 'e'.repeat(40), mergeCommitSha: null }], fileOnHead: 'Identical', fileOnBase: 'Absent'
+    },
+    ledgerState: 'Published', ledgerWritesPossible: false, ledgerCommitSha: 'e'.repeat(40), ledgerPullNumber: 7, writesPerformed: false, readAtUtc: '2026-11-13T16:00:00Z',
+    ...overrides
+  };
+}

@@ -4,7 +4,8 @@ Status: **model connections, gates, a converter that returns a *proposal*, the k
 opt-in, allow-listed publisher of the pull request are implemented. The publisher is OFF by default and has only been exercised against the GitHub
 simulator.** The conversion itself never approves or publishes anything. See
 [ADR-011](../ADR/ADR-011-ai-conversion-gates-and-model-connections.md), [ADR-012](../ADR/ADR-012-kept-proposals-and-human-approval.md) and, for the Azure triggers,
-[ADR-015](../ADR/ADR-015-azure-triggers-as-a-separately-approved-derived-proposal.md).
+[ADR-015](../ADR/ADR-015-azure-triggers-as-a-separately-approved-derived-proposal.md) and, for replacing a published file and checking an attempt against the destination,
+[ADR-016](../ADR/ADR-016-replacing-a-published-file-and-reconciling-an-attempt.md).
 
 ## Model connections (UI: Connections → *AI model connections*)
 
@@ -121,8 +122,14 @@ What comes back: where the workflow goes (`.github/workflows/azdo-{pipelineId}-{
 | `TargetUnreadable` | Blocker | the destination could not be read: nothing was checked |
 | `RepositoryNotFound`, `RepositoryArchived`, `BaseBranchNotFound` | Blocker | the repository (or the credential's view of it) or the base is not usable |
 | `WorkflowPathOccupied` | Blocker | a *different* file is at the path on the base branch: publishing would overwrite it |
+| `WorkflowWillBeReplaced` | Info | the file at the path is exactly the text of the approved conversion this (Triggers) proposal was derived from: the plan replaces it, on a new branch (`mode: Update`) |
 | `AlreadyPublished` | Info | exactly this workflow is on the base branch (line endings ignored): nothing to publish, so not `ready` |
 | `HeadBranchExists`, `OpenPullRequestExists` | Blocker | the branch is taken, or a pull request from it is open |
+
+**Creating or replacing.** A plan puts the file on a new branch either as a new file (`mode: Create`) or, only for a **derived Triggers proposal**, as the replacement of the approved text of
+its parent conversion (`mode: Update`, with `replacesWorkflowSha256`). The file is replaceable only if the parent is still approved (same pipeline) and the file at the planned base commit is exactly
+that text and its blob id is the git id of the bytes that were read; anything else at the path is `WorkflowPathOccupied`. An update names the blob it replaces; `planSha256` covers the mode, the blob and
+the replaced text, so a file edited after the plan was shown makes the confirmation stale. A plan that creates a file hashes exactly what it always did.
 
 `ready` means nothing stands in the way, never that anything was published. `planSha256` covers the proposal, the repository, the base branch **and its commit**,
 the branch, the path, the commit message, the title and the description: a plan made again after the base moved has another hash, which is what a future
@@ -160,8 +167,10 @@ Body `{ destinationConnectionId, repository, baseBranch?, planSha256 }`, **super
 
 Then it writes, recording the state before and after each write, one step at a time: **create the branch** at the planned commit → **commit the one file** on it → **open the pull
 request** → read the pull request (open, from our branch at our commit into our base) and the file at that commit (the approved text) back. The writer only writes a file named
-`.github/workflows/azdo-{n}-{name}.yml` on a branch named `migrate/azdo-{n}-{hash8}`, for text that hashes to the approved hash. It **never merges, updates, deletes or force-pushes,
-and never repeats a write**.
+`.github/workflows/azdo-{n}-{name}.yml` on a branch named `migrate/azdo-{n}-{hash8}`, for text that hashes to the approved hash. The base branch is **never written**. The file is either new (it must
+not exist at the planned base commit) or the **replacement of the one text the plan names** (it must exist there with the planned blob id and text, or nothing is written:
+`PublicationWorkflowPathChanged`); a replacement is one `PUT` with `sha` = that blob on the new branch and is believed only if GitHub answers **200** (a created file answers 201). It **never merges,
+deletes or force-pushes, and never repeats a write**.
 
 | Ledger state | Meaning |
 | --- | --- |
@@ -209,10 +218,35 @@ Errors: 404 unknown; 409 `ProposalNotApproved`, `ParentIsNotAConversion`, `NoAut
 `UnsupportedSource`, `SourceCredentialMissing`.
 
 Publishing a derived proposal uses the same plan and publisher; the description says the workflow **starts by itself** and lists the mapped triggers and the accepted differences. It
-works for a **free path only**: if the manual-only conversion was already published, the plan reports `WorkflowPathOccupied` (updating a published file is not built).
+works on a **free path** (a new file) or, when the manual-only conversion was published and merged and the file is still exactly its approved text, as a **replacement** of that file (see above). Merge
+the conversion's pull request first: while it is open the path looks free, and the two pull requests would conflict.
 
 **Not verified.** actionlint checks the syntax of the filters (all eight Orion workflows with automatic triggers pass with the real analysers). Whether the same events start the same
 runs on GitHub has not been observed, and no golden workflow has run there.
+
+## Reconciling an attempt: `POST /api/workloads/pipelines/proposals/{id}/publications/{publicationId}/reconcile`
+
+Body `{ destinationConnectionId }` (`admin`/`superadmin`, rate limited). Sets one recorded attempt beside what the destination shows now. **A view, not an action**: GET requests only, inside the one
+repository, with the destination connection's read-only credential (never the publishing App's); nothing is written at the destination, the ledger does not change, nothing is stored. The connection
+must be a verified GitHub destination for the organization the attempt wrote to (`409 DestinationMismatch`); an attempt of another proposal is `404`.
+
+Read: the repository (archived?), the base branch tip now, the attempt's branch, every pull request from it in **any state** plus the number the ledger recorded, and the file at the workflow path on the
+branch and on the base, classified (the approved text / the text that was replaced / something else / nothing; the text is never returned). The response has `verdict`, `findings`, the `observed`
+facts and the ledger's own fields, and `writesPerformed: false`.
+
+| Verdict | Meaning |
+| --- | --- |
+| `OpenPullRequest` | open, at the commit the product wrote, with the approved text on its branch |
+| `OpenPullRequestChanged` | open, but the branch moved or its file is not the approved text: do not merge it believing it is |
+| `Merged` / `MergedBaseDiffers` | merged and the base has the approved text / merged but the base does not (changed after, or the merge did not bring it) |
+| `ClosedWithoutMerge` | closed, nothing reached the base; the branch may remain |
+| `BranchWithoutPullRequest` | a branch is left and no pull request uses it: the product will not open one or delete it |
+| `AlreadyOnBase` / `NothingFound` | the approved text is on the base and nothing remains / nothing of this attempt exists |
+| `TargetUnreadable` / `RepositoryNotFound` | nothing can be said (never shown as a good result) |
+
+Findings (`Info`/`Warning`): `BranchMoved`, `BaseMoved`, `PullRequestMissing`, `MultiplePullRequests`, `OtherPullRequests`, `AttemptNotFinished`, `UnexpectedObjects` (the ledger says nothing was written but
+something with the attempt's name exists), `ProductWillNotRetry`, `LedgerStillBlocksPlan` (an attempt that failed with `writesPossible` keeps that exact plan blocked even after a person removed what it
+left; another plan, with another hash, is possible once the base branch moves). The screen shows it per attempt ("Check at the destination"). Not verified online: see ADR-016.
 
 ## What may be sent to a model
 

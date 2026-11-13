@@ -38,8 +38,8 @@ Consequences:
   name; the product does not claim equivalence.
 - **Azure Repos Git ignores `pr:`** (branch policies build pull requests), so `pull_request` adds runs that did not come from the YAML; this is flagged, not hidden. For other Azure
   sources the YAML `pr:` applies, which this ADR does not distinguish.
-- **New file only.** Publishing the derived proposal works only for a path that is free: if the manual-only conversion was already published and merged, the plan reports
-  `WorkflowPathOccupied`. Updating a file this product published earlier (only when the base file equals the parent's approved text) is deferred, not built.
+- **New file, or replacing the parent's file.** Publishing the derived proposal works on a free path, or (ADR-016) as a replacement of the file the parent conversion put there, when that file is
+  still exactly the parent's approved text; anything else at the path is `WorkflowPathOccupied`.
 - **`batch`, `autoCancel` and `drafts` are not translated** into `concurrency` or job conditions; they are named as differences. Resource triggers (pipelines, repositories,
   containers) have no automatic equivalent and are named too.
 - The schema change is idempotent (`ADD COLUMN IF NOT EXISTS` with a `Conversion` default, constraint and trigger added if missing): a 0.5.0 database upgrades in place, existing rows become

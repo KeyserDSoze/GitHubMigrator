@@ -328,6 +328,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.RequestedBy).HasColumnName("requested_by").HasMaxLength(160);
             entity.Property(x => x.StartedAtUtc).HasColumnName("started_at_utc");
             entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.Property(x => x.Mode).HasColumnName("mode").HasMaxLength(8).HasDefaultValue("Create");
+            entity.Property(x => x.ReplacedBlobSha).HasColumnName("replaced_blob_sha").HasMaxLength(40);
+            entity.Property(x => x.ReplacedWorkflowSha256).HasColumnName("replaced_workflow_sha256").HasMaxLength(64);
             entity.HasIndex(x => new { x.ProposalId, x.StartedAtUtc }).HasDatabaseName("ix_workflow_publications_proposal");
             entity.HasOne<WorkflowProposalRecord>().WithMany().HasForeignKey(x => x.ProposalId).OnDelete(DeleteBehavior.Restrict);
         });

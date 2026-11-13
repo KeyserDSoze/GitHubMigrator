@@ -11,8 +11,10 @@ namespace GitHubMigrator.Infrastructure.GitHub;
 
 // The only code in the product that writes a workflow file or opens a pull request. It writes ONE file, under .github/workflows/, on a NEW
 // branch whose name it checks, with a token it mints for ONE repository with exactly contents, pull_requests and workflows write and discards
-// when it returns. It never merges, never force-pushes, never updates or deletes, and never repeats a write: a write whose answer was lost is
-// reported as such (WritesPossible) and left for a person. Everything it does is read back before it says it succeeded.
+// when it returns. The file is either new (it must not exist) or the replacement of the one text the plan names (it must exist, with that blob id and
+// that text, at the planned base commit): the base branch itself is never written. It never merges, never force-pushes, never deletes, and never
+// repeats a write: a write whose answer was lost is reported as such (WritesPossible) and left for a person. Everything it does is read back before it
+// says it succeeded.
 public sealed partial class GitHubPublicationWriter(HttpClient client, TimeProvider clock, GitHubEndpoints? endpoints = null) : IGitHubPublicationWriter
 {
     private const int MaxReplyBytes = 262_144;
@@ -25,6 +27,8 @@ public sealed partial class GitHubPublicationWriter(HttpClient client, TimeProvi
     private static partial Regex HeadBranch();
     [GeneratedRegex(@"^[0-9a-f]{40}$", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 200)]
     private static partial Regex GitSha();
+    [GeneratedRegex(@"^[0-9a-f]{64}$", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 200)]
+    private static partial Regex Sha256Hex();
 
     public async Task<PublicationCredentialObservation> InspectAsync(long appId, long installationId, string privateKeyPem, string organization, string repository, CancellationToken ct) =>
         (await MintAsync(appId, installationId, privateKeyPem, organization, repository, ct)).Observation;
@@ -44,8 +48,13 @@ public sealed partial class GitHubPublicationWriter(HttpClient client, TimeProvi
         // ---- reads with the writing credential: nothing has been written yet, so every refusal here leaves nothing behind
         using (var tip = await ReadAsync($"{root}/branches/{PathEscape(plan.BaseBranch)}", token, ct))
             if (tip is null || Text(Property(tip.RootElement, "commit"), "sha") != plan.BaseSha) throw new PublicationWriteException("PublicationBaseMoved", false);
+        var update = plan.Mode == PublicationModes.Update;
         using (var file = await ReadAsync($"{root}/contents/{PathEscape(plan.WorkflowPath)}?ref={plan.BaseSha}", token, ct))
-            if (file is not null) throw new PublicationWriteException("PublicationWorkflowPathOccupied", false);
+        {
+            // a new file must not exist; a replacement must find exactly the blob and the text the plan was made against, or somebody changed it since
+            if (!update && file is not null) throw new PublicationWriteException("PublicationWorkflowPathOccupied", false);
+            if (update && (file is null || !IsReplaceable(file.RootElement, plan))) throw new PublicationWriteException("PublicationWorkflowPathChanged", false);
+        }
         using (var head = await ReadAsync($"{root}/git/ref/heads/{PathEscape(plan.HeadBranch)}", token, ct))
             if (head is not null) throw new PublicationWriteException("PublicationHeadBranchExists", false);
 
@@ -58,8 +67,12 @@ public sealed partial class GitHubPublicationWriter(HttpClient client, TimeProvi
         // ---- 2. the one file, on that branch only
         await progress.RecordAsync(PublicationStates.FileCommitting, null, null, null, ct);
         string commitSha;
-        using (var committed = await WriteAsync($"{root}/contents/{PathEscape(plan.WorkflowPath)}", token,
-            new { message = plan.CommitMessage, content = Convert.ToBase64String(bytes), branch = plan.HeadBranch }, "PublicationFile", writesBefore: true, ct, HttpMethod.Put))
+        // GitHub answers 201 for a created file and 200 for a replaced one, and a replacement must name the blob it replaces
+        object fileBody = update
+            ? new { message = plan.CommitMessage, content = Convert.ToBase64String(bytes), branch = plan.HeadBranch, sha = plan.ReplacesBlobSha }
+            : new { message = plan.CommitMessage, content = Convert.ToBase64String(bytes), branch = plan.HeadBranch };
+        using (var committed = await WriteAsync($"{root}/contents/{PathEscape(plan.WorkflowPath)}", token, fileBody, "PublicationFile", writesBefore: true, ct, HttpMethod.Put,
+            update ? HttpStatusCode.OK : HttpStatusCode.Created))
         {
             commitSha = Text(Property(committed.RootElement, "commit"), "sha") ?? "";
             var blob = Text(Property(committed.RootElement, "content"), "sha");
@@ -107,6 +120,23 @@ public sealed partial class GitHubPublicationWriter(HttpClient client, TimeProvi
             string.IsNullOrWhiteSpace(plan.WorkflowYaml) || plan.WorkflowYaml.Length > 262_144 || WorkflowHash.Sha256(plan.WorkflowYaml) != plan.WorkflowSha256 ||
             string.IsNullOrWhiteSpace(plan.PullRequestTitle) || plan.PullRequestTitle.Length > 256 || plan.PullRequestBody.Length > 60_000 || string.IsNullOrWhiteSpace(plan.CommitMessage))
             throw new PublicationWriteException("PublicationRequestInvalid", false);
+        // a mode is one of two, and a replacement names both the blob and the text it replaces (a new file names neither)
+        var update = plan.Mode == PublicationModes.Update;
+        if (plan.Mode is not (PublicationModes.Create or PublicationModes.Update) || update != (plan.ReplacesBlobSha is not null) || update != (plan.ReplacesWorkflowSha256 is not null) ||
+            (update && (!GitSha().IsMatch(plan.ReplacesBlobSha!) || !Sha256Hex().IsMatch(plan.ReplacesWorkflowSha256!) || plan.ReplacesWorkflowSha256 == plan.WorkflowSha256)))
+            throw new PublicationWriteException("PublicationRequestInvalid", false);
+    }
+
+    // The file at the base commit is the one the plan replaces: a regular file whose blob id is the planned one, whose bytes have that id, and whose text is the text named.
+    private static bool IsReplaceable(JsonElement file, PublicationExecution plan)
+    {
+        if (Text(file, "type") != "file" || Text(file, "encoding") != "base64" || Text(file, "content") is not { } encoded || Text(file, "sha") != plan.ReplacesBlobSha) return false;
+        try
+        {
+            var bytes = Convert.FromBase64String(encoded.Replace("\n", "").Replace("\r", ""));
+            return GitBlob.Sha(bytes) == plan.ReplacesBlobSha && WorkflowHash.Sha256(new UTF8Encoding(false, true).GetString(bytes)) == plan.ReplacesWorkflowSha256;
+        }
+        catch (Exception ex) when (ex is FormatException or DecoderFallbackException) { return false; }
     }
 
     // ---- the credential --------------------------------------------------------------------------------------------------------------------
@@ -224,7 +254,8 @@ public sealed partial class GitHubPublicationWriter(HttpClient client, TimeProvi
 
     // A write. A definite 4xx means it did not happen; a transport failure, a timeout, a 5xx or an unreadable answer means it may have, and is
     // reported that way. It is never repeated.
-    private async Task<JsonDocument> WriteAsync(string relative, string token, object body, string code, bool writesBefore, CancellationToken ct, HttpMethod? method = null)
+    private async Task<JsonDocument> WriteAsync(string relative, string token, object body, string code, bool writesBefore, CancellationToken ct, HttpMethod? method = null,
+        HttpStatusCode? success = null)
     {
         using var request = Request(method ?? HttpMethod.Post, relative, token);
         request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
@@ -233,7 +264,8 @@ public sealed partial class GitHubPublicationWriter(HttpClient client, TimeProvi
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { throw new PublicationWriteException(code + "AnswerLost", true); }
         using (response)
         {
-            if (response.StatusCode != HttpStatusCode.Created)
+            // only the one success the step expects: any other 2xx means the write happened in a way this writer did not plan for
+            if (response.StatusCode != (success ?? HttpStatusCode.Created))
                 throw new PublicationWriteException(code + (response.StatusCode is >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError ? "Rejected" : "Failed"),
                     writesBefore || (int)response.StatusCode >= 500 || response.IsSuccessStatusCode);
             try { return await BoundedAsync(response, ct) ?? throw new PublicationWriteException(code + "AnswerUnreadable", true); }
@@ -261,14 +293,7 @@ public sealed partial class GitHubPublicationWriter(HttpClient client, TimeProvi
 
     // ---- small helpers -------------------------------------------------------------------------------------------------------------------
 
-    // git's object id of a file: what the contents API must answer for exactly these bytes.
-    private static string BlobSha(byte[] bytes)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
-        hash.AppendData(Encoding.ASCII.GetBytes($"blob {bytes.Length}\0"));
-        hash.AppendData(bytes);
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
+    private static string BlobSha(byte[] bytes) => GitBlob.Sha(bytes);
 
     private static string? DecodedHash(JsonElement file)
     {

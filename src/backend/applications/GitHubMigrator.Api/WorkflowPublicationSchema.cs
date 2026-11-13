@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 // The ledger of what the product wrote to a destination repository (one branch, one file, one pull request per plan). The database, not only the
 // service, refuses to:
 //  - start a second live publication of the same plan (partial unique index: a plan whose attempt failed BEFORE any write may be tried again);
-//  - change what was planned (repository, base commit, branch, path, hashes) or who asked;
+//  - change what was planned (repository, base commit, branch, path, hashes, whether it creates a file or replaces one, and which blob and text) or who asked;
 //  - move a publication backwards, skip a step of the order branch -> file -> pull request, or leave Published/Failed;
 //  - call a publication Published without a commit and a pull request number, or Failed without a reason;
 //  - delete a publication.
@@ -39,6 +39,10 @@ public static class WorkflowPublicationSchema
                 started_at_utc timestamptz NOT NULL,
                 updated_at_utc timestamptz NOT NULL
             );
+            -- 0.7: a publication either creates a file or replaces ONE named blob (the approved text of the parent conversion)
+            ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS mode varchar(8) NOT NULL DEFAULT 'Create';
+            ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS replaced_blob_sha varchar(40) NULL;
+            ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS replaced_workflow_sha256 varchar(64) NULL;
             CREATE INDEX IF NOT EXISTS ix_workflow_publications_proposal ON workflow_publications(proposal_id, started_at_utc);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_publications_live ON workflow_publications(proposal_id, plan_sha256)
                 WHERE NOT (state = 'Failed' AND writes_possible = false);
@@ -59,6 +63,14 @@ public static class WorkflowPublicationSchema
                         AND (state NOT IN ('PullRequestOpened') OR pull_number IS NOT NULL)
                         AND (state <> 'Failed' OR writes_possible OR failed_at_state IN ('Started','BranchCreating')));
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_workflow_publications_mode') THEN
+                    ALTER TABLE workflow_publications ADD CONSTRAINT ck_workflow_publications_mode CHECK (
+                        mode IN ('Create','Update')
+                        AND ((mode = 'Update') = (replaced_blob_sha IS NOT NULL))
+                        AND ((mode = 'Update') = (replaced_workflow_sha256 IS NOT NULL))
+                        AND (replaced_blob_sha IS NULL OR replaced_blob_sha ~ '^[0-9a-f]{{40}}$')
+                        AND (replaced_workflow_sha256 IS NULL OR (replaced_workflow_sha256 ~ '^[0-9a-f]{{64}}$' AND replaced_workflow_sha256 <> workflow_sha256)));
+                END IF;
             END
             $wpub_constraints$;
 
@@ -73,6 +85,8 @@ public static class WorkflowPublicationSchema
                    OR NEW.workflow_sha256 IS DISTINCT FROM OLD.workflow_sha256 OR NEW.organization IS DISTINCT FROM OLD.organization
                    OR NEW.repository IS DISTINCT FROM OLD.repository OR NEW.base_branch IS DISTINCT FROM OLD.base_branch OR NEW.base_sha IS DISTINCT FROM OLD.base_sha
                    OR NEW.head_branch IS DISTINCT FROM OLD.head_branch OR NEW.workflow_path IS DISTINCT FROM OLD.workflow_path
+                   OR NEW.mode IS DISTINCT FROM OLD.mode OR NEW.replaced_blob_sha IS DISTINCT FROM OLD.replaced_blob_sha
+                   OR NEW.replaced_workflow_sha256 IS DISTINCT FROM OLD.replaced_workflow_sha256
                    OR NEW.requested_by_id IS DISTINCT FROM OLD.requested_by_id OR NEW.requested_by IS DISTINCT FROM OLD.requested_by
                    OR NEW.started_at_utc IS DISTINCT FROM OLD.started_at_utc THEN
                     RAISE EXCEPTION 'workflow publication plan is immutable';

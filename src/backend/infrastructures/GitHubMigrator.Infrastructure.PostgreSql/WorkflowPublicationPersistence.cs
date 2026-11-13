@@ -27,6 +27,9 @@ public sealed class WorkflowPublicationRecord
     public string RequestedBy { get; set; } = "";
     public DateTimeOffset StartedAtUtc { get; set; }
     public DateTimeOffset UpdatedAtUtc { get; set; }
+    public string Mode { get; set; } = "Create";
+    public string? ReplacedBlobSha { get; set; }
+    public string? ReplacedWorkflowSha256 { get; set; }
 }
 
 // The ledger of what the product wrote to a destination. A row is written BEFORE the first write and moves only forward (the schema enforces
@@ -41,7 +44,8 @@ public sealed class PostgresPublicationLedger(AppDbContext db) : IPublicationLed
         {
             Id = r.Id, ProposalId = r.ProposalId, PlanSha256 = r.PlanSha256, WorkflowSha256 = r.WorkflowSha256, Organization = r.Organization, Repository = r.Repository,
             BaseBranch = r.BaseBranch, BaseSha = r.BaseSha, HeadBranch = r.HeadBranch, WorkflowPath = r.WorkflowPath, State = r.State, WritesPossible = false,
-            RequestedById = r.RequestedById, RequestedBy = r.RequestedBy, StartedAtUtc = r.StartedAtUtc, UpdatedAtUtc = r.UpdatedAtUtc
+            RequestedById = r.RequestedById, RequestedBy = r.RequestedBy, StartedAtUtc = r.StartedAtUtc, UpdatedAtUtc = r.UpdatedAtUtc,
+            Mode = r.Mode, ReplacedBlobSha = r.ReplacedBlobSha, ReplacedWorkflowSha256 = r.ReplacedWorkflowSha256
         });
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation, ConstraintName: LiveIndex })
@@ -74,5 +78,5 @@ public sealed class PostgresPublicationLedger(AppDbContext db) : IPublicationLed
 
     private static PublicationRecord From(WorkflowPublicationRecord r) => new(r.Id, r.ProposalId, r.PlanSha256, r.WorkflowSha256, r.Organization, r.Repository, r.BaseBranch,
         r.BaseSha, r.HeadBranch, r.WorkflowPath, r.State, r.CommitSha, r.PullNumber, r.PullUrl, r.ErrorCode, r.FailedAtState, r.WritesPossible, r.RequestedById, r.RequestedBy,
-        r.StartedAtUtc, r.UpdatedAtUtc);
+        r.StartedAtUtc, r.UpdatedAtUtc, r.Mode, r.ReplacedBlobSha, r.ReplacedWorkflowSha256);
 }

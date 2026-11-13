@@ -552,11 +552,25 @@ export type PublicationPlan = {
   headBranch: string; workflowPath: string; commitMessage: string; pullRequestTitle: string; pullRequestBody: string;
   ready: boolean; writesPerformed: boolean; findings: { code: string; severity: 'Blocker' | 'Info'; message: string }[];
   steps: { code: string; title: string; command: string | null }[]; planSha256: string; readAtUtc: string; workflowYaml: string;
+  // Update: the plan replaces the workflow approved earlier (its hash) instead of adding a file. Older answers carry neither: they create.
+  mode?: 'Create' | 'Update'; replacesWorkflowSha256?: string | null;
 };
 export type Publication = {
   id: string; proposalId: string; state: string; organization: string; repository: string; baseBranch: string; baseSha: string; headBranch: string;
   workflowPath: string; planSha256: string; commitSha: string | null; pullNumber: number | null; pullUrl: string | null; errorCode: string | null;
   failedAtState: string | null; writesPossible: boolean; requestedBy: string; startedAtUtc: string; updatedAtUtc: string;
+  mode?: 'Create' | 'Update'; replacedWorkflowSha256?: string | null;
+};
+// An attempt set beside what the destination shows now (read only): the verdict is what is there, the findings what to make of it.
+export type ReconciliationFile = 'Identical' | 'Absent' | 'Different' | 'PriorVersion';
+export type Reconciliation = {
+  publicationId: string; proposalId: string; verdict: string; findings: { code: string; severity: 'Info' | 'Warning'; message: string }[];
+  observed: {
+    repositoryExists: boolean; archived: boolean; baseTipSha: string | null; headBranchSha: string | null;
+    pulls: { number: number; state: string; merged: boolean; headSha: string | null; mergeCommitSha: string | null }[];
+    fileOnHead: ReconciliationFile; fileOnBase: ReconciliationFile;
+  } | null;
+  ledgerState: string; ledgerWritesPossible: boolean; ledgerCommitSha: string | null; ledgerPullNumber: number | null; writesPerformed: boolean; readAtUtc: string;
 };
 export type PublicationStatus = { enabled: boolean; allowedRepositories: string[] };
 export type ConversionStatus = {
@@ -990,6 +1004,10 @@ export const api = {
   planPublication: (token: string, id: string, destinationConnectionId: string, repository: string, baseBranch: string) =>
     call<PublicationPlan>(`/api/workloads/pipelines/proposals/${id}/publication-plan`, {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ destinationConnectionId, repository, baseBranch: baseBranch || null })
+    }),
+  reconcilePublication: (token: string, proposalId: string, publicationId: string, destinationConnectionId: string) =>
+    call<Reconciliation>(`/api/workloads/pipelines/proposals/${proposalId}/publications/${publicationId}/reconcile`, {
+      method: 'POST', headers: withToken(token), body: JSON.stringify({ destinationConnectionId })
     }),
   publicationStatus: (token: string) =>
     call<PublicationStatus>('/api/workloads/pipelines/publication/status', { headers: withToken(token) }),

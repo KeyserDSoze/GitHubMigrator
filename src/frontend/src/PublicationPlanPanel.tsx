@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, CheckCircle2, ClipboardCopy, Download, GitPullRequest, ShieldAlert } from 'lucide-react';
-import { api, ApiError, type Connection, type Publication, type PublicationPlan, type PublicationStatus } from './api';
+import { AlertTriangle, CheckCircle2, ClipboardCopy, Download, GitPullRequest, RefreshCw, Replace, ShieldAlert } from 'lucide-react';
+import { api, ApiError, type Connection, type Publication, type PublicationPlan, type PublicationStatus, type Reconciliation } from './api';
 
 type Props = { token: string; proposalId: string; destinations: Connection[]; defaultDestinationId: string; defaultRepository: string; isSuperAdmin: boolean };
 
@@ -22,6 +22,9 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState('');
   const [result, setResult] = useState<Publication | null>(null);
+  const [reconciled, setReconciled] = useState<Record<string, Reconciliation>>({});
+  const [reconciling, setReconciling] = useState('');
+  const [reconcileErrors, setReconcileErrors] = useState<Record<string, string>>({});
 
   // Whether the product may write at all, and what it has already done for this proposal. Both are context: when they cannot be loaded the plan still works.
   useEffect(() => {
@@ -48,6 +51,18 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
       setPublishing(false);
       api.listPublications(token, proposalId).then(setAttempts).catch(() => undefined);
     }
+  }
+
+  // Reads the destination (GET only) for one recorded attempt and sets what is there beside what the ledger says. It changes nothing anywhere. The connection used is
+  // the one for the organization the attempt wrote to, since reading another would only say "not found".
+  async function reconcile(a: Publication) {
+    const connection = destinations.find(d => d.organization.toLowerCase() === a.organization.toLowerCase())?.id ?? destinationId;
+    setReconciling(a.id); setReconcileErrors(previous => ({ ...previous, [a.id]: '' }));
+    try { const seen = await api.reconcilePublication(token, proposalId, a.id, connection); setReconciled(previous => ({ ...previous, [a.id]: seen })); }
+    catch (e) {
+      const code = e instanceof Error ? e.message : '';
+      setReconcileErrors(previous => ({ ...previous, [a.id]: t('pubRecError_' + code, { defaultValue: t('pubRecErrorGeneric') }) }));
+    } finally { setReconciling(''); }
   }
 
   async function run() {
@@ -89,7 +104,7 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
     {status?.enabled && allowed(p) && p.ready && isSuperAdmin && !result && <>
       <label className="proposal-warning">
         <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
-        <span>{t('pubConfirm', { hash: p.planSha256.slice(0, 12) })}</span>
+        <span>{t(p.mode === 'Update' ? 'pubConfirmUpdate' : 'pubConfirm', { hash: p.planSha256.slice(0, 12) })}</span>
       </label>
       <div className="proposal-actions">
         <button type="button" className="primary" disabled={!confirmed || publishing} onClick={() => { void publish(p); }}>
@@ -105,6 +120,27 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
       ? <><CheckCircle2 size={15} /> {t('pubPublished', { n: r.pullNumber })}{linkOf(r) && <> <a href={linkOf(r)!} target="_blank" rel="noreferrer noopener">{t('pubOpenPull')}</a></>}</>
       : <><AlertTriangle size={15} /> {t('pubFailedAt', { state: t('pubState_' + (r.failedAtState ?? 'Started'), { defaultValue: r.failedAtState ?? '' }), code: r.errorCode ?? '' })}{' '}
         <strong>{r.writesPossible ? t('pubFailedWrites') : t('pubFailedNoWrites')}</strong></>}
+  </div>;
+
+  // What the destination shows for one attempt. The verdict is a fact about the destination; the hint says what a person could do, never what the product will do.
+  const reconciliation = (r: Reconciliation) => <div className="publication-reconciliation" aria-label={t('pubRecTitle')}>
+    <div className="conversion-heading">
+      <span className={'connection-badge' + (['Merged', 'OpenPullRequest', 'NothingFound', 'AlreadyOnBase', 'ClosedWithoutMerge'].includes(r.verdict) ? '' : ' invalid')}>
+        {['Merged', 'OpenPullRequest'].includes(r.verdict) ? <CheckCircle2 size={15} /> : <ShieldAlert size={15} />} {t('pubVerdict_' + r.verdict, { defaultValue: r.verdict })}
+      </span>
+      <span className="conversion-reason">{t('pubRecNote')} · {new Date(r.readAtUtc).toLocaleString()}</span>
+    </div>
+    <p className="connection-hint">{t('pubVerdictHint_' + r.verdict, { defaultValue: '' })}</p>
+    {r.findings.map(f => <p key={f.code} className={'workload-finding' + (f.severity === 'Warning' ? ' warning' : '')}>
+      <strong>{f.code}</strong> — {t('pubRecFinding_' + f.code, { defaultValue: f.message })}</p>)}
+    {r.observed && r.observed.repositoryExists && <dl className="conversion-provenance">
+      <dt>{t('pubRecBranch')}</dt><dd>{r.observed.headBranchSha ? <code>{r.observed.headBranchSha.slice(0, 12)}</code> : t('pubRecMissing')}</dd>
+      <dt>{t('pubRecBase')}</dt><dd>{r.observed.baseTipSha ? <code>{r.observed.baseTipSha.slice(0, 12)}</code> : t('pubRecMissing')}</dd>
+      <dt>{t('pubRecPulls')}</dt><dd>{r.observed.pulls.length === 0 ? t('pubRecNone')
+        : r.observed.pulls.map(p => `#${p.number} ${p.merged ? t('pubRecMerged') : p.state === 'open' ? t('pubRecOpen') : t('pubRecClosed')}`).join(', ')}</dd>
+      <dt>{t('pubRecFileOnBranch')}</dt><dd>{r.observed.headBranchSha ? t('pubFile_' + r.observed.fileOnHead) : '—'}</dd>
+      <dt>{t('pubRecFileOnBase')}</dt><dd>{r.observed.baseTipSha ? t('pubFile_' + r.observed.fileOnBase) : '—'}</dd>
+    </dl>}
   </div>;
 
   return <div className="publication-plan" aria-label={t('pubTitle')}>
@@ -139,7 +175,9 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
         </span>
         <span className="conversion-reason">{t('pubNoWrites')}</span>
       </div>
-      {plan.findings.map(f => <p key={f.code} className="workload-finding"><strong>{f.code}</strong> — {t('pubFinding_' + f.code, { defaultValue: f.message })}</p>)}
+      {plan.mode === 'Update' && <p className="publication-mode"><span className="gate-chip kind-triggers"><Replace size={13} /> {t('pubModeUpdate')}</span>{' '}
+        {t('pubModeUpdateHint', { hash: (plan.replacesWorkflowSha256 ?? '').slice(0, 12) })}</p>}
+      {plan.findings.map(f => <p key={f.code} className="workload-finding"><strong>{f.code}</strong> — {t('pubFinding_' + f.code, { defaultValue: f.message, hash: (plan.replacesWorkflowSha256 ?? '').slice(0, 12) })}</p>)}
       <dl className="conversion-provenance">
         <dt>{t('pubRepo')}</dt><dd>{plan.organization}/{plan.repository}</dd>
         <dt>{t('pubBaseBranch')}</dt><dd>{plan.baseBranch}{plan.baseSha && <> @ <code>{plan.baseSha.slice(0, 12)}</code></>}</dd>
@@ -175,9 +213,15 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
       <ul>
         {attempts.map(a => <li key={a.id}>
           <span className={'gate-chip ' + (a.state === 'Published' ? 'gate-passed' : a.state === 'Failed' ? 'gate-failed' : '')}>{t('pubState_' + a.state, { defaultValue: a.state })}</span>{' '}
+          {a.mode === 'Update' && <><span className="gate-chip kind-triggers"><Replace size={13} /> {t('pubAttemptUpdate')}</span>{' '}</>}
           {a.organization}/{a.repository} · {new Date(a.startedAtUtc).toLocaleString()} · {a.requestedBy}
           {a.pullNumber ? <> · #{a.pullNumber}</> : null}{a.errorCode ? <> · <code>{a.errorCode}</code></> : null}
-          {a.state === 'Failed' && a.writesPossible ? <> · <strong>{t('pubFailedWrites')}</strong></> : null}
+          {a.state === 'Failed' && a.writesPossible ? <> · <strong>{t('pubFailedWrites')}</strong></> : null}{' '}
+          <button type="button" className="icon-button" disabled={reconciling === a.id} onClick={() => { void reconcile(a); }}>
+            <RefreshCw size={13} /> {reconciling === a.id ? t('pubRecBusy') : t('pubRecCheck')}
+          </button>
+          {reconcileErrors[a.id] && <div className="alert" role="alert">{reconcileErrors[a.id]}</div>}
+          {reconciled[a.id] && reconciliation(reconciled[a.id])}
         </li>)}
       </ul>
     </div>}

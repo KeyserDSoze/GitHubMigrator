@@ -28,7 +28,7 @@ Consequences:
 - **Nothing here has met GitHub.** Not verified online: how github.com answers a workflow-file write without the permission, a write whose answer is lost, App-token permission rules, the
   Contents API for workflow files, and rate limits. Enabling it for a real repository should start with a sandbox repository and a throw-away App, with `credential-check` first.
 - Only superadmins can publish; approval already required two people (four eyes), and publication is a third, explicit act on a hash.
-- No automatic cleanup: a `writesPossible` failure leaves a branch (and possibly a file) that a person removes. A reconciliation view of what exists versus the ledger would help and is not built.
+- No automatic cleanup: a `writesPossible` failure leaves a branch (and possibly a file) that a person removes. A read-only reconciliation view of what exists versus the ledger exists since ADR-016. "Never updates" is narrowed by ADR-016: the writer may replace the one approved text a derived proposal names, on the new branch only.
 - The ledger and proposals tables are not in the restricted-runtime grants script (fails closed), as for the earlier AI tables.
 - The original Azure triggers are not converted by a conversion: the published workflow is manual-only. They come back only as a separately approved derived proposal ([ADR-015](ADR-015-azure-triggers-as-a-separately-approved-derived-proposal.md)).
 - The repository must already exist at the destination (creating it is the missing multi-repository transfer), and the App must be installed on it.

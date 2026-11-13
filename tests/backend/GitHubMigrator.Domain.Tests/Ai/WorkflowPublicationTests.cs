@@ -14,13 +14,15 @@ internal sealed class FakePublicationReader : IGitHubPublicationReader
     public PublicationTarget Result { get; set; } = FreshTarget();
     public Exception? Throw { get; set; }
     public List<(string Org, string Repo, string? Base, string Head, string Path, string Sha, string Token)> Calls { get; } = [];
+    public List<string?> Priors { get; } = [];
 
     public static PublicationTarget FreshTarget() => new(true, false, "main", "main", new string('c', 40), WorkflowFileState.Absent, false, null, []);
 
     public Task<PublicationTarget> ReadAsync(string organization, string repository, string? baseBranch, string headBranch, string workflowPath,
-        string workflowSha256, string token, CancellationToken ct)
+        string workflowSha256, string? priorWorkflowSha256, string token, CancellationToken ct)
     {
         Calls.Add((organization, repository, baseBranch, headBranch, workflowPath, workflowSha256, token));
+        Priors.Add(priorWorkflowSha256);
         return Throw is null ? Task.FromResult(Result) : Task.FromException<PublicationTarget>(Throw);
     }
 
@@ -312,7 +314,7 @@ public sealed class GitHubPublicationReaderTests
     });
 
     private static Task<PublicationTarget> ReadAsync(StubHandler handler, string? baseBranch = null, GitHubEndpoints? endpoints = null) =>
-        Reader(handler, endpoints).ReadAsync("target-org", "orion-api", baseBranch, "migrate/azdo-42-abcd1234", ".github/workflows/azdo-42-x.yml", WorkflowHashOf(Workflow), "pat", default);
+        Reader(handler, endpoints).ReadAsync("target-org", "orion-api", baseBranch, "migrate/azdo-42-abcd1234", ".github/workflows/azdo-42-x.yml", WorkflowHashOf(Workflow), null, "pat", default);
 
     [Fact]
     public async Task It_reads_the_repository_the_base_tip_the_file_the_branch_and_the_pull_requests_with_get_requests_only()

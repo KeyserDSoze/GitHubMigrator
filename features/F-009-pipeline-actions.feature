@@ -118,3 +118,17 @@ Feature: Convert pipelines to reviewed GitHub Actions
     Given a pipeline with trigger none, pr none and no schedule
     When a person asks for the Azure triggers
     Then the answer says there is nothing to convert and nothing is kept
+
+  Scenario: A derived Triggers proposal replaces the file its parent put there, on a new branch, and only that file
+    Given a conversion that was published and merged, and a derived Triggers proposal approved separately
+    When a plan is made against the repository and the person confirms it by its hash
+    Then the plan says it replaces the file approved earlier and names its hash, and the writer replaces exactly that blob on a new branch
+    And the base branch is not written and nothing is merged
+    And a file that was edited, a parent whose approval was withdrawn, or a file edited after the plan was shown is not replaced
+
+  Scenario: An attempt can be checked against the destination without changing anything
+    Given a recorded publication attempt
+    When a person asks to check it at the destination
+    Then only GET requests are made and the answer names what exists: an open, merged or closed pull request, a branch left behind, or nothing
+    And a pull request whose branch or file no longer matches what the product wrote is not presented as safe
+    And the ledger is unchanged and the product does not clean up, retry or close anything

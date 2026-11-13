@@ -323,4 +323,143 @@ public sealed class GitHubPublicationWriterTests
         var badKey = await Assert.ThrowsAsync<PublicationWriteException>(() => new GitHubPublicationWriter(new HttpClient(new StubHandler()), new FixedClock()).InspectAsync(11, 22, "not a pem", "target-org", "orion-api", default));
         Assert.Equal(("PublicationSigningKeyInvalid", false), (badKey.Code, badKey.WritesPossible));
     }
+
+    // ---- replacing the file a derived proposal's parent put there ----------------------------------------------------------------------------
+
+    private const string OldYaml = "# azure-tasks: converted=none manual=none\nname: x\non:\n  workflow_dispatch:\njobs: {}\n# the version without triggers\n";
+
+    private static PublicationExecution UpdatePlan(Func<PublicationExecution, PublicationExecution>? change = null) => Plan(p =>
+    {
+        var update = p with { Mode = PublicationModes.Update, ReplacesBlobSha = Blob(OldYaml), ReplacesWorkflowSha256 = WorkflowHash.Sha256(OldYaml) };
+        return change is null ? update : change(update);
+    });
+
+    private static HttpResponseMessage OldFile(string? text = null, string? sha = null) => Json(new
+    {
+        type = "file", encoding = "base64", sha = sha ?? Blob(text ?? OldYaml), content = Convert.ToBase64String(Encoding.UTF8.GetBytes(text ?? OldYaml))
+    });
+
+    // the happy script, with the file present at the base commit and GitHub answering 200 (a replaced file) instead of 201 (a created one)
+    private static void ToUpdate(List<Func<HttpResponseMessage>> s)
+    {
+        s[4] = () => OldFile();
+        s[7] = () => Json(new { content = new { sha = Blob(Yaml) }, commit = new { sha = CommitSha, parents = new[] { new { sha = BaseSha } } } }, HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task It_replaces_the_named_file_on_the_new_branch_with_the_blob_it_replaces_and_never_touches_the_base_branch()
+    {
+        var run = await PublishAsync(ToUpdate, UpdatePlan());
+        Assert.Equal((CommitSha, 7), (run.Outcome!.CommitSha, run.Outcome.PullNumber));
+
+        // the same requests in the same order as a creation: only the answer to the file write and the file at the base differ
+        Assert.Equal(["POST /repos/target-org/orion-api/git/refs", $"PUT /repos/target-org/orion-api/contents/{Path}", "POST /repos/target-org/orion-api/pulls"],
+            run.Writes.Skip(1).Select(w => w.Replace("%2F", "/")));
+        Assert.Equal([PublicationStates.BranchCreating, PublicationStates.BranchCreated, PublicationStates.FileCommitting, PublicationStates.FileCommitted,
+            PublicationStates.PullRequestOpening, PublicationStates.PullRequestOpened], run.Progress.Steps.Select(s => s.State));
+
+        using (var file = JsonDocument.Parse(run.Handler.Sent[7].Body))
+        {
+            Assert.Equal(Blob(OldYaml), file.RootElement.GetProperty("sha").GetString()); // GitHub is told which blob is being replaced
+            Assert.Equal(Head, file.RootElement.GetProperty("branch").GetString());        // on the new branch, not on main
+            Assert.Equal(Yaml, Encoding.UTF8.GetString(Convert.FromBase64String(file.RootElement.GetProperty("content").GetString()!)));
+        }
+        using (var branch = JsonDocument.Parse(run.Handler.Sent[6].Body)) Assert.Equal(("refs/heads/" + Head, BaseSha), (branch.RootElement.GetProperty("ref").GetString(), branch.RootElement.GetProperty("sha").GetString()));
+        // nothing is ever written to the base branch, merged, patched or deleted
+        Assert.DoesNotContain(run.Requests, r => r.Contains("/merge") || r.StartsWith("PATCH") || r.StartsWith("DELETE"));
+        Assert.DoesNotContain(run.Handler.Sent.Where(r => r.Method != HttpMethod.Get), r => r.Body.Contains("refs/heads/main") || r.Body.Contains("\"branch\":\"main\""));
+    }
+
+    [Fact]
+    public async Task A_replacement_needs_the_file_at_the_planned_base_to_be_exactly_the_blob_and_the_text_the_plan_names_or_nothing_is_written()
+    {
+        var gone = await PublishAsync(s => { ToUpdate(s); s[4] = NotFound; }, UpdatePlan());
+        Fails(gone, "PublicationWorkflowPathChanged", false);
+        var other = new Dictionary<string, Func<HttpResponseMessage>>
+        {
+            ["another blob id"] = () => OldFile(sha: new string('0', 40)),
+            ["another text (its own blob id)"] = () => OldFile("name: somebody elses\non: push\njobs: {}\n"),
+            ["the text, with a blob id that is not the id of its bytes"] = () => OldFile(sha: Blob(OldYaml + "x")),
+            ["a directory"] = () => Json(new[] { new { type = "file" } }),
+            ["a submodule"] = () => Json(new { type = "submodule", sha = Blob(OldYaml) }),
+            ["not base64"] = () => Json(new { type = "file", encoding = "base64", sha = Blob(OldYaml), content = "!!!not base64!!!" }),
+            ["no content"] = () => Json(new { type = "file", encoding = "base64", sha = Blob(OldYaml) }),
+            ["bytes that are not text"] = () => Json(new { type = "file", encoding = "base64", sha = Blob(OldYaml), content = Convert.ToBase64String([0xff, 0xfe]) })
+        };
+        foreach (var (name, answer) in other)
+        {
+            var run = await PublishAsync(s => { ToUpdate(s); s[4] = answer; }, UpdatePlan());
+            Fails(run, "PublicationWorkflowPathChanged", false);
+            Assert.True(run.Writes.All(w => w.StartsWith("POST /app/installations/22/access_tokens")), name + ": " + string.Join(", ", run.Writes));
+            Assert.Empty(run.Progress.Steps);
+        }
+
+        // a creation still needs the path to be empty
+        Fails(await PublishAsync(s => s[4] = () => OldFile()), "PublicationWorkflowPathOccupied", false);
+    }
+
+    [Fact]
+    public async Task Only_the_one_success_a_step_expects_is_believed_so_a_201_for_a_replacement_or_a_200_for_a_creation_is_reported_as_possibly_written()
+    {
+        var created = await PublishAsync(s => { ToUpdate(s); s[7] = () => Json(new { content = new { sha = Blob(Yaml) }, commit = new { sha = CommitSha, parents = new[] { new { sha = BaseSha } } } }, HttpStatusCode.Created); }, UpdatePlan());
+        Fails(created, "PublicationFileFailed", true);
+        Assert.Equal([PublicationStates.BranchCreating, PublicationStates.BranchCreated, PublicationStates.FileCommitting], created.Progress.Steps.Select(s => s.State));
+        Assert.DoesNotContain(created.Requests, r => r.EndsWith("/pulls")); // no pull request is opened on the strength of an answer that was not expected
+
+        var replaced = await PublishAsync(s => s[7] = () => Json(new { content = new { sha = Blob(Yaml) }, commit = new { sha = CommitSha, parents = new[] { new { sha = BaseSha } } } }, HttpStatusCode.OK));
+        Fails(replaced, "PublicationFileFailed", true);
+    }
+
+    [Fact]
+    public async Task GitHub_refusing_the_replacement_or_answering_wrongly_is_a_refusal_after_the_branch_exists_and_nothing_is_repeated()
+    {
+        // 409: the blob id no longer matches on the branch
+        var conflict = await PublishAsync(s => { ToUpdate(s); s[7] = () => Json(new { message = "does not match" }, HttpStatusCode.Conflict); }, UpdatePlan());
+        Fails(conflict, "PublicationFileRejected", true);
+        Assert.Equal(1, conflict.Requests.Count(r => r.StartsWith("PUT ")));
+
+        // a commit that does not sit on the planned base, or a file that is not the new text
+        Fails(await PublishAsync(s => { ToUpdate(s); s[7] = () => Json(new { content = new { sha = Blob(Yaml) }, commit = new { sha = CommitSha, parents = new[] { new { sha = new string('9', 40) } } } }); }, UpdatePlan()),
+            "PublicationFileUnexpected", true);
+        Fails(await PublishAsync(s => { ToUpdate(s); s[7] = () => Json(new { content = new { sha = Blob(OldYaml) }, commit = new { sha = CommitSha, parents = new[] { new { sha = BaseSha } } } }); }, UpdatePlan()),
+            "PublicationFileUnexpected", true);
+        // a lost answer to the write
+        var lost = await PublishAsync(s => { ToUpdate(s); s[7] = () => throw new HttpRequestException("reset"); }, UpdatePlan());
+        Fails(lost, "PublicationFileAnswerLost", true);
+        Assert.Equal(1, lost.Requests.Count(r => r.StartsWith("PUT ")));
+    }
+
+    [Fact]
+    public async Task A_replacement_is_read_back_like_a_creation_and_a_failed_read_back_is_written_not_verified()
+    {
+        var wrongFile = await PublishAsync(s => { ToUpdate(s); s[10] = () => Json(new { type = "file", encoding = "base64", content = Convert.ToBase64String(Encoding.UTF8.GetBytes(OldYaml)) }); }, UpdatePlan());
+        Fails(wrongFile, "PublicationVerificationFailed", true); // the pull request exists, but its file is not the approved text
+        Assert.Equal(PublicationStates.PullRequestOpened, wrongFile.Progress.Steps[^1].State);
+    }
+
+    [Fact]
+    public async Task A_plan_that_does_not_say_exactly_which_file_it_replaces_is_refused_before_a_token_is_asked_for()
+    {
+        var sha256 = WorkflowHash.Sha256(OldYaml);
+        var bad = new Func<PublicationExecution, PublicationExecution>[]
+        {
+            p => p with { Mode = "Delete" },
+            p => p with { Mode = "update" },
+            p => p with { ReplacesBlobSha = null },                          // an update names the blob...
+            p => p with { ReplacesWorkflowSha256 = null },                   // ...and the text
+            p => p with { ReplacesBlobSha = "not-a-blob" },
+            p => p with { ReplacesBlobSha = new string('B', 40) },
+            p => p with { ReplacesWorkflowSha256 = "short" },
+            p => p with { ReplacesWorkflowSha256 = p.WorkflowSha256 }        // replacing a file with itself is not a replacement
+        };
+        foreach (var change in bad)
+        {
+            var run = await PublishAsync(plan: UpdatePlan(change));
+            Fails(run, "PublicationRequestInvalid", false);
+            Assert.Empty(run.Handler.Sent);
+        }
+        // a creation names neither
+        Fails(await PublishAsync(plan: Plan(p => p with { ReplacesBlobSha = Blob(OldYaml) })), "PublicationRequestInvalid", false);
+        Fails(await PublishAsync(plan: Plan(p => p with { ReplacesWorkflowSha256 = sha256 })), "PublicationRequestInvalid", false);
+    }
 }

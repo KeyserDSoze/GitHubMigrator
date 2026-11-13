@@ -23,8 +23,10 @@ public sealed record WorkflowPublicationOptions(bool Enabled, long AppId, long I
 }
 
 // Everything the writer needs, already decided: it adds nothing of its own and takes nothing from a caller.
+// Mode Update replaces ONE existing file whose blob and text are named here (ReplacesBlobSha, ReplacesWorkflowSha256); Create writes a file that must not exist.
 public sealed record PublicationExecution(Guid ProposalId, string Organization, string Repository, string BaseBranch, string BaseSha, string HeadBranch,
-    string WorkflowPath, string WorkflowYaml, string WorkflowSha256, string CommitMessage, string PullRequestTitle, string PullRequestBody, string PlanSha256);
+    string WorkflowPath, string WorkflowYaml, string WorkflowSha256, string CommitMessage, string PullRequestTitle, string PullRequestBody, string PlanSha256,
+    string Mode = PublicationModes.Create, string? ReplacesBlobSha = null, string? ReplacesWorkflowSha256 = null);
 
 public sealed record PublicationOutcome(string CommitSha, int PullNumber, string? PullUrl);
 
@@ -48,7 +50,8 @@ public interface IGitHubPublicationWriter
     // Mints a one-repository token with exactly contents, pull_requests and workflows write, checks it, and discards it. Writes nothing.
     Task<PublicationCredentialObservation> InspectAsync(long appId, long installationId, string privateKeyPem, string organization, string repository, CancellationToken ct);
 
-    // Creates the branch, commits the one file, opens the pull request and reads all of it back. Never merges, never retries a write.
+    // Creates the branch, commits the one file (a new file, or the replacement of the one approved text the plan names), opens the pull request and reads all of
+    // it back. The base branch is never written. Never merges, never deletes, never force-pushes, never retries a write.
     Task<PublicationOutcome> PublishAsync(long appId, long installationId, string privateKeyPem, PublicationExecution plan, IPublicationProgress progress, CancellationToken ct);
 }
 
@@ -84,7 +87,8 @@ public static class PublicationStates
 
 public sealed record PublicationRecord(Guid Id, Guid ProposalId, string PlanSha256, string WorkflowSha256, string Organization, string Repository,
     string BaseBranch, string BaseSha, string HeadBranch, string WorkflowPath, string State, string? CommitSha, int? PullNumber, string? PullUrl,
-    string? ErrorCode, string? FailedAtState, bool WritesPossible, Guid RequestedById, string RequestedBy, DateTimeOffset StartedAtUtc, DateTimeOffset UpdatedAtUtc);
+    string? ErrorCode, string? FailedAtState, bool WritesPossible, Guid RequestedById, string RequestedBy, DateTimeOffset StartedAtUtc, DateTimeOffset UpdatedAtUtc,
+    string Mode = PublicationModes.Create, string? ReplacedBlobSha = null, string? ReplacedWorkflowSha256 = null);
 
 public interface IPublicationLedger
 {
@@ -139,14 +143,14 @@ public sealed class WorkflowPublicationExecutor(WorkflowPublicationService plann
         var now = clock.GetUtcNow();
         var started = await ledger.TryStartAsync(new(Guid.NewGuid(), proposalId, plan.PlanSha256, plan.WorkflowSha256, plan.Organization, plan.Repository,
             plan.BaseBranch, plan.BaseSha, plan.HeadBranch, plan.WorkflowPath, PublicationStates.Started, null, null, null, null, null, false,
-            actor.Id, actor.Name, now, now), ct) ?? throw new WorkflowPublicationException("PublicationAlreadyAttempted");
+            actor.Id, actor.Name, now, now, plan.Mode, plan.ReplacesBlobSha, plan.ReplacesWorkflowSha256), ct) ?? throw new WorkflowPublicationException("PublicationAlreadyAttempted");
 
         var progress = new LedgerProgress(ledger, clock, started.Id);
         try
         {
             var outcome = await writer.PublishAsync(options.AppId, options.InstallationId, pem, new(proposalId, plan.Organization, plan.Repository, plan.BaseBranch,
                 plan.BaseSha, plan.HeadBranch, plan.WorkflowPath, yaml, plan.WorkflowSha256, plan.CommitMessage, plan.PullRequestTitle, plan.PullRequestBody,
-                plan.PlanSha256), progress, ct);
+                plan.PlanSha256, plan.Mode, plan.ReplacesBlobSha, plan.ReplacesWorkflowSha256), progress, ct);
             if (!await ledger.AdvanceAsync(started.Id, PublicationStates.PullRequestOpened, PublicationStates.Published, outcome.CommitSha, outcome.PullNumber, outcome.PullUrl, clock.GetUtcNow(), CancellationToken.None))
                 throw new WorkflowPublicationException("PublicationLedgerConflict", record: await ledger.GetAsync(started.Id, CancellationToken.None));
         }
