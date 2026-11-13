@@ -20,7 +20,7 @@
 | 6 | F-006 Native Git migration | F-005/F-008 | Mirror branches, tags and history; compare refs/SHAs | Planned |
 | 7 | F-007 TFVC conversion | F-005/F-008 | Best-effort changesets/branches conversion and evidence report | Research |
 | 8 | F-012 Azure DevOps Server/TFS and GitHub Enterprise Server | F-002/F-003 | Version-specific adapters and safe custom endpoints | Planned |
-| 9 | F-009 Pipeline → Actions | F-002/F-003 | Read-only YAML task analysis + AI advisory + safe disabled draft; AI model connections, redaction, output gates (actionlint/zizmor/policy/task accounting) an AI conversion *proposal*, its persistence and the human approval bound to the workflow hash built; PR publication pending | **Preview MVP; proposal and approval built, PR publication pending; deployment pending** |
+| 9 | F-009 Pipeline → Actions | F-002/F-003 | Read-only YAML task analysis + AI advisory + safe disabled draft; AI model connections, redaction, output gates (actionlint/zizmor/policy/task accounting) an AI conversion *proposal*, its persistence and the human approval bound to the workflow hash and a read-only publication plan built; writing the PR pending a publication credential | **Preview MVP; proposal, approval and publication plan built, PR write pending; deployment pending** |
 | 10 | F-010 Boards → Issues/Projects | F-002/F-003 | Issue draft with source ID, direct relations, target GitHub existence checks; later idempotent issue write | **Preview and reconciliation MVP; publishing pending** |
 | 11 | F-011 Guest/external users | F-004/F-005 | Guest governance, invitations and reviews | Later |
 

@@ -437,3 +437,13 @@
 .proposal-history li{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .state-approved{color:var(--accent)}
 .state-rejected,.state-revoked,.state-blocked{color:#ff8a8a;border-color:#ff8a8a66}
+
+.publication-plan{border-top:1px solid var(--border);padding-top:12px;display:grid;gap:10px}
+.publication-plan h4,.publication-plan h5{margin:0;display:flex;align-items:center;gap:8px}
+.publication-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.publication-result{display:grid;gap:10px;border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--surface)}
+.publication-result pre{max-height:320px;overflow:auto;white-space:pre-wrap}
+.publication-title{margin:0;font-weight:700;font-size:13px}
+.publication-steps{margin:0;padding-left:20px;display:grid;gap:10px;font-size:12px}
+.publication-command{display:flex;align-items:flex-start;gap:10px;margin-top:4px}
+.publication-command code{flex:1;overflow-wrap:anywhere;font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:6px 10px}

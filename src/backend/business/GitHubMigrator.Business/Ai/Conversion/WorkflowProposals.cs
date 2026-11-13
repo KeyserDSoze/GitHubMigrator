@@ -18,7 +18,7 @@ public sealed record StoredFinding(string Gate, string Code, string Severity, st
 // Everything that explains a proposal except its text. No source text, no values: the plan holds names only and the
 // provenance holds hashes and counts.
 public sealed record ProposalEvidence(IReadOnlyList<StoredGate> Gates, IReadOnlyList<StoredFinding> Findings, ConversionPlan Plan,
-    IReadOnlyList<string> SourceTasks, ConversionProvenance? Provenance);
+    IReadOnlyList<string> SourceTasks, ConversionProvenance? Provenance, string? PipelineName = null);
 
 public sealed record WorkflowProposal(Guid Id, Guid SourceConnectionId, string ProjectId, int PipelineId, Guid AiConnectionId,
     ProposalState State, string? Reason, string? WorkflowYaml, string? WorkflowSha256, string? ModelNotes, ProposalEvidence Evidence,
@@ -85,7 +85,7 @@ public sealed class WorkflowProposalService(IWorkflowProposalRepository reposito
         var evidence = new ProposalEvidence(
             proposal.Gates?.Gates.Select(g => new StoredGate(g.Gate, g.Status.ToString(), g.Detail)).ToArray() ?? [],
             proposal.Gates?.Findings.Select(f => new StoredFinding(f.Gate, f.Code, f.Severity.ToString(), f.Message, f.Line)).ToArray() ?? [],
-            proposal.Plan, proposal.SourceTasks, proposal.Provenance);
+            proposal.Plan, proposal.SourceTasks, proposal.Provenance, proposal.PipelineName);
         var now = clock.GetUtcNow();
         var stored = new WorkflowProposal(Guid.NewGuid(), sourceConnectionId, projectId, pipelineId, aiConnectionId,
             proposed ? ProposalState.Proposed : ProposalState.Blocked, proposed ? null : proposal.Reason ?? "Blocked",
@@ -157,13 +157,17 @@ public sealed class WorkflowProposalService(IWorkflowProposalRepository reposito
     // The one door a later step (pull request publication) must go through: the text it publishes is the text a person
     // approved, byte for byte, and that approval has not been revoked. It does not re-run the gates: publishing re-checks
     // what it needs at the destination; this only answers "what exactly was approved".
-    public async Task<ApprovedWorkflow> RequireApprovedAsync(Guid id, CancellationToken ct)
+    public async Task<ApprovedWorkflow> RequireApprovedAsync(Guid id, CancellationToken ct) => (await RequireApprovedWithRecordAsync(id, ct)).Workflow;
+
+    // The same door, with the record the approval belongs to and the history that names the approver, for a step that has to
+    // describe what it publishes (the publication plan). Nothing here is read from anywhere but the approved row.
+    public async Task<(ApprovedWorkflow Workflow, WorkflowProposal Proposal, IReadOnlyList<ProposalEvent> Events)> RequireApprovedWithRecordAsync(Guid id, CancellationToken ct)
     {
         var proposal = await repository.GetAsync(id, ct) ?? throw new WorkflowProposalException("ProposalNotFound");
         if (proposal.State != ProposalState.Approved) throw new WorkflowProposalException("ProposalNotApproved");
         if (proposal.WorkflowYaml is null || proposal.WorkflowSha256 is null || proposal.ApprovedSha256 != proposal.WorkflowSha256 || !proposal.IntegrityOk)
             throw new WorkflowProposalException("ProposalIntegrityFailure");
-        return new(proposal.Id, proposal.WorkflowYaml, proposal.WorkflowSha256);
+        return (new(proposal.Id, proposal.WorkflowYaml, proposal.WorkflowSha256), proposal, await repository.EventsAsync(id, ct));
     }
 
     // Stable over the order findings were produced in, so the same verdict always has the same hash.

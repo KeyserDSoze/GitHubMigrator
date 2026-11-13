@@ -25,6 +25,9 @@ public sealed record ConversionProposal(ConversionStatus Status, string? Reason,
     // The Azure tasks of the source the gates accounted for. Kept so that an approval can run the very same gates again.
     public IReadOnlyList<string> SourceTasks { get; init; } = [];
 
+    // Name of the Azure pipeline, as the source reported it. Untrusted text: only ever shown inside quotes or code.
+    public string? PipelineName { get; init; }
+
     public static ConversionProposal NotAttempted(string reason, ConversionPlan plan, ConversionProvenance? provenance = null) =>
         new(ConversionStatus.NotAttempted, reason, null, null, null, null, plan, provenance);
 }

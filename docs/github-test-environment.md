@@ -39,7 +39,7 @@ REST under `/api/v3`, using GitHub's documented shapes (snake_case, explicit nul
 - repositories: create (`POST /orgs/{org}/repos`, name/case/policy validation), get, patch (default branch, archive), delete, branches, tags, commits
 - Git data: `matching-refs` (annotated tags reported as type `tag`), `git/ref(s)` create/update/delete with fast-forward checks, `git/commits|tags|trees|blobs`
 - contents: get (base64/raw/dir), put/delete with `sha` conflict rules, real commits on a branch (creating the first commit of an empty repository)
-- pull requests (create, list, get, patch, real merge/squash) and issues (+comments), sharing the number space like GitHub
+- pull requests (create, list — filtered by `state`, `head=owner:branch` and `base` —, get, patch, real merge/squash) and issues (+comments), sharing the number space like GitHub
 - Actions: repository secrets (public key, **sealed-box size validation: plaintext uploads are rejected**), variables, environments (+ environment secrets/variables by repository id), workflows discovered from `.github/workflows` on the default branch
 - rulesets (`/rulesets`, `/rules/branches/{branch}`), enforced on REST writes **and on pushes**
 - GitHub App: JWT (RS256, signature checked against the registered public key), `/app`, `/app/installations/{id}`, `POST .../access_tokens` (one-repository, `contents` read/write, `metadata: read`, 60-minute expiry, never more than the installation grants). Installation tokens see only their repositories and cannot manage secrets

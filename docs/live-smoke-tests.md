@@ -16,6 +16,7 @@ Everything against Azure DevOps and GitHub is **read-only**: all HTTP goes throu
 | GitHub | validator and access | token, organization, membership and role, private-repository policy |
 | | missing repository | a missing name is `NotVisibleOrMissing` |
 | | repository probes (with `..._GH_REPO`) | an absent commit is "not found" although GitHub answers 422; refs and annotated tag objects; rulesets; Actions secret/variable **names** |
+| | publication reader (with `..._GH_REPO`) | the read-only publication plan's reads: default-branch tip, an absent workflow path (contents 404), an absent branch whose name contains `/` (git/ref 404), an empty `head=owner:branch` pull request list, a missing repository / base branch |
 
 | AI model (opt-in, **sends prompts**) | ping | the product client gets an answer from the configured endpoint; which of `max_tokens` / `max_completion_tokens` it accepts |
 | | rejections | a bogus key, an unknown model and a ~1.2 MB input are classified `Unauthorized`, `ModelNotFound`, `ContextLengthExceeded` as LlmSim assumes (with the real status and code in the report) |

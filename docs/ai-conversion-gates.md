@@ -1,7 +1,7 @@
 # AI conversion: model connections and workflow gates
 
-Status: **model connections, gates, a converter that returns a *proposal*, the kept proposals and the human approval are implemented. Publishing
-an approved workflow as a pull request is not.** The conversion itself never approves or publishes anything. See
+Status: **model connections, gates, a converter that returns a *proposal*, the kept proposals, the human approval and a read-only *publication plan* are
+implemented. Writing the branch and the pull request to GitHub is not: a person does it with the plan.** The conversion itself never approves or publishes anything. See
 [ADR-011](../ADR/ADR-011-ai-conversion-gates-and-model-connections.md) and [ADR-012](../ADR/ADR-012-kept-proposals-and-human-approval.md).
 
 ## Model connections (UI: Connections → *AI model connections*)
@@ -100,6 +100,42 @@ proposals cannot be deleted.
 `workflow_dispatch` only). `WorkflowProposalService.RequireApprovedAsync(id)` is the one door a later publisher must use: it returns the text only for an
 `Approved` proposal whose recorded approval hash is the text's hash.
 
+## Publication plan (read only): `POST /api/workloads/pipelines/proposals/{id}/publication-plan`
+
+Body `{ destinationConnectionId, repository, baseBranch? }` (`admin`/`superadmin`, rate limited). Only an **approved** proposal is planned
+(`RequireApprovedAsync`: the stored text must still hash to the approved hash); nothing about the destination is read for any other. The destination
+connection must be a verified GitHub destination. The plan **writes nothing**: the destination is read with GET requests only, inside the one repository,
+with the destination connection's own credential (the response says `writesPerformed: false`).
+
+What is read: the repository (exists, archived, default branch), the base branch tip, the file at the workflow path *at that commit* (compared with the
+approved hash inside the reader; the text never leaves it), the branch the plan would create, and open pull requests from it.
+
+What comes back: where the workflow goes (`.github/workflows/azdo-{pipelineId}-{name}.yml`, the same path as the preview; a new branch
+`migrate/azdo-{pipelineId}-{first 8 of the hash}`), the commit message, the pull request title and description, the findings, the steps a person runs
+(clone, branch, save, verify the SHA-256, commit, push, `gh pr create`; every value single-quoted), the approved text, and `planSha256`.
+
+| Finding | Severity | Meaning |
+| --- | --- | --- |
+| `TargetUnreadable` | Blocker | the destination could not be read: nothing was checked |
+| `RepositoryNotFound`, `RepositoryArchived`, `BaseBranchNotFound` | Blocker | the repository (or the credential's view of it) or the base is not usable |
+| `WorkflowPathOccupied` | Blocker | a *different* file is at the path on the base branch: publishing would overwrite it |
+| `AlreadyPublished` | Info | exactly this workflow is on the base branch (line endings ignored): nothing to publish, so not `ready` |
+| `HeadBranchExists`, `OpenPullRequestExists` | Blocker | the branch is taken, or a pull request from it is open |
+
+`ready` means nothing stands in the way, never that anything was published. `planSha256` covers the proposal, the repository, the base branch **and its commit**,
+the branch, the path, the commit message, the title and the description: a plan made again after the base moved has another hash, which is what a future
+executor must be asked to confirm.
+
+**Text from outside is data in the description.** The pipeline name, user names, model name and the model's notes are untrusted: names go in code spans
+(backticks and control characters removed, bounded), and the model's notes go in a fence one backtick longer than any run inside them, so none of them can open a
+heading, a link or a mention.
+
+**Why the product does not write the pull request yet.** A push of a file under `.github/workflows/` needs more than `contents: write`: GitHub requires the
+`workflow` scope (token) or *Workflows: write* (GitHub App), and opening the pull request needs *Pull requests: write*. F-043 attests a credential with
+`Contents: write` only, on purpose, so it cannot be reused; a publication credential is a different, repository-scoped attestation that does not exist yet. The
+GitHub simulator does not model those two permissions either (`tools/GhSim` knows `contents` only), so a write path tested against it would be tested
+against something more permissive than GitHub. See [ADR-013](../ADR/ADR-013-publication-plan-before-publication.md).
+
 ## What may be sent to a model
 
 `SourceRedactor.Redact(text)`: credentials (AWS keys, GitHub/Slack/npm/NuGet/Google/Stripe tokens, JWTs, `Authorization: Basic/Bearer` values, connection-string
@@ -132,11 +168,11 @@ they are missing; CI sets `GITHUBMIGRATOR_REQUIRE_TOOLS=true`.
 | `tests/backend/GitHubMigrator.Domain.Tests/WorkflowGates` | gates, hostile corpus, redactor, extractor, fake and real analysers, process runner |
 | `…/Ai` | client against a stub handler (URL, auth, retries, errors, timeouts), connection service, **client against LlmSim** (faults, no credential reaches the model, every hostile answer stopped) |
 | `tests/integration/AiConnectionsAgainstSimApiTests.cs` | the real API with PostgreSQL, encrypted secrets and LlmSim |
-| `…/Ai/WorkflowProposalTests.cs` | the approval rules with an in-memory store: binding to the hash, four eyes, gates run again, warnings by name, races, release of the approved text |
+| `…/Ai/WorkflowPublicationTests.cs` | the plan (naming, findings, hash, injection-proof description, quoting, order of checks) and the destination reader against scripted GitHub answers |\n| `…/Ai/WorkflowProposalTests.cs` | the approval rules with an in-memory store: binding to the hash, four eyes, gates run again, warnings by name, races, release of the approved text |
 | `…/Ai/ConversionTests.cs`, `OrionConverterEvaluationTests.cs`, `PipelineYamlReaderTests.cs` | plan, prompt, orchestrator (fake model), the converter on the ten Orion pipelines with the real analysers (golden answers must reach `ReadyForReview`; 40 hostile edits must be blocked with the expected code), the YAML reader |
-| `tests/integration/WorkflowProposalApprovalApiTests.cs` | kept proposals and approval on the real API and PostgreSQL: the whole decision flow, concurrent approvals, and the database refusing rewrites and skipped states (needs the analysers; CI installs them) |
+| `tests/integration/WorkflowPublicationPlanApiTests.cs` | approved workflow → plan against GhSim over real HTTP: GETs only and only that repository, every conflict from what the destination really holds, no read for an unapproved proposal |\n| `tests/integration/WorkflowProposalApprovalApiTests.cs` | kept proposals and approval on the real API and PostgreSQL: the whole decision flow, concurrent approvals, and the database refusing rewrites and skipped states (needs the analysers; CI installs them) |
 | `tests/integration/PipelineConversionAgainstSimApiTests.cs` | the endpoint on the real API: end to end with LlmSim, no source secret reaches the model, consent, failures, access |
-| `tests/frontend/ai-connections.spec.ts`, `pipeline-conversion.spec.ts`, `proposal-review.spec.ts` | the UI against mocked endpoints |
+| `tests/frontend/ai-connections.spec.ts`, `pipeline-conversion.spec.ts`, `proposal-review.spec.ts`, `publication-plan.spec.ts` | the UI against mocked endpoints |
 | `…/WorkflowGates/Golden/orion` + `OrionGoldenCorpusTests` | ten Orion pipelines converted by hand: gates (policy and real analysers), plan accounting, task coverage, honesty rules, redaction; see its `README.md` and `GATE_FINDINGS.md`. **Never executed on GitHub** |
 | `tests/live/LiveSmoke.Tests/AiModelLiveSmokeTests.cs` | opt-in smoke against a real model endpoint ([live smoke tests](live-smoke-tests.md)) |
 | `tests/simulators/LlmSim.Tests` | the simulator's own contract ([docs](llm-test-environment.md)) |

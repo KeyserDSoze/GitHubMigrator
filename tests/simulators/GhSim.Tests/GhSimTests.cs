@@ -143,6 +143,14 @@ public sealed class GhSimRestTests(GhSimFixture sim) : IClassFixture<GhSimFixtur
         var asIssue = await sim.Get($"/repos/{slug}/issues/1");
         Assert.True(asIssue.Json.TryGetProperty("pull_request", out _));
 
+        // the list is narrowed by head=owner:branch and base=branch, as on GitHub
+        var owner = slug.Split('/')[0];
+        Assert.Single((await sim.Get($"/repos/{slug}/pulls?state=open&head={owner}:work")).Json.EnumerateArray());
+        Assert.Empty((await sim.Get($"/repos/{slug}/pulls?state=open&head={owner}:other")).Json.EnumerateArray());
+        Assert.Empty((await sim.Get($"/repos/{slug}/pulls?state=open&head=someone-else:work")).Json.EnumerateArray());
+        Assert.Single((await sim.Get($"/repos/{slug}/pulls?base=main")).Json.EnumerateArray());
+        Assert.Empty((await sim.Get($"/repos/{slug}/pulls?base=develop")).Json.EnumerateArray());
+
         Assert.Equal(200, (await sim.Put($"/repos/{slug}/pulls/1/merge", new { merge_method = "merge" })).Status);
         Assert.True((await sim.Get($"/repos/{slug}/pulls/1")).Json.GetProperty("merged").GetBoolean());
         Assert.Equal(200, (await sim.Get($"/repos/{slug}/contents/CHANGES.md")).Status);

@@ -84,6 +84,7 @@ builder.Services.AddSingleton<IWorkflowGatePipelineFactory>(new WorkflowGatePipe
 builder.Services.AddScoped(sp => new PipelineConverter(sp.GetRequiredService<IChatModelClient>(),
     sp.GetRequiredService<IWorkflowGatePipelineFactory>(), sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped<PipelineConversionService>();
+builder.Services.AddScoped<WorkflowPublicationService>();
 builder.Services.AddScoped<IWorkflowProposalRepository, PostgresWorkflowProposalRepository>();
 // Four eyes by default: whoever asked the model for a workflow is not the only person who may approve it. A single-reviewer
 // deployment turns it off explicitly with WorkflowApproval:RequireSecondApprover=false.
@@ -672,6 +673,9 @@ builder.Services.AddHttpClient<AzureDevOpsWorkloadReader>(c => c.Timeout = TimeS
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Services.AddHttpClient<GitHubConfigurationReader>(c => c.Timeout = TimeSpan.FromSeconds(15))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddHttpClient<GitHubPublicationReader>(c => c.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+builder.Services.AddTransient<IGitHubPublicationReader>(s => s.GetRequiredService<GitHubPublicationReader>());
 // Redirects must never be followed (they would carry the API key to another host); each attempt has its own timeout.
 builder.Services.AddHttpClient<GitHubMigrator.Infrastructure.Ai.OpenAiCompatibleChatClient>(c => c.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });

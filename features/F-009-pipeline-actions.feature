@@ -60,3 +60,16 @@ Feature: Convert pipelines to reviewed GitHub Actions
     Given a model answer that the gates block
     Then it is kept with its findings and provenance but without the workflow text
     And it cannot be approved
+
+  Scenario: An approved workflow is planned against the destination without writing anything
+    Given an approved proposal and a verified GitHub destination connection
+    When the operator asks for a publication plan for a repository
+    Then only GET requests are made, only inside that repository
+    And the plan names the branch, the file, the pull request title and description and the commands a person runs
+    And it reports a different file at the path, a taken branch, an open pull request, an archived or missing repository as findings
+    And its hash covers the base commit, so a plan made after the base moved has another hash
+
+  Scenario: Nothing is planned for a proposal nobody approved
+    Given a proposal that is pending, rejected, revoked or blocked
+    When a publication plan is requested
+    Then it is refused and the destination is not contacted

@@ -171,7 +171,8 @@ export default function WorkloadsPage({ mode, token, isAdmin }: Props) {
         {t('workloadVerify')}
       </button>}
     </form>
-    {mode === 'pipelines' && <PipelineConversionPanel token={token} sourceId={sourceId} projectId={projectId} pipelineId={pipelineId} />}
+    {mode === 'pipelines' && <PipelineConversionPanel token={token} sourceId={sourceId} projectId={projectId} pipelineId={pipelineId}
+      destinations={targets} defaultDestinationId={destinationId} defaultRepository={repository} />}
     {pipeline && <section className="workload-output">
       <h2>{pipeline.sourceName}</h2>
       <p>{t('workloadPath')}: <code>{pipeline.workflowPath}</code></p>

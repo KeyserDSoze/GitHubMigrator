@@ -45,9 +45,16 @@ public static partial class GhSimApp
             var (r, error) = Open(sim, ctx, org, repo);
             if (error is not null) return error;
             var state = Q(ctx, "state") is { Length: > 0 } s ? s : "open";
+            // head=owner:branch and base=branch narrow the list, as on GitHub (the simulator has no forks: the owner is the repository's)
+            var headFilter = Q(ctx, "head"); var baseFilter = Q(ctx, "base");
+            var headOwner = headFilter.Contains(':') ? headFilter[..headFilter.IndexOf(':')] : null;
+            var headRef = headFilter.Contains(':') ? headFilter[(headFilter.IndexOf(':') + 1)..] : headFilter;
             List<GhPull> all;
             lock (sim.Store.Lock)
-                all = r!.Pulls.Where(p => state == "all" || p.State == state).OrderByDescending(p => p.Number).ToList();
+                all = r!.Pulls.Where(p => state == "all" || p.State == state)
+                    .Where(p => headRef.Length == 0 || (p.HeadRef == headRef && (headOwner is null || headOwner.Equals(r.Org, StringComparison.OrdinalIgnoreCase))))
+                    .Where(p => baseFilter.Length == 0 || p.BaseRef == baseFilter)
+                    .OrderByDescending(p => p.Number).ToList();
             await RefreshPullsAsync(sim, r!, all);
             return Results.Json(Page(ctx, all).Select(p => GhJson.Pull(sim, ctx, r!, p)).ToArray());
         });

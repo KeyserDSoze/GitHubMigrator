@@ -39,6 +39,25 @@ public static class WorkflowProposalEndpoints
             catch (WorkflowProposalException ex) { return Refused(ex, logs, id, actor, "approve"); }
         }).RequireRateLimiting("external");
 
+        // Plans the pull request for an APPROVED proposal: reads the destination repository (GET only) and returns where the workflow
+        // would go, what the description says, what is in the way and a hash of the whole plan. It writes nothing anywhere.
+        group.MapPost("/{id:guid}/publication-plan", async Task<IResult> (Guid id, PublicationPlanInput input, WorkflowPublicationService service,
+            ClaimsPrincipal user, ILoggerFactory logs, CancellationToken ct) =>
+        {
+            var actor = ActorOf(user);
+            if (actor is null) return Results.Forbid();
+            try
+            {
+                var (plan, yaml) = await service.PlanAsync(id, input.DestinationConnectionId, input.Repository ?? "", string.IsNullOrWhiteSpace(input.BaseBranch) ? null : input.BaseBranch.Trim(), ct);
+                logs.CreateLogger("WorkflowProposals").LogInformation(
+                    "Workflow publication planned Proposal={ProposalId} Repository={Organization}/{Repository} Ready={Ready} Plan={Plan} By={Actor}",
+                    id, plan.Organization, plan.Repository, plan.Ready, plan.PlanSha256, actor.Id);
+                return Results.Ok(PublicationPlanResponse.From(plan, yaml));
+            }
+            catch (WorkflowProposalException ex) { return Refused(ex, logs, id, actor, "plan"); }
+            catch (WorkloadInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
+        }).RequireRateLimiting("external");
+
         group.MapPost("/{id:guid}/reject", (Guid id, DecisionInput input, WorkflowProposalService service, ClaimsPrincipal user, ILoggerFactory logs, CancellationToken ct) =>
             DecideAsync("reject", id, input, service, user, logs, ct, (a, i, n, c) => service.RejectAsync(a, i, n, c)));
 
@@ -106,3 +125,18 @@ public sealed record ProposalDetailResponse(Guid Id, string State, string? Reaso
     Guid AiConnectionId, string? WorkflowYaml, string? WorkflowSha256, string? ModelNotes, string? ApprovedSha256, bool IntegrityOk, string CreatedBy,
     DateTimeOffset CreatedAtUtc, bool CreatedByMe, bool RequiresSecondApprover, bool CanApprove, IReadOnlyList<GateResponse> Gates,
     IReadOnlyList<FindingResponse> Findings, PlanResponse Plan, ProvenanceResponse? Provenance, IReadOnlyList<ProposalEventResponse> Events);
+
+public sealed record PublicationPlanInput(Guid DestinationConnectionId, string? Repository, string? BaseBranch);
+public sealed record PublicationFindingResponse(string Code, string Severity, string Message);
+public sealed record PublicationStepResponse(string Code, string Title, string? Command);
+
+// A plan, not an action: Ready says nothing stands in the way, never that anything was published.
+public sealed record PublicationPlanResponse(Guid ProposalId, string WorkflowSha256, string Organization, string Repository, string BaseBranch, string? BaseSha,
+    string HeadBranch, string WorkflowPath, string CommitMessage, string PullRequestTitle, string PullRequestBody, bool Ready, bool WritesPerformed,
+    IReadOnlyList<PublicationFindingResponse> Findings, IReadOnlyList<PublicationStepResponse> Steps, string PlanSha256, DateTimeOffset ReadAtUtc, string WorkflowYaml)
+{
+    public static PublicationPlanResponse From(PublicationPlan p, string yaml) => new(p.ProposalId, p.WorkflowSha256, p.Organization, p.Repository, p.BaseBranch,
+        p.BaseSha, p.HeadBranch, p.WorkflowPath, p.CommitMessage, p.PullRequestTitle, p.PullRequestBody, p.Ready, false,
+        p.Findings.Select(f => new PublicationFindingResponse(f.Code, f.Severity, f.Message)).ToArray(),
+        p.Steps.Select(s => new PublicationStepResponse(s.Code, s.Title, s.Command)).ToArray(), p.PlanSha256, p.ReadAtUtc, yaml);
+}

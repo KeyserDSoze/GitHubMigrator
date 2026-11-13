@@ -33,13 +33,15 @@ public sealed class RequiresAnalysersFactAttribute : FactAttribute
 // Kept proposals and human approval on the real API (PostgreSQL, JWT, the database constraints and triggers, production DI),
 // with a model that is LlmSim over real HTTP and the real analysers. Approval records who accepted which text; nothing here
 // publishes anything.
-public abstract class ProposalApiTestBase(bool singleReviewer) : IAsyncLifetime
+public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = false) : IAsyncLifetime
 {
     protected const string Key = "llm-sim-key";
     private WebApplication _sim = null!;
     protected string Origin = "";
     protected readonly HttpClient Control = new();
     protected ApiHarness Api = null!;
+    // when asked for, the destination is the GitHub simulator over real HTTP (Providers:GitHub:*), not the in-process fake
+    protected GhSimFixture? GitHub;
 
     private static string CatalogSha(string repository) => ActionCatalog.All.Single(a => a.Repository == repository).Sha;
 
@@ -77,7 +79,8 @@ public abstract class ProposalApiTestBase(bool singleReviewer) : IAsyncLifetime
         _sim = await LlmSimApp.StartAsync(new LlmSimOptions("http://127.0.0.1:0"));
         Origin = _sim.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
         Control.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Key);
-        Api = new ApiHarness { LlmSimOrigin = Origin, SingleReviewer = singleReviewer };
+        if (githubSim) { GitHub = new GhSimFixture(); await GitHub.InitializeAsync(); }
+        Api = new ApiHarness { LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin };
         await Api.InitializeAsync();
         await using var scope = Api.Host.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -89,6 +92,7 @@ public abstract class ProposalApiTestBase(bool singleReviewer) : IAsyncLifetime
     {
         Control.Dispose();
         await Api.DisposeAsync();
+        if (GitHub is not null) await GitHub.DisposeAsync();
         await _sim.StopAsync();
         await _sim.DisposeAsync();
     }

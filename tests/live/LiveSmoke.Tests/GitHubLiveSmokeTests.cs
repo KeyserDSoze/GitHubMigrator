@@ -83,6 +83,39 @@ public sealed class GitHubLiveSmokeTests(LiveReport report, ITestOutputHelper ou
         });
     }
 
+    // The publication plan reads one repository with GET requests only. These are the behaviours it was written from documentation for:
+    // the branch tip, the contents API answering 404 for an absent path, git/ref answering 404 for an absent branch even when its name
+    // contains "/", and the pull request list filtered by head=owner:branch.
+    [LiveGitHubFact]
+    public async Task The_publication_reader_matches_what_the_simulator_assumes()
+    {
+        if (Gh.Repository is null)
+        {
+            report.Record("github", "publication-reader", "info", "Set GITHUBMIGRATOR_LIVE_GH_REPO to check the read-only publication plan against the real repository.");
+            return;
+        }
+        var reader = new GitHubPublicationReader(LiveEnvironment.ReadOnlyClient(), Endpoints);
+        var unique = Guid.NewGuid().ToString("N")[..12];
+        var target = await reader.ReadAsync(Gh.Organization, Gh.Repository, null, $"migrate/gm-live-smoke-{unique}", $".github/workflows/gm-live-smoke-{unique}.yml", new string('a', 64), Gh.Pat, default);
+        output.WriteLine($"exists={target.RepositoryExists} archived={target.Archived} default={target.DefaultBranch} base={target.BaseBranch}@{target.BaseSha} file={target.WorkflowFile} head={target.HeadBranchExists} pulls={target.OpenPullRequests.Count}");
+        Assert.True(target.RepositoryExists);
+        Assert.False(string.IsNullOrEmpty(target.DefaultBranch));
+        Assert.Equal(target.DefaultBranch, target.BaseBranch);
+        Assert.Matches("^[0-9a-f]{40}$", target.BaseSha ?? "");
+        Assert.Equal(WorkflowFileState.Absent, target.WorkflowFile);
+        Assert.False(target.HeadBranchExists);
+        Assert.Empty(target.OpenPullRequests);
+        report.Record("github", "publication-reader", "confirmed",
+            "Repository, default-branch tip, an absent workflow path (contents API 404), an absent branch whose name contains '/' (git/ref 404) and an empty head=owner:branch pull request list are read as the plan assumes.");
+
+        var missing = await reader.ReadAsync(Gh.Organization, "gm-live-smoke-" + unique, null, "migrate/x", ".github/workflows/x.yml", new string('a', 64), Gh.Pat, default);
+        Assert.False(missing.RepositoryExists);
+        var noBase = await reader.ReadAsync(Gh.Organization, Gh.Repository, "gm-live-smoke-no-such-branch-" + unique, "migrate/x", ".github/workflows/x.yml", new string('a', 64), Gh.Pat, default);
+        Assert.True(noBase.RepositoryExists);
+        Assert.Null(noBase.BaseSha);
+        report.Record("github", "publication-reader-missing", "confirmed", "A missing repository and a missing base branch are reported as such (404), not as an error.");
+    }
+
     private async Task Probe(string name, Func<Task<(string Status, string Detail)>> probe)
     {
         try

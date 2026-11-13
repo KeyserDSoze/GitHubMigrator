@@ -542,6 +542,12 @@ export type ProposalDetail = Pick<ConversionProposal, 'gates' | 'findings' | 'pl
   approvedSha256: string | null; integrityOk: boolean; createdBy: string; createdAtUtc: string; createdByMe: boolean;
   requiresSecondApprover: boolean; canApprove: boolean; events: ProposalEvent[];
 };
+export type PublicationPlan = {
+  proposalId: string; workflowSha256: string; organization: string; repository: string; baseBranch: string; baseSha: string | null;
+  headBranch: string; workflowPath: string; commitMessage: string; pullRequestTitle: string; pullRequestBody: string;
+  ready: boolean; writesPerformed: boolean; findings: { code: string; severity: 'Blocker' | 'Info'; message: string }[];
+  steps: { code: string; title: string; command: string | null }[]; planSha256: string; readAtUtc: string; workflowYaml: string;
+};
 export type ConversionStatus = {
   actionlint: boolean; zizmor: boolean; canBeApprovable: boolean; policyVersion: string; actionCatalogVerifiedOn: string;
 };
@@ -967,6 +973,10 @@ export const api = {
   approveProposal: (token: string, id: string, workflowSha256: string, acknowledgedWarnings: string[], note: string) =>
     call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/approve`, {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ workflowSha256, acknowledgedWarnings, note })
+    }),
+  planPublication: (token: string, id: string, destinationConnectionId: string, repository: string, baseBranch: string) =>
+    call<PublicationPlan>(`/api/workloads/pipelines/proposals/${id}/publication-plan`, {
+      method: 'POST', headers: withToken(token), body: JSON.stringify({ destinationConnectionId, repository, baseBranch: baseBranch || null })
     }),
   rejectProposal: (token: string, id: string, note: string) =>
     call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/reject`, {

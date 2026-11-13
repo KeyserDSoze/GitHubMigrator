@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, CheckCircle2, ClipboardCopy, History, ShieldAlert, XCircle, MinusCircle } from 'lucide-react';
 import ProposalReview from './ProposalReview';
-import { api, type AiConnection, type ConversionProposal, type ConversionStatus, type ProposalDetail, type ProposalSummary } from './api';
+import { api, type AiConnection, type Connection, type ConversionProposal, type ConversionStatus, type ProposalDetail, type ProposalSummary } from './api';
 
 // A kept proposal, shown with the same pieces as a fresh answer. Every state but Blocked passed the gates when it was proposed.
 const fromDetail = (d: ProposalDetail): ConversionProposal => ({
@@ -11,9 +11,12 @@ const fromDetail = (d: ProposalDetail): ConversionProposal => ({
   gates: d.gates, findings: d.findings, plan: d.plan, provenance: d.provenance
 });
 
-type Props = { token: string; sourceId: string; projectId: string; pipelineId: string };
+type Props = {
+  token: string; sourceId: string; projectId: string; pipelineId: string;
+  destinations: Connection[]; defaultDestinationId: string; defaultRepository: string;
+};
 
-export default function PipelineConversionPanel({ token, sourceId, projectId, pipelineId }: Props) {
+export default function PipelineConversionPanel({ token, sourceId, projectId, pipelineId, destinations, defaultDestinationId, defaultRepository }: Props) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [profiles, setProfiles] = useState<AiConnection[]>([]);
@@ -182,7 +185,8 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
           </dl></>}
 
         {/* last on purpose: a person reads the text, the findings and the evidence above, then decides */}
-        {detail && detail.state !== 'Blocked' && <ProposalReview key={detail.id + detail.state} token={token} detail={detail} onChanged={decided} />}
+        {detail && detail.state !== 'Blocked' && <ProposalReview key={detail.id + detail.state} token={token} detail={detail} onChanged={decided}
+          destinations={destinations} defaultDestinationId={defaultDestinationId} defaultRepository={defaultRepository} />}
       </div>}
     </div>}
   </section>;

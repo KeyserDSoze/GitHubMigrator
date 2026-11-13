@@ -42,39 +42,39 @@ internal sealed class InMemoryProposalRepository : IWorkflowProposalRepository
 
 public sealed class WorkflowProposalServiceTests
 {
-    private static readonly DateTimeOffset Now = new(2026, 11, 13, 12, 0, 0, TimeSpan.Zero);
-    private static readonly ProposalActor Author = new(Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001"), "author");
-    private static readonly ProposalActor Reviewer = new(Guid.Parse("bbbbbbbb-0000-0000-0000-000000000002"), "reviewer");
-    private static readonly Guid SourceId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-    private static readonly Guid AiId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    internal static readonly DateTimeOffset Now = new(2026, 11, 13, 12, 0, 0, TimeSpan.Zero);
+    internal static readonly ProposalActor Author = new(Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001"), "author");
+    internal static readonly ProposalActor Reviewer = new(Guid.Parse("bbbbbbbb-0000-0000-0000-000000000002"), "reviewer");
+    internal static readonly Guid SourceId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    internal static readonly Guid AiId = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
     private sealed class FixedTime : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
 
     private static IWorkflowGatePipelineFactory Analysers(bool present = true) => new WorkflowGatePipelineFactory(
         present ? new FakeToolRunner("actionlint", new(true, "[]", null, 0)) : null, present ? new FakeToolRunner("zizmor", new(true, "[]", null, 0)) : null);
 
-    private static WorkflowProposalService Service(InMemoryProposalRepository repo, bool secondApprover = true, bool analysers = true, WorkflowGatePolicy? policy = null) =>
+    internal static WorkflowProposalService Service(InMemoryProposalRepository repo, bool secondApprover = true, bool analysers = true, WorkflowGatePolicy? policy = null) =>
         new(repo, Analysers(analysers), new FixedTime(), new() { RequireSecondApprover = secondApprover }, policy);
 
     // the same text with pins the product verified, so that it has no warning
     private static string WithHeader(string yaml) => "# azure-tasks: converted=UseDotNet@2 manual=none\n" + yaml;
 
-    private static readonly string Clean = WithHeader(Good.Replace(CheckoutSha, ActionCatalog.All.Single(a => a.Repository == "actions/checkout").Sha)
+    internal static readonly string Clean = WithHeader(Good.Replace(CheckoutSha, ActionCatalog.All.Single(a => a.Repository == "actions/checkout").Sha)
         .Replace(SetupDotnetSha, ActionCatalog.All.Single(a => a.Repository == "actions/setup-dotnet").Sha));
 
-    private static readonly ConversionPlan Plan = new([new("NUGET_API_KEY", "pipeline variable")], [], [], []);
+    internal static readonly ConversionPlan Plan = new([new("NUGET_API_KEY", "pipeline variable")], [], [], []);
 
-    private static async Task<ConversionProposal> ConvertedAsync(string yaml, bool analysers = true)
+    internal static async Task<ConversionProposal> ConvertedAsync(string yaml, bool analysers = true)
     {
         var report = await Analysers(analysers).Create(WorkflowGatePolicy.Default).RunAsync(yaml, Plan.ToGateContextFor(["UseDotNet@2"]), default);
         var provenance = new ConversionProvenance(AiId, "OpenAICompatible", "llm.corp.example", "gpt-x", "gpt-x-2025", new string('a', 64), Plan.Sha256,
             WorkflowGatePolicy.Default.Version, "2026-11-13", [new("SENSITIVE_LITERAL", 2)], 100, 50,
             [new(1, report.Approvable ? "GatesPassed" : "Blocked", 100, 50, report.WorkflowSha256, [])], Now);
         return new(report.Approvable ? ConversionStatus.ReadyForReview : ConversionStatus.Blocked, report.Approvable ? null : "GatesBlocked", yaml,
-            report.WorkflowSha256, "Triggers are not converted.", report, Plan, provenance) { SourceTasks = ["UseDotNet@2"] };
+            report.WorkflowSha256, "Triggers are not converted.", report, Plan, provenance) { SourceTasks = ["UseDotNet@2"], PipelineName = "Orion API CI/CD" };
     }
 
-    private static async Task<(InMemoryProposalRepository Repo, WorkflowProposal Proposal)> ProposedAsync(string? yaml = null)
+    internal static async Task<(InMemoryProposalRepository Repo, WorkflowProposal Proposal)> ProposedAsync(string? yaml = null)
     {
         var repo = new InMemoryProposalRepository();
         var kept = await Service(repo).RecordAsync(Author, SourceId, "project", 42, AiId, await ConvertedAsync(yaml ?? Clean), default);

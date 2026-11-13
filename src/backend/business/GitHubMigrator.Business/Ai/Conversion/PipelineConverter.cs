@@ -88,7 +88,7 @@ public sealed class PipelineConverter(IChatModelClient client, IWorkflowGatePipe
 
         return (proposal ?? ConversionProposal.NotAttempted("ModelFailure:Unknown", plan)) with
         {
-            Provenance = Provenance(), SourceTasks = sourceTasks.Order(StringComparer.OrdinalIgnoreCase).ToArray()
+            Provenance = Provenance(), SourceTasks = sourceTasks.Order(StringComparer.OrdinalIgnoreCase).ToArray(), PipelineName = pipeline.Name
         };
 
         ConversionProvenance Provenance() => new(use.Connection.Id, use.Connection.Provider.ToString(), new Uri(use.Connection.Endpoint).Host,
