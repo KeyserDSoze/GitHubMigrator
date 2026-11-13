@@ -85,6 +85,7 @@ builder.Services.AddScoped(sp => new PipelineConverter(sp.GetRequiredService<ICh
     sp.GetRequiredService<IWorkflowGatePipelineFactory>(), sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddScoped<PipelineConversionService>();
 builder.Services.AddScoped<WorkflowPublicationService>();
+builder.Services.AddScoped<PipelineTriggerService>();
 // Writing the pull request is OFF unless the operator turns it on with a credential of its own (a GitHub App installed on the allow-listed
 // repositories with contents, pull_requests and workflows write) and names the repositories it may write to. Nothing falls back to the read-only PAT.
 builder.Services.AddSingleton(new WorkflowPublicationOptions(

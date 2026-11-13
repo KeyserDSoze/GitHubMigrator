@@ -41,7 +41,8 @@ Consequences:
 - No diff against the deterministic scaffold is recorded: the scaffold is a disabled draft and a diff against it says little. The reviewer reads the
   text, the findings, the plan and the provenance instead.
 - Pull-request publication (needs the multi-repository executor, F-043/F-083 being single-repository) and the separate approval to re-enable the
-  original triggers remain to be built. A read-only publication plan for an approved proposal exists since ADR-013.
+  original triggers were left to later records. A read-only publication plan for an approved proposal exists since ADR-013, an opt-in publisher since ADR-014, and the
+  triggers come back as a derived, separately approved proposal since ADR-015.
 
 Alternatives considered: approving a proposal id (rejected: the text must be what was read); trusting the stored gate report (rejected: policy,
 catalog and analysers move); letting the author approve (rejected as default: a second person is the cheapest strong control); storing blocked

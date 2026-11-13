@@ -151,6 +151,9 @@ public sealed class WorkflowPolicyGate : IWorkflowGate
                 findings.Add(Warn("RISKY_TRIGGER", $"Trigger '{name}' is driven by content an outsider can author.", line));
         }
         var enabled = triggers.Where(t => t.Name != "workflow_dispatch").Select(t => t.Name).Distinct().ToArray();
+        if (!policy.RequireDisabledTriggers && policy.PermittedAutomaticTriggers is { } permitted)
+            foreach (var (name, line) in triggers.Where(t => !permitted.Contains(t.Name)))
+                findings.Add(Block("TRIGGER_NOT_PERMITTED", $"Trigger '{name}' is not one of the automatic triggers converted from Azure ({string.Join(", ", permitted.Where(p => p != "workflow_dispatch").Order())}).", line));
         if (policy.RequireDisabledTriggers && enabled.Length > 0)
             findings.Add(Block("TRIGGERS_NOT_DISABLED",
                 "Triggers (" + string.Join(", ", enabled) + ") would start the workflow by themselves. A proposal is delivered manual-only (workflow_dispatch); enabling the original triggers is a separate approval."));

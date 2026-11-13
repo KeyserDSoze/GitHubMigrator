@@ -25,7 +25,7 @@ internal sealed class InMemoryProposalRepository : IWorkflowProposalRepository
         Task.FromResult<IReadOnlyList<ProposalSummary>>(Rows.Values
             .Where(p => p.SourceConnectionId == sourceConnectionId && p.ProjectId == projectId && p.PipelineId == pipelineId)
             .OrderByDescending(p => p.CreatedAtUtc).Take(limit)
-            .Select(p => new ProposalSummary(p.Id, p.State, p.Reason, p.WorkflowSha256, p.CreatedBy, p.CreatedAtUtc, p.AiConnectionId)).ToArray());
+            .Select(p => new ProposalSummary(p.Id, p.State, p.Reason, p.WorkflowSha256, p.CreatedBy, p.CreatedAtUtc, p.AiConnectionId, p.Kind)).ToArray());
 
     public Task<IReadOnlyList<ProposalEvent>> EventsAsync(Guid id, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<ProposalEvent>>(Log.Where(e => e.ProposalId == id).OrderBy(e => e.Id).ToArray());

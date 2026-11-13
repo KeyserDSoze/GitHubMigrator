@@ -61,8 +61,11 @@ public static partial class WorkflowPublicationPlanner
         var baseBranch = target?.BaseBranch ?? requestedBase;
         var findings = Findings(target, targetUnreadable);
         var approval = events.LastOrDefault(e => e.Type == "Approved");
-        var title = Truncate($"Add GitHub Actions workflow for Azure pipeline #{proposal.PipelineId} ({Plain(proposal.Evidence.PipelineName, 60)})", 120);
-        var commit = $"ci: add Azure pipeline {proposal.PipelineId} as a manual GitHub Actions workflow\n\nProposed by an AI model, approved by a person. Workflow SHA-256: {approved.WorkflowSha256}";
+        var triggers = proposal.Kind == ProposalKinds.Triggers;
+        var title = Truncate($"Add GitHub Actions workflow for Azure pipeline #{proposal.PipelineId} ({Plain(proposal.Evidence.PipelineName, 60)}){(triggers ? " with automatic triggers" : "")}", 120);
+        var commit = triggers
+            ? $"ci: add Azure pipeline {proposal.PipelineId} as a GitHub Actions workflow with automatic triggers\n\nConverted by an AI model, triggers mapped from Azure by fixed rules, approved by a person. Workflow SHA-256: {approved.WorkflowSha256}"
+            : $"ci: add Azure pipeline {proposal.PipelineId} as a manual GitHub Actions workflow\n\nProposed by an AI model, approved by a person. Workflow SHA-256: {approved.WorkflowSha256}";
         var body = Body(approved, proposal, approval, path);
         var ready = findings.All(f => f.Severity != "Blocker") && target?.WorkflowFile != WorkflowFileState.Identical;
         var steps = Steps(gitUrl, repository, baseBranch, head, path, approved.WorkflowSha256, title, commit);
@@ -122,7 +125,24 @@ public static partial class WorkflowPublicationPlanner
         sb.AppendLine();
         sb.AppendLine("### What this is not");
         sb.AppendLine("- It is **not** proven equivalent to the Azure pipeline. Read it line by line.");
-        sb.AppendLine("- It runs only when started by hand (`workflow_dispatch`). The original Azure triggers were **not** converted.");
+        if (proposal.Kind == ProposalKinds.Triggers)
+        {
+            sb.AppendLine("- It **starts by itself** on the triggers below. They were converted from the Azure pipeline by fixed rules (no model), and the two systems differ in ways a person accepted at approval.");
+            sb.AppendLine();
+            sb.AppendLine("### Automatic triggers");
+            foreach (var line in proposal.Evidence.Triggers?.Mapped ?? []) sb.AppendLine($"- `{Plain(line, 300)}`");
+            var acceptedCodes = approval?.Detail?.AcknowledgedWarnings ?? [];
+            var differences = (proposal.Evidence.Triggers?.Differences ?? []).Where(d => acceptedCodes.Contains(d.Code)).ToArray();
+            if (differences.Length > 0)
+            {
+                sb.AppendLine("- Differences from Azure, accepted by a person:");
+                foreach (var d in differences) sb.AppendLine($"  - `{Plain(d.Code, 60)}`: {d.Message}");
+            }
+        }
+        else
+        {
+            sb.AppendLine("- It runs only when started by hand (`workflow_dispatch`). The original Azure triggers were **not** converted.");
+        }
         sb.AppendLine();
         sb.AppendLine("### Needs a person");
         sb.AppendLine(manual.Count == 0 ? "- No task is marked as a manual port." : "- Tasks that must be ported by hand (`MANUAL PORT REQUIRED` in the file): " + string.Join(", ", manual.Select(m => $"`{Plain(m, 60)}`")) + ".");

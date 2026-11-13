@@ -94,3 +94,27 @@ Feature: Convert pipelines to reviewed GitHub Actions
   Scenario: A refusal before any write frees the plan
     Given a publication refused because the installation lacks a permission
     Then nothing was written and the same plan can be published after the operator fixes the installation
+
+  Scenario: The Azure triggers are proposed separately, without a model, from an approved conversion only
+    Given an approved conversion of a pipeline whose YAML has a branch trigger, a pull request trigger and a schedule
+    When a person asks for the Azure triggers
+    Then a new proposal of kind Triggers is kept with its own hash, linked to the approved conversion, and the conversion keeps its own approval
+    And the pipeline YAML is read on the server and no request is made to any model
+    And only the on: entry differs from the approved text, which keeps workflow_dispatch
+    And a conversion that is not approved, or a proposal that is itself a Triggers proposal, is refused
+
+  Scenario: Every difference from Azure has to be accepted by name before the triggers are approved
+    Given a derived Triggers proposal that lists the differences between the Azure and the GitHub triggers
+    When a person approves it without naming every difference
+    Then the approval is refused and names the ones missing
+    And the approval that succeeds records the policy that allows push, pull_request and schedule, and the differences accepted
+
+  Scenario: The derived workflow is judged by a policy that allows only the converted triggers
+    Given a workflow with push, pull_request and schedule
+    Then the manual-only policy blocks it and the trigger policy lets it pass
+    And a workflow with release, workflow_run, issues, pull_request_target or repository_dispatch is blocked by the trigger policy too
+
+  Scenario: Nothing is derived when Azure has no automatic trigger
+    Given a pipeline with trigger none, pr none and no schedule
+    When a person asks for the Azure triggers
+    Then the answer says there is nothing to convert and nothing is kept

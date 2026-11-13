@@ -3,7 +3,8 @@
 Status: **model connections, gates, a converter that returns a *proposal*, the kept proposals, the human approval, a read-only *publication plan* and an
 opt-in, allow-listed publisher of the pull request are implemented. The publisher is OFF by default and has only been exercised against the GitHub
 simulator.** The conversion itself never approves or publishes anything. See
-[ADR-011](../ADR/ADR-011-ai-conversion-gates-and-model-connections.md) and [ADR-012](../ADR/ADR-012-kept-proposals-and-human-approval.md).
+[ADR-011](../ADR/ADR-011-ai-conversion-gates-and-model-connections.md), [ADR-012](../ADR/ADR-012-kept-proposals-and-human-approval.md) and, for the Azure triggers,
+[ADR-015](../ADR/ADR-015-azure-triggers-as-a-separately-approved-derived-proposal.md).
 
 ## Model connections (UI: Connections → *AI model connections*)
 
@@ -98,7 +99,7 @@ Errors: 404 unknown; 403 `SecondApproverRequired`; 409 `ProposalNotPending` / `P
 proposals cannot be deleted.
 
 **Approved is not published.** Approval creates no branch or pull request and does not re-enable the original Azure triggers (the workflow stays
-`workflow_dispatch` only). `WorkflowProposalService.RequireApprovedAsync(id)` is the one door a later publisher must use: it returns the text only for an
+`workflow_dispatch` only; the triggers come back only through a derived proposal, see below). `WorkflowProposalService.RequireApprovedAsync(id)` is the one door a later publisher must use: it returns the text only for an
 `Approved` proposal whose recorded approval hash is the text's hash.
 
 ## Publication plan (read only): `POST /api/workloads/pipelines/proposals/{id}/publication-plan`
@@ -175,6 +176,44 @@ The database enforces the order (no skipped step, no way back, `Published`/`Fail
 workflow file (status code 403 and its wording) is an assumption, and against scripted answers. The Contents API's behaviour for a workflow file, GitHub's exact answers to a lost write,
 and App-token rules have not been confirmed against github.com: that needs a sandbox repository and a throw-away App.
 
+## The Azure triggers: `POST /api/workloads/pipelines/proposals/{id}/derive-triggers`
+
+(`admin`/`superadmin`, rate limited.) Only an **approved `Conversion`** can be a parent; the answer is the detail of a **new proposal** of kind `Triggers` (`parentProposalId` = the
+parent, its own id and hash, `triggers: { mapped, differences }`). Nothing is approved or published by it, and the parent is untouched. The pipeline's YAML is read on the server with
+the source connection's credential and **never sent to a model** (no redaction, no consent involved); the mapping is fixed rules, so the same Azure YAML gives the same text.
+
+What the mapping does to the approved text: it rewrites the `on:` entry and nothing else (every other line is returned byte for byte; the result is parsed again and must have the
+same top-level keys and exactly `workflow_dispatch` plus the mapped triggers). It refuses a parent that already has other triggers, no `on:`, or an `on:` that is not plainly
+manual-only.
+
+| Azure | GitHub | Notes |
+| --- | --- | --- |
+| `trigger:` branches, tags, paths | `push:` branches, tags, paths | absent `trigger` = every push (flagged); `none` = no `push` |
+| `*` in a pattern | `**` | Azure's `*` crosses `/`; GitHub's does not |
+| plain path `src` | `src`, `src/**` | Azure path filters match by prefix |
+| include + exclude | include, then `!exclude` entries | GitHub does not allow both lists; exclude only → `*-ignore` |
+| `?` in a pattern, other characters | dropped | named as `TRIGGER_PATTERN_UNSUPPORTED` |
+| `pr:` | `pull_request:` | Azure Repos Git ignores `pr:` in YAML (branch policies decide): flagged |
+| `schedules:` cron | `schedule:` cron | `always:` and branch filters are flagged; cron is UTC on both sides |
+| `batch`, `autoCancel`, `drafts` | not translated | named, so a person can add `concurrency` or an `if:` |
+| `resources:` triggers | not translated | named |
+
+Every difference is a `Warning` finding of the `triggers` gate with a stable code (`TRIGGER_*`) and **has to be accepted by name** at approval, together with the gate warnings.
+`TRIGGER_STARTS_PRIVILEGED_JOBS` is raised when the approved workflow signs in to Azure, asks for an OIDC token or reads secrets.
+
+Policy: the derived text is judged by `WorkflowGatePolicy.WithAutomaticTriggers()` (same rules; `push`, `pull_request` and `schedule` allowed, anything else `TRIGGER_NOT_PERMITTED`,
+`pull_request_target` and `workflow_run` still `DANGEROUS_TRIGGER`); the approval event records the policy version, which ends with `+triggers`.
+
+Errors: 404 unknown; 409 `ProposalNotApproved`, `ParentIsNotAConversion`, `NoAutomaticTriggers`; 422 `SourceYamlUnavailable`, `SourceTooLarge`, `SourceYamlUnreadable`,
+`WorkflowNotReadable`, `OnSectionNotFound`, `WorkflowHasOtherTriggers`, `TriggerShapeUnsupported`, `DerivedWorkflowInvalid`, `ProviderReadFailed`; 400 `SourceNotFound`,
+`UnsupportedSource`, `SourceCredentialMissing`.
+
+Publishing a derived proposal uses the same plan and publisher; the description says the workflow **starts by itself** and lists the mapped triggers and the accepted differences. It
+works for a **free path only**: if the manual-only conversion was already published, the plan reports `WorkflowPathOccupied` (updating a published file is not built).
+
+**Not verified.** actionlint checks the syntax of the filters (all eight Orion workflows with automatic triggers pass with the real analysers). Whether the same events start the same
+runs on GitHub has not been observed, and no golden workflow has run there.
+
 ## What may be sent to a model
 
 `SourceRedactor.Redact(text)`: credentials (AWS keys, GitHub/Slack/npm/NuGet/Google/Stripe tokens, JWTs, `Authorization: Basic/Bearer` values, connection-string
@@ -189,7 +228,7 @@ what it replaced so an operator can audit it; it never claims text is clean.
 | Gate | Codes (blockers unless noted) |
 | --- | --- |
 | structure | `EMPTY_WORKFLOW`, `YAML_PARSE_ERROR`, `MULTIPLE_DOCUMENTS`, `NOT_A_WORKFLOW`, `EMPTY_JOBS`, `JOB_WITHOUT_RUNNER`, `JOB_WITHOUT_STEPS`, `STEP_INVALID`, `TOO_MANY_JOBS`, `TOO_MANY_STEPS`, `WORKFLOW_TOO_LARGE`, `SUSPICIOUS_UNICODE` |
-| policy | `UNPINNED_ACTION`, `ACTION_OWNER_NOT_ALLOWED`, `DANGEROUS_TRIGGER`, `TRIGGERS_NOT_DISABLED`, `PERMISSIONS_UNDECLARED`, `PERMISSIONS_TOO_BROAD`, `PERMISSION_WRITE_BLOCKED`, `REMOTE_SCRIPT_EXECUTION`, `UNTRUSTED_CONTEXT_IN_SCRIPT`, `SECRET_IN_RUN_SCRIPT`, `SECRET_TO_UNLISTED_HOST`, `SECRET_NOT_IN_PLAN`, `VARIABLE_NOT_IN_PLAN`, `LITERAL_SECRET`, `REDACTION_PLACEHOLDER_LEFT`; warnings: `ACTION_PINNED_BY_TAG`, `RISKY_TRIGGER`, `CHECKOUT_PERSISTS_CREDENTIALS`, `SELF_HOSTED_RUNNER`, `UNLISTED_HOST`, `INPUT_IN_RUN_SCRIPT`, `SECRETS_INHERIT`, `PERMISSION_WRITE`; info: `OIDC_TOKEN_REQUESTED` |
+| policy | `UNPINNED_ACTION`, `ACTION_OWNER_NOT_ALLOWED`, `DANGEROUS_TRIGGER`, `TRIGGERS_NOT_DISABLED`, `TRIGGER_NOT_PERMITTED` (only under the trigger policy), `PERMISSIONS_UNDECLARED`, `PERMISSIONS_TOO_BROAD`, `PERMISSION_WRITE_BLOCKED`, `REMOTE_SCRIPT_EXECUTION`, `UNTRUSTED_CONTEXT_IN_SCRIPT`, `SECRET_IN_RUN_SCRIPT`, `SECRET_TO_UNLISTED_HOST`, `SECRET_NOT_IN_PLAN`, `VARIABLE_NOT_IN_PLAN`, `LITERAL_SECRET`, `REDACTION_PLACEHOLDER_LEFT`; warnings: `ACTION_PINNED_BY_TAG`, `RISKY_TRIGGER`, `CHECKOUT_PERSISTS_CREDENTIALS`, `SELF_HOSTED_RUNNER`, `UNLISTED_HOST`, `INPUT_IN_RUN_SCRIPT`, `SECRETS_INHERIT`, `PERMISSION_WRITE`; info: `OIDC_TOKEN_REQUESTED` |
 | suppressions | `LINTER_SUPPRESSION_COMMENT` |
 | actionlint | `ACTIONLINT_<KIND>` (e.g. `ACTIONLINT_EXPRESSION`, `ACTIONLINT_JOB_NEEDS`, `ACTIONLINT_RUNNER_LABEL`) |
 | zizmor | `ZIZMOR_<IDENT>`; `High` blocks, `Medium` warns (policy), lower is info |

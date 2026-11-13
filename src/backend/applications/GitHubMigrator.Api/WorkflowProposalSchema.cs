@@ -2,7 +2,7 @@ using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 
 // Kept AI conversion proposals and the human decisions on them. The database, not only the service, refuses to:
-//  - change a proposal's text, hash, evidence or author after it was written;
+//  - change a proposal's text, hash, evidence, kind, parent or author after it was written;
 //  - approve a proposal that has no text, or with a hash other than the text's;
 //  - skip a state (only Proposed -> Approved|Rejected and Approved -> Revoked exist);
 //  - edit or delete a decision (events are append-only) or delete a proposal at all.
@@ -32,6 +32,9 @@ public static class WorkflowProposalSchema
                 created_at_utc timestamptz NOT NULL,
                 approved_sha256 varchar(64) NULL
             );
+            -- 0.6: a proposal is a conversion or, derived from an approved conversion, the same workflow with its Azure triggers converted
+            ALTER TABLE workflow_proposals ADD COLUMN IF NOT EXISTS kind varchar(16) NOT NULL DEFAULT 'Conversion';
+            ALTER TABLE workflow_proposals ADD COLUMN IF NOT EXISTS parent_proposal_id uuid NULL REFERENCES workflow_proposals(id) ON DELETE RESTRICT;
             CREATE INDEX IF NOT EXISTS ix_workflow_proposals_pipeline
                 ON workflow_proposals(source_connection_id, project_id, pipeline_id, created_at_utc);
             CREATE TABLE IF NOT EXISTS workflow_proposal_events (
@@ -62,6 +65,11 @@ public static class WorkflowProposalSchema
                         AND (state NOT IN ('Approved','Revoked') OR (approved_sha256 IS NOT NULL AND approved_sha256 = workflow_sha256))
                         AND (workflow_yaml IS NULL OR workflow_sha256 IS NOT NULL));
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_workflow_proposals_kind') THEN
+                    ALTER TABLE workflow_proposals ADD CONSTRAINT ck_workflow_proposals_kind CHECK (
+                        kind IN ('Conversion','Triggers') AND ((kind = 'Triggers') = (parent_proposal_id IS NOT NULL))
+                        AND (parent_proposal_id IS NULL OR parent_proposal_id <> id));
+                END IF;
                 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_workflow_proposal_events_type') THEN
                     ALTER TABLE workflow_proposal_events ADD CONSTRAINT ck_workflow_proposal_events_type CHECK (
                         type IN ('Created','Approved','Rejected','Revoked')
@@ -84,6 +92,8 @@ public static class WorkflowProposalSchema
                    OR NEW.project_id IS DISTINCT FROM OLD.project_id
                    OR NEW.pipeline_id IS DISTINCT FROM OLD.pipeline_id
                    OR NEW.ai_connection_id IS DISTINCT FROM OLD.ai_connection_id
+                   OR NEW.kind IS DISTINCT FROM OLD.kind
+                   OR NEW.parent_proposal_id IS DISTINCT FROM OLD.parent_proposal_id
                    OR NEW.reason IS DISTINCT FROM OLD.reason
                    OR NEW.workflow_yaml IS DISTINCT FROM OLD.workflow_yaml
                    OR NEW.workflow_sha256 IS DISTINCT FROM OLD.workflow_sha256

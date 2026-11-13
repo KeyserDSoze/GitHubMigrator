@@ -355,6 +355,18 @@ public sealed class ApiHarness : IAsyncLifetime
             return Json(JsonSerializer.Serialize(new
             {
                 content = """
+                    trigger:
+                      branches:
+                        include:
+                        - main
+                        - release/*
+                    pr:
+                      branches:
+                        include:
+                        - main
+                    schedules:
+                    - cron: '0 3 * * 1-5'
+                      always: true
                     steps:
                     - task: UseDotNet@2
                       inputs:

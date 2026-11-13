@@ -35,10 +35,11 @@ export function convertAnswer(d: Detail) {
 // An API that behaves like the real one for the parts the screen depends on, so the tests read the requests it receives.
 export async function setup(page: Page, initial: Detail, options: { history?: Detail[]; refuse?: { status: number; body: Record<string, unknown> }; listFails?: boolean;
   plan?: Detail; planRefuse?: { status: number; body: Record<string, unknown> };
-  role?: string; publication?: { enabled: boolean; allowed: string[] }; attempts?: Detail[]; published?: Detail; publishRefuse?: { status: number; body: Record<string, unknown> } } = {}) {
-  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])] };
+  role?: string; publication?: { enabled: boolean; allowed: string[] }; attempts?: Detail[]; published?: Detail; publishRefuse?: { status: number; body: Record<string, unknown> };
+  derived?: Detail; deriveRefuse?: { status: number; body: Record<string, unknown> } } = {}) {
+  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])], derives: [] as string[] };
   const summaries = () => [store.current, ...store.kept.filter(k => k.id !== store.current.id)].map(d => ({
-    id: d.id, state: d.state, reason: d.reason, workflowSha256: d.workflowSha256, createdBy: d.createdBy, createdAtUtc: d.createdAtUtc }));
+    id: d.id, state: d.state, reason: d.reason, workflowSha256: d.workflowSha256, createdBy: d.createdBy, createdAtUtc: d.createdAtUtc, kind: d.kind ?? 'Conversion' }));
 
   await page.route('**/api/auth/login', route => route.fulfill({ json: { accessToken: 't', mustChangePassword: false, username: 'reviewer', role: options.role ?? 'superadmin' } }));
   await page.route('**/api/connections', route => route.fulfill({ json: [
@@ -69,6 +70,14 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
       const record = options.published ?? publicationRecord();
       store.attempts = [record, ...store.attempts];
       return route.fulfill({ json: record });
+    }
+    if (verb === 'derive-triggers') {
+      store.derives.push(id!);
+      if (options.deriveRefuse) return route.fulfill({ status: options.deriveRefuse.status, json: options.deriveRefuse.body });
+      const created = options.derived ?? triggersDetail(id!);
+      store.kept = [store.current, ...store.kept.filter(k => k.id !== store.current.id)];
+      store.current = created;
+      return route.fulfill({ json: created });
     }
     if (verb === 'publication-plan') {
       store.plans.push(body);
@@ -131,3 +140,29 @@ export function publicationRecord(overrides: Detail = {}): Detail {
     startedAtUtc: '2026-11-13T14:00:00Z', updatedAtUtc: '2026-11-13T14:00:05Z', ...overrides
   };
 }
+
+export const derivedId = '8b2d3e4f-5c6a-4b7c-9d8e-0f1a2b3c4d5e';
+export const derivedSha = 'cd'.repeat(32);
+
+// The same workflow with its Azure triggers converted: another id and hash, linked to its parent, and the mapping's differences as warnings to accept.
+export function triggersDetail(parentId = proposalId, overrides: Detail = {}): Detail {
+  return detail({
+    id: derivedId, kind: 'Triggers', parentProposalId: parentId, workflowSha256: derivedSha, canApprove: true, modelNotes: null,
+    workflowYaml: '# azure-tasks: converted=UseDotNet@2 manual=none\nname: demo\non:\n  workflow_dispatch:\n  push:\n    branches:\n      - \'main\'\njobs: {}\n',
+    triggers: {
+      mapped: ['push — branches: main, release/**', 'pull_request — branches: main', 'schedule: 0 3 * * 1-5'],
+      differences: [
+        { code: 'TRIGGER_PR_AZURE_REPOS_IGNORED', message: 'In Azure Repos Git the pr: section of the YAML is ignored.' },
+        { code: 'TRIGGER_STARTS_PRIVILEGED_JOBS', message: 'The workflow uses secrets and will start by itself.' }
+      ]
+    },
+    findings: [
+      { gate: 'triggers', code: 'TRIGGER_PR_AZURE_REPOS_IGNORED', severity: 'Warning', message: 'In Azure Repos Git the pr: section of the YAML is ignored.', line: null },
+      { gate: 'triggers', code: 'TRIGGER_STARTS_PRIVILEGED_JOBS', severity: 'Warning', message: 'The workflow uses secrets and will start by itself.', line: null }
+    ],
+    events: [{ id: 1, type: 'Created', actor: 'author', occurredAtUtc: '2026-11-13T15:00:00Z', workflowSha256: derivedSha, note: null, reportSha256: null, policyVersion: null, acknowledgedWarnings: [] }],
+    ...overrides
+  });
+}
+
+export const deriveButton = (page: Page) => page.getByRole('button', { name: /proponi i trigger di azure|propose the azure triggers/i });

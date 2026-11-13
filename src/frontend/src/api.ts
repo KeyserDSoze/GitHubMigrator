@@ -530,9 +530,13 @@ export type ConversionProposal = {
   } | null;
 };
 export type ProposalState = 'Proposed' | 'Blocked' | 'Approved' | 'Rejected' | 'Revoked';
+// A proposal is the AI conversion itself (manual-only) or, derived from an approved conversion, the same workflow with its Azure triggers
+// converted by fixed rules. Older answers carry no kind: they are conversions.
+export type ProposalKind = 'Conversion' | 'Triggers';
 export type ProposalSummary = {
-  id: string; state: ProposalState; reason: string | null; workflowSha256: string | null; createdBy: string; createdAtUtc: string;
+  id: string; state: ProposalState; reason: string | null; workflowSha256: string | null; createdBy: string; createdAtUtc: string; kind?: ProposalKind;
 };
+export type TriggerMapping = { mapped: string[]; differences: { code: string; message: string }[] };
 export type ProposalEvent = {
   id: number; type: 'Created' | 'Approved' | 'Rejected' | 'Revoked'; actor: string; occurredAtUtc: string;
   workflowSha256: string | null; note: string | null; reportSha256: string | null; policyVersion: string | null; acknowledgedWarnings: string[];
@@ -541,6 +545,7 @@ export type ProposalDetail = Pick<ConversionProposal, 'gates' | 'findings' | 'pl
   id: string; state: ProposalState; sourceConnectionId: string; projectId: string; pipelineId: number; aiConnectionId: string;
   approvedSha256: string | null; integrityOk: boolean; createdBy: string; createdAtUtc: string; createdByMe: boolean;
   requiresSecondApprover: boolean; canApprove: boolean; events: ProposalEvent[];
+  kind?: ProposalKind; parentProposalId?: string | null; triggers?: TriggerMapping | null;
 };
 export type PublicationPlan = {
   proposalId: string; workflowSha256: string; organization: string; repository: string; baseBranch: string; baseSha: string | null;
@@ -980,6 +985,8 @@ export const api = {
     call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/approve`, {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ workflowSha256, acknowledgedWarnings, note })
     }),
+  deriveTriggers: (token: string, id: string) =>
+    call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/derive-triggers`, { method: 'POST', headers: withToken(token) }),
   planPublication: (token: string, id: string, destinationConnectionId: string, repository: string, baseBranch: string) =>
     call<PublicationPlan>(`/api/workloads/pipelines/proposals/${id}/publication-plan`, {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ destinationConnectionId, repository, baseBranch: baseBranch || null })

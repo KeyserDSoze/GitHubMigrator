@@ -28,7 +28,7 @@ public sealed record WorkflowPlanContext(IReadOnlySet<string> AllowedSecrets, IR
         new((secrets ?? []).ToHashSet(StringComparer.Ordinal), (variables ?? []).ToHashSet(StringComparer.Ordinal));
 }
 
-public sealed class WorkflowGatePolicy
+public sealed record WorkflowGatePolicy
 {
     public static WorkflowGatePolicy Default { get; } = new();
 
@@ -40,6 +40,18 @@ public sealed class WorkflowGatePolicy
     // Converted workflows are delivered manual-only (workflow_dispatch); the original triggers are enabled by a
     // separate, explicit approval. Branch pushes of a proposal must never start a deploy by themselves.
     public bool RequireDisabledTriggers { get; init; } = true;
+
+    // Only meaningful when RequireDisabledTriggers is false: the automatic triggers a workflow may have. Anything else is blocked (TRIGGER_NOT_PERMITTED),
+    // so lifting the manual-only rule never means "any trigger". Null: no restriction beyond the dangerous-trigger checks.
+    public IReadOnlySet<string>? PermittedAutomaticTriggers { get; init; }
+
+    // The policy a workflow whose Azure triggers were converted is judged by: the same rules, with push, pull_request and schedule allowed.
+    public WorkflowGatePolicy WithAutomaticTriggers() => this with
+    {
+        RequireDisabledTriggers = false,
+        PermittedAutomaticTriggers = new HashSet<string>(StringComparer.Ordinal) { "workflow_dispatch", "push", "pull_request", "schedule" },
+        Version = Version + "+triggers"
+    };
 
     public bool RequireShaPinning { get; init; } = true;
 

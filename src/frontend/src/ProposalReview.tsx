@@ -1,23 +1,27 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2, ShieldCheck, Undo2, UserCheck, XCircle } from 'lucide-react';
+import { CheckCircle2, ShieldCheck, Undo2, UserCheck, Workflow, XCircle } from 'lucide-react';
 import PublicationPlanPanel from './PublicationPlanPanel';
 import { api, ApiError, type Connection, type ProposalDetail } from './api';
 
 type Props = {
   token: string; detail: ProposalDetail; onChanged: (detail: ProposalDetail) => void;
   destinations: Connection[]; defaultDestinationId: string; defaultRepository: string; isSuperAdmin: boolean;
+  // a derived proposal (the Azure triggers) was made from this approved conversion, or a person asked to see the conversion a derived one came from
+  onDerived?: (derived: ProposalDetail) => void; onOpenParent?: (id: string) => void;
 };
 
 // The human step. Approving binds a person to ONE text, named by its SHA-256, after the server ran the gates again; it publishes
 // nothing and re-enables nothing. Warnings are accepted by name, one by one, because they are what a reviewer is there to weigh.
-export default function ProposalReview({ token, detail, onChanged, destinations, defaultDestinationId, defaultRepository, isSuperAdmin }: Props) {
+export default function ProposalReview({ token, detail, onChanged, destinations, defaultDestinationId, defaultRepository, isSuperAdmin, onDerived, onOpenParent }: Props) {
   const { t, i18n } = useTranslation();
   const [ack, setAck] = useState<Set<string>>(new Set());
   const [late, setLate] = useState<string[]>([]);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [deriving, setDeriving] = useState(false);
+  const [deriveError, setDeriveError] = useState('');
 
   const seen = new Map(detail.findings.filter(f => f.severity === 'Warning').map(f => [f.code, f.message]));
   const required = [...new Set([...seen.keys(), ...late])];
@@ -37,17 +41,34 @@ export default function ProposalReview({ token, detail, onChanged, destinations,
     } finally { setBusy(false); }
   }
 
+  // Reads the pipeline's own YAML on the server (no model sees it), maps its triggers by fixed rules and keeps the result as a proposal of its own.
+  async function deriveTriggers() {
+    setDeriving(true); setDeriveError('');
+    try { onDerived?.(await api.deriveTriggers(token, detail.id)); }
+    catch (e) {
+      const code = e instanceof Error ? e.message : '';
+      setDeriveError(t('trigError_' + code, { defaultValue: t('reviewError_' + code, { defaultValue: t('trigErrorGeneric') }) }));
+    } finally { setDeriving(false); }
+  }
+
   function toggle(code: string) {
     setAck(previous => { const next = new Set(previous); if (next.has(code)) next.delete(code); else next.add(code); return next; });
   }
 
   const approval = detail.events.find(e => e.type === 'Approved');
   const proposed = detail.state === 'Proposed';
+  const triggers = detail.kind === 'Triggers';
 
   return <div className="proposal-review" aria-label={t('reviewTitle')}>
     <h4><ShieldCheck size={15} /> {t('reviewTitle')}</h4>
     <p className="connection-hint">{t('reviewHash')}: <code className="proposal-hash" title={detail.workflowSha256 ?? ''}>{detail.workflowSha256 ?? '—'}</code></p>
     {!detail.integrityOk && <div className="alert" role="alert">{t('reviewIntegrity')}</div>}
+    {triggers && <div className="proposal-triggers" aria-label={t('trigMappedTitle')}>
+      <h5><Workflow size={14} /> {t('trigMappedTitle')}</h5>
+      <p className="connection-hint">{t('trigMappedHint')}</p>
+      <ul>{(detail.triggers?.mapped ?? []).map(line => <li key={line}><code>{line}</code></li>)}</ul>
+      {detail.parentProposalId && onOpenParent && <button type="button" className="icon-button" onClick={() => onOpenParent(detail.parentProposalId!)}>{t('trigOpenParent')}</button>}
+    </div>}
     {error && <div className="alert" role="alert">{error}</div>}
 
     {proposed && <>
@@ -72,12 +93,20 @@ export default function ProposalReview({ token, detail, onChanged, destinations,
           <XCircle size={14} /> {t('reviewReject')}
         </button>
       </div>
-      {detail.canApprove && <p className="connection-hint">{t('reviewApproveHint')}</p>}
+      {detail.canApprove && <p className="connection-hint">{t(triggers ? 'reviewApproveHintTriggers' : 'reviewApproveHint')}</p>}
     </>}
 
     {detail.state === 'Approved' && <>
       <PublicationPlanPanel token={token} proposalId={detail.id} destinations={destinations} defaultDestinationId={defaultDestinationId} defaultRepository={defaultRepository} isSuperAdmin={isSuperAdmin} />
       <p className="connection-hint">{t('reviewApprovedHint')}</p>
+      {!triggers && onDerived && <div className="proposal-triggers" aria-label={t('trigDeriveTitle')}>
+        <h5><Workflow size={14} /> {t('trigDeriveTitle')}</h5>
+        <p className="connection-hint">{t('trigDeriveHint')}</p>
+        {deriveError && <div className="alert" role="alert">{deriveError}</div>}
+        <button type="button" className="secondary-button" disabled={deriving} onClick={() => { void deriveTriggers(); }}>
+          <Workflow size={14} /> {deriving ? t('trigBusy') : t('trigDerive')}
+        </button>
+      </div>}
       <label>{t('reviewNote')}
         <textarea value={note} maxLength={500} rows={2} onChange={e => setNote(e.target.value)} />
       </label>

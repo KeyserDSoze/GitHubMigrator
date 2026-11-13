@@ -18,18 +18,29 @@ public sealed record StoredFinding(string Gate, string Code, string Severity, st
 // Everything that explains a proposal except its text. No source text, no values: the plan holds names only and the
 // provenance holds hashes and counts.
 public sealed record ProposalEvidence(IReadOnlyList<StoredGate> Gates, IReadOnlyList<StoredFinding> Findings, ConversionPlan Plan,
-    IReadOnlyList<string> SourceTasks, ConversionProvenance? Provenance, string? PipelineName = null);
+    IReadOnlyList<string> SourceTasks, ConversionProvenance? Provenance, string? PipelineName = null, TriggerEvidence? Triggers = null);
+
+// A proposal is either the AI conversion itself (manual-only) or, derived from an APPROVED conversion, the same workflow with the Azure triggers converted
+// by a fixed mapping. The derived one is a proposal of its own: it is approved (or rejected) separately, by its own hash, under its own policy.
+public static class ProposalKinds
+{
+    public const string Conversion = "Conversion";
+    public const string Triggers = "Triggers";
+}
+
+// What was converted and what a person has to accept: the differences are accepted by name at approval, like gate warnings.
+public sealed record TriggerEvidence(IReadOnlyList<TriggerDifference> Differences, IReadOnlyList<string> Mapped);
 
 public sealed record WorkflowProposal(Guid Id, Guid SourceConnectionId, string ProjectId, int PipelineId, Guid AiConnectionId,
     ProposalState State, string? Reason, string? WorkflowYaml, string? WorkflowSha256, string? ModelNotes, ProposalEvidence Evidence,
-    Guid CreatedById, string CreatedBy, DateTimeOffset CreatedAtUtc, string? ApprovedSha256)
+    Guid CreatedById, string CreatedBy, DateTimeOffset CreatedAtUtc, string? ApprovedSha256, string Kind = ProposalKinds.Conversion, Guid? ParentProposalId = null)
 {
     // The stored text still hashes to the stored hash. Checked on every read that matters, not only when it was written.
     public bool IntegrityOk => WorkflowYaml is null || (WorkflowSha256 is not null && WorkflowHash.Sha256(WorkflowYaml) == WorkflowSha256);
 }
 
 public sealed record ProposalSummary(Guid Id, ProposalState State, string? Reason, string? WorkflowSha256, string CreatedBy,
-    DateTimeOffset CreatedAtUtc, Guid AiConnectionId);
+    DateTimeOffset CreatedAtUtc, Guid AiConnectionId, string Kind = ProposalKinds.Conversion);
 
 public sealed record ProposalEventDetail(string? ReportSha256, string? PolicyVersion, IReadOnlyList<string> AcknowledgedWarnings);
 
@@ -78,19 +89,22 @@ public sealed class WorkflowProposalService(IWorkflowProposalRepository reposito
     // Only an answer a model actually produced is kept. Nothing was sent (consent, size, redaction) or the request failed:
     // there is nothing to review and nothing to audit beyond the log line.
     public async Task<WorkflowProposal?> RecordAsync(ProposalActor actor, Guid sourceConnectionId, string projectId, int pipelineId,
-        Guid aiConnectionId, ConversionProposal proposal, CancellationToken ct)
+        Guid aiConnectionId, ConversionProposal proposal, CancellationToken ct, string kind = ProposalKinds.Conversion, Guid? parentProposalId = null,
+        TriggerEvidence? triggers = null)
     {
         if (proposal.Status == ConversionStatus.NotAttempted) return null;
         var proposed = proposal.Status == ConversionStatus.ReadyForReview && proposal.Gates is { Approvable: true } && proposal.WorkflowYaml is not null;
         var evidence = new ProposalEvidence(
             proposal.Gates?.Gates.Select(g => new StoredGate(g.Gate, g.Status.ToString(), g.Detail)).ToArray() ?? [],
-            proposal.Gates?.Findings.Select(f => new StoredFinding(f.Gate, f.Code, f.Severity.ToString(), f.Message, f.Line)).ToArray() ?? [],
-            proposal.Plan, proposal.SourceTasks, proposal.Provenance, proposal.PipelineName);
+            [.. proposal.Gates?.Findings.Select(f => new StoredFinding(f.Gate, f.Code, f.Severity.ToString(), f.Message, f.Line)) ?? [],
+             // the mapping's differences are shown and accepted like warnings, whichever gate would not have raised them
+             .. triggers?.Differences.Select(d => new StoredFinding("triggers", d.Code, "Warning", d.Message, null)) ?? []],
+            proposal.Plan, proposal.SourceTasks, proposal.Provenance, proposal.PipelineName, triggers);
         var now = clock.GetUtcNow();
         var stored = new WorkflowProposal(Guid.NewGuid(), sourceConnectionId, projectId, pipelineId, aiConnectionId,
             proposed ? ProposalState.Proposed : ProposalState.Blocked, proposed ? null : proposal.Reason ?? "Blocked",
             proposed ? proposal.WorkflowYaml : null, proposal.WorkflowSha256, proposed ? proposal.ModelNotes : null, evidence,
-            actor.Id, actor.Name, now, null);
+            actor.Id, actor.Name, now, null, kind, parentProposalId);
         await repository.AddAsync(stored, new(0, stored.Id, "Created", actor.Id, actor.Name, now, stored.WorkflowSha256, null, null), ct);
         return stored;
     }
@@ -113,7 +127,8 @@ public sealed class WorkflowProposalService(IWorkflowProposalRepository reposito
             throw new WorkflowProposalException("WorkflowHashMismatch");
         if (_options.RequireSecondApprover && actor.Id == proposal.CreatedById) throw new WorkflowProposalException("SecondApproverRequired");
 
-        var report = await gates.Create(_policy).RunAsync(proposal.WorkflowYaml, proposal.Evidence.Plan.ToGateContextFor(proposal.Evidence.SourceTasks), ct);
+        // the policy the text was proposed under: a derived workflow with converted triggers is judged by the trigger policy, a conversion by the manual-only one
+        var report = await gates.Create(PolicyFor(proposal)).RunAsync(proposal.WorkflowYaml, proposal.Evidence.Plan.ToGateContextFor(proposal.Evidence.SourceTasks), ct);
         if (report.WorkflowSha256 != proposal.WorkflowSha256) throw new WorkflowProposalException("ProposalIntegrityFailure");
         if (!report.Approvable)
         {
@@ -124,7 +139,8 @@ public sealed class WorkflowProposalService(IWorkflowProposalRepository reposito
         }
 
         // Every warning of THIS run has to be accepted by name; warnings are what a reviewer is asked to weigh.
-        var warnings = report.Findings.Where(f => f.Severity == GateSeverity.Warning).Select(f => f.Code).Distinct().Order(StringComparer.Ordinal).ToArray();
+        var warnings = report.Findings.Where(f => f.Severity == GateSeverity.Warning).Select(f => f.Code)
+            .Concat(proposal.Evidence.Triggers?.Differences.Select(d => d.Code) ?? []).Distinct().Order(StringComparer.Ordinal).ToArray();
         var accepted = (acknowledgedWarnings ?? []).ToHashSet(StringComparer.Ordinal);
         var missing = warnings.Where(w => !accepted.Contains(w)).ToArray();
         if (missing.Length > 0) throw new WorkflowProposalException("WarningsNotAcknowledged", missing);
@@ -135,6 +151,10 @@ public sealed class WorkflowProposalService(IWorkflowProposalRepository reposito
         if (!applied) throw new WorkflowProposalException("ProposalNotPending");
         return (await repository.GetAsync(id, ct))!;
     }
+
+    // One place decides which policy judges which kind, so a derived proposal is proposed and approved under the same rules.
+    public WorkflowGatePolicy PolicyForKind(string kind) => kind == ProposalKinds.Triggers ? _policy.WithAutomaticTriggers() : _policy;
+    private WorkflowGatePolicy PolicyFor(WorkflowProposal proposal) => PolicyForKind(proposal.Kind);
 
     public Task<WorkflowProposal> RejectAsync(ProposalActor actor, Guid id, string? note, CancellationToken ct) =>
         DecideAsync(actor, id, ProposalState.Proposed, ProposalState.Rejected, "Rejected", note, ct);

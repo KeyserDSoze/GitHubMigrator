@@ -3,7 +3,8 @@ using GitHubMigrator.Business;
 using Microsoft.AspNetCore.Authorization;
 
 // Kept conversion proposals and the human decisions on them. Approving records WHO accepted WHICH text (its SHA-256) after the
-// gates were run again; it never publishes, never creates a branch or pull request and never re-enables the original triggers.
+// gates were run again; it never publishes and never creates a branch or pull request. The original Azure triggers come back only
+// through a derived proposal of their own (derive-triggers), which is approved separately.
 public static class WorkflowProposalEndpoints
 {
     public static void MapWorkflowProposalEndpoints(this WebApplication app)
@@ -40,7 +41,7 @@ public static class WorkflowProposalEndpoints
         {
             if (string.IsNullOrWhiteSpace(projectId) || projectId.Length > 100 || pipelineId < 1) return Results.BadRequest(new { error = "InvalidProposalQuery" });
             var rows = await service.ListAsync(sourceConnectionId, projectId, pipelineId, ct);
-            return Results.Ok(rows.Select(r => new ProposalSummaryResponse(r.Id, r.State.ToString(), r.Reason, r.WorkflowSha256, r.CreatedBy, r.CreatedAtUtc)));
+            return Results.Ok(rows.Select(r => new ProposalSummaryResponse(r.Id, r.State.ToString(), r.Reason, r.WorkflowSha256, r.CreatedBy, r.CreatedAtUtc, r.Kind)));
         });
 
         group.MapGet("/{id:guid}", async Task<IResult> (Guid id, WorkflowProposalService service, ClaimsPrincipal user, CancellationToken ct) =>
@@ -61,6 +62,37 @@ public static class WorkflowProposalEndpoints
                 return Results.Ok(await DetailAsync(approved, service, user, ct));
             }
             catch (WorkflowProposalException ex) { return Refused(ex, logs, id, actor, "approve"); }
+        }).RequireRateLimiting("external");
+
+        // Converts the Azure triggers of an APPROVED conversion into a proposal of its own. The pipeline's YAML is read here and mapped by fixed rules:
+        // no model sees it. The result is only a proposal; it is approved (by its own hash) and published separately, and it starts by itself once merged.
+        group.MapPost("/{id:guid}/derive-triggers", async Task<IResult> (Guid id, PipelineTriggerService service, WorkflowProposalService proposals,
+            ClaimsPrincipal user, ILoggerFactory logs, CancellationToken ct) =>
+        {
+            var actor = ActorOf(user);
+            if (actor is null) return Results.Forbid();
+            try
+            {
+                var derived = await service.DeriveAsync(actor, id, ct);
+                logs.CreateLogger("WorkflowProposals").LogInformation(
+                    "Workflow trigger proposal Parent={ParentId} Proposal={ProposalId} State={State} Reason={Reason} Sha={Sha} By={Actor}",
+                    id, derived.Id, derived.State, derived.Reason, derived.WorkflowSha256, actor.Id);
+                return Results.Ok(await DetailAsync(derived, proposals, user, ct));
+            }
+            catch (TriggerDerivationException ex)
+            {
+                logs.CreateLogger("WorkflowProposals").LogWarning("Workflow trigger derivation refused Proposal={ProposalId} Code={Code} By={Actor}", id, ex.Code, actor.Id);
+                return ex.Code switch
+                {
+                    "NoAutomaticTriggers" or "ParentIsNotAConversion" => Results.Conflict(new { error = ex.Code }),
+                    "SourceYamlUnreadable" or "SourceYamlUnavailable" or "WorkflowNotReadable" or "OnSectionNotFound" or "WorkflowHasOtherTriggers" or "TriggerShapeUnsupported"
+                        or "DerivedWorkflowInvalid" => Results.UnprocessableEntity(new { error = ex.Code }),
+                    _ => Results.BadRequest(new { error = ex.Code })
+                };
+            }
+            catch (WorkflowProposalException ex) { return Refused(ex, logs, id, actor, "derive-triggers"); }
+            catch (WorkloadInputException ex) { return Results.BadRequest(new { error = ex.Code }); }
+            catch (HttpRequestException) { return Results.UnprocessableEntity(new { error = "ProviderReadFailed" }); }
         }).RequireRateLimiting("external");
 
         // Plans the pull request for an APPROVED proposal: reads the destination repository (GET only) and returns where the workflow
@@ -168,13 +200,18 @@ public static class WorkflowProposalEndpoints
             p.Evidence.Findings.Select(f => new FindingResponse(f.Gate, f.Code, f.Severity, f.Message, f.Line)).ToArray(),
             ConversionMapping.Plan(p.Evidence.Plan), ConversionMapping.Provenance(p.Evidence.Provenance),
             events.Select(e => new ProposalEventResponse(e.Id, e.Type, e.Actor, e.OccurredAtUtc, e.WorkflowSha256, e.Note, e.Detail?.ReportSha256,
-                e.Detail?.PolicyVersion, e.Detail?.AcknowledgedWarnings ?? [])).ToArray());
+                e.Detail?.PolicyVersion, e.Detail?.AcknowledgedWarnings ?? [])).ToArray(),
+            p.Kind, p.ParentProposalId,
+            p.Evidence.Triggers is null ? null : new TriggerMappingResponse(p.Evidence.Triggers.Mapped,
+                p.Evidence.Triggers.Differences.Select(d => new TriggerDifferenceResponse(d.Code, d.Message)).ToArray()));
     }
 }
 
 public sealed record ApprovalInput(string? WorkflowSha256, string[]? AcknowledgedWarnings, string? Note);
 public sealed record DecisionInput(string? Note);
-public sealed record ProposalSummaryResponse(Guid Id, string State, string? Reason, string? WorkflowSha256, string CreatedBy, DateTimeOffset CreatedAtUtc);
+public sealed record ProposalSummaryResponse(Guid Id, string State, string? Reason, string? WorkflowSha256, string CreatedBy, DateTimeOffset CreatedAtUtc, string Kind);
+public sealed record TriggerDifferenceResponse(string Code, string Message);
+public sealed record TriggerMappingResponse(IReadOnlyList<string> Mapped, IReadOnlyList<TriggerDifferenceResponse> Differences);
 public sealed record ProposalEventResponse(long Id, string Type, string Actor, DateTimeOffset OccurredAtUtc, string? WorkflowSha256, string? Note,
     string? ReportSha256, string? PolicyVersion, IReadOnlyList<string> AcknowledgedWarnings);
 
@@ -183,7 +220,8 @@ public sealed record ProposalEventResponse(long Id, string Type, string Actor, D
 public sealed record ProposalDetailResponse(Guid Id, string State, string? Reason, Guid SourceConnectionId, string ProjectId, int PipelineId,
     Guid AiConnectionId, string? WorkflowYaml, string? WorkflowSha256, string? ModelNotes, string? ApprovedSha256, bool IntegrityOk, string CreatedBy,
     DateTimeOffset CreatedAtUtc, bool CreatedByMe, bool RequiresSecondApprover, bool CanApprove, IReadOnlyList<GateResponse> Gates,
-    IReadOnlyList<FindingResponse> Findings, PlanResponse Plan, ProvenanceResponse? Provenance, IReadOnlyList<ProposalEventResponse> Events);
+    IReadOnlyList<FindingResponse> Findings, PlanResponse Plan, ProvenanceResponse? Provenance, IReadOnlyList<ProposalEventResponse> Events,
+    string Kind, Guid? ParentProposalId, TriggerMappingResponse? Triggers);
 
 public sealed record PublishInput(Guid DestinationConnectionId, string? Repository, string? BaseBranch, string? PlanSha256);
 public sealed record PublicationStatusResponse(bool Enabled, IReadOnlyList<string> AllowedRepositories);

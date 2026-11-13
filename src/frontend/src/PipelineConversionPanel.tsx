@@ -81,6 +81,12 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
     void loadHistory();
   }
 
+  // the derived proposal is a proposal of its own: it replaces the one on screen and is listed with the others
+  function derived(created: ProposalDetail) {
+    setCopied(false); setError('');
+    decided(created);
+  }
+
   async function copy(text: string) {
     try { await navigator.clipboard.writeText(text); setCopied(true); } catch { setError(t('convRequestError')); }
   }
@@ -129,6 +135,7 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
         {history.length > 0 && <ul>
           {history.map(h => <li key={h.id}>
             <span className={'gate-chip state-' + h.state.toLowerCase()}>{t('convState_' + h.state)}</span>{' '}
+            {h.kind === 'Triggers' && <><span className="gate-chip kind-triggers">{t('convKind_Triggers')}</span>{' '}</>}
             {new Date(h.createdAtUtc).toLocaleString()} · {h.createdBy} · <code>{h.workflowSha256?.slice(0, 12) ?? '—'}</code>{' '}
             <button type="button" className="icon-button" onClick={() => { void openProposal(h.id); }}>{t('convHistoryOpen')}</button>
           </li>)}
@@ -143,7 +150,10 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
           </span>
           {proposal.reason && <span className="conversion-reason">{reasonText(proposal.reason)}</span>}
         </div>
-        <p className="connection-hint">{proposal.status !== 'ReadyForReview' ? t('convNotReadyHint') : detail?.state === 'Approved' ? t('convApprovedHint') : t('convReadyHint')}</p>
+        {detail?.kind === 'Triggers' && <span className="gate-chip kind-triggers">{t('convKind_Triggers')}</span>}
+        <p className="connection-hint">{proposal.status !== 'ReadyForReview' ? t('convNotReadyHint')
+          : detail?.state === 'Approved' ? t(detail.kind === 'Triggers' ? 'convTriggersApprovedHint' : 'convApprovedHint')
+          : t(detail?.kind === 'Triggers' ? 'convTriggersReadyHint' : 'convReadyHint')}</p>
         {proposal.saved === false && proposal.status !== 'NotAttempted' && <p className="workload-notice"><ShieldAlert size={16} />{t('convNotKept')}</p>}
 
         {proposal.gates.length > 0 && <div className="conversion-gates" aria-label={t('convGates')}>
@@ -186,7 +196,8 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
 
         {/* last on purpose: a person reads the text, the findings and the evidence above, then decides */}
         {detail && detail.state !== 'Blocked' && <ProposalReview key={detail.id + detail.state} token={token} detail={detail} onChanged={decided}
-          destinations={destinations} defaultDestinationId={defaultDestinationId} defaultRepository={defaultRepository} isSuperAdmin={isSuperAdmin} />}
+          destinations={destinations} defaultDestinationId={defaultDestinationId} defaultRepository={defaultRepository} isSuperAdmin={isSuperAdmin}
+          onDerived={derived} onOpenParent={id => { void openProposal(id); }} />}
       </div>}
     </div>}
   </section>;

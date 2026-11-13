@@ -425,6 +425,9 @@
 .proposal-review{border:1px solid var(--border);background:var(--surface2);border-radius:12px;padding:16px;display:grid;gap:10px}
 .proposal-review h4,.proposal-review h5{margin:0;display:flex;align-items:center;gap:8px}
 .proposal-hash{overflow-wrap:anywhere;font-size:11px}
+.proposal-triggers{border:1px solid var(--border);border-radius:10px;padding:10px 14px;display:grid;gap:8px;background:var(--bg)}
+.proposal-triggers ul{margin:0;padding-left:18px;font-size:12px;display:grid;gap:4px}
+.gate-chip.kind-triggers{border-color:var(--accent)}
 .proposal-warnings{border:1px solid var(--border);border-radius:10px;padding:10px 14px;display:grid;gap:8px}
 .proposal-warning{display:flex;align-items:flex-start;gap:10px;font-size:12px;font-weight:600;color:var(--text)}
 .proposal-warning input[type=checkbox]{width:16px;height:16px;min-width:0;flex:none;margin-top:2px;accent-color:var(--accent);box-shadow:none}

@@ -282,6 +282,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.CreatedBy).HasColumnName("created_by").HasMaxLength(160);
             entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
             entity.Property(x => x.ApprovedSha256).HasColumnName("approved_sha256").HasMaxLength(64);
+            entity.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(16).HasDefaultValue("Conversion");
+            entity.Property(x => x.ParentProposalId).HasColumnName("parent_proposal_id");
             entity.HasIndex(x => new { x.SourceConnectionId, x.ProjectId, x.PipelineId, x.CreatedAtUtc })
                 .HasDatabaseName("ix_workflow_proposals_pipeline");
         });

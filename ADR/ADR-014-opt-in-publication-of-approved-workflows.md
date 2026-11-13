@@ -30,7 +30,7 @@ Consequences:
 - Only superadmins can publish; approval already required two people (four eyes), and publication is a third, explicit act on a hash.
 - No automatic cleanup: a `writesPossible` failure leaves a branch (and possibly a file) that a person removes. A reconciliation view of what exists versus the ledger would help and is not built.
 - The ledger and proposals tables are not in the restricted-runtime grants script (fails closed), as for the earlier AI tables.
-- The original Azure triggers are still not converted; the published workflow is manual-only. Enabling triggers remains a separate approval, still to be designed.
+- The original Azure triggers are not converted by a conversion: the published workflow is manual-only. They come back only as a separately approved derived proposal ([ADR-015](ADR-015-azure-triggers-as-a-separately-approved-derived-proposal.md)).
 - The repository must already exist at the destination (creating it is the missing multi-repository transfer), and the App must be installed on it.
 
 Alternatives considered: publishing with the destination PAT (rejected: far broader than one repository, and it would blur the credential separation the project insists on); reusing F-043

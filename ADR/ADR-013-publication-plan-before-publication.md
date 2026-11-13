@@ -31,7 +31,7 @@ Consequences:
 - Not verified online: GitHub's behaviour for `head=owner:branch` with branch names that contain `/`, the contents API on very large or symlinked files, and
   rate limits. The reader treats every unexpected answer as unreadable or as "something else is there", never as absence.
 - The plan is not persisted: it is cheap to make again and its hash says whether it is still the same plan. An audit of plans that were shown is not recorded.
-- The original Azure triggers are still not converted; enabling them is a separate approval.
+- The original Azure triggers are not converted by a conversion; enabling them is a separate approval (see ADR-015).
 
 Alternatives considered: writing the branch and pull request now with the destination PAT (rejected: it would bypass the credential guards and a PAT with the
 `workflow` scope is far broader than one repository); reusing the F-043 attestation (rejected: wrong permissions by design); a downloadable zip instead of

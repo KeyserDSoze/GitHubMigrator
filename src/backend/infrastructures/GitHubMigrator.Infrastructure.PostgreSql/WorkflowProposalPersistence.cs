@@ -21,6 +21,8 @@ public sealed class WorkflowProposalRecord
     public string CreatedBy { get; set; } = "";
     public DateTimeOffset CreatedAtUtc { get; set; }
     public string? ApprovedSha256 { get; set; }
+    public string Kind { get; set; } = "Conversion";
+    public Guid? ParentProposalId { get; set; }
 }
 
 public sealed class WorkflowProposalEventRecord
@@ -50,7 +52,8 @@ public sealed class PostgresWorkflowProposalRepository(AppDbContext db) : IWorkf
             Id = p.Id, SourceConnectionId = p.SourceConnectionId, ProjectId = p.ProjectId, PipelineId = p.PipelineId,
             AiConnectionId = p.AiConnectionId, State = p.State.ToString(), Reason = p.Reason, WorkflowYaml = p.WorkflowYaml,
             WorkflowSha256 = p.WorkflowSha256, ModelNotes = p.ModelNotes, Evidence = JsonSerializer.Serialize(p.Evidence, Json),
-            CreatedById = p.CreatedById, CreatedBy = p.CreatedBy, CreatedAtUtc = p.CreatedAtUtc, ApprovedSha256 = p.ApprovedSha256
+            CreatedById = p.CreatedById, CreatedBy = p.CreatedBy, CreatedAtUtc = p.CreatedAtUtc, ApprovedSha256 = p.ApprovedSha256,
+            Kind = p.Kind, ParentProposalId = p.ParentProposalId
         });
         await db.SaveChangesAsync(ct);
         db.WorkflowProposalEvents.Add(ToRecord(created));
@@ -64,7 +67,7 @@ public sealed class PostgresWorkflowProposalRepository(AppDbContext db) : IWorkf
         return r is null ? null : new WorkflowProposal(r.Id, r.SourceConnectionId, r.ProjectId, r.PipelineId, r.AiConnectionId,
             Parse(r.State), r.Reason, r.WorkflowYaml, r.WorkflowSha256, r.ModelNotes,
             JsonSerializer.Deserialize<ProposalEvidence>(r.Evidence, Json) ?? throw new InvalidOperationException("Stored proposal evidence is unreadable."),
-            r.CreatedById, r.CreatedBy, r.CreatedAtUtc, r.ApprovedSha256);
+            r.CreatedById, r.CreatedBy, r.CreatedAtUtc, r.ApprovedSha256, r.Kind, r.ParentProposalId);
     }
 
     // No text and no evidence: a list must stay cheap and must not become a second way to read a workflow.
@@ -73,8 +76,8 @@ public sealed class PostgresWorkflowProposalRepository(AppDbContext db) : IWorkf
         var rows = await db.WorkflowProposals.AsNoTracking()
             .Where(x => x.SourceConnectionId == sourceConnectionId && x.ProjectId == projectId && x.PipelineId == pipelineId)
             .OrderByDescending(x => x.CreatedAtUtc).Take(Math.Clamp(limit, 1, 200))
-            .Select(x => new { x.Id, x.State, x.Reason, x.WorkflowSha256, x.CreatedBy, x.CreatedAtUtc, x.AiConnectionId }).ToListAsync(ct);
-        return rows.Select(x => new ProposalSummary(x.Id, Parse(x.State), x.Reason, x.WorkflowSha256, x.CreatedBy, x.CreatedAtUtc, x.AiConnectionId)).ToArray();
+            .Select(x => new { x.Id, x.State, x.Reason, x.WorkflowSha256, x.CreatedBy, x.CreatedAtUtc, x.AiConnectionId, x.Kind }).ToListAsync(ct);
+        return rows.Select(x => new ProposalSummary(x.Id, Parse(x.State), x.Reason, x.WorkflowSha256, x.CreatedBy, x.CreatedAtUtc, x.AiConnectionId, x.Kind)).ToArray();
     }
 
     public async Task<IReadOnlyList<ProposalEvent>> EventsAsync(Guid id, CancellationToken ct)
