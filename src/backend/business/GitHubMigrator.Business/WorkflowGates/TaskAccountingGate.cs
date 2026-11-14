@@ -2,8 +2,9 @@ using System.Text.RegularExpressions;
 
 namespace GitHubMigrator.Business.WorkflowGates;
 
-// The Azure tasks a pipeline uses, found two ways: the product's analyser and a scan of the text. The analyser does not
-// look inside conditional insertions (${{ if }}:), so the scan catches what it misses.
+// The Azure tasks a pipeline uses, found two ways: the product's analyser (which follows conditional insertions) and a scan of the
+// text. The scan is a second, independent reading: it still works when the YAML cannot be parsed or the analyser reached its limits,
+// and a task seen by either is a task the workflow has to account for.
 public static class SourceTaskInventory
 {
     private static readonly Regex TaskLine = new(@"^\s*(?:-\s+)?task:\s*([A-Za-z0-9][A-Za-z0-9._@/-]{0,99})\s*(?:#.*)?$",

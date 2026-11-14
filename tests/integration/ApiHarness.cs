@@ -76,6 +76,8 @@ public sealed class ApiHarness : IAsyncLifetime
     public (long AppId, long InstallationId, string KeyReference, string Repositories)? Publication { get; set; }
     // When true the person who asked for a conversion may also approve it (WorkflowApproval:RequireSecondApprover=false).
     public bool SingleReviewer { get; set; }
+    // Lines put in front of the stub pipeline's YAML (for example a `pool:` with demands). Empty by default: the other tests see the YAML they always saw.
+    public string AzureYamlPrefix { get; set; } = "";
 
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
@@ -222,7 +224,7 @@ public sealed class ApiHarness : IAsyncLifetime
             Environment.SetEnvironmentVariable(pair.Key, pair.Value);
         }
 
-        var azure = new WireStub(request => ReplyAzure(request), Calls);
+        var azure = new WireStub(request => ReplyAzure(request, AzureYamlPrefix), Calls);
         var github = new WireStub(request => ReplyGitHub(request), Calls);
         Host = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
@@ -314,7 +316,7 @@ public sealed class ApiHarness : IAsyncLifetime
         return token;
     }
 
-    private static HttpResponseMessage ReplyAzure(HttpRequestMessage req)
+    private static HttpResponseMessage ReplyAzure(HttpRequestMessage req, string yamlPrefix = "")
     {
         var path = req.RequestUri!.AbsolutePath;
         // F-008 integration: actual Azure DevOps discovery reader, fixed-host
@@ -354,7 +356,7 @@ public sealed class ApiHarness : IAsyncLifetime
         if (path.EndsWith("/_apis/git/repositories/source-git/items", StringComparison.Ordinal))
             return Json(JsonSerializer.Serialize(new
             {
-                content = """
+                content = yamlPrefix + """
                     trigger:
                       branches:
                         include:

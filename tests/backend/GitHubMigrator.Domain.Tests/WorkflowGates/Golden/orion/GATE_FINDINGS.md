@@ -11,22 +11,19 @@ Written while authoring the corpus. "Fixed" means a change to product code with 
 | `Password=${DB_PASSWORD}` / `Password=$(Var)` in a connection string and `https://u:$(Token)@host` were masked | `SecretPatterns` | syntactic references (`$(x)`, `${x}`, `$env:x`, `%x%`) are never credentials |
 | `Authorization: Basic <base64>` / `Bearer <opaque>` was **not** masked (the scheme word split the value): a real redaction gap | `SecretPatterns` | new `AUTHORIZATION_HEADER` pattern; references after the scheme are kept |
 | a credential found under a key was masked only there: `password: x` plus a later `echo x` leaked the key-less copy (found by the end-to-end test against the Azure stub) | `SourceRedactor` | every other occurrence of a value the scanner identified is masked too, with the same placeholder |
+| **actionlint rejects custom self-hosted runner labels** (`runs-on: [self-hosted, linux, docker, npm]` → `runner-label`): the source (2003) demands agents with `docker` and `npm`, which could only be dropped | `ProcessWorkflowToolRunner`, `AzureRunnerLabels` (ADR-017) | the product reads the plain names a self-hosted pool demands from the pipeline YAML, stores them in the plan, names them to the model and writes them into an actionlint config of its own; 2003 now keeps `[self-hosted, linux, docker, npm]`. A model cannot add a label. actionlint compares the spelling exactly |
+| **`AzureYamlTaskAnalyzer` did not see tasks inside conditional insertions** (3001's `AzureCLI@2`), counted `template` only in `steps`, and ignored `download:`/`publish:` | `AzureYamlTaskAnalyzer` (ADR-017) | insertions are followed, templates counted in jobs/stages/variables/`extends`, shortcuts listed, computed steps reported as unknown; the corpus test now requires the analyser to see every task the text scan sees. The 2001 and 2003 sidecars list the variable templates |
+| deeply nested YAML (`steps: [[[[…]]]]`, ~50 KB) **overflows the stack** inside YamlDotNet and ends the process: found by the robustness test written for the analyser; every parse of untrusted YAML was exposed, including a model's answer | `SafeYaml` (ADR-018) | the depth is measured on the parser's event stream and a document nested deeper than 100 is refused before any node is built; `YAML_TOO_DEEP` for a workflow, "unreadable" for a source |
 
 ## Found and not fixed (decisions for a human)
 
-1. **actionlint rejects custom self-hosted runner labels** (`runs-on: [self-hosted, linux, docker, npm]` → `runner-label`).
-   The source (2003) demands agents with `docker` and `npm`. The gates run actionlint without any configuration on purpose, so
-   an operator with custom labels cannot pass. Declared in the workflow as `[self-hosted, linux]` and in `notes`. A per-plan
-   list of labels written by the product (never by a model) into the isolated actionlint config would fix it.
+(Items 1 and 4 of the first version of this list were fixed in 0.8 and moved up: see the table above and ADR-017.)
+
 2. **`ZIZMOR_SECRETS_OUTSIDE_ENV` (Medium) on eight of ten workflows.** True and useful (repository-level secrets, no
    environment), but the source has the same property because Azure variable groups are not environment-scoped. Accepted per
    workflow with the reason; moving secrets into environments adds approvals the source does not have.
 3. **Container images must be pinned by digest** (zizmor `unpinned-images`, High). 2005 used `dotnet/sdk:8.0` and `redis:7`;
    they are pinned now, which freezes them (security update lag). Digests are in `ACTION_PINS.md`.
-4. **`AzureYamlTaskAnalyzer` does not see tasks inside conditional insertions** (`- ${{ if ... }}:` in a steps list): 3001's
-   `AzureCLI@2` is missing from the inventory the product shows. It also counts `template` only in `steps`, not
-   `variables:`/`stages:`/`jobs:` templates (2001's `variables.yml`). The task-coverage test scans the source text as well. This
-   is the existing preview code and changing its output affects pinned tests, so it is left for a deliberate change.
 5. **Approvals, branch checks and environment protections** (Azure environments prod, infra-prod, staging) live outside the YAML; the
    workflows reference GitHub environments of the same names and every sidecar says so. Nothing creates them.
 6. **Tool assumptions the gates cannot see**: trivy on the runner (2001), a signing certificate in the store (2005), the

@@ -521,6 +521,8 @@ export type ConversionProposal = {
   plan: {
     secrets: { name: string; origin: string }[]; variables: { name: string; origin: string }[];
     connections: { connection: string; kind: string; guidance: string; secrets: string[]; variables: string[] }[]; notes: string[];
+    // extra self-hosted runner labels the pipeline's pools demand; older answers have none
+    runnerLabels?: string[];
   };
   provenance: {
     aiConnectionId: string; provider: string; host: string; model: string; reportedModel: string | null;

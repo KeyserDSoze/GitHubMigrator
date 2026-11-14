@@ -24,6 +24,9 @@ public sealed record WorkflowPlanContext(IReadOnlySet<string> AllowedSecrets, IR
     // Azure tasks of the source pipeline, for the accounting gate. Empty means "nothing to account for".
     public IReadOnlySet<string> SourceTasks { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+    // Extra self-hosted runner labels the SOURCE pipeline demands (written by the product, never by a model). Handed to actionlint as the only labels it should accept beyond GitHub's own.
+    public IReadOnlyList<string> RunnerLabels { get; init; } = [];
+
     public static WorkflowPlanContext Of(IEnumerable<string>? secrets, IEnumerable<string>? variables) =>
         new((secrets ?? []).ToHashSet(StringComparer.Ordinal), (variables ?? []).ToHashSet(StringComparer.Ordinal));
 }

@@ -76,6 +76,10 @@
   ],
   "templates": [
     {
+      "template": "pipelines/templates/variables.yml",
+      "handledBy": "inlined: its variables are the workflow's NUGET_PACKAGES and DOTNET_CLI_TELEMETRY_OPTOUT env entries and the dotnetVersion input"
+    },
+    {
       "template": "pipelines/templates/dotnet-quality.yml",
       "handledBy": "inlined as the Restore local tools and Verify formatting steps"
     },

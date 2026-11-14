@@ -53,6 +53,15 @@ source YAML.
    `NotAttempted` (reasons: `SourceConsentRequired`, `AiConnection*`, `RedactionBlocked`, `SourceTooLarge`, `ClassicPipelineUnsupported`,
    `SourceYamlUnavailable`, `ModelFailure:<code>`). The deterministic disabled draft of the preview remains the fallback.
 
+**Reading the source (ADR-017).** The task inventory follows conditional insertions (`${{ if }}:`, `else`, `each`), counts `template:` in jobs, stages, variables and `extends`, lists step shortcuts
+(`publish`, `download`, …) as `shortcut:<name>`, and reports what a template expression computes as `unknown:computed-steps` instead of skipping it; it never returns values. The self-hosted pool `demands`
+that are plain names (`docker`, `npm`) become the plan's **runner labels**: written by the product from the pipeline YAML, stored with the plan, named to the model, and given to the real actionlint (through a
+config file the product writes, nothing else configured) as the only extra labels it accepts. actionlint compares their spelling exactly; the `SELF_HOSTED_RUNNER` warning still asks a person to accept that the
+destination has runners with them.
+
+**Untrusted YAML is bounded before it is parsed (ADR-018).** Every parse of YAML the product does not control goes through `SafeYaml`, which refuses a document nested deeper than 100 levels before building
+any node (the parser's recursion overflows the stack at ~24,000 levels, which ends the process). The structure gate answers `YAML_TOO_DEEP`; the source readers report the YAML as unreadable.
+
 **Task accounting.** The workflow's first line must be `# azure-tasks: converted=A@1,B@2 manual=C@3` (the `TaskAccountingGate`). Every Azure
 task of the source (the analyser's inventory plus a text scan, because the analyser misses tasks inside `${{ if }}` insertions) must be in
 one list; a `manual` task needs `MANUAL PORT REQUIRED` next to its name. This stops a *silent* drop; it cannot tell that a "converted" task
@@ -261,7 +270,7 @@ what it replaced so an operator can audit it; it never claims text is clean.
 
 | Gate | Codes (blockers unless noted) |
 | --- | --- |
-| structure | `EMPTY_WORKFLOW`, `YAML_PARSE_ERROR`, `MULTIPLE_DOCUMENTS`, `NOT_A_WORKFLOW`, `EMPTY_JOBS`, `JOB_WITHOUT_RUNNER`, `JOB_WITHOUT_STEPS`, `STEP_INVALID`, `TOO_MANY_JOBS`, `TOO_MANY_STEPS`, `WORKFLOW_TOO_LARGE`, `SUSPICIOUS_UNICODE` |
+| structure | `EMPTY_WORKFLOW`, `YAML_PARSE_ERROR`, `YAML_TOO_DEEP`, `MULTIPLE_DOCUMENTS`, `NOT_A_WORKFLOW`, `EMPTY_JOBS`, `JOB_WITHOUT_RUNNER`, `JOB_WITHOUT_STEPS`, `STEP_INVALID`, `TOO_MANY_JOBS`, `TOO_MANY_STEPS`, `WORKFLOW_TOO_LARGE`, `SUSPICIOUS_UNICODE` |
 | policy | `UNPINNED_ACTION`, `ACTION_OWNER_NOT_ALLOWED`, `DANGEROUS_TRIGGER`, `TRIGGERS_NOT_DISABLED`, `TRIGGER_NOT_PERMITTED` (only under the trigger policy), `PERMISSIONS_UNDECLARED`, `PERMISSIONS_TOO_BROAD`, `PERMISSION_WRITE_BLOCKED`, `REMOTE_SCRIPT_EXECUTION`, `UNTRUSTED_CONTEXT_IN_SCRIPT`, `SECRET_IN_RUN_SCRIPT`, `SECRET_TO_UNLISTED_HOST`, `SECRET_NOT_IN_PLAN`, `VARIABLE_NOT_IN_PLAN`, `LITERAL_SECRET`, `REDACTION_PLACEHOLDER_LEFT`; warnings: `ACTION_PINNED_BY_TAG`, `RISKY_TRIGGER`, `CHECKOUT_PERSISTS_CREDENTIALS`, `SELF_HOSTED_RUNNER`, `UNLISTED_HOST`, `INPUT_IN_RUN_SCRIPT`, `SECRETS_INHERIT`, `PERMISSION_WRITE`; info: `OIDC_TOKEN_REQUESTED` |
 | suppressions | `LINTER_SUPPRESSION_COMMENT` |
 | actionlint | `ACTIONLINT_<KIND>` (e.g. `ACTIONLINT_EXPRESSION`, `ACTIONLINT_JOB_NEEDS`, `ACTIONLINT_RUNNER_LABEL`) |

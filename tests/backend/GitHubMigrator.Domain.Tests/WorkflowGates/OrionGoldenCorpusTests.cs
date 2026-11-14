@@ -94,10 +94,14 @@ public sealed class OrionGoldenCorpusTests(ITestOutputHelper output)
         foreach (var task in structure.Tasks.Where(t => t.Kind == "task").Select(t => t.Identifier).Distinct(StringComparer.OrdinalIgnoreCase))
             Assert.True(declared.Contains(task, StringComparer.OrdinalIgnoreCase), $"{name}: task {task} is neither mapped nor declared unsupported");
 
-        // The analyser does not look inside conditional insertions (${{ if }}:), so the source text is scanned too: a task it
-        // misses must still be mapped or declared unsupported (see GATE_FINDINGS.md).
-        foreach (var task in Regex.Matches(c.SourceYaml, @"^\s*(?:-\s+)?task:\s*(\S+)", RegexOptions.Multiline).Select(m => m.Groups[1].Value).Distinct(StringComparer.OrdinalIgnoreCase))
+        // The source text is scanned as well, as an independent cross-check: a task named anywhere in it must be mapped or declared unsupported, and the
+        // analyser (which follows conditional insertions since 0.8) must have seen every one of them, with nothing it had to report as unknown.
+        var scanned = Regex.Matches(c.SourceYaml, @"^\s*(?:-\s+)?task:\s*(\S+)", RegexOptions.Multiline).Select(m => m.Groups[1].Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        foreach (var task in scanned)
             Assert.True(declared.Contains(task, StringComparer.OrdinalIgnoreCase), $"{name}: task {task} appears in the source text but is neither mapped nor declared unsupported");
+        var analysed = structure.Tasks.Where(t => t.Kind == "task").Select(t => t.Identifier).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Assert.True(scanned.All(analysed.Contains), $"{name}: the analyser missed " + string.Join(", ", scanned.Where(t => !analysed.Contains(t))));
+        Assert.DoesNotContain(structure.Tasks, t => t.Kind == "unknown");
 
         Assert.Equal(structure.Tasks.Count(t => t.Kind == "template"), c.Sidecar.Templates.Length);
         Assert.All(c.Sidecar.TaskMap, t => Assert.False(string.IsNullOrWhiteSpace(t.Github)));

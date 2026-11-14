@@ -100,7 +100,7 @@ public sealed record FindingResponse(string Gate, string Code, string Severity, 
 public sealed record PlanEntryResponse(string Name, string Origin);
 public sealed record ConnectionMappingResponse(string Connection, string Kind, string Guidance, IReadOnlyList<string> Secrets, IReadOnlyList<string> Variables);
 public sealed record PlanResponse(IReadOnlyList<PlanEntryResponse> Secrets, IReadOnlyList<PlanEntryResponse> Variables,
-    IReadOnlyList<ConnectionMappingResponse> Connections, IReadOnlyList<string> Notes);
+    IReadOnlyList<ConnectionMappingResponse> Connections, IReadOnlyList<string> Notes, IReadOnlyList<string> RunnerLabels);
 public sealed record AttemptResponse(int Number, string Outcome, int? PromptTokens, int? CompletionTokens, string? WorkflowSha256, IReadOnlyList<string> BlockerCodes);
 public sealed record ProvenanceResponse(Guid AiConnectionId, string Provider, string Host, string Model, string? ReportedModel, string PromptSha256,
     string PlanSha256, string PolicyVersion, string ActionCatalogVerifiedOn, IReadOnlyList<RedactionSummary> Redactions,
@@ -124,7 +124,7 @@ public static class ConversionMapping
 {
     public static PlanResponse Plan(ConversionPlan plan) => new(
         plan.Secrets.Select(s => new PlanEntryResponse(s.Name, s.Origin)).ToArray(), plan.Variables.Select(v => new PlanEntryResponse(v.Name, v.Origin)).ToArray(),
-        plan.Connections.Select(c => new ConnectionMappingResponse(c.Connection, c.Kind, c.Guidance, c.Secrets, c.Variables)).ToArray(), plan.Notes);
+        plan.Connections.Select(c => new ConnectionMappingResponse(c.Connection, c.Kind, c.Guidance, c.Secrets, c.Variables)).ToArray(), plan.Notes, plan.Labels);
 
     public static ProvenanceResponse? Provenance(ConversionProvenance? p) => p is null ? null : new(p.AiConnectionId, p.Provider, p.Host, p.Model, p.ReportedModel,
         p.PromptSha256, p.PlanSha256, p.PolicyVersion, p.ActionCatalogVerifiedOn, p.Redactions, p.TotalPromptTokens, p.TotalCompletionTokens,

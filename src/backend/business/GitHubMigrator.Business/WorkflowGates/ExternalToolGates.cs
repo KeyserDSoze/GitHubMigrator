@@ -5,10 +5,19 @@ namespace GitHubMigrator.Business.WorkflowGates;
 // Where a static analyser runs is infrastructure; what its answer means is policy (here).
 public sealed record ToolRun(bool Completed, string Output, string? Detail = null, int ExitCode = 0);
 
+// What a run may be told besides the workflow: labels the product itself derived from the source. Never anything a model wrote.
+public sealed record WorkflowToolOptions(IReadOnlyList<string> RunnerLabels)
+{
+    public static WorkflowToolOptions None { get; } = new([]);
+}
+
 public interface IWorkflowToolRunner
 {
     string Tool { get; }
     Task<ToolRun> RunAsync(string workflowYaml, CancellationToken ct);
+
+    // A runner that can use the options overrides this; one that cannot simply runs the workflow as it always did.
+    Task<ToolRun> RunAsync(string workflowYaml, WorkflowToolOptions options, CancellationToken ct) => RunAsync(workflowYaml, ct);
 }
 
 // actionlint: syntax, expressions, runner labels, needs graph, shell and script checks.
@@ -19,7 +28,8 @@ public sealed class ActionlintGate(IWorkflowToolRunner runner) : IWorkflowGate
 
     public async Task<GateResult> EvaluateAsync(WorkflowGateContext context, CancellationToken ct)
     {
-        var run = await runner.RunAsync(context.Yaml, ct);
+        // actionlint alone is told about the labels the source demanded: they are the only labels beyond GitHub's own that it accepts
+        var run = context.Plan.RunnerLabels.Count == 0 ? await runner.RunAsync(context.Yaml, ct) : await runner.RunAsync(context.Yaml, new(context.Plan.RunnerLabels), ct);
         // exit 0 = clean, 1 = findings; anything else (3 = fatal) or silence is a tool that did not analyse the file
         var unusable = ToolOutput.Unusable(Name, run, exitCode => exitCode is 0 or 1);
         if (unusable is not null) return unusable;

@@ -12,21 +12,27 @@ public sealed record ConnectionMapping(string Connection, string Kind, string Gu
 
 // The only secrets and variables a converted workflow may reference. Deterministic: a model is told the list, the gates
 // enforce it, and nothing is created at the destination from it (that stays a human step). Values never appear here.
+// RunnerLabels are the extra self-hosted labels the source's pools demand (see AzureRunnerLabels); plans stored before they existed have none.
 public sealed record ConversionPlan(IReadOnlyList<PlanEntry> Secrets, IReadOnlyList<PlanEntry> Variables,
-    IReadOnlyList<ConnectionMapping> Connections, IReadOnlyList<string> Notes)
+    IReadOnlyList<ConnectionMapping> Connections, IReadOnlyList<string> Notes, IReadOnlyList<string>? RunnerLabels = null)
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<string> Labels => RunnerLabels ?? [];
+
     public WorkflowPlanContext ToGateContext(string? sourceYaml) =>
-        WorkflowPlanContext.Of(Secrets.Select(s => s.Name), Variables.Select(v => v.Name)) with { SourceTasks = SourceTaskInventory.From(sourceYaml) };
+        WorkflowPlanContext.Of(Secrets.Select(s => s.Name), Variables.Select(v => v.Name)) with { SourceTasks = SourceTaskInventory.From(sourceYaml), RunnerLabels = Labels };
 
     // The same context from a stored task list, so a stored proposal can be gated again without its source text.
     public WorkflowPlanContext ToGateContextFor(IEnumerable<string> sourceTasks) =>
         WorkflowPlanContext.Of(Secrets.Select(s => s.Name), Variables.Select(v => v.Name)) with
         {
-            SourceTasks = new HashSet<string>(sourceTasks, StringComparer.OrdinalIgnoreCase)
+            SourceTasks = new HashSet<string>(sourceTasks, StringComparer.OrdinalIgnoreCase), RunnerLabels = Labels
         };
 
+    // Labels enter the hash only when there are some, so the hash of a plan without them is what it always was.
     public string Sha256 => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
-        string.Join('\n', Secrets.Select(s => "s:" + s.Name).Order(StringComparer.Ordinal).Concat(Variables.Select(v => "v:" + v.Name).Order(StringComparer.Ordinal))))));
+        string.Join('\n', Secrets.Select(s => "s:" + s.Name).Order(StringComparer.Ordinal).Concat(Variables.Select(v => "v:" + v.Name).Order(StringComparer.Ordinal))
+            .Concat(Labels.Select(l => "l:" + l).Order(StringComparer.Ordinal))))));
 }
 
 public static partial class ConversionPlanBuilder
@@ -78,7 +84,10 @@ public static partial class ConversionPlanBuilder
             foreach (var variable in mapping.Variables) Add(variables, variable, $"service connection '{connection.Name}' ({connection.Kind})");
         }
         notes.Add("Service connections are mapped only when the pipeline YAML names them; the project inventory is not pipeline-scoped.");
-        return new(secrets, variables, connections, notes);
+        var labels = AzureRunnerLabels.From(sourceYaml);
+        if (labels.Count > 0)
+            notes.Add($"The pipeline's self-hosted pools demand {string.Join(", ", labels)}: a workflow may use these as extra runner labels, and the destination needs runners that have them.");
+        return new(secrets, variables, connections, notes, labels.Count == 0 ? null : labels);
     }
 
     private static ConnectionMapping Map(AzureServiceReference connection)

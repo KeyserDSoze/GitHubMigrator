@@ -183,6 +183,7 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
         <p className="connection-hint">{t('convPlanHint')}</p>
         <p><strong>{t('convSecrets')}:</strong> {proposal.plan.secrets.length ? proposal.plan.secrets.map(s => s.name).join(', ') : '—'}</p>
         <p><strong>{t('convVariables')}:</strong> {proposal.plan.variables.length ? proposal.plan.variables.map(s => s.name).join(', ') : '—'}</p>
+        {(proposal.plan.runnerLabels?.length ?? 0) > 0 && <p><strong>{t('convRunnerLabels')}:</strong> {proposal.plan.runnerLabels!.join(', ')} <span className="connection-hint">{t('convRunnerLabelsHint')}</span></p>}
 
         {proposal.provenance && <><h4>{t('convProvenance')}</h4>
           <dl className="conversion-provenance">

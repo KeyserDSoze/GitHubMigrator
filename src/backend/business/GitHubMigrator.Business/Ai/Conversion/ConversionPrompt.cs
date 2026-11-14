@@ -61,6 +61,8 @@ public static partial class ConversionPrompt
             foreach (var c in plan.Connections)
                 user.AppendLine($"- {c.Connection} ({c.Kind}): {c.Guidance} Secrets: {(c.Secrets.Count == 0 ? "none" : string.Join(", ", c.Secrets))}. Variables: {(c.Variables.Count == 0 ? "none" : string.Join(", ", c.Variables))}.");
         }
+        if (plan.Labels.Count > 0)
+            user.AppendLine($"RUNNER LABELS the pipeline's self-hosted pools demand: {string.Join(", ", plan.Labels)}. A job that needs such a pool may use `runs-on: [self-hosted, linux|windows|macOS, <only these labels>]`; no other custom label is accepted. Say in the Notes that the destination needs runners with them. Everything else runs on GitHub-hosted runners.");
         user.AppendLine("Non-secret variables of the pipeline's variable groups are exported to its scripts as environment variables by Azure; reproduce that with a workflow-level `env:` only for the ones the pipeline needs.");
         user.AppendLine();
         user.AppendLine("AZURE TASKS OF THE SOURCE (account for each one in the first-line comment): " + (sourceTasks.Count == 0 ? "(none)" : string.Join(", ", sourceTasks.Order(StringComparer.OrdinalIgnoreCase))));

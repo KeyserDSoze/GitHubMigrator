@@ -54,7 +54,11 @@ public sealed record OrionCase(string Name, string SourceYaml, string GoldenYaml
         return new(Sidecar.PipelineId, Sidecar.Name, "yaml", Sidecar.Source.Path, Sidecar.Source.Repo, variables, connections, "available", AzureYamlTaskAnalyzer.Analyze(SourceYaml));
     }
 
-    public WorkflowPlanContext Plan() => WorkflowPlanContext.Of(Sidecar.Plan.Secrets, Sidecar.Plan.Variables) with { SourceTasks = SourceTaskInventory.From(SourceYaml) };
+    // The runner labels are what the product derives from the source's pools, exactly as a conversion does; the sidecar does not get to name any.
+    public WorkflowPlanContext Plan() => WorkflowPlanContext.Of(Sidecar.Plan.Secrets, Sidecar.Plan.Variables) with
+    {
+        SourceTasks = SourceTaskInventory.From(SourceYaml), RunnerLabels = AzureRunnerLabels.From(SourceYaml)
+    };
 
     // The gates a converted workflow has to pass, accounting included.
     public WorkflowGatePipeline PolicyGates() => new([new WorkflowPolicyGate(), new LinterSuppressionGate(), new TaskAccountingGate()], Policy());

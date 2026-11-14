@@ -81,9 +81,9 @@ jobs:
     name: Copy bundle to the staging hosts
     needs: build-and-test
     if: ${{ github.ref == 'refs/heads/main' }}
-    # The source demands agents with docker and npm; custom runner labels are not accepted by the gates, so the runner
-    # group behind [self-hosted, linux] must provide both.
-    runs-on: [self-hosted, linux]
+    # The source demands agents with docker and npm: both are kept as runner labels (the product reads them from the pool's demands),
+    # so the destination needs runners that have them.
+    runs-on: [self-hosted, linux, docker, npm]
     environment: staging
     steps:
       - name: Download the web bundle

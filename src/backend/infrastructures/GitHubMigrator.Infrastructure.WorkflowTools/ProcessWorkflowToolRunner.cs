@@ -10,14 +10,16 @@ namespace GitHubMigrator.Infrastructure.WorkflowTools;
 // empty, the network is not needed (zizmor --offline), output is bounded and the process is killed at the deadline.
 // zizmor runs with --no-ignores (a "# zizmor: ignore" comment written by a model must not mute it), --no-config and
 // the strictest persona: for generated workflows a false positive costs a review, a false negative costs security.
+// The one configuration actionlint ever gets is written HERE, from labels the product derived from the source pipeline and validated again
+// (self-hosted-runner labels, nothing else: no ignore rules, no shell or Python rules); it lives outside .github/workflows, in the same private directory.
 public sealed class ProcessWorkflowToolRunner : IWorkflowToolRunner
 {
     private const int MaxOutputBytes = 2 * 1024 * 1024;
     private readonly string _executable;
-    private readonly Func<string, string[]> _arguments;
+    private readonly Func<string, string?, string[]> _arguments;
     private readonly TimeSpan _timeout;
 
-    private ProcessWorkflowToolRunner(string tool, string executable, Func<string, string[]> arguments, TimeSpan timeout)
+    private ProcessWorkflowToolRunner(string tool, string executable, Func<string, string?, string[]> arguments, TimeSpan timeout)
     {
         Tool = tool; _executable = executable; _arguments = arguments; _timeout = timeout;
     }
@@ -25,10 +27,11 @@ public sealed class ProcessWorkflowToolRunner : IWorkflowToolRunner
     public string Tool { get; }
 
     public static ProcessWorkflowToolRunner Actionlint(string executable, TimeSpan? timeout = null) =>
-        new("actionlint", executable, file => ["-format", "{{json .}}", "-no-color", file], timeout ?? TimeSpan.FromSeconds(30));
+        new("actionlint", executable, (file, config) => config is null ? ["-format", "{{json .}}", "-no-color", file] : ["-config-file", config, "-format", "{{json .}}", "-no-color", file],
+            timeout ?? TimeSpan.FromSeconds(30));
 
     public static ProcessWorkflowToolRunner Zizmor(string executable, TimeSpan? timeout = null) =>
-        new("zizmor", executable, file => ["--offline", "--no-progress", "--no-config", "--no-ignores", "--persona", "auditor", "--format", "json", file], timeout ?? TimeSpan.FromSeconds(60));
+        new("zizmor", executable, (file, _) => ["--offline", "--no-progress", "--no-config", "--no-ignores", "--persona", "auditor", "--format", "json", file], timeout ?? TimeSpan.FromSeconds(60));
 
     // A configured path wins; otherwise the tool is looked up on PATH. Null means "not installed": the gate then
     // reports NotRun and the workflow cannot be approved.
@@ -43,20 +46,39 @@ public sealed class ProcessWorkflowToolRunner : IWorkflowToolRunner
         return null;
     }
 
-    public async Task<ToolRun> RunAsync(string workflowYaml, CancellationToken ct)
+    public Task<ToolRun> RunAsync(string workflowYaml, CancellationToken ct) => RunAsync(workflowYaml, WorkflowToolOptions.None, ct);
+
+    // plain capability names only: a label that is not one is refused (the gate then did not run), never repaired or quoted around
+    private static readonly System.Text.RegularExpressions.Regex Label = new(@"^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$",
+        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+
+    public async Task<ToolRun> RunAsync(string workflowYaml, WorkflowToolOptions options, CancellationToken ct)
     {
+        string? configText = null;
+        if (Tool == "actionlint" && options.RunnerLabels.Count > 0)
+        {
+            if (options.RunnerLabels.Count > 32 || options.RunnerLabels.Any(l => !Label.IsMatch(l))) return new(false, "", Tool + " could not be configured.");
+            configText = "self-hosted-runner:\n  labels:\n" + string.Concat(options.RunnerLabels.Select(l => $"    - '{l}'\n"));
+        }
+
         var directory = Path.Combine(Path.GetTempPath(), "workflow-gate-" + Guid.NewGuid().ToString("N"));
         var file = Path.Combine(directory, ".github", "workflows", "workflow.yml");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             await File.WriteAllTextAsync(file, workflowYaml, new UTF8Encoding(false), ct);
+            string? config = null;
+            if (configText is not null)
+            {
+                config = Path.Combine(directory, "actionlint-config.yaml");
+                await File.WriteAllTextAsync(config, configText, new UTF8Encoding(false), ct);
+            }
             var info = new ProcessStartInfo(_executable)
             {
                 WorkingDirectory = directory, RedirectStandardInput = true, RedirectStandardOutput = true,
                 RedirectStandardError = true, UseShellExecute = false
             };
-            foreach (var argument in _arguments(file)) info.ArgumentList.Add(argument);
+            foreach (var argument in _arguments(file, config)) info.ArgumentList.Add(argument);
             info.Environment.Clear();
             info.Environment["PATH"] = "/usr/bin:/bin";
             info.Environment["HOME"] = directory;

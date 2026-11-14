@@ -81,7 +81,7 @@
   ],
   "notes": [
     "NOT executed on GitHub.",
-    "The deploy job needs a self-hosted runner group providing docker and npm (the source's demands); custom runner labels are rejected by actionlint, so only [self-hosted, linux] is declared (see GATE_FINDINGS.md).",
+    "The deploy job needs self-hosted runners with the labels docker and npm (the source's demands, read from the pool by the product and handed to actionlint as the only extra labels it accepts): the destination has to provide runners that have them.",
     "The SSH deployment key is written to the runner's home for the job and removed by an always() step; a persistent self-hosted runner makes that window a risk to review.",
     "The deployment job of the source checks out no sources, so its npm publish ran in an empty directory; the converted step publishes from the downloaded web-dist directory and needs a human to confirm it is the intended package.",
     "NODE_ENV=production is exported as in the source, which makes npm install skip devDependencies for the lint and test steps; keep or fix deliberately.",
@@ -89,7 +89,12 @@
     "The staging environment's branch control (main, release/*) is configured on the GitHub environment."
   ],
   "extraAllowedHosts": [],
-  "templates": [],
+  "templates": [
+    {
+      "template": "variables/common.yml@templates",
+      "handledBy": "not converted: its variables (orionRegion, teamsWebhookVariable) are not referenced by the YAML"
+    }
+  ],
   "redaction": {
     "findings": []
   }

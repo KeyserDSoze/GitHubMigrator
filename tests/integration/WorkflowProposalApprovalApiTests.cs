@@ -77,6 +77,9 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
     // the same text with a pin this product has not verified: still approvable, with one warning to accept
     protected static readonly string WarningWorkflow = GoodWorkflow.Replace(CatalogSha("actions/setup-dotnet"), new string('a', 40));
 
+    // lines put in front of the stub pipeline's Azure YAML; a test that needs a `pool:` with demands overrides it
+    protected virtual string AzureYaml => "";
+
     protected static string Fenced(string yaml) => "```yaml\n" + yaml + "\n```\n\nNotes: nothing else.";
 
     public async Task InitializeAsync()
@@ -87,7 +90,7 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
         if (githubSim) { GitHub = new GhSimFixture(); await GitHub.InitializeAsync(); }
         Api = new ApiHarness
         {
-            LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin,
+            LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin, AzureYamlPrefix = AzureYaml,
             Publication = publication ? (PublicationAppId, PublicationAppId + 1, PublicationKeyReference, PublicationRepositories) : null
         };
         await Api.InitializeAsync();

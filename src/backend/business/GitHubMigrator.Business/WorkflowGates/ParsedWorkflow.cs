@@ -46,8 +46,7 @@ public sealed class ParsedWorkflow
         }
         try
         {
-            var stream = new YamlStream();
-            stream.Load(new StringReader(yaml));
+            var stream = SafeYaml.Load(yaml);
             if (stream.Documents.Count != 1)
             {
                 error = Fail("MULTIPLE_DOCUMENTS", $"A workflow file is exactly one YAML document, found {stream.Documents.Count}.");
@@ -59,6 +58,12 @@ public sealed class ParsedWorkflow
                 return null;
             }
             return new ParsedWorkflow(root);
+        }
+        catch (YamlNestingException ex)
+        {
+            // refused before any node was built: how deeply a document nests must not decide whether the process survives
+            error = Fail("YAML_TOO_DEEP", $"The YAML nests deeper than {ex.MaxDepth} levels; it is not read.");
+            return null;
         }
         catch (YamlException ex)
         {

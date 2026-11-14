@@ -61,8 +61,8 @@ public static partial class AzureTriggerReader
     public static AzureTriggers? Read(string? yaml)
     {
         if (string.IsNullOrWhiteSpace(yaml) || yaml.Length > MaxChars) return null;
-        YamlStream stream = new();
-        try { stream.Load(new StringReader(yaml)); }
+        YamlStream stream;
+        try { stream = SafeYaml.Load(yaml); }
         catch (Exception ex) when (ex is YamlException or InvalidOperationException or ArgumentException) { return null; }
         if (stream.Documents.Count != 1 || stream.Documents[0].RootNode is not YamlMappingNode root) return null;
 
@@ -301,8 +301,8 @@ public static class WorkflowTriggerEditor
         if (mapped.IsEmpty) return new(false, "NoAutomaticTriggers", null, mapped, differences);
 
         var text = approvedYaml.Replace("\r\n", "\n");
-        YamlStream stream = new();
-        try { stream.Load(new StringReader(text)); }
+        YamlStream stream;
+        try { stream = SafeYaml.Load(text); }
         catch (Exception ex) when (ex is YamlException or InvalidOperationException or ArgumentException) { return new(false, "WorkflowNotReadable", null, mapped, differences); }
         if (stream.Documents.Count != 1 || stream.Documents[0].RootNode is not YamlMappingNode root) return new(false, "WorkflowNotReadable", null, mapped, differences);
 
@@ -370,8 +370,7 @@ public static class WorkflowTriggerEditor
         // prove it: parses, one document, the same top-level keys, and `on` holds workflow_dispatch plus exactly what was generated
         try
         {
-            var check = new YamlStream();
-            check.Load(new StringReader(result));
+            var check = SafeYaml.Load(result);
             if (check.Documents.Count != 1 || check.Documents[0].RootNode is not YamlMappingNode after ||
                 !after.Children.Keys.OfType<YamlScalarNode>().Select(k => k.Value).Order().SequenceEqual(root.Children.Keys.OfType<YamlScalarNode>().Select(k => k.Value).Order()) ||
                 after.Children.First(p => p.Key is YamlScalarNode { Value: "on" }).Value is not YamlMappingNode onAfter)

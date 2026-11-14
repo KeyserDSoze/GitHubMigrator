@@ -132,3 +132,20 @@ Feature: Convert pipelines to reviewed GitHub Actions
     Then only GET requests are made and the answer names what exists: an open, merged or closed pull request, a branch left behind, or nothing
     And a pull request whose branch or file no longer matches what the product wrote is not presented as safe
     And the ledger is unchanged and the product does not clean up, retry or close anything
+
+  Scenario: The inventory of a pipeline follows conditional insertions and says what it cannot read
+    Given a pipeline with steps inside ${{ if }} and ${{ each }} entries, templates for jobs, stages and variables, a download step and a step list produced by a template expression
+    When the pipeline is analysed
+    Then every step inside the insertions is listed in order, each template once, the download step as a shortcut, and the computed steps as unknown
+    And no condition, path or value of the pipeline is returned
+
+  Scenario: The runner labels a self-hosted pool demands survive the conversion
+    Given a pipeline whose pool demands docker and npm
+    When it is converted
+    Then the plan, the model's request and the stored proposal name the labels docker and npm, and the real actionlint accepts exactly those extra labels
+    And a label the pool did not demand is still refused, and the self-hosted runner warning is still a person's to accept
+
+  Scenario: YAML that nests absurdly deeply cannot stop the process
+    Given a workflow a model wrote, or a source pipeline, that nests tens of thousands of levels
+    When it is gated, analysed, or read for its triggers
+    Then it is refused before any node is built, as YAML_TOO_DEEP or as unreadable, and the API keeps answering
