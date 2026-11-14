@@ -82,6 +82,9 @@ public sealed class ApiHarness : IAsyncLifetime
     public string OperatorRunnerLabels { get; set; } = "";
     // Files of other paths and repositories the Azure stub serves (the templates a pipeline includes), keyed "project|repository|/path"; a path that is not here is a 404.
     public IReadOnlyDictionary<string, string> AzureTemplateFiles { get; set; } = new Dictionary<string, string>();
+    // When set, pipeline 42 is a classic (designer) one and this is its build definition as the service would return it; AzureClassicEndpoints is the project's list of service connections (with ids).
+    public string? AzureClassicDefinition { get; set; }
+    public string AzureClassicEndpoints { get; set; } = """{"value":[]}""";
 
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
@@ -229,7 +232,7 @@ public sealed class ApiHarness : IAsyncLifetime
             Environment.SetEnvironmentVariable(pair.Key, pair.Value);
         }
 
-        var azure = new WireStub(request => ReplyAzure(request, AzureYamlPrefix, AzureTemplateFiles), Calls);
+        var azure = new WireStub(request => ReplyAzure(request, AzureYamlPrefix, AzureTemplateFiles, AzureClassicDefinition, AzureClassicEndpoints), Calls);
         var github = new WireStub(request => ReplyGitHub(request), Calls);
         Host = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
@@ -321,9 +324,19 @@ public sealed class ApiHarness : IAsyncLifetime
         return token;
     }
 
-    private static HttpResponseMessage ReplyAzure(HttpRequestMessage req, string yamlPrefix = "", IReadOnlyDictionary<string, string>? templateFiles = null)
+    private static HttpResponseMessage ReplyAzure(HttpRequestMessage req, string yamlPrefix = "", IReadOnlyDictionary<string, string>? templateFiles = null,
+        string? classicDefinition = null, string classicEndpoints = """{"value":[]}""")
     {
         var path = req.RequestUri!.AbsolutePath;
+        // a classic pipeline has no file: what is read of it is its definition and the project's service connections; anything else about it (a file, the task catalogue) is a 404
+        if (classicDefinition is not null)
+        {
+            if (path.EndsWith("/_apis/pipelines/42", StringComparison.Ordinal)) return Json("""{"id":42,"name":"Orion Legacy","configuration":{"type":"designerJson"}}""");
+            if (path.EndsWith("/_apis/build/definitions/42", StringComparison.Ordinal)) return Json(classicDefinition);
+            if (path.EndsWith("/_apis/serviceendpoint/endpoints", StringComparison.Ordinal)) return Json(classicEndpoints);
+            if (path.EndsWith("/_apis/distributedtask/variablegroups/7", StringComparison.Ordinal)) return Json("""{"name":"prod","variables":{"APP_TOKEN":{"isSecret":true,"value":"DONT_SHOW_GROUP_TOKEN"}}}""");
+            if (path.EndsWith("/items", StringComparison.Ordinal) || path.Contains("/_apis/distributedtask/tasks/", StringComparison.Ordinal)) return new(HttpStatusCode.NotFound);
+        }
         // a file of some repository: the pipeline's own file is served below; any other is a template and is served only if the test put it there
         if (path.EndsWith("/items", StringComparison.Ordinal) && path.Contains("/_apis/git/repositories/", StringComparison.Ordinal))
         {

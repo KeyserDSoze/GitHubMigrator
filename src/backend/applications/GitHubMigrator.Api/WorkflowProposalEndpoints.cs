@@ -85,7 +85,7 @@ public static class WorkflowProposalEndpoints
                 logs.CreateLogger("WorkflowProposals").LogWarning("Workflow trigger derivation refused Proposal={ProposalId} Code={Code} By={Actor}", id, ex.Code, actor.Id);
                 return ex.Code switch
                 {
-                    "NoAutomaticTriggers" or "ParentIsNotAConversion" => Results.Conflict(new { error = ex.Code }),
+                    "NoAutomaticTriggers" or "ParentIsNotAConversion" or "ClassicTriggersNotSupported" => Results.Conflict(new { error = ex.Code }),
                     "SourceYamlUnreadable" or "SourceYamlUnavailable" or "WorkflowNotReadable" or "OnSectionNotFound" or "WorkflowHasOtherTriggers" or "TriggerShapeUnsupported"
                         or "DerivedWorkflowInvalid" => Results.UnprocessableEntity(new { error = ex.Code }),
                     _ => Results.BadRequest(new { error = ex.Code })

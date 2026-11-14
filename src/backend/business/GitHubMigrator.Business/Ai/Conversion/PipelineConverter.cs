@@ -10,13 +10,15 @@ public sealed class PipelineConverter(IChatModelClient client, IWorkflowGatePipe
     private readonly WorkflowGatePolicy _policy = policy ?? WorkflowGatePolicy.Default;
 
     // templates: what the service read of the templates the pipeline includes (already redacted and bounded); null when nobody asked for them.
+    // origin: set when the text is the product's rendering of a classic (designer) definition and not a file; without it a pipeline that is not YAML is still refused.
     public async Task<ConversionProposal> ConvertAsync(AiConnectionUse use, AzurePipelineSource pipeline, string? sourceYaml,
-        ConversionOptions? options, CancellationToken ct, ResolvedTemplates? templates = null)
+        ConversionOptions? options, CancellationToken ct, ResolvedTemplates? templates = null, SourceOrigin? origin = null)
     {
         options ??= new();
         var plan = ConversionPlanBuilder.Build(pipeline, sourceYaml, options.OperatorRunnerLabels, options.RunnerLabels, templates?.Files.Select(f => f.Text).ToArray());
-        if (pipeline.Kind != "yaml") return ConversionProposal.NotAttempted("ClassicPipelineUnsupported", plan);
-        if (string.IsNullOrWhiteSpace(sourceYaml)) return ConversionProposal.NotAttempted("SourceYamlUnavailable", plan);
+        var classic = pipeline.Kind != "yaml" && origin?.Kind == PipelineSourceOrigins.ClassicDefinition;
+        if (pipeline.Kind != "yaml" && !classic) return ConversionProposal.NotAttempted("ClassicPipelineUnsupported", plan);
+        if (string.IsNullOrWhiteSpace(sourceYaml)) return ConversionProposal.NotAttempted(classic ? "ClassicPipelineUnsupported" : "SourceYamlUnavailable", plan);
         // defence in depth: the caller resolved the connection with consent required, and nothing here relies on that alone
         if (!use.Connection.SendSourceContent) return ConversionProposal.NotAttempted("SourceConsentRequired", plan);
 
@@ -29,7 +31,7 @@ public sealed class PipelineConverter(IChatModelClient client, IWorkflowGatePipe
         var sourceTasks = new HashSet<string>(SourceTaskInventory.From(sourceYaml), StringComparer.OrdinalIgnoreCase);
         foreach (var file in templates?.Files ?? []) sourceTasks.UnionWith(file.Tasks);
         var nonce = ConversionPrompt.NewNonceAvoiding(nonceSource ?? ConversionPrompt.NewNonce, [redaction.Text, .. templates?.Files.Select(f => f.Text) ?? []]);
-        var (system, user) = ConversionPrompt.Build(plan, redaction.Text, sourceTasks, nonce, _policy, templates);
+        var (system, user) = ConversionPrompt.Build(plan, redaction.Text, sourceTasks, nonce, _policy, templates, classic ? origin : null);
         var messages = new List<ChatMessage> { ChatMessage.System(system), ChatMessage.User(user) };
         var promptSha = ConversionPrompt.Sha256(messages);
         var redactions = redaction.Findings.Select(f => f.Kind).Concat(templates?.Files.SelectMany(f => f.RedactionKinds) ?? [])
@@ -99,8 +101,16 @@ public sealed class PipelineConverter(IChatModelClient client, IWorkflowGatePipe
             use.Connection.Model, reportedModel, promptSha, plan.Sha256, _policy.Version, ActionCatalog.VerifiedOn.ToString("yyyy-MM-dd"),
             redactions, promptTokens, completionTokens, attempts.ToArray(), clock.GetUtcNow(),
             templates is null ? null : templates.Files.Select(f => new TemplateProvenance(f.Repository, f.Path, f.Ref, f.Sha256, f.Bytes)).ToArray(),
-            templates is null ? null : templates.Unresolved);
+            templates is null ? null : templates.Unresolved,
+            classic ? origin!.Kind : null, classic ? Notes(origin!) : null);
 
         static string Cap(string text) => text.Length > 120_000 ? text[..120_000] : text;
+
+        // the notes come from the definition's own text: they are redacted like the source before they are kept or shown
+        static IReadOnlyList<string> Notes(SourceOrigin origin) => origin.Notes.Take(40).Select(note =>
+        {
+            var redacted = SourceRedactor.Redact(note, 2_000);
+            return redacted.Blocked ? "(withheld: it holds something that must not be kept)" : redacted.Text;
+        }).ToArray();
     }
 }

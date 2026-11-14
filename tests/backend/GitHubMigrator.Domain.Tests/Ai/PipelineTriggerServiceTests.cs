@@ -36,11 +36,11 @@ public sealed class PipelineTriggerServiceTests
         new(SourceId, "Azure", provider, direction, "contoso", "ref-source", Now, Now, "Verified", "bot", "Verified");
 
     private static async Task<Rig> RigAsync(bool approveParent = true, MigrationConnection? connection = null, string? token = SourceToken, bool analysers = true,
-        string? parentYaml = null, string[]? parentWarnings = null)
+        string? parentYaml = null, string[]? parentWarnings = null, string? sourceOrigin = null)
     {
         var repo = new InMemoryProposalRepository();
         var proposals = Service(repo, analysers: analysers);
-        var kept = (await proposals.RecordAsync(Author, SourceId, "project", 42, AiId, await ConvertedAsync(parentYaml ?? Clean, analysers), default))!;
+        var kept = (await proposals.RecordAsync(Author, SourceId, "project", 42, AiId, await ConvertedAsync(parentYaml ?? Clean, analysers, sourceOrigin), default))!;
         if (approveParent) await Service(repo).ApproveAsync(Reviewer, kept.Id, kept.WorkflowSha256, parentWarnings ?? [], "Reviewed the manual-only workflow.", default);
         var secrets = new MemorySecrets();
         if (token is not null) secrets.Values["ref-source"] = token;
@@ -49,6 +49,23 @@ public sealed class PipelineTriggerServiceTests
             analysers ? new FakeToolRunner("actionlint", new(true, "[]", null, 0)) : null, analysers ? new FakeToolRunner("zizmor", new(true, "[]", null, 0)) : null);
         var triggers = new PipelineTriggerService(proposals, new FakeDestinations(connection ?? SourceConnection()), secrets, source, factory);
         return new(triggers, proposals, repo, source, (await repo.GetAsync(kept.Id, default))!);
+    }
+
+    [Fact]
+    public async Task The_triggers_of_a_classic_pipeline_are_never_derived_and_the_source_is_not_even_read()
+    {
+        var rig = await RigAsync(sourceOrigin: PipelineSourceOrigins.ClassicDefinition);
+        var rows = rig.Repo.Rows.Count;
+
+        Assert.Equal("ClassicTriggersNotSupported", await RefusedAsync(rig));
+
+        Assert.Equal(0, rig.Source.Reads);
+        Assert.Equal(rows, rig.Repo.Rows.Count); // nothing was kept
+        // any other origin (or none) is not what is refused
+        var ordinary = await RigAsync(sourceOrigin: "something-else");
+        var derived = await ordinary.Triggers.DeriveAsync(Author, ordinary.Parent.Id, default);
+        Assert.Equal(1, ordinary.Source.Reads);
+        Assert.Equal(ProposalKinds.Triggers, derived.Kind);
     }
 
     private static async Task<string> RefusedAsync(Rig rig, Guid? id = null)

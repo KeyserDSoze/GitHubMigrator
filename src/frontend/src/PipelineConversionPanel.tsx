@@ -207,6 +207,10 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
             <dt>{t('convAttempts')}</dt><dd>{proposal.provenance.attempts.map(a => `${a.number}: ${a.outcome}`).join(' → ')}</dd>
             <dt>{t('convTokens')}</dt><dd>{proposal.provenance.totalPromptTokens} / {proposal.provenance.totalCompletionTokens}</dd>
             <dt>{t('convRedactions')}</dt><dd>{proposal.provenance.redactions.length ? proposal.provenance.redactions.map(r => `${r.kind} × ${r.count}`).join(', ') : t('convNoRedactions')}</dd>
+            {proposal.provenance.sourceOrigin === 'classic-definition' && <><dt>{t('convSource')}</dt><dd>
+              {t('convSourceClassic')}
+              {(proposal.provenance.sourceNotes?.length ?? 0) > 0 && <ul className="conversion-source-notes">{proposal.provenance.sourceNotes!.map((n, i) => <li key={i}>{n}</li>)}</ul>}
+            </dd></>}
             {(proposal.provenance.templates?.length ?? 0) > 0 && <><dt>{t('convTemplatesSent')}</dt><dd>
               {proposal.provenance.templates!.map(f => `${f.repository}:${f.path}${f.ref ? ` @ ${f.ref}` : ''} (${f.bytes} B)`).join('; ')}
             </dd></>}

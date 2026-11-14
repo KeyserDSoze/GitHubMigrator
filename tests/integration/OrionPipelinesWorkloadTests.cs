@@ -65,10 +65,10 @@ public sealed class OrionPipelinesReadByTheProductTests(OrionSimFixture sim) : I
     }
 
     [Fact]
-    public async Task The_converters_yaml_read_returns_the_source_of_every_yaml_pipeline_and_nothing_for_classic_ones()
+    public async Task The_converters_read_returns_the_file_of_every_yaml_pipeline_and_the_rendering_of_a_classic_ones_definition()
     {
         var reader = (IPipelineYamlReader)((IServerAwareWorkloadReader)new AzureDevOpsWorkloadReader(new HttpClient(), Policy)).ForServer(sim.ServerRoot);
-        var read = 0;
+        int read = 0, classic = 0;
         foreach (var pipeline in await ReadAllPipelinesAsync())
         {
             var project = (await sim.GetAsync("/_apis/projects")).GetProperty("value").EnumerateArray()
@@ -76,13 +76,22 @@ public sealed class OrionPipelinesReadByTheProductTests(OrionSimFixture sim) : I
                 .GetProperty("id").GetString()!;
             var yaml = await reader.ReadPipelineYamlAsync("DefaultCollection", project, pipeline.Id, OrionSimFixture.Pat, default);
             Assert.False(yaml.TooLarge);
-            if (pipeline.Kind != "yaml") { Assert.Null(yaml.Content); continue; }
+            if (pipeline.Kind != "yaml")
+            {
+                // a classic pipeline has no file: what is returned is the rendering of its definition, and it says so
+                Assert.Equal(PipelineSourceOrigins.ClassicDefinition, yaml.Origin);
+                Assert.Contains("# Rendered by GitHubMigrator from a classic (designer) build definition.", yaml.Content);
+                classic++;
+                continue;
+            }
+            Assert.Null(yaml.Origin); // a file read from a repository has no origin to name
             Assert.False(string.IsNullOrWhiteSpace(yaml.Content));
             // the very text the preview analysed: same tasks, in the same order
             Assert.Equal(pipeline.Structure!.Tasks, AzureYamlTaskAnalyzer.Analyze(yaml.Content).Tasks);
             read++;
         }
         Assert.Equal(sim.Expected.GetProperty("yamlPipelines").GetInt32(), read);
+        Assert.Equal(sim.Expected.GetProperty("classicPipelines").GetInt32(), classic);
     }
 
     // The estate's own pipelines include templates of their repository and of orion-templates (another project of the organization): they are read through the product's reader from the simulator, with the
@@ -101,7 +110,7 @@ public sealed class OrionPipelinesReadByTheProductTests(OrionSimFixture sim) : I
             {
                 var id = pipeline.GetProperty("id").GetInt32();
                 var yaml = await yamlReader.ReadPipelineYamlAsync("DefaultCollection", projectId, id, OrionSimFixture.Pat, default);
-                if (yaml.Content is null) continue;
+                if (yaml.Content is null || yaml.Origin is not null) continue; // a classic pipeline's text is a rendering, not a file: it includes no templates
                 Assert.False(string.IsNullOrEmpty(yaml.RepositoryId)); // where the pipeline's own file is
                 Assert.False(string.IsNullOrEmpty(yaml.Path));
                 var resolved = await PipelineTemplates.ResolveAsync(yaml.Content, new(projectId, yaml.RepositoryId, yaml.Path), files, "DefaultCollection", OrionSimFixture.Pat, new(), default);
@@ -123,6 +132,37 @@ public sealed class OrionPipelinesReadByTheProductTests(OrionSimFixture sim) : I
         Assert.All(found.Values, r => Assert.Empty(r.Unresolved)); // everything the estate includes is readable
         Assert.All(found.Values.SelectMany(r => r.Files), f => { Assert.False(string.IsNullOrWhiteSpace(f.Text)); Assert.Matches("^[0-9a-f]{64}$", f.Sha256); });
         Assert.Contains(api.Files.SelectMany(f => f.Tasks).Concat(found.Values.SelectMany(r => r.Files).SelectMany(f => f.Tasks)), t => t.Contains('@')); // the templates carry tasks of their own
+    }
+
+    // The estate's one classic (designer) pipeline has no file: the product's reader renders its definition, read from the simulator, with every task named from its id. (The simulator emits the shape the product expects:
+    // Microsoft's reference does not document a classic definition's steps, so that the real service answers the same way is what the live smoke test records.)
+    [Fact]
+    public async Task The_classic_pipeline_of_the_estate_is_rendered_from_its_definition_with_every_task_named_and_its_triggers_only_described()
+    {
+        var reader = (IPipelineYamlReader)((IServerAwareWorkloadReader)new AzureDevOpsWorkloadReader(new HttpClient(), Policy)).ForServer(sim.ServerRoot);
+        PipelineYaml? read = null;
+        foreach (var project in (await sim.GetAsync("/_apis/projects")).GetProperty("value").EnumerateArray())
+        {
+            var projectId = project.GetProperty("id").GetString()!;
+            foreach (var pipeline in (await sim.GetAsync($"/{projectId}/_apis/pipelines")).GetProperty("value").EnumerateArray())
+                if (pipeline.GetProperty("name").GetString() == "orion-legacy Build")
+                    read = await reader.ReadPipelineYamlAsync("DefaultCollection", projectId, pipeline.GetProperty("id").GetInt32(), OrionSimFixture.Pat, default);
+        }
+
+        Assert.NotNull(read);
+        Assert.False(read.TooLarge);
+        Assert.Equal(PipelineSourceOrigins.ClassicDefinition, read.Origin);
+        var text = read.Content!;
+        Assert.Equal(["CopyFiles@2", "NuGetCommand@2", "NuGetToolInstaller@1", "PowerShell@2", "PublishBuildArtifacts@1", "VSBuild@1", "VSTest@2"], GitHubMigrator.Business.WorkflowGates.SourceTaskInventory.From(text).Order(StringComparer.Ordinal));
+        Assert.Contains("name: '$(date:yyyyMMdd)$(rev:.r)'", text);
+        Assert.Contains("pool:\n  name: 'Windows Agents'", text); // a self-hosted pool: the image the simulator also gives is not used
+        Assert.Contains("displayName: 'Use NuGet 6.x'", text);
+        Assert.DoesNotContain("\ntrigger:", text);
+        Assert.DoesNotContain("\nschedules:", text);
+        Assert.Contains(read.Notes!, n => n.StartsWith("Continuous integration trigger, not carried over: branches [+refs/heads/master, +refs/heads/maintenance/2019]") && n.EndsWith("changes are batched"));
+        Assert.Contains(read.Notes!, n => n.StartsWith("Schedule, not carried over: Mon,Tue,Wed,Thu,Fri at 02:00 (UTC), only when there are changes"));
+        Assert.Contains(read.Notes!, n => n.Contains("secret") && n.Contains("variable(s)"));
+        Assert.DoesNotContain("DeployPassword\n  value", text);
     }
 
     [Fact]

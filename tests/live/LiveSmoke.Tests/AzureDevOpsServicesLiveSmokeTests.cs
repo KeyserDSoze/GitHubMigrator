@@ -360,6 +360,19 @@ public sealed class AzureDevOpsServicesLiveSmokeTests(LiveReport report, ITestOu
         }
         var phase = phases[0];
         report.Record("ado-services", "classic-phases-shape", "info", $"{phases.GetArrayLength()} phase(s); a phase's keys: " + Keys(phase));
+        // the places the converter reads besides the steps themselves (key names only): where a phase says which pool and demands it runs on, the process-level agent specification, what a phase depends on, and what
+        // "Get sources" keeps in the repository's properties
+        if (phase.TryGetProperty("target", out var phaseTarget) && phaseTarget.ValueKind == JsonValueKind.Object)
+            report.Record("ado-services", "classic-phase-target-shape", "info", "keys: " + Keys(phaseTarget) + (phaseTarget.TryGetProperty("type", out var targetType) ? $"; type={targetType}" : "") +
+                (phaseTarget.TryGetProperty("queue", out var targetQueue) && targetQueue.ValueKind == JsonValueKind.Object ? "; queue keys: " + Keys(targetQueue) : "") +
+                (phaseTarget.TryGetProperty("agentSpecification", out var targetSpec) && targetSpec.ValueKind == JsonValueKind.Object ? "; agentSpecification keys: " + Keys(targetSpec) : ""));
+        if (process.TryGetProperty("target", out var processTarget) && processTarget.ValueKind == JsonValueKind.Object)
+            report.Record("ado-services", "classic-process-target-shape", "info", "keys: " + Keys(processTarget) +
+                (processTarget.TryGetProperty("agentSpecification", out var processSpec) && processSpec.ValueKind == JsonValueKind.Object ? "; agentSpecification keys: " + Keys(processSpec) : ""));
+        if (phase.TryGetProperty("dependencies", out var dependencies) && dependencies.ValueKind == JsonValueKind.Array)
+            report.Record("ado-services", "classic-phase-dependencies-shape", "info", $"{dependencies.GetArrayLength()} dependenc(ies); an item's keys: " + (dependencies.GetArrayLength() > 0 ? Keys(dependencies[0]) : "none"));
+        if (root.TryGetProperty("repository", out var repository) && repository.TryGetProperty("properties", out var repositoryProperties) && repositoryProperties.ValueKind == JsonValueKind.Object)
+            report.Record("ado-services", "classic-repository-properties-shape", "info", "property names: " + string.Join(",", repositoryProperties.EnumerateObject().Select(p => p.Name).Order().Take(20)));
         if (!phase.TryGetProperty("steps", out var steps) || steps.ValueKind != JsonValueKind.Array || steps.GetArrayLength() == 0)
         {
             report.Record("ado-services", "classic-steps-shape", "differs", "the first phase has no `steps` array.");

@@ -83,6 +83,9 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
     protected virtual string OperatorRunnerLabels => "";
     // files the Azure stub serves besides the pipeline itself (templates), keyed "project|repository|/path"
     protected virtual IReadOnlyDictionary<string, string> AzureTemplateFiles => new Dictionary<string, string>();
+    // set to make pipeline 42 a classic (designer) one: its build definition JSON, and the project's service connections
+    protected virtual string? AzureClassicDefinition => null;
+    protected virtual string AzureClassicEndpoints => """{"value":[]}""";
 
     protected static string Fenced(string yaml) => "```yaml\n" + yaml + "\n```\n\nNotes: nothing else.";
 
@@ -94,7 +97,7 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
         if (githubSim) { GitHub = new GhSimFixture(); await GitHub.InitializeAsync(); }
         Api = new ApiHarness
         {
-            LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin, AzureYamlPrefix = AzureYaml, OperatorRunnerLabels = OperatorRunnerLabels, AzureTemplateFiles = AzureTemplateFiles,
+            LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin, AzureYamlPrefix = AzureYaml, OperatorRunnerLabels = OperatorRunnerLabels, AzureTemplateFiles = AzureTemplateFiles, AzureClassicDefinition = AzureClassicDefinition, AzureClassicEndpoints = AzureClassicEndpoints,
             Publication = publication ? (PublicationAppId, PublicationAppId + 1, PublicationKeyReference, PublicationRepositories) : null
         };
         await Api.InitializeAsync();

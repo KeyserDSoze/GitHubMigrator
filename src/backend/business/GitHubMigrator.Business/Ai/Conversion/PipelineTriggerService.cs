@@ -20,6 +20,8 @@ public sealed class PipelineTriggerService(WorkflowProposalService proposals, IC
         // only an approved, intact conversion is a parent: what a person approved is what the triggers are added to
         var (approved, parent, _) = await proposals.RequireApprovedWithRecordAsync(parentId, ct);
         if (parent.Kind != ProposalKinds.Conversion) throw new TriggerDerivationException("ParentIsNotAConversion");
+        // a classic pipeline's triggers are only described in the rendering of its definition: what Azure means by its filters (no branch filter, settings taken from the definition) is not verified, so they are never turned into `on:`
+        if (parent.Evidence.Provenance?.SourceOrigin == PipelineSourceOrigins.ClassicDefinition) throw new TriggerDerivationException("ClassicTriggersNotSupported");
 
         var connection = await connections.GetAsync(parent.SourceConnectionId, ct) ?? throw new TriggerDerivationException("SourceNotFound");
         if (connection.Direction != ConnectionDirection.Source || !ProviderKeys.IsAzureDevOpsSource(connection.ProviderKey)) throw new TriggerDerivationException("UnsupportedSource");

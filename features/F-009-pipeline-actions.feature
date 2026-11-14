@@ -198,3 +198,14 @@ Feature: Convert pipelines to reviewed GitHub Actions
     And a task only a template uses has to be accounted for by the real gates, and approving and deriving the triggers gate the kept text against the same tasks
     And the proposal keeps the repository, path, ref, hash and size of each template sent and never its text, and lists what was not sent with a reason
     And a computed path, a path that leaves the repository, a repository of another type, a file that cannot be read and one that cannot be redacted are reported and never read or sent
+
+  Scenario: A classic (designer) pipeline is converted from a rendering of its definition, with its tasks named, nothing secret sent and its triggers only described
+    Given a classic build pipeline with a self-hosted queue, a service connection named by id in a step input, an input called password and a trigger and a schedule, and a source connection with consent to send source
+    When it is converted
+    Then the model is told it reads a rendering of a classic definition and not a YAML file, and receives each step as a task with its name and version, the service connection by its name, and nothing of the password input, the secret variables or the secrets in the text
+    And no file is read from any repository, a task the product cannot name is shown by its id and has to be accounted for as manual, and a task only the definition has has to be accounted for by the real gates
+    And the proposal keeps that its source was a classic definition and the notes of what the rendering could not carry over, the triggers and the schedule among them
+    And the pull request description says the source was a classic definition
+    And deriving the Azure triggers is refused with a reason and reads nothing, so the workflow stays manual
+    And a definition that is not a designer one, or that cannot be read, is refused as a classic pipeline always was and nothing is sent
+

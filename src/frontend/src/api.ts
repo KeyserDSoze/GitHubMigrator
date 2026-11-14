@@ -534,6 +534,9 @@ export type ConversionProposal = {
     // the templates the pipeline includes that were read and sent with it (names, sizes and hashes, never their text), and the ones that were not, with a reason; older answers have neither
     templates?: { repository: string; path: string; ref: string | null; sha256: string; bytes: number }[];
     unresolvedTemplates?: { reference: string; reason: string }[];
+    // where the source text came from when it was not a file: 'classic-definition' is the product's rendering of a classic (designer) definition, with what the rendering could not carry over
+    sourceOrigin?: string | null;
+    sourceNotes?: string[];
   } | null;
 };
 export type ProposalState = 'Proposed' | 'Blocked' | 'Approved' | 'Rejected' | 'Revoked';

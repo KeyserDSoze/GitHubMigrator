@@ -57,7 +57,9 @@ public sealed class PipelineConversionService(
         }
 
         string? yaml = null, rootRepository = null, rootPath = null;
-        if (pipeline.Kind == "yaml")
+        SourceOrigin? origin = null;
+        // a YAML pipeline is read from its file; a classic one is rendered from its definition by the same reader (nothing at all for what is neither); a source that cannot read either is refused as before
+        if (pipeline.Kind == "yaml" || reader is IPipelineYamlReader)
         {
             var yamlReader = reader as IPipelineYamlReader ?? throw new WorkloadInputException("UnsupportedSource");
             var read = await yamlReader.ReadPipelineYamlAsync(connection.Organization, projectId, pipelineId, token, ct);
@@ -65,15 +67,16 @@ public sealed class PipelineConversionService(
             yaml = read.Content;
             rootRepository = read.RepositoryId;
             rootPath = read.Path;
+            if (read.Origin is { Length: > 0 } kind) origin = new(kind, read.Notes ?? []);
         }
         // the templates the pipeline includes are source too: read only when the person asked, after the consent above, from this organization, redacted, within what the model may be sent
         ResolvedTemplates? templates = null;
-        if (options.IncludeTemplates && yaml is not null)
+        if (options.IncludeTemplates && yaml is not null && origin is null)
         {
             var budget = Math.Max(0, Math.Min(SourceRedactor.DefaultMaxBytes, Math.Max(1_000, use.Endpoint.MaxInputBytes / 2)) - yaml.Length);
             templates = await PipelineTemplates.ResolveAsync(yaml, new(projectId, rootRepository, rootPath), reader as IRepositoryFileReader, connection.Organization, token,
                 new TemplateLimits(MaxTotalBytes: budget), ct);
         }
-        return await converter.ConvertAsync(use, pipeline, yaml, options, ct, templates);
+        return await converter.ConvertAsync(use, pipeline, yaml, options, ct, templates, origin);
     }
 }

@@ -158,6 +158,7 @@ public static partial class WorkflowPublicationPlanner
         if (replacesSha256 is not null) sb.AppendLine($"| Replaces | the workflow at this path approved earlier, SHA-256 `{replacesSha256}` |");
         if (approval is not null) sb.AppendLine($"| Approved by | `{Plain(approval.Actor, 60)}` on {approval.OccurredAtUtc:yyyy-MM-dd HH:mm} UTC |");
         sb.AppendLine($"| Proposed by | `{Plain(proposal.CreatedBy, 60)}` on {proposal.CreatedAtUtc:yyyy-MM-dd HH:mm} UTC |");
+        if (p?.SourceOrigin == PipelineSourceOrigins.ClassicDefinition) sb.AppendLine("| Source | a **classic (designer) build definition**, rendered as text by this product: there was no YAML file to read |");
         if (p is not null) sb.AppendLine($"| Model | `{Plain(p.Model, 60)}` via `{Plain(p.Host, 80)}` |");
         if (p is not null) sb.AppendLine($"| Checked with | gate policy {Plain(p.PolicyVersion, 20)}, action pins verified {Plain(p.ActionCatalogVerifiedOn, 12)}, actionlint and zizmor |");
         sb.AppendLine();

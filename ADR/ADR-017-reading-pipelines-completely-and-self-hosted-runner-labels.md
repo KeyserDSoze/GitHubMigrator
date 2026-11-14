@@ -40,4 +40,6 @@ Consequences:
 Alternatives considered: letting the model name labels (rejected: it would be choosing what the gate accepts); labels from pool *names* (rejected: a pool name is Azure's concept and mapping it to a label is a decision for
 whoever owns the runners); an operator-configured global list (done in [ADR-022](ADR-022-extra-runner-labels-from-the-operator-and-the-person.md), together with labels given for one conversion); ignoring actionlint's `runner-label` kind through policy (rejected: it would accept any label).
 
+Update (ADR-024, 0.12.0): a classic (designer) pipeline, which was refused, is now converted from a rendering of its definition; the task inventory of this ADR counts the `task:` lines of that rendering like any other.
+
 Update (ADR-023, 0.11.0): the files a `template:` points at can now be read and sent with the pipeline, only when a person asks per conversion; what this ADR counts and reports is unchanged, and without that choice the model is still told it cannot see them.

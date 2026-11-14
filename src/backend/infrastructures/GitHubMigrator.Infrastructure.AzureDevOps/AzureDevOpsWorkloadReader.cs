@@ -99,7 +99,7 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client, ServerEndpointP
         var root = $"{Collection(organization)}/{Uri.EscapeDataString(projectId)}";
         using var pipe = await GetAsync($"{root}/_apis/pipelines/{pipelineId}?api-version={Api}", token, ct);
         var configuration = Property(pipe.RootElement, "configuration");
-        if ((Text(configuration, "type") ?? "unknown") != "yaml") return new(null, false);
+        if ((Text(configuration, "type") ?? "unknown") != "yaml") return await ReadClassicAsync(organization, root, pipelineId, token, ct);
         var path = Text(configuration, "path");
         var repo = Text(Property(configuration, "repository"), "id");
         if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(repo))
@@ -118,6 +118,62 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client, ServerEndpointP
             return raw.Length > MaxPipelineYamlChars ? new(null, true, repo, path) : new(raw, false, repo, path);
         }
         catch (HttpRequestException) { return new(null, false, repo, path); }
+    }
+
+    // A classic (designer) build pipeline has no file: its source is the definition. It is read with GET and rendered as text by ClassicPipelineRenderer, so the conversion works on text like for any other pipeline.
+    // What the definition only holds by id is asked of the organization, best effort (a refusal just leaves the id in the text): the service connections its inputs name, and, for tasks the built-in table does not
+    // know, the organization's task catalogue (an internal endpoint Microsoft does not document, so it is only a fallback, never relied on). At most 3 requests plus one per unknown task, MaxLookups at most.
+    private async Task<PipelineYaml> ReadClassicAsync(string organization, string root, int pipelineId, string token, CancellationToken ct)
+    {
+        JsonDocument definition;
+        try { definition = await GetAsync($"{root}/_apis/build/definitions/{pipelineId}?api-version={Api}", token, ct); }
+        catch (HttpRequestException) { return new(null, false); }
+        using (definition)
+        {
+            if (!ClassicPipelineRenderer.IsDesigner(definition.RootElement)) return new(null, false);
+
+            var endpointNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using var endpoints = await GetAsync($"{root}/_apis/serviceendpoint/endpoints?api-version={Api}", token, ct);
+                foreach (var endpoint in Items(endpoints))
+                    if (ClassicTaskCatalog.NormalizeId(Text(endpoint, "id")) is { } id && Text(endpoint, "name") is { Length: > 0 } name) endpointNames[id] = name;
+            }
+            catch (HttpRequestException) { /* the ids stay in the text */ }
+
+            var taskNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var id in ClassicPipelineRenderer.TaskIdsToLookUp(definition.RootElement))
+                try
+                {
+                    using var task = await GetAsync($"{Collection(organization)}/_apis/distributedtask/tasks/{id}?api-version={Api}", token, ct);
+                    if (TaskName(task.RootElement) is { } name) taskNames[id] = name;
+                }
+                catch (HttpRequestException) { /* the id stays in the text */ }
+
+            var rendering = ClassicPipelineRenderer.Render(definition.RootElement, new(endpointNames, taskNames));
+            if (rendering is null) return new(null, false);
+            var repository = Text(Property(definition.RootElement, "repository"), "id");
+            return rendering.TooLarge
+                ? new(null, true, repository, null, PipelineSourceOrigins.ClassicDefinition, rendering.Notes)
+                : new(rendering.Text, false, repository, null, PipelineSourceOrigins.ClassicDefinition, rendering.Notes);
+        }
+    }
+
+    // The name of a task from the catalogue's answer: a list of its versions (as `value` or as the array itself) or one definition; the newest version's name.
+    private static string? TaskName(JsonElement answer)
+    {
+        var items = answer.ValueKind == JsonValueKind.Array ? answer : Property(answer, "value");
+        if (items.ValueKind != JsonValueKind.Array) return Text(answer, "name");
+        string? best = null;
+        var bestMajor = -1;
+        foreach (var item in items.EnumerateArray().Take(100))
+        {
+            if (Text(item, "name") is not { Length: > 0 } name) continue;
+            var major = Property(Property(item, "version"), "major");
+            var value = major.ValueKind == JsonValueKind.Number && major.TryGetInt32(out var parsed) ? parsed : 0;
+            if (value >= bestMajor) { best = name; bestMajor = value; }
+        }
+        return best;
     }
 
     // One file of one repository (a template the pipeline includes), GET only, in the organization of the connection. The project, repository and path were validated as plain names by the caller and are

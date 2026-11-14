@@ -64,12 +64,12 @@ public sealed class WorkflowProposalServiceTests
 
     internal static readonly ConversionPlan Plan = new([new("NUGET_API_KEY", "pipeline variable")], [], [], []);
 
-    internal static async Task<ConversionProposal> ConvertedAsync(string yaml, bool analysers = true)
+    internal static async Task<ConversionProposal> ConvertedAsync(string yaml, bool analysers = true, string? sourceOrigin = null)
     {
         var report = await Analysers(analysers).Create(WorkflowGatePolicy.Default).RunAsync(yaml, Plan.ToGateContextFor(["UseDotNet@2"]), default);
         var provenance = new ConversionProvenance(AiId, "OpenAICompatible", "llm.corp.example", "gpt-x", "gpt-x-2025", new string('a', 64), Plan.Sha256,
             WorkflowGatePolicy.Default.Version, "2026-11-13", [new("SENSITIVE_LITERAL", 2)], 100, 50,
-            [new(1, report.Approvable ? "GatesPassed" : "Blocked", 100, 50, report.WorkflowSha256, [])], Now);
+            [new(1, report.Approvable ? "GatesPassed" : "Blocked", 100, 50, report.WorkflowSha256, [])], Now, SourceOrigin: sourceOrigin, SourceNotes: sourceOrigin is null ? null : ["A note"]);
         return new(report.Approvable ? ConversionStatus.ReadyForReview : ConversionStatus.Blocked, report.Approvable ? null : "GatesBlocked", yaml,
             report.WorkflowSha256, "Triggers are not converted.", report, Plan, provenance) { SourceTasks = ["UseDotNet@2"], PipelineName = "Orion API CI/CD" };
     }

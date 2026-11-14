@@ -106,7 +106,8 @@ public sealed record AttemptResponse(int Number, string Outcome, int? PromptToke
 public sealed record ProvenanceResponse(Guid AiConnectionId, string Provider, string Host, string Model, string? ReportedModel, string PromptSha256,
     string PlanSha256, string PolicyVersion, string ActionCatalogVerifiedOn, IReadOnlyList<RedactionSummary> Redactions,
     int TotalPromptTokens, int TotalCompletionTokens, IReadOnlyList<AttemptResponse> Attempts, DateTimeOffset GeneratedAtUtc,
-    IReadOnlyList<TemplateProvenance> Templates, IReadOnlyList<UnresolvedTemplate> UnresolvedTemplates);
+    IReadOnlyList<TemplateProvenance> Templates, IReadOnlyList<UnresolvedTemplate> UnresolvedTemplates,
+    string? SourceOrigin, IReadOnlyList<string> SourceNotes);
 
 // Never carries the source YAML, only the proposed workflow, the evidence and a statement of what this is not.
 // Saved means the proposal was kept and can be reviewed (ProposalId); it never means approved or published.
@@ -131,5 +132,5 @@ public static class ConversionMapping
     public static ProvenanceResponse? Provenance(ConversionProvenance? p) => p is null ? null : new(p.AiConnectionId, p.Provider, p.Host, p.Model, p.ReportedModel,
         p.PromptSha256, p.PlanSha256, p.PolicyVersion, p.ActionCatalogVerifiedOn, p.Redactions, p.TotalPromptTokens, p.TotalCompletionTokens,
         p.Attempts.Select(a => new AttemptResponse(a.Number, a.Outcome, a.PromptTokens, a.CompletionTokens, a.WorkflowSha256, a.BlockerCodes)).ToArray(), p.GeneratedAtUtc,
-        p.Templates ?? [], p.UnresolvedTemplates ?? []);
+        p.Templates ?? [], p.UnresolvedTemplates ?? [], p.SourceOrigin, p.SourceNotes ?? []);
 }

@@ -32,10 +32,12 @@ public sealed class PipelineYamlReaderTests
     }
 
     [Fact]
-    public async Task A_classic_pipeline_or_a_missing_file_gives_nothing_and_an_oversized_file_is_refused_not_cut()
+    public async Task A_classic_pipeline_whose_definition_cannot_be_read_or_a_missing_file_gives_nothing_and_an_oversized_file_is_refused_not_cut()
     {
-        var classic = await Reader(new StubHandler().Then(() => Pipeline("designerJson"))).ReadPipelineYamlAsync("o", "p", 1, "pat", default);
+        // a classic pipeline's source is its definition (see AzureClassicPipelineReaderTests); when that cannot be read there is nothing to give
+        var classic = await Reader(new StubHandler().Then(() => Pipeline("designerJson")).Then(() => new HttpResponseMessage(HttpStatusCode.NotFound))).ReadPipelineYamlAsync("o", "p", 1, "pat", default);
         Assert.Null(classic.Content);
+        Assert.Null(classic.Origin);
 
         var missing = await Reader(new StubHandler().Then(() => Pipeline()).Then(() => new HttpResponseMessage(HttpStatusCode.NotFound)))
             .ReadPipelineYamlAsync("o", "p", 1, "pat", default);

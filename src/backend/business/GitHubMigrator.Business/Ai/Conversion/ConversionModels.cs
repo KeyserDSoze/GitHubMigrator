@@ -18,7 +18,11 @@ public sealed record ConversionProvenance(Guid AiConnectionId, string Provider, 
     string PromptSha256, string PlanSha256, string PolicyVersion, string ActionCatalogVerifiedOn,
     IReadOnlyList<RedactionSummary> Redactions, int TotalPromptTokens, int TotalCompletionTokens,
     IReadOnlyList<ConversionAttempt> Attempts, DateTimeOffset GeneratedAtUtc,
-    IReadOnlyList<TemplateProvenance>? Templates = null, IReadOnlyList<UnresolvedTemplate>? UnresolvedTemplates = null);
+    IReadOnlyList<TemplateProvenance>? Templates = null, IReadOnlyList<UnresolvedTemplate>? UnresolvedTemplates = null,
+    string? SourceOrigin = null, IReadOnlyList<string>? SourceNotes = null);
+
+// Where the source text comes from when it is not a file read from a repository (see PipelineSourceOrigins), with what its rendering could not carry over.
+public sealed record SourceOrigin(string Kind, IReadOnlyList<string> Notes);
 
 public sealed record ConversionProposal(ConversionStatus Status, string? Reason, string? WorkflowYaml, string? WorkflowSha256,
     string? ModelNotes, WorkflowGateReport? Gates, ConversionPlan Plan, ConversionProvenance? Provenance)

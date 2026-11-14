@@ -24,6 +24,7 @@ export default function ProposalReview({ token, detail, onChanged, destinations,
   const [translateConcurrency, setTranslateConcurrency] = useState(true);
   const [deriveError, setDeriveError] = useState('');
 
+  const classic = detail.provenance?.sourceOrigin === 'classic-definition';
   const seen = new Map(detail.findings.filter(f => f.severity === 'Warning').map(f => [f.code, f.message]));
   const required = [...new Set([...seen.keys(), ...late])];
   const allAccepted = required.every(code => ack.has(code));
@@ -100,7 +101,11 @@ export default function ProposalReview({ token, detail, onChanged, destinations,
     {detail.state === 'Approved' && <>
       <PublicationPlanPanel token={token} proposalId={detail.id} destinations={destinations} defaultDestinationId={defaultDestinationId} defaultRepository={defaultRepository} isSuperAdmin={isSuperAdmin} />
       <p className="connection-hint">{t('reviewApprovedHint')}</p>
-      {!triggers && onDerived && <div className="proposal-triggers" aria-label={t('trigDeriveTitle')}>
+      {!triggers && classic && <div className="proposal-triggers" aria-label={t('trigDeriveTitle')}>
+        <h5><Workflow size={14} /> {t('trigDeriveTitle')}</h5>
+        <p className="connection-hint">{t('trigClassicHint')}</p>
+      </div>}
+      {!triggers && !classic && onDerived && <div className="proposal-triggers" aria-label={t('trigDeriveTitle')}>
         <h5><Workflow size={14} /> {t('trigDeriveTitle')}</h5>
         <p className="connection-hint">{t('trigDeriveHint')}</p>
         {deriveError && <div className="alert" role="alert">{deriveError}</div>}

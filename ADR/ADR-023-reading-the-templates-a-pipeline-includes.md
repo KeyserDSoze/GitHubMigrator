@@ -49,3 +49,5 @@ Alternatives considered: always reading templates (rejected: widens what is sent
 template language and its expressions, which the product does not do and which is where subtle mistakes live); resolving `type: github` repositories (rejected for now: a different credential and consent, and the
 source's own GitHub connection is not the Azure one); one concatenated source text (rejected: one redaction and one limit for different files, and the model could not tell where a file ended); sending a
 template's text back into the stored proposal (rejected: only names and hashes are needed to say what was sent, and the text would be a second copy of source to protect).
+
+Update (ADR-024, 0.12.0): the option is ignored for a classic pipeline, whose text is a rendering and has no `template:` to read; an input that happens to be called `template` is not one.
