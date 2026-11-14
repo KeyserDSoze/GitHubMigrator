@@ -113,6 +113,57 @@ public sealed class WorkflowPublicationUpdateApiTests : PublicationApiTestBase
     }
 
     [RequiresAnalysersFact]
+    public async Task The_conversions_pull_request_blocks_the_triggers_plan_while_it_is_open_and_the_plan_follows_what_happens_to_it()
+    {
+        await RegisterAppAsync();
+        var conversion = await ApprovedAsync();
+        await RepoAsync(Repo);
+        var (published, parentPull) = await PublishAsync(conversion, Repo, await ReadyPlanHashAsync(conversion, Repo));
+        Assert.Equal(HttpStatusCode.OK, published);
+        var number = parentPull.GetProperty("pullNumber").GetInt32();
+        var triggers = await ApprovedTriggersAsync(conversion);
+        await GitHub!.SendAsync("DELETE", "/_sim/requests");
+
+        // still open: the file is not on the base branch, so the path looks free, but the same file added on another branch would conflict with the open pull request
+        var (_, blocked) = await PlanAsync(triggers, Repo);
+        Assert.False(blocked.GetProperty("ready").GetBoolean());
+        var finding = blocked.GetProperty("findings").EnumerateArray().Single(f => f.GetProperty("code").GetString() == "EarlierPullRequestOpen");
+        Assert.Equal("Blocker", finding.GetProperty("severity").GetString());
+        Assert.Contains($"#{number}", finding.GetProperty("message").GetString());
+        Assert.Contains("The conversion this proposal was derived from", finding.GetProperty("message").GetString());
+        Assert.Equal("Create", blocked.GetProperty("mode").GetString());
+
+        // the product refuses to publish it, and writes nothing
+        var (status, refusal) = await PublishAsync(triggers, Repo, blocked.GetProperty("planSha256").GetString());
+        Assert.Equal((HttpStatusCode.Conflict, "PublicationPlanNotReady"), (status, refusal.GetProperty("error").GetString()));
+        Assert.Contains("EarlierPullRequestOpen", refusal.GetProperty("details").EnumerateArray().Select(e => e.GetString()));
+        Assert.Empty(await WritesAsync(Repo));
+        Assert.Empty(await RowsAsync(triggers));
+
+        // closed without merging: nothing of it is on the base branch, nothing conflicts, the path is free
+        await GitHub.SendAsync("PATCH", $"/repos/orion-org/{Repo}/pulls/{number}", new { state = "closed" });
+        var (_, closed) = await PlanAsync(triggers, Repo);
+        Assert.True(closed.GetProperty("ready").GetBoolean(), closed.ToString());
+        Assert.DoesNotContain("EarlierPullRequestOpen", Codes(closed));
+        Assert.Equal("Create", closed.GetProperty("mode").GetString());
+
+        // reopened: blocked again; the plan follows the destination, not a note made once
+        await GitHub.SendAsync("PATCH", $"/repos/orion-org/{Repo}/pulls/{number}", new { state = "open" });
+        var (_, reopened) = await PlanAsync(triggers, Repo);
+        Assert.False(reopened.GetProperty("ready").GetBoolean());
+        Assert.Contains("EarlierPullRequestOpen", Codes(reopened));
+
+        // merged: the file is on the base branch exactly as approved, so the triggers replace it, and nothing stands in the way
+        await GitHub.SendAsync("PUT", $"/repos/orion-org/{Repo}/pulls/{number}/merge", new { merge_method = "squash" });
+        await GitHub.SendAsync("DELETE", "/_sim/requests"); // what a person did is not the product's: from here on only planning is measured
+        var (_, merged) = await PlanAsync(triggers, Repo);
+        Assert.True(merged.GetProperty("ready").GetBoolean(), merged.ToString());
+        Assert.Equal("Update", merged.GetProperty("mode").GetString());
+        Assert.DoesNotContain("EarlierPullRequestOpen", Codes(merged));
+        Assert.Empty(await WritesAsync(Repo)); // planning only ever read
+    }
+
+    [RequiresAnalysersFact]
     public async Task A_workflow_somebody_edited_after_it_was_merged_is_theirs_and_is_not_replaced()
     {
         var (conversion, oldText, oldBlob) = await PublishedAndMergedAsync();
@@ -206,6 +257,15 @@ public sealed class WorkflowPublicationUpdateApiTests : PublicationApiTestBase
         return (response.StatusCode, text.Length == 0 ? default : JsonDocument.Parse(text).RootElement.Clone());
     }
 
+    private async Task<(HttpStatusCode Status, JsonElement Body)> ReleaseAsync(JsonElement proposal, Guid publication, Who who = Who.Superadmin, string? note = "Removed what was left by hand.", Guid? destination = null)
+    {
+        using var response = await SendAsync(HttpMethod.Post, Url(proposal, $"/publications/{publication}/release"), who, new { destinationConnectionId = destination ?? Api.DestinationConnectionId, note });
+        var text = await response.Content.ReadAsStringAsync();
+        return (response.StatusCode, text.Length == 0 ? default : JsonDocument.Parse(text).RootElement.Clone());
+    }
+
+    private static string[] Details(JsonElement body) => body.GetProperty("details").EnumerateArray().Select(e => e.GetString()!).Order(StringComparer.Ordinal).ToArray();
+
     private async Task<(JsonElement Conversion, JsonElement Published, string Repo)> PublishedConversionAsync(string repo)
     {
         await RegisterAppAsync();
@@ -292,8 +352,16 @@ public sealed class WorkflowPublicationUpdateApiTests : PublicationApiTestBase
         var (_, clean) = await ReconcileAsync(conversion, id);
         Assert.Equal("NothingFound", clean.GetProperty("verdict").GetString());
         Assert.Contains("LedgerStillBlocksPlan", Codes(clean));
+        // the destination looks free, but the ledger keeps this exact plan blocked: the plan says so, with the hash unchanged, and publishing is refused before anything is written
+        var (_, blockedPlan) = await PlanAsync(conversion, repo);
+        Assert.False(blockedPlan.GetProperty("ready").GetBoolean());
+        Assert.Equal(planHash, blockedPlan.GetProperty("planSha256").GetString());
+        Assert.Contains("AttemptBlocksPlan", Codes(blockedPlan));
+        var writesBefore = (await WritesAsync(repo)).Length;
         var (again, refusal) = await PublishAsync(conversion, repo, planHash);
-        Assert.Equal((HttpStatusCode.Conflict, "PublicationAlreadyAttempted"), (again, refusal.GetProperty("error").GetString())); // what the finding says
+        Assert.Equal((HttpStatusCode.Conflict, "PublicationPlanNotReady"), (again, refusal.GetProperty("error").GetString()));
+        Assert.Contains("AttemptBlocksPlan", refusal.GetProperty("details").EnumerateArray().Select(e => e.GetString()));
+        Assert.Equal(writesBefore, (await WritesAsync(repo)).Length);
 
         // "once the base moves": any commit on the base makes another plan, with another hash, and that one is not blocked
         await GitHub.SendAsync("PUT", $"/repos/orion-org/{repo}/contents/CHANGES.md", new { message = "move the base", content = B64("# changes\n") });
@@ -304,6 +372,210 @@ public sealed class WorkflowPublicationUpdateApiTests : PublicationApiTestBase
         Assert.Equal(HttpStatusCode.OK, retried);
         Assert.Equal("Published", second.GetProperty("state").GetString());
         Assert.Equal(2, (await RowsAsync(conversion)).Count); // the failed attempt stays on record next to the one that worked
+    }
+
+    // (the external endpoints allow a user twelve calls a minute: the two halves of this story are two tests so each stays inside it)
+    [RequiresAnalysersFact]
+    public async Task Releasing_is_for_a_superadmin_with_a_note_for_the_right_attempt_and_destination_and_refuses_what_is_still_there_or_cannot_be_read()
+    {
+        await RegisterAppAsync();
+        var conversion = await ApprovedAsync();
+        var repo = await RepoAsync("pub-rel");
+        var planHash = await ReadyPlanHashAsync(conversion, repo);
+        await GitHub!.SendAsync("POST", "/_sim/faults", new { pathRegex = @"/contents/\.github/workflows/", method = "PUT", status = 500, message = "boom" });
+        var (failedStatus, failure) = await PublishAsync(conversion, repo, planHash);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, failedStatus);
+        var id = failure.GetProperty("publication").GetProperty("id").GetGuid();
+        await GitHub.SendAsync("DELETE", "/_sim/faults");
+
+        // who: only a superadmin; and a note is part of it
+        Assert.Equal(HttpStatusCode.Unauthorized, (await ReleaseAsync(conversion, id, Who.Anonymous)).Status);
+        Assert.Equal(HttpStatusCode.Forbidden, (await ReleaseAsync(conversion, id, Who.User)).Status);
+        Assert.Equal(HttpStatusCode.Forbidden, (await ReleaseAsync(conversion, id, Who.Admin)).Status);
+        foreach (var note in new string?[] { null, "ok" })
+        {
+            var (noNote, noteBody) = await ReleaseAsync(conversion, id, note: note);
+            Assert.Equal((HttpStatusCode.BadRequest, "NoteRequired"), (noNote, noteBody.GetProperty("error").GetString()));
+        }
+        // the right attempt and the right destination
+        Assert.Equal(HttpStatusCode.NotFound, (await ReleaseAsync(conversion, Guid.NewGuid())).Status);
+        Assert.Equal(HttpStatusCode.NotFound, (await ReleaseAsync(await ApprovedAsync(), id)).Status);
+        var (source, sourceBody) = await ReleaseAsync(conversion, id, destination: Api.SourceConnectionId);
+        Assert.Equal((HttpStatusCode.BadRequest, "UnsupportedDestination"), (source, sourceBody.GetProperty("error").GetString()));
+        Assert.Equal(HttpStatusCode.BadRequest, (await ReleaseAsync(conversion, id, destination: Guid.NewGuid())).Status);
+
+        // the branch the attempt created is still there: the product sees it and refuses, and marks nothing
+        var (leftover, refused) = await ReleaseAsync(conversion, id);
+        Assert.Equal(HttpStatusCode.Conflict, leftover);
+        Assert.Equal("PublicationLeftoversExist", refused.GetProperty("error").GetString());
+        Assert.Equal(["BranchExists"], Details(refused));
+        Assert.True(refused.GetProperty("publication").GetProperty("blocksItsPlan").GetBoolean());
+        Assert.Null((await RowsAsync(conversion)).Single().ReleasedAtUtc);
+
+        // the destination cannot be read: that is not a clean destination
+        await GitHub.SendAsync("POST", "/_sim/faults", new { pathRegex = @"/repos/orion-org/pub-rel$", method = "GET", status = 500, message = "down" });
+        var (unreadable, unreadableBody) = await ReleaseAsync(conversion, id);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, unreadable);
+        Assert.Equal("DestinationUnreadable", unreadableBody.GetProperty("error").GetString());
+        await GitHub.SendAsync("DELETE", "/_sim/faults");
+        Assert.Null((await RowsAsync(conversion)).Single().ReleasedAtUtc);
+    }
+
+    [RequiresAnalysersFact]
+    public async Task A_superadmin_releases_an_attempt_after_the_product_has_looked_at_the_destination_and_then_the_same_plan_goes_through()
+    {
+        await RegisterAppAsync();
+        var conversion = await ApprovedAsync();
+        var repo = await RepoAsync("pub-rel");
+        var planHash = await ReadyPlanHashAsync(conversion, repo);
+        await GitHub!.SendAsync("POST", "/_sim/faults", new { pathRegex = @"/contents/\.github/workflows/", method = "PUT", status = 500, message = "boom" });
+        var (failedStatus, failure) = await PublishAsync(conversion, repo, planHash);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, failedStatus);
+        var id = failure.GetProperty("publication").GetProperty("id").GetGuid();
+        var head = failure.GetProperty("publication").GetProperty("headBranch").GetString()!;
+        await GitHub.SendAsync("DELETE", "/_sim/faults");
+
+        // a person removes the branch: the plan still cannot be published, and says why
+        await GitHub.SendAsync("DELETE", $"/repos/orion-org/{repo}/git/refs/heads/{head}");
+        var (_, blockedPlan) = await PlanAsync(conversion, repo);
+        Assert.False(blockedPlan.GetProperty("ready").GetBoolean());
+        Assert.Equal(["AttemptBlocksPlan"], blockedPlan.GetProperty("findings").EnumerateArray().Where(f => f.GetProperty("severity").GetString() == "Blocker").Select(f => f.GetProperty("code").GetString()));
+        Assert.Equal(planHash, blockedPlan.GetProperty("planSha256").GetString());
+
+        // the release: the product reads again (GET only) and the attempt is marked, not changed
+        await GitHub.SendAsync("DELETE", "/_sim/requests");
+        var (released, body) = await ReleaseAsync(conversion, id, note: "  The branch was deleted from the web page.  ");
+        Assert.Equal(HttpStatusCode.OK, released);
+        Assert.Empty(await WritesAsync(repo));
+        Assert.Equal(("Failed", true, false, "The branch was deleted from the web page."), (body.GetProperty("state").GetString(), body.GetProperty("writesPossible").GetBoolean(), body.GetProperty("blocksItsPlan").GetBoolean(), body.GetProperty("releaseNote").GetString()));
+        Assert.False(string.IsNullOrEmpty(body.GetProperty("releasedBy").GetString()));
+        var row = Assert.Single(await RowsAsync(conversion));
+        Assert.Equal(("Failed", "PublicationFileFailed", true), (row.State, row.ErrorCode, row.WritesPossible));
+        Assert.NotNull(row.ReleasedAtUtc);
+        using (var evidence = JsonDocument.Parse(row.ReleaseEvidence!))
+        {
+            Assert.False(evidence.RootElement.GetProperty("headBranchExists").GetBoolean());
+            Assert.Equal("Failed", evidence.RootElement.GetProperty("ledgerState").GetString());
+            Assert.DoesNotContain("run:", row.ReleaseEvidence); // no workflow text, no credential
+        }
+
+        // decided once
+        var (twice, twiceBody) = await ReleaseAsync(conversion, id);
+        Assert.Equal(HttpStatusCode.Conflict, twice);
+        Assert.Equal("PublicationAlreadyReleased", twiceBody.GetProperty("error").GetString());
+
+        // the view says so, and the same plan, with the same hash, now goes through; the released attempt stays beside the new one
+        var (_, view) = await ReconcileAsync(conversion, id);
+        Assert.True(view.GetProperty("ledgerReleased").GetBoolean());
+        Assert.False(view.GetProperty("ledgerBlocksPlan").GetBoolean());
+        Assert.Contains("AttemptReleased", Codes(view));
+        Assert.DoesNotContain("LedgerStillBlocksPlan", Codes(view));
+        Assert.Equal(planHash, await ReadyPlanHashAsync(conversion, repo));
+        var (retried, second) = await PublishAsync(conversion, repo, planHash);
+        Assert.Equal(HttpStatusCode.OK, retried);
+        Assert.Equal("Published", second.GetProperty("state").GetString());
+        var rows = await RowsAsync(conversion);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(1, rows.Count(r => r.ReleasedAtUtc is not null));
+    }
+
+    [RequiresAnalysersFact]
+    public async Task A_published_attempt_whose_pull_request_was_closed_and_whose_branch_is_gone_is_released_but_not_while_anything_of_it_is_there_and_never_after_a_merge()
+    {
+        var (conversion, published, repo) = await PublishedConversionAsync("pub-rel2");
+        var id = published.GetProperty("id").GetGuid();
+        var head = published.GetProperty("headBranch").GetString()!;
+        var number = published.GetProperty("pullNumber").GetInt32();
+        var planHash = published.GetProperty("planSha256").GetString()!;
+
+        // open: the pull request and the branch are there, and the plan says what is in the way (not "the attempt")
+        var (_, openPlan) = await PlanAsync(conversion, repo);
+        Assert.False(openPlan.GetProperty("ready").GetBoolean());
+        Assert.DoesNotContain("AttemptBlocksPlan", Codes(openPlan));
+        var (openStatus, open) = await ReleaseAsync(conversion, id);
+        Assert.Equal((HttpStatusCode.Conflict, "PublicationLeftoversExist"), (openStatus, open.GetProperty("error").GetString()));
+        Assert.Equal(["BranchExists", "PublishedPullRequestNotClosed", "PullRequestOpen"], Details(open));
+
+        // closed without merging, branch still there
+        await GitHub!.SendAsync("PATCH", $"/repos/orion-org/{repo}/pulls/{number}", new { state = "closed" });
+        var (_, closedWithBranch) = await ReleaseAsync(conversion, id);
+        Assert.Equal(["BranchExists"], Details(closedWithBranch));
+
+        // branch gone: nothing of it remains, only the ledger still counts the plan as published
+        await GitHub.SendAsync("DELETE", $"/repos/orion-org/{repo}/git/refs/heads/{head}");
+        var (_, blocked) = await PlanAsync(conversion, repo);
+        Assert.False(blocked.GetProperty("ready").GetBoolean());
+        Assert.Contains("AttemptBlocksPlan", Codes(blocked));
+        var (_, view) = await ReconcileAsync(conversion, id);
+        Assert.Equal("ClosedWithoutMerge", view.GetProperty("verdict").GetString());
+        Assert.Contains("LedgerStillBlocksPlan", Codes(view));
+        Assert.True(view.GetProperty("ledgerBlocksPlan").GetBoolean());
+
+        var (status, released) = await ReleaseAsync(conversion, id, note: "Closed it on purpose: wrong repository settings.");
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(("Published", number, false), (released.GetProperty("state").GetString(), released.GetProperty("pullNumber").GetInt32(), released.GetProperty("blocksItsPlan").GetBoolean()));
+
+        // the same plan is published again: a new pull request, and the closed one is not mistaken for an open one in the way
+        Assert.Equal(planHash, await ReadyPlanHashAsync(conversion, repo));
+        var (again, second) = await PublishAsync(conversion, repo, planHash);
+        Assert.Equal(HttpStatusCode.OK, again);
+        Assert.NotEqual(number, second.GetProperty("pullNumber").GetInt32());
+        Assert.Equal(2, (await RowsAsync(conversion)).Count);
+    }
+
+    [RequiresAnalysersFact]
+    public async Task A_merged_pull_request_is_never_released_because_the_file_is_on_the_base_branch()
+    {
+        var (conversion, published, repo) = await PublishedConversionAsync("pub-rel3");
+        var id = published.GetProperty("id").GetGuid();
+        await GitHub!.SendAsync("PUT", $"/repos/orion-org/{repo}/pulls/{published.GetProperty("pullNumber").GetInt32()}/merge", new { merge_method = "squash" });
+        await GitHub.SendAsync("DELETE", $"/repos/orion-org/{repo}/git/refs/heads/{published.GetProperty("headBranch").GetString()}");
+
+        var (status, refused) = await ReleaseAsync(conversion, id);
+        Assert.Equal((HttpStatusCode.Conflict, "PublicationLeftoversExist"), (status, refused.GetProperty("error").GetString()));
+        Assert.Equal(["PublishedPullRequestNotClosed", "PullRequestMerged"], Details(refused));
+        Assert.Null(Assert.Single(await RowsAsync(conversion)).ReleasedAtUtc);
+    }
+
+    [RequiresAnalysersFact]
+    public async Task An_attempt_that_wrote_nothing_is_not_released_and_one_that_never_finished_is_released_only_once_it_has_not_moved_for_fifteen_minutes()
+    {
+        await RegisterAppAsync();
+        var conversion = await ApprovedAsync();
+        var repo = await RepoAsync("pub-rel4");
+        var planHash = await ReadyPlanHashAsync(conversion, repo);
+
+        // refused before any write (the installation token could not be minted): the plan was never blocked, so there is nothing to release
+        await GitHub!.SendAsync("POST", "/_sim/faults", new { pathRegex = @"/access_tokens$", method = "POST", status = 500, message = "no token" });
+        var (failedStatus, failure) = await PublishAsync(conversion, repo, planHash);
+        await GitHub.SendAsync("DELETE", "/_sim/faults");
+        Assert.NotEqual(HttpStatusCode.OK, failedStatus);
+        var clean = Assert.Single(await RowsAsync(conversion));
+        Assert.Equal(("Failed", false), (clean.State, clean.WritesPossible));
+        var (free, freeBody) = await ReleaseAsync(conversion, clean.Id);
+        Assert.Equal(HttpStatusCode.Conflict, free);
+        Assert.Equal("PublicationAlreadyFree", freeBody.GetProperty("error").GetString());
+        Assert.Null((await RowsAsync(conversion)).Single(r => r.Id == clean.Id).ReleasedAtUtc);
+
+        // an attempt that never finished (the process died): running until it has not moved for fifteen minutes
+        var proposal = conversion.GetProperty("proposalId").GetGuid();
+        var stuck = Guid.NewGuid();
+        await InDbAsync(db => db.Database.ExecuteSqlRawAsync(
+            "INSERT INTO workflow_publications (id, proposal_id, plan_sha256, workflow_sha256, organization, repository, base_branch, base_sha, head_branch, workflow_path, state, writes_possible, requested_by_id, requested_by, started_at_utc, updated_at_utc) " +
+            "VALUES ({0}, {1}, {2}, {3}, 'orion-org', 'pub-rel4', 'main', {4}, 'migrate/azdo-42-abcd1234', '.github/workflows/azdo-42-release-safe.yml', 'BranchCreating', false, {5}, 'tester', now(), now())",
+            stuck, proposal, new string('b', 64), conversion.GetProperty("workflowSha256").GetString()!, new string('c', 40), Guid.NewGuid()));
+        var (running, runningBody) = await ReleaseAsync(conversion, stuck);
+        Assert.Equal(HttpStatusCode.Conflict, running);
+        Assert.Equal("PublicationStillRunning", runningBody.GetProperty("error").GetString());
+        Assert.Equal("BranchCreating", (await RowsAsync(conversion)).Single(r => r.Id == stuck).State);
+
+        await InDbAsync(db => db.Database.ExecuteSqlRawAsync("UPDATE workflow_publications SET updated_at_utc = now() - interval '16 minutes' WHERE id = {0}", stuck));
+        var (status, released) = await ReleaseAsync(conversion, stuck, note: "The API restarted while it was running.");
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(("Failed", "PublicationAbandoned", true, false), (released.GetProperty("state").GetString(), released.GetProperty("errorCode").GetString(), released.GetProperty("writesPossible").GetBoolean(), released.GetProperty("blocksItsPlan").GetBoolean()));
+        var row = (await RowsAsync(conversion)).Single(r => r.Id == stuck);
+        Assert.Equal(("Failed", "BranchCreating", "PublicationAbandoned", true), (row.State, row.FailedAtState, row.ErrorCode, row.WritesPossible));
+        Assert.NotNull(row.ReleasedAtUtc);
     }
 
     [RequiresAnalysersFact]

@@ -37,8 +37,9 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
   plan?: Detail; planRefuse?: { status: number; body: Record<string, unknown> };
   role?: string; publication?: { enabled: boolean; allowed: string[] }; attempts?: Detail[]; published?: Detail; publishRefuse?: { status: number; body: Record<string, unknown> };
   derived?: Detail; deriveRefuse?: { status: number; body: Record<string, unknown> };
-  reconcile?: Detail; reconcileRefuse?: { status: number; body: Record<string, unknown>; once?: boolean } } = {}) {
-  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])], derives: [] as string[], reconciles: [] as { publication: string; body: Record<string, any> }[] };
+  reconcile?: Detail; reconcileRefuse?: { status: number; body: Record<string, unknown>; once?: boolean };
+  release?: Detail; releaseRefuse?: { status: number; body: Record<string, unknown> }; reconcileAfterRelease?: Detail } = {}) {
+  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])], derives: [] as string[], reconciles: [] as { publication: string; body: Record<string, any> }[], releases: [] as { publication: string; body: Record<string, any> }[], released: false };
   const summaries = () => [store.current, ...store.kept.filter(k => k.id !== store.current.id)].map(d => ({
     id: d.id, state: d.state, reason: d.reason, workflowSha256: d.workflowSha256, createdBy: d.createdBy, createdAtUtc: d.createdAtUtc, kind: d.kind ?? 'Conversion' }));
 
@@ -76,7 +77,17 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
       store.reconciles.push({ publication: path.split('/').slice(-2)[0], body });
       if (options.reconcileRefuse && !(options.reconcileRefuse.once && store.reconciles.length > 1))
         return route.fulfill({ status: options.reconcileRefuse.status, json: options.reconcileRefuse.body });
+      if (store.released && options.reconcileAfterRelease) return route.fulfill({ json: options.reconcileAfterRelease });
       return route.fulfill({ json: options.reconcile ?? reconciliation() });
+    }
+    if (verb === 'release') {
+      const publication = path.split('/').slice(-2)[0];
+      store.releases.push({ publication, body });
+      if (options.releaseRefuse) return route.fulfill({ status: options.releaseRefuse.status, json: options.releaseRefuse.body });
+      const released = { ...(store.attempts.find(a => a.id === publication) ?? publicationRecord()), releasedAtUtc: '2026-11-13T17:00:00Z', releasedBy: 'reviewer', releaseNote: body.note, blocksItsPlan: false, ...options.release };
+      store.attempts = store.attempts.map(a => a.id === publication ? released : a);
+      store.released = true;
+      return route.fulfill({ json: released });
     }
     if (verb === 'derive-triggers') {
       store.derives.push(id!);

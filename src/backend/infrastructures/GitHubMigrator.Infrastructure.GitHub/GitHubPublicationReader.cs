@@ -107,6 +107,13 @@ public sealed class GitHubPublicationReader(HttpClient client, GitHubEndpoints? 
         return new(true, archived, baseTip, headSha, pulls.OrderByDescending(p => p.Number).ToArray(), onHead, onBase);
     }
 
+    public async Task<PullObservation?> ReadPullAsync(string organization, string repository, int number, string headBranch, string token, CancellationToken ct)
+    {
+        if (number <= 0) return null;
+        using var pull = await GetAsync($"repos/{Uri.EscapeDataString(organization)}/{Uri.EscapeDataString(repository)}/pulls/{number}", token, ct);
+        return pull is null ? null : Pull(pull.RootElement, headBranch);
+    }
+
     // A pull request counts only when its head is the branch asked about and it has a number; `merged` is on a single pull request, `merged_at` also in a list.
     private static PullObservation? Pull(JsonElement pull, string headBranch)
     {

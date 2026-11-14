@@ -30,6 +30,12 @@ public sealed class WorkflowPublicationRecord
     public string Mode { get; set; } = "Create";
     public string? ReplacedBlobSha { get; set; }
     public string? ReplacedWorkflowSha256 { get; set; }
+    public DateTimeOffset? ReleasedAtUtc { get; set; }
+    public Guid? ReleasedById { get; set; }
+    public string? ReleasedBy { get; set; }
+    public string? ReleaseNote { get; set; }
+    // what the destination showed when a person released the attempt (json, no workflow text)
+    public string? ReleaseEvidence { get; set; }
 }
 
 // The ledger of what the product wrote to a destination. A row is written BEFORE the first write and moves only forward (the schema enforces
@@ -67,6 +73,21 @@ public sealed class PostgresPublicationLedger(AppDbContext db) : IPublicationLed
             .ExecuteUpdateAsync(s => s.SetProperty(x => x.FailedAtState, x => x.State).SetProperty(x => x.State, PublicationStates.Failed)
                 .SetProperty(x => x.ErrorCode, errorCode).SetProperty(x => x.WritesPossible, writesPossible).SetProperty(x => x.UpdatedAtUtc, at), ct);
 
+    // Whatever a process left half done and never finished is closed here, as a failure after which writes are possible: nothing says it did not write.
+    public async Task<bool> AbandonAsync(Guid id, DateTimeOffset staleBefore, DateTimeOffset at, CancellationToken ct) =>
+        await db.WorkflowPublications.Where(x => x.Id == id && x.State != PublicationStates.Published && x.State != PublicationStates.Failed && x.UpdatedAtUtc <= staleBefore)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.FailedAtState, x => x.State).SetProperty(x => x.State, PublicationStates.Failed)
+                .SetProperty(x => x.ErrorCode, "PublicationAbandoned").SetProperty(x => x.WritesPossible, true).SetProperty(x => x.UpdatedAtUtc, at), ct) == 1;
+
+    // The one change a final row accepts (the guard trigger allows nothing else): the release columns go from empty to filled, once.
+    public async Task<bool> ReleaseAsync(Guid id, Guid byId, string by, string note, string evidenceJson, DateTimeOffset at, CancellationToken ct)
+    {
+        var who = by.Length > 160 ? by[..160] : by;
+        return await db.WorkflowPublications.Where(x => x.Id == id && x.ReleasedAtUtc == null && (x.State == PublicationStates.Failed || x.State == PublicationStates.Published))
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.ReleasedAtUtc, at).SetProperty(x => x.ReleasedById, byId).SetProperty(x => x.ReleasedBy, who)
+                .SetProperty(x => x.ReleaseNote, note).SetProperty(x => x.ReleaseEvidence, evidenceJson), ct) == 1;
+    }
+
     public async Task<PublicationRecord?> GetAsync(Guid id, CancellationToken ct)
     {
         var r = await db.WorkflowPublications.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
@@ -76,7 +97,16 @@ public sealed class PostgresPublicationLedger(AppDbContext db) : IPublicationLed
     public async Task<IReadOnlyList<PublicationRecord>> ListAsync(Guid proposalId, CancellationToken ct) =>
         (await db.WorkflowPublications.AsNoTracking().Where(x => x.ProposalId == proposalId).OrderByDescending(x => x.StartedAtUtc).Take(50).ToListAsync(ct)).Select(From).ToArray();
 
+    public async Task<IReadOnlyList<PublicationRecord>> ListForPathAsync(string organization, string repository, string workflowPath, CancellationToken ct)
+    {
+        var org = organization.ToLowerInvariant();
+        var repo = repository.ToLowerInvariant();
+        return (await db.WorkflowPublications.AsNoTracking()
+            .Where(x => x.Organization.ToLower() == org && x.Repository.ToLower() == repo && x.WorkflowPath == workflowPath)
+            .OrderByDescending(x => x.StartedAtUtc).Take(20).ToListAsync(ct)).Select(From).ToArray();
+    }
+
     private static PublicationRecord From(WorkflowPublicationRecord r) => new(r.Id, r.ProposalId, r.PlanSha256, r.WorkflowSha256, r.Organization, r.Repository, r.BaseBranch,
         r.BaseSha, r.HeadBranch, r.WorkflowPath, r.State, r.CommitSha, r.PullNumber, r.PullUrl, r.ErrorCode, r.FailedAtState, r.WritesPossible, r.RequestedById, r.RequestedBy,
-        r.StartedAtUtc, r.UpdatedAtUtc, r.Mode, r.ReplacedBlobSha, r.ReplacedWorkflowSha256);
+        r.StartedAtUtc, r.UpdatedAtUtc, r.Mode, r.ReplacedBlobSha, r.ReplacedWorkflowSha256, r.ReleasedAtUtc, r.ReleasedById, r.ReleasedBy, r.ReleaseNote);
 }

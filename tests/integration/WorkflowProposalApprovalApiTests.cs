@@ -46,7 +46,7 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
     protected const long PublicationAppId = 424200;
     protected const string PublicationKeyReference = "workflow-publication-key";
     protected const string PublicationRepositories = "orion-org/pub-ok,orion-org/pub-two,orion-org/pub-race,orion-org/pub-moved,orion-org/pub-fail,orion-org/pub-late,"
-        + "orion-org/pub-upd,orion-org/pub-edit,orion-org/pub-rec,orion-org/pub-rec2,orion-org/pub-rec3";
+        + "orion-org/pub-upd,orion-org/pub-edit,orion-org/pub-rec,orion-org/pub-rec2,orion-org/pub-rec3,orion-org/pub-rel,orion-org/pub-rel2,orion-org/pub-rel3,orion-org/pub-rel4";
 
     private static string CatalogSha(string repository) => ActionCatalog.All.Single(a => a.Repository == repository).Sha;
 

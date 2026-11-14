@@ -161,3 +161,157 @@ test('an unreadable destination says nothing about what exists and is not shown 
   await expect(result(page).locator('.connection-badge.invalid')).toHaveCount(1);
   await expect(result(page).locator('dl')).toHaveCount(0); // no facts are invented
 });
+
+test('an earlier pull request still open for the same file blocks the plan, says which one, and a warning about one that could not be read does not', async ({ page }) => {
+  const blocked = publicationPlan('orion-api', {
+    ready: false,
+    findings: [{ code: 'EarlierPullRequestOpen', severity: 'Blocker', message: 'The conversion this proposal was derived from is still open as pull request #7 in this repository (not merged).' }]
+  });
+  await setup(page, approved(), { publication: enabled, plan: blocked });
+  await openPanel(page);
+  await repositoryField(page).fill('orion-api');
+  await plan(page).click();
+
+  await expect(panel(page).getByText(/pull request #7.*ancora aperta|pull request #7.*still open/i).first()).toBeVisible();
+  await expect(panel(page).getByText(/unisci o chiudi la #7|merge or close #7/i)).toBeVisible();
+  await expect(panel(page).getByText(/qualcosa è d.intralcio|something stands in the way|bloccat|blocked/i).first()).toBeVisible();
+  await expect(publishButton(page)).toHaveCount(0); // nothing to confirm while something stands in the way
+});
+
+test('a pull request that could not be read is shown as unknown and the plan can still be confirmed', async ({ page }) => {
+  const unchecked = publicationPlan('orion-api', {
+    ready: true,
+    findings: [{ code: 'EarlierPullRequestUnchecked', severity: 'Warning', message: 'The conversion was published as pull request #7; it could not be read just now.' }]
+  });
+  await setup(page, approved(), { publication: enabled, plan: unchecked });
+  await openPanel(page);
+  await repositoryField(page).fill('orion-api');
+  await plan(page).click();
+
+  await expect(panel(page).getByText(/pull request #7.*non si sa se sia ancora aperta|pull request #7.*whether it is still open is not known/i)).toBeVisible();
+  await expect(confirmBox(page)).toBeVisible();
+});
+
+// ---- releasing an attempt that keeps its plan blocked ----------------------------------------------------------------------------------------
+
+const failedWrote = () => publicationRecord({ state: 'Failed', failedAtState: 'FileCommitting', errorCode: 'PublicationFileFailed', writesPossible: true, pullNumber: null, pullUrl: null,
+  commitSha: null, blocksItsPlan: true });
+const nothingLeft = (overrides: Record<string, unknown> = {}) => reconciliation({
+  verdict: 'NothingFound', ledgerState: 'Failed', ledgerWritesPossible: true, ledgerCommitSha: null, ledgerPullNumber: null, ledgerBlocksPlan: true, ledgerReleased: false,
+  findings: [
+    { code: 'LedgerStillBlocksPlan', severity: 'Info', message: 'Nothing of the attempt is left, but the ledger still blocks this exact plan.' },
+    { code: 'NothingFound', severity: 'Info', message: 'Nothing found.' }
+  ],
+  observed: { repositoryExists: true, archived: false, baseTipSha: 'c'.repeat(40), headBranchSha: null, pulls: [], fileOnHead: 'Absent', fileOnBase: 'Absent' },
+  ...overrides
+});
+const releaseForm = (page: Page) => panel(page).getByLabel(/rilascia questo tentativo|release this attempt/i);
+const releaseNote = (page: Page) => releaseForm(page).getByRole('textbox', { name: /cosa è stato ripulito|what was cleaned up/i });
+const releaseButton = (page: Page) => releaseForm(page).getByRole('button', { name: /rilascia il tentativo|release the attempt/i });
+
+test('a superadmin releases an attempt the ledger still blocks, with a note, and it is then shown as released and no longer offered', async ({ page }) => {
+  const blockedPlan = publicationPlan('orion-api', { ready: false, findings: [{ code: 'AttemptBlocksPlan', severity: 'Blocker', message: 'An earlier attempt of this exact plan failed.' }] });
+  const store = await setup(page, approved(), { publication: enabled, plan: blockedPlan, attempts: [failedWrote()], reconcile: nothingLeft(), reconcileAfterRelease: nothingLeft({
+    ledgerBlocksPlan: false, ledgerReleased: true, findings: [
+      { code: 'AttemptReleased', severity: 'Info', message: 'A person released this attempt.' }, { code: 'NothingFound', severity: 'Info', message: 'Nothing found.' }] }) });
+  await openPanel(page);
+  await expect(releaseForm(page)).toHaveCount(0); // not before the destination has been read
+  await repositoryField(page).fill('orion-api');
+  await plan(page).click();
+  const keptBlocked = panel(page).getByText(/tiene bloccato \(vedi i tentativi|keeps it blocked \(see the attempts/i);
+  await expect(keptBlocked).toBeVisible();
+  await check(page).click();
+
+  await expect(result(page).getByText(/Del tentativo non resta nulla|Nothing of the attempt is left/i)).toBeVisible();
+  await expect(releaseForm(page)).toBeVisible();
+  await expect(releaseButton(page)).toBeDisabled(); // a note is part of it
+  await releaseNote(page).fill('ab');
+  await expect(releaseButton(page)).toBeDisabled();
+  await releaseNote(page).fill('  Deleted the branch from the web page.  ');
+  await releaseButton(page).click();
+
+  await expect(panel(page).getByText(/rilasciato da reviewer|released by reviewer/i)).toBeVisible();
+  await expect(panel(page).getByText(/Deleted the branch from the web page\./)).toBeVisible();
+  await expect(result(page).getByText(/ha rilasciato questo tentativo|released this attempt/i)).toBeVisible();
+  await expect(releaseForm(page)).toHaveCount(0);
+  await expect(keptBlocked).toHaveCount(0); // the plan that said the attempt was in the way is gone: it is made again, not edited
+  // what was sent: the attempt, the connection for its organization and the note as written (the server keeps it trimmed)
+  expect(store.releases).toHaveLength(1);
+  expect(store.releases[0].publication).toBe(failedWrote().id);
+  expect(store.releases[0].body).toEqual({ destinationConnectionId: destinationId, note: 'Deleted the branch from the web page.' });
+  expect(store.reconciles).toHaveLength(2); // read again after the release, to show what the ledger says now
+});
+
+test('the release is offered to a superadmin only, and only where the product said the ledger still blocks the plan', async ({ page }) => {
+  // an admin who may plan and check sees why, but cannot release
+  await setup(page, approved(), { publication: enabled, attempts: [failedWrote()], reconcile: nothingLeft(), role: 'admin' });
+  await openPanel(page);
+  await check(page).click();
+  await expect(result(page).getByText(/Del tentativo non resta nulla|Nothing of the attempt is left/i)).toBeVisible();
+  await expect(releaseForm(page)).toHaveCount(0);
+});
+
+test('nothing is offered to release while the destination still shows something of the attempt', async ({ page }) => {
+  await setup(page, approved(), { publication: enabled, attempts: [failedWrote()], reconcile: reconciliation({
+    verdict: 'BranchWithoutPullRequest', ledgerState: 'Failed', ledgerWritesPossible: true, ledgerCommitSha: null, ledgerPullNumber: null, ledgerBlocksPlan: true,
+    findings: [{ code: 'ProductWillNotRetry', severity: 'Info', message: 'The product will not retry this attempt or clean up after it.' }],
+    observed: { repositoryExists: true, archived: false, baseTipSha: 'c'.repeat(40), headBranchSha: 'c'.repeat(40), pulls: [], fileOnHead: 'Absent', fileOnBase: 'Absent' } }) });
+  await openPanel(page);
+  await check(page).click();
+  await expect(result(page).getByText(/non ripeterà questo tentativo|will not retry this attempt/i)).toBeVisible();
+  await expect(releaseForm(page)).toHaveCount(0);
+});
+
+test('a release refused because something of the attempt is still there says what, leaves the note, and shows what the destination has now', async ({ page }) => {
+  const store = await setup(page, approved(), { publication: enabled, attempts: [failedWrote()], reconcile: nothingLeft(),
+    releaseRefuse: { status: 409, body: { error: 'PublicationLeftoversExist', details: ['BranchExists', 'PullRequestOpen'] } } });
+  await openPanel(page);
+  await check(page).click();
+  await releaseNote(page).fill('I think it is clean.');
+  await releaseButton(page).click();
+
+  const refusal = releaseForm(page).getByRole('alert');
+  await expect(refusal).toContainText(/ancora sul destinatario|still at the destination/i);
+  await expect(refusal).toContainText(/il branch esiste ancora|the branch still exists/i);
+  await expect(refusal).toContainText(/ancora aperta|still open/i);
+  await expect(releaseNote(page)).toHaveValue('I think it is clean.'); // what was typed is not lost
+  await expect(releaseButton(page)).toBeEnabled();
+  expect(store.reconciles).toHaveLength(2); // and the destination is read again to show what is there now
+});
+
+test('a release that cannot be checked or was decided meanwhile is explained in words, not as a code', async ({ page }) => {
+  for (const [error, status, words] of [
+    ['DestinationUnreadable', 422, /non si è potuto leggere|could not be read/i],
+    ['PublicationAlreadyReleased', 409, /già stato rilasciato|already released/i],
+    ['PublicationStillRunning', 409, /ancora in corso|still be running/i],
+    ['NoteRequired', 400, /almeno 3 caratteri|at least 3 characters/i]
+  ] as const) {
+    await setup(page, approved(), { publication: enabled, attempts: [failedWrote()], reconcile: nothingLeft(), releaseRefuse: { status, body: { error } } });
+    await openPanel(page);
+    await check(page).click();
+    await releaseNote(page).fill('Cleaned it up.');
+    await releaseButton(page).click();
+    const alert = releaseForm(page).getByRole('alert');
+    await expect(alert).toContainText(words);
+    await expect(alert).not.toContainText(error);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  }
+});
+
+test('a plan an earlier attempt keeps blocked says so, in words, with nothing to confirm', async ({ page }) => {
+  const blocked = publicationPlan('orion-api', { ready: false, findings: [{ code: 'AttemptBlocksPlan', severity: 'Blocker', message: 'An earlier attempt of this exact plan failed.' }] });
+  await setup(page, approved(), { publication: enabled, plan: blocked, attempts: [failedWrote()] });
+  await openPanel(page);
+  await repositoryField(page).fill('orion-api');
+  await plan(page).click();
+
+  await expect(panel(page).getByText(/tiene bloccato \(vedi i tentativi|keeps it blocked \(see the attempts/i)).toBeVisible();
+  await expect(publishButton(page)).toHaveCount(0);
+});
+
+test('an attempt that was released is shown as released from the start, with who and why', async ({ page }) => {
+  await setup(page, approved(), { publication: enabled, attempts: [{ ...failedWrote(), blocksItsPlan: false, releasedAtUtc: '2026-11-13T17:00:00Z', releasedBy: 'ops-lead', releaseNote: 'Branch removed, checked by hand.' }] });
+  await openPanel(page);
+  await expect(panel(page).getByText(/rilasciato da ops-lead|released by ops-lead/i)).toBeVisible();
+  await expect(panel(page).getByText(/Branch removed, checked by hand\./)).toBeVisible();
+});

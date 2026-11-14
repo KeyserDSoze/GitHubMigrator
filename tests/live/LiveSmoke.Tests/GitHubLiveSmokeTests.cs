@@ -116,6 +116,62 @@ public sealed class GitHubLiveSmokeTests(LiveReport report, ITestOutputHelper ou
         report.Record("github", "publication-reader-missing", "confirmed", "A missing repository and a missing base branch are reported as such (404), not as an error.");
     }
 
+    // What the reconciliation view and the "earlier pull request" check of a plan read (0.8 and 0.9), with GET requests only: everything at the destination that belongs to one attempt
+    // (its branch, every pull request from it in ANY state, the file on the branch and on the base), and one pull request by number. The behaviours the simulator was written from
+    // documentation for: GET /pulls/{n} answering 404 for a number that is not there, and head=owner:branch finding a pull request whose branch name contains "/".
+    // Optional, to also see a real pull request: GITHUBMIGRATOR_LIVE_GH_PULL=<number>:<head branch> (a pull request in the sandbox repository; any state).
+    [LiveGitHubFact]
+    public async Task The_reconciliation_readers_match_what_the_simulator_assumes()
+    {
+        if (Gh.Repository is null)
+        {
+            report.Record("github", "reconciliation-readers", "info", "Set GITHUBMIGRATOR_LIVE_GH_REPO to check the read-only reconciliation readers against the real repository.");
+            return;
+        }
+        var reader = new GitHubPublicationReader(LiveEnvironment.ReadOnlyClient(), Endpoints);
+        var unique = Guid.NewGuid().ToString("N")[..12];
+        var path = $".github/workflows/gm-live-smoke-{unique}.yml";
+        var branch = $"migrate/gm-live-smoke-{unique}";
+        var target = await reader.ReadAsync(Gh.Organization, Gh.Repository, null, branch, path, new string('a', 64), null, Gh.Pat, default);
+        Assert.True(target.RepositoryExists);
+        var baseBranch = target.BaseBranch!;
+
+        // an attempt of which nothing exists: no branch, no pull request from it, no file
+        var nothing = await reader.ObserveAsync(Gh.Organization, Gh.Repository, baseBranch, branch, path, new string('a', 64), null, null, Gh.Pat, default);
+        output.WriteLine($"exists={nothing.RepositoryExists} archived={nothing.Archived} baseTip={nothing.BaseTipSha} head={nothing.HeadBranchSha} pulls={nothing.Pulls.Count} onHead={nothing.FileOnHead} onBase={nothing.FileOnBase}");
+        Assert.True(nothing.RepositoryExists);
+        Assert.Matches("^[0-9a-f]{40}$", nothing.BaseTipSha ?? "");
+        Assert.Null(nothing.HeadBranchSha);
+        Assert.Empty(nothing.Pulls);
+        Assert.Equal(WorkflowFileState.Absent, nothing.FileOnHead);
+        Assert.Equal(WorkflowFileState.Absent, nothing.FileOnBase);
+        report.Record("github", "reconciliation-nothing-found", "confirmed",
+            "An attempt of which nothing exists reads as: repository present, base tip, no branch (git/ref 404 with a '/' in the name), an empty pull request list for head=owner:branch in every state, no file.");
+
+        // one pull request by number: a number that is not there is "no such pull request", not an error
+        Assert.Null(await reader.ReadPullAsync(Gh.Organization, Gh.Repository, 999_999_999, branch, Gh.Pat, default));
+        report.Record("github", "pull-request-by-number-missing", "confirmed", "GET /pulls/{number} for a number that does not exist answers 404 and is read as no such pull request.");
+
+        if (LiveEnvironment.Env("GITHUBMIGRATOR_LIVE_GH_PULL") is not { } spec || spec.Split(':', 2) is not [var text, var head] || !int.TryParse(text, out var number) || number <= 0)
+        {
+            report.Record("github", "pull-request-reader", "info", "Set GITHUBMIGRATOR_LIVE_GH_PULL=<number>:<head branch> (a pull request in the sandbox repository, any state) to check how a real pull request is read.");
+            return;
+        }
+        var pull = await reader.ReadPullAsync(Gh.Organization, Gh.Repository, number, head, Gh.Pat, default);
+        Assert.NotNull(pull);
+        output.WriteLine($"#{pull!.Number} state={pull.State} merged={pull.Merged} head={pull.HeadSha} base={pull.BaseRef} mergeCommit={pull.MergeCommitSha}");
+        Assert.Equal(number, pull.Number);
+        Assert.Contains(pull.State, new[] { "open", "closed" });
+        if (pull.Merged) Assert.Equal("closed", pull.State); // a merged pull request is a closed one
+        // a number belongs to the attempt only if the pull request comes from the branch the attempt wrote
+        Assert.Null(await reader.ReadPullAsync(Gh.Organization, Gh.Repository, number, head + "-not-this-one", Gh.Pat, default));
+        // and the list read from the branch (what the reconciliation view uses) finds the same pull request, whatever its state
+        var listed = await reader.ObserveAsync(Gh.Organization, Gh.Repository, pull.BaseRef ?? baseBranch, head, path, new string('a', 64), null, number, Gh.Pat, default);
+        Assert.Contains(listed.Pulls, p => p.Number == number);
+        report.Record("github", "pull-request-reader", "confirmed",
+            $"#{number} ({pull.State}{(pull.Merged ? ", merged" : "")}) is read by number and by head=owner:branch{(head.Contains('/') ? " (the branch name contains '/')" : "")}; the same number with another branch name is not read as the attempt's.");
+    }
+
     private async Task Probe(string name, Func<Task<(string Status, string Detail)>> probe)
     {
         try

@@ -15,6 +15,9 @@ public interface IGitHubPublicationObserver
     // `replacedWorkflowSha256` is the hash of the text an update replaced, so that text can be told from "somebody else's file".
     Task<PublicationObservation> ObserveAsync(string organization, string repository, string baseBranch, string headBranch, string workflowPath,
         string workflowSha256, string? replacedWorkflowSha256, int? pullNumber, string token, CancellationToken ct);
+
+    // One pull request by number, read with a GET: null when it does not exist or is not a pull request from `headBranch` (a number that belongs to something else is not the attempt's).
+    Task<PullObservation?> ReadPullAsync(string organization, string repository, int number, string headBranch, string token, CancellationToken ct);
 }
 
 public static class ReconciliationVerdicts
@@ -34,7 +37,8 @@ public static class ReconciliationVerdicts
 // One attempt of the ledger set beside what is at the destination. A view, not an action: nothing is written, no state is changed, and the product does not
 // clean up or retry on the strength of it. It says what a person would find.
 public sealed record PublicationReconciliation(Guid PublicationId, Guid ProposalId, string Verdict, IReadOnlyList<PublicationFinding> Findings,
-    PublicationObservation? Observed, string LedgerState, bool LedgerWritesPossible, string? LedgerCommitSha, int? LedgerPullNumber, DateTimeOffset ReadAtUtc);
+    PublicationObservation? Observed, string LedgerState, bool LedgerWritesPossible, string? LedgerCommitSha, int? LedgerPullNumber, DateTimeOffset ReadAtUtc,
+    bool LedgerReleased = false, bool LedgerBlocksPlan = false);
 
 public static class PublicationReconciler
 {
@@ -129,15 +133,20 @@ public static class PublicationReconciler
                 Add("AttemptNotFinished", "Warning", $"The ledger shows this attempt stopped in the state {record.State}. If the product is not running it, treat it as an attempt that may have written: what exists is above.");
             if (record.State == PublicationStates.Failed && !record.WritesPossible && (o.HeadBranchSha is not null || o.Pulls.Count > 0))
                 Add("UnexpectedObjects", "Warning", "The ledger says nothing was written, but a branch or pull request with this attempt's name exists: it was not made by this attempt, or the ledger is wrong.");
-            if (record.State == PublicationStates.Failed && record.WritesPossible)
+            if (record.ReleasedAtUtc is { } releasedAt)
+                Add("AttemptReleased", "Info", $"A person released this attempt on {releasedAt:yyyy-MM-dd HH:mm} UTC after the product had checked the destination: the ledger no longer keeps its plan blocked.");
+            else if (record.State == PublicationStates.Failed && record.WritesPossible)
             {
-                if (verdict == ReconciliationVerdicts.NothingFound)
-                    Add("LedgerStillBlocksPlan", "Info", "The attempt left nothing behind, but the ledger still blocks this exact plan. A new plan, with another hash, is possible once the base branch moves.");
+                if (verdict is ReconciliationVerdicts.NothingFound or ReconciliationVerdicts.ClosedWithoutMerge && o.HeadBranchSha is null)
+                    Add("LedgerStillBlocksPlan", "Info", "The attempt left nothing behind, but the ledger still blocks this exact plan. A superadmin can release it (the product checks the destination again first), or the base branch can move: that makes a different plan.");
                 else
                     Add("ProductWillNotRetry", "Info", "The product will not retry this attempt or clean up after it: a person decides what to do with what exists.");
             }
+            else if (record.State == PublicationStates.Published && record.BlocksItsPlan && o.HeadBranchSha is null && pull is { Merged: false, State: "closed" })
+                Add("LedgerStillBlocksPlan", "Info", "The pull request was closed without merging and its branch is gone, but the ledger still blocks this exact plan. A superadmin can release it (the product checks the destination again first).");
         }
-        return new(record.Id, record.ProposalId, verdict, findings, observed, record.State, record.WritesPossible, record.CommitSha, record.PullNumber, now);
+        return new(record.Id, record.ProposalId, verdict, findings, observed, record.State, record.WritesPossible, record.CommitSha, record.PullNumber, now,
+            record.ReleasedAtUtc is not null, record.BlocksItsPlan);
     }
 }
 
@@ -151,12 +160,7 @@ public sealed class PublicationReconciliationService(IPublicationLedger ledger, 
         var record = await ledger.GetAsync(publicationId, ct);
         if (record is null || record.ProposalId != proposalId) throw new WorkflowPublicationException("PublicationNotFound");
 
-        var destination = await connections.GetAsync(destinationId, ct) ?? throw new WorkloadInputException("DestinationNotFound");
-        if (destination.Direction != ConnectionDirection.Destination || !ProviderKeys.IsGitHubDestination(destination.ProviderKey) || destination.ValidationCode != "Verified")
-            throw new WorkloadInputException("UnsupportedDestination");
-        if (!string.Equals(destination.Organization, record.Organization, StringComparison.OrdinalIgnoreCase)) throw new WorkflowPublicationException("DestinationMismatch");
-        var token = await secrets.ReadAsync(destination.SecretReference, ct);
-        if (string.IsNullOrEmpty(token)) throw new WorkloadInputException("DestinationCredentialMissing");
+        var token = await PublicationDestinationAccess.TokenAsync(connections, secrets, destinationId, record.Organization, ct);
 
         PublicationObservation? observed = null;
         var unreadable = false;
@@ -167,5 +171,19 @@ public sealed class PublicationReconciliationService(IPublicationLedger ledger, 
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException) { unreadable = true; }
         return PublicationReconciler.Assess(record, observed, unreadable, clock.GetUtcNow());
+    }
+}
+
+// The read-only credential for the organization an attempt wrote to: a verified GitHub destination of that organization with a stored credential, nothing else.
+internal static class PublicationDestinationAccess
+{
+    public static async Task<string> TokenAsync(IConnectionRepository connections, IConnectionSecretStore secrets, Guid destinationId, string organization, CancellationToken ct)
+    {
+        var destination = await connections.GetAsync(destinationId, ct) ?? throw new WorkloadInputException("DestinationNotFound");
+        if (destination.Direction != ConnectionDirection.Destination || !ProviderKeys.IsGitHubDestination(destination.ProviderKey) || destination.ValidationCode != "Verified")
+            throw new WorkloadInputException("UnsupportedDestination");
+        if (!string.Equals(destination.Organization, organization, StringComparison.OrdinalIgnoreCase)) throw new WorkflowPublicationException("DestinationMismatch");
+        var token = await secrets.ReadAsync(destination.SecretReference, ct);
+        return string.IsNullOrEmpty(token) ? throw new WorkloadInputException("DestinationCredentialMissing") : token;
     }
 }

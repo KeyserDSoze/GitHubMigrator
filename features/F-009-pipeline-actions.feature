@@ -149,3 +149,22 @@ Feature: Convert pipelines to reviewed GitHub Actions
     Given a workflow a model wrote, or a source pipeline, that nests tens of thousands of levels
     When it is gated, analysed, or read for its triggers
     Then it is refused before any node is built, as YAML_TOO_DEEP or as unreadable, and the API keeps answering
+
+  Scenario: A plan sees the pull request of an earlier publication of the same file
+    Given a conversion published as a pull request that is still open, and a Triggers proposal derived from it and approved
+    When a plan is made against the same repository
+    Then the plan is not ready and names the open pull request, with the same plan hash as before, and publishing it writes nothing
+    And once that pull request is closed the plan is ready, and once it is merged the plan replaces the file
+
+  Scenario: A plan blocked only by the ledger says so, and a superadmin releases the attempt after the product looked again
+    Given an attempt that failed after a write may have happened, whose branch a person has deleted
+    When the plan is made again
+    Then it is not ready and says an earlier attempt of this exact plan keeps it blocked, with the same hash
+    And a release is refused while the branch, an open pull request or a merged one is still there, when the destination cannot be read, to anyone but a superadmin and without a note
+    And a release made with a note, after a GET-only read finds nothing left, marks the attempt (who, why, what was seen) and changes nothing else
+    And the same plan, with the same hash, is then published again and both attempts stay on record
+
+  Scenario: An attempt that never finished is released only after it has been still for fifteen minutes
+    Given an attempt that stopped before a final state
+    When a superadmin asks to release it
+    Then it is refused while it moved less than fifteen minutes ago, and afterwards it is abandoned as a failure after which writes are possible and released, but only if the destination is clean

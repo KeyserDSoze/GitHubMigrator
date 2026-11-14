@@ -7,7 +7,9 @@ using Microsoft.EntityFrameworkCore;
 //  - change what was planned (repository, base commit, branch, path, hashes, whether it creates a file or replaces one, and which blob and text) or who asked;
 //  - move a publication backwards, skip a step of the order branch -> file -> pull request, or leave Published/Failed;
 //  - call a publication Published without a commit and a pull request number, or Failed without a reason;
-//  - delete a publication.
+//  - delete a publication;
+//  - release an attempt twice, release one that is not final, or change anything but the release marks when releasing (0.9: a person who has cleaned up the destination, after the product
+//    has read it again, frees the exact plan the attempt kept blocked; the attempt itself stays on record exactly as it was).
 // Constraints and triggers are added idempotently so they also exist on a database that EnsureCreated built from the model.
 public static class WorkflowPublicationSchema
 {
@@ -43,9 +45,24 @@ public static class WorkflowPublicationSchema
             ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS mode varchar(8) NOT NULL DEFAULT 'Create';
             ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS replaced_blob_sha varchar(40) NULL;
             ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS replaced_workflow_sha256 varchar(64) NULL;
+            -- 0.9: a released attempt no longer keeps its plan blocked
+            ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS released_at_utc timestamptz NULL;
+            ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS released_by_id uuid NULL;
+            ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS released_by varchar(160) NULL;
+            ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS release_note varchar(500) NULL;
+            ALTER TABLE workflow_publications ADD COLUMN IF NOT EXISTS release_evidence jsonb NULL;
             CREATE INDEX IF NOT EXISTS ix_workflow_publications_proposal ON workflow_publications(proposal_id, started_at_utc);
+            CREATE INDEX IF NOT EXISTS ix_workflow_publications_path ON workflow_publications(organization, repository, workflow_path);
+            -- an index built by an earlier version does not know about releases: it is rebuilt with the new predicate (which only excludes MORE rows, so it cannot fail on existing data)
+            DO $wpub_index$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'workflow_publications' AND indexname = 'ux_workflow_publications_live' AND indexdef NOT LIKE '%released_at_utc%') THEN
+                    DROP INDEX ux_workflow_publications_live;
+                END IF;
+            END
+            $wpub_index$;
             CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_publications_live ON workflow_publications(proposal_id, plan_sha256)
-                WHERE NOT (state = 'Failed' AND writes_possible = false);
+                WHERE NOT (released_at_utc IS NOT NULL OR (state = 'Failed' AND writes_possible = false));
 
             DO $wpub_constraints$
             BEGIN
@@ -71,6 +88,14 @@ public static class WorkflowPublicationSchema
                         AND (replaced_blob_sha IS NULL OR replaced_blob_sha ~ '^[0-9a-f]{{40}}$')
                         AND (replaced_workflow_sha256 IS NULL OR (replaced_workflow_sha256 ~ '^[0-9a-f]{{64}}$' AND replaced_workflow_sha256 <> workflow_sha256)));
                 END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_workflow_publications_release') THEN
+                    ALTER TABLE workflow_publications ADD CONSTRAINT ck_workflow_publications_release CHECK (
+                        ((released_at_utc IS NULL) = (released_by_id IS NULL))
+                        AND ((released_at_utc IS NULL) = (released_by IS NULL))
+                        AND ((released_at_utc IS NULL) = (release_note IS NULL))
+                        AND ((released_at_utc IS NULL) = (release_evidence IS NULL))
+                        AND (released_at_utc IS NULL OR (state IN ('Failed','Published') AND char_length(release_note) >= 3)));
+                END IF;
             END
             $wpub_constraints$;
 
@@ -92,7 +117,18 @@ public static class WorkflowPublicationSchema
                     RAISE EXCEPTION 'workflow publication plan is immutable';
                 END IF;
                 IF OLD.state IN ('Published','Failed') THEN
+                    -- the single change a final attempt accepts: the release marks, empty to filled, with everything else exactly as it was
+                    IF OLD.released_at_utc IS NULL AND NEW.released_at_utc IS NOT NULL
+                       AND NEW.state IS NOT DISTINCT FROM OLD.state AND NEW.commit_sha IS NOT DISTINCT FROM OLD.commit_sha
+                       AND NEW.pull_number IS NOT DISTINCT FROM OLD.pull_number AND NEW.pull_url IS NOT DISTINCT FROM OLD.pull_url
+                       AND NEW.error_code IS NOT DISTINCT FROM OLD.error_code AND NEW.failed_at_state IS NOT DISTINCT FROM OLD.failed_at_state
+                       AND NEW.writes_possible IS NOT DISTINCT FROM OLD.writes_possible AND NEW.updated_at_utc IS NOT DISTINCT FROM OLD.updated_at_utc THEN
+                        RETURN NEW;
+                    END IF;
                     RAISE EXCEPTION 'workflow publication is final';
+                END IF;
+                IF NEW.released_at_utc IS NOT NULL OR NEW.released_by_id IS NOT NULL OR NEW.released_by IS NOT NULL OR NEW.release_note IS NOT NULL OR NEW.release_evidence IS NOT NULL THEN
+                    RAISE EXCEPTION 'only a final workflow publication is released';
                 END IF;
                 IF NEW.state = 'Failed' THEN
                     IF NEW.failed_at_state IS DISTINCT FROM OLD.state THEN RAISE EXCEPTION 'workflow publication failure must name the state it failed in'; END IF;

@@ -552,7 +552,7 @@ export type ProposalDetail = Pick<ConversionProposal, 'gates' | 'findings' | 'pl
 export type PublicationPlan = {
   proposalId: string; workflowSha256: string; organization: string; repository: string; baseBranch: string; baseSha: string | null;
   headBranch: string; workflowPath: string; commitMessage: string; pullRequestTitle: string; pullRequestBody: string;
-  ready: boolean; writesPerformed: boolean; findings: { code: string; severity: 'Blocker' | 'Info'; message: string }[];
+  ready: boolean; writesPerformed: boolean; findings: { code: string; severity: 'Blocker' | 'Warning' | 'Info'; message: string }[];
   steps: { code: string; title: string; command: string | null }[]; planSha256: string; readAtUtc: string; workflowYaml: string;
   // Update: the plan replaces the workflow approved earlier (its hash) instead of adding a file. Older answers carry neither: they create.
   mode?: 'Create' | 'Update'; replacesWorkflowSha256?: string | null;
@@ -562,6 +562,8 @@ export type Publication = {
   workflowPath: string; planSha256: string; commitSha: string | null; pullNumber: number | null; pullUrl: string | null; errorCode: string | null;
   failedAtState: string | null; writesPossible: boolean; requestedBy: string; startedAtUtc: string; updatedAtUtc: string;
   mode?: 'Create' | 'Update'; replacedWorkflowSha256?: string | null;
+  // 0.9: a superadmin can release an attempt that keeps its exact plan blocked, after the product has read the destination again. Older answers carry none of these.
+  releasedAtUtc?: string | null; releasedBy?: string | null; releaseNote?: string | null; blocksItsPlan?: boolean;
 };
 // An attempt set beside what the destination shows now (read only): the verdict is what is there, the findings what to make of it.
 export type ReconciliationFile = 'Identical' | 'Absent' | 'Different' | 'PriorVersion';
@@ -573,6 +575,7 @@ export type Reconciliation = {
     fileOnHead: ReconciliationFile; fileOnBase: ReconciliationFile;
   } | null;
   ledgerState: string; ledgerWritesPossible: boolean; ledgerCommitSha: string | null; ledgerPullNumber: number | null; writesPerformed: boolean; readAtUtc: string;
+  ledgerReleased?: boolean; ledgerBlocksPlan?: boolean;
 };
 export type PublicationStatus = { enabled: boolean; allowedRepositories: string[] };
 export type ConversionStatus = {
@@ -1010,6 +1013,10 @@ export const api = {
   reconcilePublication: (token: string, proposalId: string, publicationId: string, destinationConnectionId: string) =>
     call<Reconciliation>(`/api/workloads/pipelines/proposals/${proposalId}/publications/${publicationId}/reconcile`, {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ destinationConnectionId })
+    }),
+  releasePublication: (token: string, proposalId: string, publicationId: string, destinationConnectionId: string, note: string) =>
+    call<Publication>(`/api/workloads/pipelines/proposals/${proposalId}/publications/${publicationId}/release`, {
+      method: 'POST', headers: withToken(token), body: JSON.stringify({ destinationConnectionId, note })
     }),
   publicationStatus: (token: string) =>
     call<PublicationStatus>('/api/workloads/pipelines/publication/status', { headers: withToken(token) }),

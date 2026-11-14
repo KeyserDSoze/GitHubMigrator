@@ -105,13 +105,68 @@ public sealed class PublicationReconcilerTests
         var r = Assess(Record(PublicationStates.Failed, writes: true, pull: null, commit: null), Seen(head: null, onHead: WorkflowFileState.Absent));
         Assert.Equal(ReconciliationVerdicts.NothingFound, r.Verdict);
         Assert.Equal(["LedgerStillBlocksPlan", "NothingFound"], Codes(r));
-        Assert.Contains("another hash", r.Findings.Single(f => f.Code == "LedgerStillBlocksPlan").Message);
+        Assert.Contains("A superadmin can release it", r.Findings.Single(f => f.Code == "LedgerStillBlocksPlan").Message);
+        Assert.Contains("the base branch can move", r.Findings.Single(f => f.Code == "LedgerStillBlocksPlan").Message);
         Assert.DoesNotContain("ProductWillNotRetry", Codes(r));
+        Assert.True(r.LedgerBlocksPlan);
+        Assert.False(r.LedgerReleased);
 
         // a failure before any write that left nothing is just nothing
         var clean = Assess(Record(PublicationStates.Failed, writes: false, pull: null, commit: null), Seen(head: null, onHead: WorkflowFileState.Absent));
         Assert.Equal(ReconciliationVerdicts.NothingFound, clean.Verdict);
         Assert.Equal(["NothingFound"], Codes(clean));
+    }
+
+    [Fact]
+    public void A_release_is_not_offered_while_the_branch_exists_and_a_released_attempt_says_so_and_no_longer_blocks()
+    {
+        var left = Assess(Record(PublicationStates.Failed, writes: true, pull: null, commit: null), Seen(head: OtherSha, onHead: WorkflowFileState.Absent));
+        Assert.Equal(["BranchWithoutPullRequest", "ProductWillNotRetry"], Codes(left));
+        Assert.True(left.LedgerBlocksPlan);
+
+        // a closed pull request does not make the branch go away: with the branch still there nothing is offered either
+        var closedButBranch = Assess(Record(PublicationStates.Failed, writes: true, pull: null, commit: null), Seen(head: OtherSha, onHead: WorkflowFileState.Absent, pulls: [Pull(state: "closed", head: OtherSha)]));
+        Assert.Equal(ReconciliationVerdicts.ClosedWithoutMerge, closedButBranch.Verdict);
+        Assert.Equal(["ClosedWithoutMerge", "ProductWillNotRetry"], Codes(closedButBranch));
+        Assert.True(closedButBranch.LedgerBlocksPlan);
+
+        var released = Assess(Record(PublicationStates.Failed, writes: true, pull: null, commit: null) with { ReleasedAtUtc = Now, ReleasedById = Guid.NewGuid(), ReleasedBy = "admin", ReleaseNote = "Deleted the branch." },
+            Seen(head: null, onHead: WorkflowFileState.Absent));
+        Assert.Equal(ReconciliationVerdicts.NothingFound, released.Verdict);
+        Assert.Equal(["AttemptReleased", "NothingFound"], Codes(released));
+        Assert.Equal("Info", released.Findings.Single(f => f.Code == "AttemptReleased").Severity);
+        Assert.Contains("released this attempt", released.Findings.Single(f => f.Code == "AttemptReleased").Message);
+        Assert.True(released.LedgerReleased);
+        Assert.False(released.LedgerBlocksPlan);
+        Assert.DoesNotContain("LedgerStillBlocksPlan", Codes(released));
+
+        // what the attempt left is still reported on a released attempt, but the release does not claim it is gone
+        var again = Assess(Record(PublicationStates.Failed, writes: true, pull: null, commit: null) with { ReleasedAtUtc = Now, ReleasedById = Guid.NewGuid(), ReleasedBy = "admin", ReleaseNote = "Deleted the branch." },
+            Seen(head: OtherSha, onHead: WorkflowFileState.Absent));
+        Assert.Equal(ReconciliationVerdicts.BranchWithoutPullRequest, again.Verdict);
+        Assert.Contains("AttemptReleased", Codes(again));
+        Assert.DoesNotContain("ProductWillNotRetry", Codes(again));
+    }
+
+    [Fact]
+    public void A_published_attempt_whose_pull_request_was_closed_and_whose_branch_is_gone_still_blocks_its_plan_and_can_be_released_but_not_while_the_branch_or_the_pull_request_is_there()
+    {
+        var closedGone = Assess(Record(), Seen(head: null, onHead: WorkflowFileState.Absent, pulls: [Pull(state: "closed")]));
+        Assert.Equal(ReconciliationVerdicts.ClosedWithoutMerge, closedGone.Verdict);
+        Assert.Equal(["ClosedWithoutMerge", "LedgerStillBlocksPlan"], Codes(closedGone));
+        Assert.True(closedGone.LedgerBlocksPlan);
+
+        var branchThere = Assess(Record(), Seen(pulls: [Pull(state: "closed")]));
+        Assert.Equal(["ClosedWithoutMerge"], Codes(branchThere));
+        var open = Assess(Record(), Seen(head: null, onHead: WorkflowFileState.Absent, pulls: [Pull()]));
+        Assert.DoesNotContain("LedgerStillBlocksPlan", Codes(open));
+        var merged = Assess(Record(), Seen(head: null, onHead: WorkflowFileState.Absent, onBase: WorkflowFileState.Identical, pulls: [Pull(state: "closed", merged: true)]));
+        Assert.DoesNotContain("LedgerStillBlocksPlan", Codes(merged));
+
+        var released = Assess(Record() with { ReleasedAtUtc = Now, ReleasedById = Guid.NewGuid(), ReleasedBy = "admin", ReleaseNote = "Closed on purpose." },
+            Seen(head: null, onHead: WorkflowFileState.Absent, pulls: [Pull(state: "closed")]));
+        Assert.Equal(["AttemptReleased", "ClosedWithoutMerge"], Codes(released));
+        Assert.False(released.LedgerBlocksPlan);
     }
 
     [Fact]
@@ -213,6 +268,8 @@ public sealed class PublicationReconciliationServiceTests
         public List<(string Org, string Repo, string Base, string Head, string Path, string Sha, string? Replaced, int? Pull, string Token)> Calls { get; } = [];
         public PublicationObservation Result { get; set; } = new(true, false, new string('c', 40), null, [], WorkflowFileState.Absent, WorkflowFileState.Absent);
         public Exception? Throw { get; set; }
+
+        public Task<PullObservation?> ReadPullAsync(string organization, string repository, int number, string headBranch, string token, CancellationToken ct) => throw new NotSupportedException();
 
         public Task<PublicationObservation> ObserveAsync(string organization, string repository, string baseBranch, string headBranch, string workflowPath, string workflowSha256,
             string? replacedWorkflowSha256, int? pullNumber, string token, CancellationToken ct)

@@ -456,5 +456,7 @@
 .publication-outcome.failed{color:#ff8a8a;border-color:#ff8a8a66}
 .publication-mode{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin:0}
 .publication-reconciliation{display:grid;gap:8px;margin-top:8px;border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--bg)}
+.publication-release textarea{width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);font:inherit;font-size:13px;resize:vertical;outline:0}
+.publication-released{display:flex;align-items:center;gap:6px;margin:6px 0 0}
 .workload-finding.warning{color:var(--text)}
 .publication-attempts ul{margin:0;padding-left:0;list-style:none;display:grid;gap:8px;font-size:12px}

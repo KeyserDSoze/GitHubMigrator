@@ -262,6 +262,85 @@ public sealed class WorkflowPublicationApiTests : PublicationApiTestBase
         Assert.Equal(3, (await RowsAsync(conversion)).Count);
     }
 
+    // A final attempt keeps its plan blocked. The one change the database accepts on it is the release marks, empty to filled, once, with everything else exactly as it was.
+    [RequiresAnalysersFact]
+    public async Task The_database_accepts_one_release_of_a_final_attempt_and_nothing_else_and_a_released_attempt_stops_blocking_its_plan()
+    {
+        var conversion = await ApprovedAsync();
+        var proposal = conversion.GetProperty("proposalId").GetGuid();
+        var sha = conversion.GetProperty("workflowSha256").GetString()!;
+        var actor = Guid.NewGuid();
+        string Plan(char c) => new(c, 64);
+
+        async Task<string> RefusedAsync(string sql, params object[] parameters) =>
+            (await Assert.ThrowsAnyAsync<Exception>(() => InDbAsync(db => db.Database.ExecuteSqlRawAsync(sql, parameters)))).ToString();
+        Task<int> ExecAsync(string sql, params object[] parameters) => InDbAsync(db => db.Database.ExecuteSqlRawAsync(sql, parameters));
+        Task<int> InsertAsync(Guid id, char plan, string state, bool writes, string extra = "", string extraValues = "") => ExecAsync(
+            $"INSERT INTO workflow_publications (id, proposal_id, plan_sha256, workflow_sha256, organization, repository, base_branch, base_sha, head_branch, workflow_path, state, writes_possible, requested_by_id, requested_by, started_at_utc, updated_at_utc{extra}) " +
+            $"VALUES ({{0}}, {{1}}, {{2}}, {{3}}, 'orion-org', 'pub-rel', 'main', {{4}}, 'migrate/azdo-42-abcd1234', '.github/workflows/azdo-42-release-safe.yml', '{state}', {(writes ? "true" : "false")}, {{5}}, 'tester', now(), now(){extraValues})",
+            id, proposal, Plan(plan), sha, new string('c', 40), actor);
+        Task<int> ReleaseSqlAsync(Guid id, string note = "Cleaned the destination.") => ExecAsync(
+            "UPDATE workflow_publications SET released_at_utc = now(), released_by_id = {1}, released_by = 'admin', release_note = {2}, release_evidence = '{{\"headBranchExists\":false}}'::jsonb WHERE id = {0}", id, actor, note);
+        var blocked = "ux_workflow_publications_live";
+
+        // the index knows about releases (an index an earlier version built is rebuilt)
+        var definition = await InDbAsync(db => db.Database.SqlQueryRaw<string>("SELECT indexdef AS \"Value\" FROM pg_indexes WHERE indexname = 'ux_workflow_publications_live'").FirstAsync());
+        Assert.Contains("released_at_utc", definition);
+
+        // an attempt that failed after a write may have happened keeps its plan blocked
+        var failed = Guid.NewGuid();
+        Assert.Equal(1, await InsertAsync(failed, 'a', "Failed", true, ", error_code, failed_at_state", ", 'PublicationFileFailed', 'FileCommitting'"));
+        Assert.Contains(blocked, await RefusedAsync("INSERT INTO workflow_publications (id, proposal_id, plan_sha256, workflow_sha256, organization, repository, base_branch, base_sha, head_branch, workflow_path, state, writes_possible, requested_by_id, requested_by, started_at_utc, updated_at_utc) " +
+            "VALUES ({0}, {1}, {2}, {3}, 'orion-org', 'pub-rel', 'main', {4}, 'migrate/azdo-42-abcd1234', '.github/workflows/azdo-42-release-safe.yml', 'Started', false, {5}, 't', now(), now())", Guid.NewGuid(), proposal, Plan('a'), sha, new string('c', 40), actor));
+
+        // the marks come all together or not at all, with a real note
+        Assert.Contains("ck_workflow_publications_release", await RefusedAsync("UPDATE workflow_publications SET released_at_utc = now() WHERE id = {0}", failed));
+        Assert.Contains("ck_workflow_publications_release", await RefusedAsync("UPDATE workflow_publications SET released_at_utc = now(), released_by_id = {1}, released_by = 'admin', release_note = 'ok' , release_evidence = '{{}}'::jsonb WHERE id = {0}", failed, actor));
+        Assert.Contains("ck_workflow_publications_release", await RefusedAsync("UPDATE workflow_publications SET released_at_utc = now(), released_by_id = {1}, released_by = 'admin', release_note = 'Cleaned it.' WHERE id = {0}", failed, actor)); // no evidence
+        // a release changes nothing else: not the state, not the reason, not whether a write was possible, not the time of the last change
+        foreach (var other in new[] { "state = 'Published'", "error_code = 'Other'", "writes_possible = false", "updated_at_utc = now() + interval '1 hour'", "failed_at_state = 'Started'" })
+            Assert.Contains("is final", await RefusedAsync($"UPDATE workflow_publications SET {other}, released_at_utc = now(), released_by_id = {{1}}, released_by = 'admin', release_note = 'Cleaned it.', release_evidence = '{{{{}}}}'::jsonb WHERE id = {{0}}", failed, actor));
+        Assert.Contains("immutable", await RefusedAsync("UPDATE workflow_publications SET base_sha = {1}, released_at_utc = now(), released_by_id = {2}, released_by = 'admin', release_note = 'Cleaned it.', release_evidence = '{{}}'::jsonb WHERE id = {0}", failed, new string('9', 40), actor));
+
+        // an attempt that has not finished is not released by the database either, nor is one that finishes and is released in one step
+        var running = Guid.NewGuid();
+        Assert.Equal(1, await InsertAsync(running, 'b', "Started", false));
+        Assert.Contains("only a final", await RefusedAsync("UPDATE workflow_publications SET released_at_utc = now(), released_by_id = {1}, released_by = 'admin', release_note = 'Cleaned it.', release_evidence = '{{}}'::jsonb WHERE id = {0}", running, actor));
+        Assert.Contains("only a final", await RefusedAsync("UPDATE workflow_publications SET state = 'Failed', failed_at_state = 'Started', error_code = 'PublicationAbandoned', writes_possible = true, released_at_utc = now(), released_by_id = {1}, released_by = 'admin', release_note = 'Cleaned it.', release_evidence = '{{}}'::jsonb WHERE id = {0}", running, actor));
+        // abandoning is a failure like any other, and is released afterwards
+        Assert.Equal(1, await ExecAsync("UPDATE workflow_publications SET state = 'Failed', failed_at_state = 'Started', error_code = 'PublicationAbandoned', writes_possible = true WHERE id = {0}", running));
+        Assert.Equal(1, await ReleaseSqlAsync(running));
+
+        // the one transition: empty marks to filled, on a final attempt
+        Assert.Equal(1, await ReleaseSqlAsync(failed));
+        var row = (await RowsAsync(conversion)).Single(r => r.Id == failed);
+        Assert.Equal(("Failed", "PublicationFileFailed", true, "admin", "Cleaned the destination."), (row.State, row.ErrorCode, row.WritesPossible, row.ReleasedBy, row.ReleaseNote));
+        Assert.NotNull(row.ReleasedAtUtc);
+        Assert.Contains("headBranchExists", row.ReleaseEvidence);
+
+        // and the plan is free: the same plan can be started again
+        var again = Guid.NewGuid();
+        Assert.Equal(1, await InsertAsync(again, 'a', "Started", false));
+
+        // a release is decided once and cannot be undone or rewritten
+        Assert.Contains("is final", await ReleaseRefusedAsync(failed));
+        Assert.Contains("is final", await RefusedAsync("UPDATE workflow_publications SET release_note = 'Something else.' WHERE id = {0}", failed));
+        Assert.Contains("is final", await RefusedAsync("UPDATE workflow_publications SET released_at_utc = NULL, released_by_id = NULL, released_by = NULL, release_note = NULL, release_evidence = NULL WHERE id = {0}", failed));
+        Assert.Contains("audit record", await RefusedAsync("DELETE FROM workflow_publications WHERE id = {0}", failed));
+
+        // a published attempt can be released too (its pull request closed unmerged, its branch gone), under the same rules
+        var published = Guid.NewGuid();
+        Assert.Equal(1, await InsertAsync(published, 'c', "Started", false));
+        foreach (var step in new[] { ("BranchCreating", ""), ("BranchCreated", ""), ("FileCommitting", ""), ("FileCommitted", ", commit_sha = '" + new string('e', 40) + "'"), ("PullRequestOpening", ""), ("PullRequestOpened", ", pull_number = 7"), ("Published", "") })
+            Assert.Equal(1, await ExecAsync($"UPDATE workflow_publications SET state = '{step.Item1}'{step.Item2} WHERE id = {{0}}", published));
+        Assert.Contains(blocked, await RefusedAsync("INSERT INTO workflow_publications (id, proposal_id, plan_sha256, workflow_sha256, organization, repository, base_branch, base_sha, head_branch, workflow_path, state, writes_possible, requested_by_id, requested_by, started_at_utc, updated_at_utc) " +
+            "VALUES ({0}, {1}, {2}, {3}, 'orion-org', 'pub-rel', 'main', {4}, 'migrate/azdo-42-abcd1234', '.github/workflows/azdo-42-release-safe.yml', 'Started', false, {5}, 't', now(), now())", Guid.NewGuid(), proposal, Plan('c'), sha, new string('c', 40), actor));
+        Assert.Equal(1, await ReleaseSqlAsync(published));
+        Assert.Equal(1, await InsertAsync(Guid.NewGuid(), 'c', "Started", false));
+
+        Task<string> ReleaseRefusedAsync(Guid id) => RefusedAsync("UPDATE workflow_publications SET released_at_utc = now(), released_by_id = {1}, released_by = 'admin', release_note = 'Again.', release_evidence = '{{}}'::jsonb WHERE id = {0}", id, actor);
+    }
+
     [RequiresAnalysersFact]
     public async Task The_status_and_the_credential_check_tell_an_operator_whether_publishing_could_start_without_writing()
     {

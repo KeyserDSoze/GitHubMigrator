@@ -25,6 +25,9 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
   const [reconciled, setReconciled] = useState<Record<string, Reconciliation>>({});
   const [reconciling, setReconciling] = useState('');
   const [reconcileErrors, setReconcileErrors] = useState<Record<string, string>>({});
+  const [releaseNotes, setReleaseNotes] = useState<Record<string, string>>({});
+  const [releasing, setReleasing] = useState('');
+  const [releaseErrors, setReleaseErrors] = useState<Record<string, string>>({});
 
   // Whether the product may write at all, and what it has already done for this proposal. Both are context: when they cannot be loaded the plan still works.
   useEffect(() => {
@@ -63,6 +66,28 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
       const code = e instanceof Error ? e.message : '';
       setReconcileErrors(previous => ({ ...previous, [a.id]: t('pubRecError_' + code, { defaultValue: t('pubRecErrorGeneric') }) }));
     } finally { setReconciling(''); }
+  }
+
+  // Frees the exact plan an attempt kept blocked. The product reads the destination again first (GET only) and refuses if the branch, an open pull request or a merged one is still
+  // there; it writes nothing at the destination and the attempt stays on record as it was. Only a superadmin gets here.
+  async function release(a: Publication) {
+    const connection = destinations.find(d => d.organization.toLowerCase() === a.organization.toLowerCase())?.id ?? destinationId;
+    setReleasing(a.id); setReleaseErrors(previous => ({ ...previous, [a.id]: '' }));
+    try {
+      await api.releasePublication(token, proposalId, a.id, connection, (releaseNotes[a.id] ?? '').trim());
+      setReleaseNotes(previous => ({ ...previous, [a.id]: '' }));
+      // what was planned before the release said the attempt was in the way: it is read again, not edited
+      setPlan(null); setConfirmed(false);
+      await reconcile(a);
+    } catch (e) {
+      const code = e instanceof Error ? e.message : '';
+      const named = (e instanceof ApiError ? e.details : []).map(d => t('pubLeftover_' + d, { defaultValue: d })).join('; ');
+      setReleaseErrors(previous => ({ ...previous, [a.id]: t('pubReleaseError_' + code, { defaultValue: t('pubReleaseErrorGeneric') }) + (named ? ` (${named})` : '') }));
+      if (code === 'PublicationLeftoversExist' || code === 'PublicationLedgerConflict') void reconcile(a); // show what is there now
+    } finally {
+      setReleasing('');
+      api.listPublications(token, proposalId).then(setAttempts).catch(() => undefined);
+    }
   }
 
   async function run() {
@@ -143,6 +168,22 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
     </dl>}
   </div>;
 
+  // Offered only where the product itself said the ledger still blocks the plan (a read of the destination shows nothing of the attempt left): one rule, the server's.
+  const releasable = (r: Reconciliation) => isSuperAdmin && !r.ledgerReleased && r.findings.some(f => f.code === 'LedgerStillBlocksPlan');
+  const releaseForm = (a: Publication) => <div className="publication-reconciliation publication-release" aria-label={t('pubReleaseTitle')}>
+    <strong>{t('pubReleaseTitle')}</strong>
+    <p className="connection-hint">{t('pubReleaseHint')}</p>
+    <label>{t('pubReleaseNote')}
+      <textarea rows={2} maxLength={500} value={releaseNotes[a.id] ?? ''} onChange={e => setReleaseNotes(previous => ({ ...previous, [a.id]: e.target.value }))} />
+    </label>
+    <div className="proposal-actions">
+      <button type="button" className="secondary-button" disabled={releasing === a.id || (releaseNotes[a.id] ?? '').trim().length < 3} onClick={() => { void release(a); }}>
+        <CheckCircle2 size={14} /> {releasing === a.id ? t('pubReleaseBusy') : t('pubReleaseButton')}
+      </button>
+    </div>
+    {releaseErrors[a.id] && <div className="alert" role="alert">{releaseErrors[a.id]}</div>}
+  </div>;
+
   return <div className="publication-plan" aria-label={t('pubTitle')}>
     <h4><GitPullRequest size={15} /> {t('pubTitle')}</h4>
     <p className="connection-hint">{t('pubHint')}</p>
@@ -177,7 +218,7 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
       </div>
       {plan.mode === 'Update' && <p className="publication-mode"><span className="gate-chip kind-triggers"><Replace size={13} /> {t('pubModeUpdate')}</span>{' '}
         {t('pubModeUpdateHint', { hash: (plan.replacesWorkflowSha256 ?? '').slice(0, 12) })}</p>}
-      {plan.findings.map(f => <p key={f.code} className="workload-finding"><strong>{f.code}</strong> — {t('pubFinding_' + f.code, { defaultValue: f.message, hash: (plan.replacesWorkflowSha256 ?? '').slice(0, 12) })}</p>)}
+      {plan.findings.map(f => <p key={f.code} className="workload-finding"><strong>{f.code}</strong> — {t('pubFinding_' + f.code, { defaultValue: f.message, hash: (plan.replacesWorkflowSha256 ?? '').slice(0, 12), number: /#(\d+)/.exec(f.message)?.[1] ?? '?' })}</p>)}
       <dl className="conversion-provenance">
         <dt>{t('pubRepo')}</dt><dd>{plan.organization}/{plan.repository}</dd>
         <dt>{t('pubBaseBranch')}</dt><dd>{plan.baseBranch}{plan.baseSha && <> @ <code>{plan.baseSha.slice(0, 12)}</code></>}</dd>
@@ -221,7 +262,11 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
             <RefreshCw size={13} /> {reconciling === a.id ? t('pubRecBusy') : t('pubRecCheck')}
           </button>
           {reconcileErrors[a.id] && <div className="alert" role="alert">{reconcileErrors[a.id]}</div>}
+          {a.releasedAtUtc && <p className="connection-hint publication-released">
+            <CheckCircle2 size={13} /> {t('pubReleasedBy', { who: a.releasedBy ?? '', when: new Date(a.releasedAtUtc).toLocaleString() })}
+            {a.releaseNote ? <> — “{a.releaseNote}”</> : null}</p>}
           {reconciled[a.id] && reconciliation(reconciled[a.id])}
+          {reconciled[a.id] && releasable(reconciled[a.id]) && releaseForm(a)}
         </li>)}
       </ul>
     </div>}

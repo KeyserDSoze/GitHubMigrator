@@ -203,4 +203,44 @@ public sealed class GitHubPublicationReplacementReaderTests
         await Assert.ThrowsAsync<HttpRequestException>(() => ObserveAsync(new StubHandler().Then(() => Repo()).Then(() => StubHandler.Json(HttpStatusCode.InternalServerError, "{}"))));
         await Assert.ThrowsAsync<HttpRequestException>(() => ObserveAsync(new StubHandler().Then(() => StubHandler.Json(HttpStatusCode.OK, "not json"))));
     }
+
+    // ---- one pull request by number -----------------------------------------------------------------------------------------------------------
+
+    private static Task<PullObservation?> ReadPullAsync(StubHandler handler, int number = 7) =>
+        Reader(handler).ReadPullAsync("target-org", "orion-api", number, Head, "pat", default);
+
+    [Fact]
+    public async Task One_pull_request_is_read_with_a_single_get_and_only_if_it_is_a_pull_request_of_the_branch_asked_about()
+    {
+        var handler = new StubHandler().Then(() => Json(new { number = 7, state = "open", merged = false, head = new { @ref = Head, sha = Sha }, @base = new { @ref = "main" } }));
+        var open = await ReadPullAsync(handler);
+        Assert.Equal((7, "open", false, Sha, "main"), (open!.Number, open.State, open.Merged, open.HeadSha, open.BaseRef));
+        var request = Assert.Single(handler.Sent);
+        Assert.Equal((HttpMethod.Get, "/repos/target-org/orion-api/pulls/7", "Bearer pat"), (request.Method, request.Uri.AbsolutePath, request.Headers["Authorization"]));
+
+        var merged = await ReadPullAsync(new StubHandler().Then(() => Json(new { number = 7, state = "closed", merged = true, head = new { @ref = Head }, @base = new { @ref = "main" } })));
+        Assert.Equal(("closed", true), (merged!.State, merged.Merged));
+        var closed = await ReadPullAsync(new StubHandler().Then(() => Json(new { number = 7, state = "closed", merged = false, head = new { @ref = Head } })));
+        Assert.Equal(("closed", false), (closed!.State, closed.Merged));
+
+        // the number belongs to another branch, or to nothing: not this attempt's pull request
+        Assert.Null(await ReadPullAsync(new StubHandler().Then(() => Json(new { number = 7, state = "open", head = new { @ref = "another-branch" } }))));
+        Assert.Null(await ReadPullAsync(new StubHandler().Then(() => NotFound())));
+        Assert.Null(await ReadPullAsync(new StubHandler().Then(() => Json(new[] { 1, 2 }))));
+        Assert.Null(await ReadPullAsync(new StubHandler().Then(() => Json(new { state = "open", head = new { @ref = Head } })))); // no number
+    }
+
+    [Fact]
+    public async Task A_number_that_cannot_be_a_pull_request_asks_nothing_and_anything_but_an_answer_is_unreadable()
+    {
+        foreach (var number in new[] { 0, -3 })
+        {
+            var handler = new StubHandler();
+            Assert.Null(await ReadPullAsync(handler, number));
+            Assert.Empty(handler.Sent);
+        }
+        foreach (var status in new[] { HttpStatusCode.Forbidden, HttpStatusCode.Unauthorized, HttpStatusCode.InternalServerError, HttpStatusCode.TooManyRequests })
+            await Assert.ThrowsAsync<HttpRequestException>(() => ReadPullAsync(new StubHandler().Then(() => StubHandler.Json(status, "{}"))));
+        await Assert.ThrowsAsync<HttpRequestException>(() => ReadPullAsync(new StubHandler().Then(() => StubHandler.Json(HttpStatusCode.OK, "not json"))));
+    }
 }

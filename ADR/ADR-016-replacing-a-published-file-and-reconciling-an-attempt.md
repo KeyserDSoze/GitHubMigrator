@@ -41,10 +41,10 @@ Consequences:
   file being replaced for an update, answers 409 on a conflict, and needs the `workflow` scope for a token under `.github/workflows` (that page says nothing about a GitHub App's permission: that part stays the ADR-014 assumption). **Not verified:** any of it against github.com
   (nothing was run there), GitHub's wording and status for a refused workflow write, `head=owner:branch` with `/` in the branch name (the plan reader already assumes it), that the list of pull
   requests carries `merged_at` for a merged one (the single-pull-request answer carries `merged`; both are read), and App-token behaviour for an update.
-- **A dead end that is only described.** An attempt that failed with `writesPossible` keeps that exact plan blocked in the ledger even after a person removes what it left; a new plan, with another
-  hash, becomes possible once the base branch moves. Reconciliation says so (`LedgerStillBlocksPlan`); releasing a plan after verified cleanup is not built.
-- **A pull request still open for the parent.** A derived proposal planned while the parent's pull request is not yet merged sees a free path and plans a creation; the two pull requests would then
-  conflict. The plan cannot see the ledger, so it does not warn; reconciliation of the parent's attempt shows whether it is still open. Merge the conversion first.
+- **A dead end that was only described (resolved in [ADR-019](ADR-019-earlier-pull-requests-and-releasing-a-blocked-plan.md)).** An attempt that failed with `writesPossible` keeps that exact plan
+  blocked in the ledger even after a person removes what it left. Since 0.9.0 a superadmin can release it after the product has read the destination again; the plan says `AttemptBlocksPlan` meanwhile.
+- **A pull request still open for the parent (resolved in ADR-019).** A derived proposal planned while the pull request of an earlier publication of the same file is open is now blocked
+  (`EarlierPullRequestOpen`) until that pull request is merged or closed.
 - Updating is for the one case "triggers over the file this product put there". Replacing a file after a *re*-conversion (another approved conversion of the same pipeline) is not covered and stays
   `WorkflowPathOccupied`.
 

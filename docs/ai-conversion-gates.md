@@ -134,6 +134,9 @@ What comes back: where the workflow goes (`.github/workflows/azdo-{pipelineId}-{
 | `WorkflowWillBeReplaced` | Info | the file at the path is exactly the text of the approved conversion this (Triggers) proposal was derived from: the plan replaces it, on a new branch (`mode: Update`) |
 | `AlreadyPublished` | Info | exactly this workflow is on the base branch (line endings ignored): nothing to publish, so not `ready` |
 | `HeadBranchExists`, `OpenPullRequestExists` | Blocker | the branch is taken, or a pull request from it is open |
+| `EarlierPullRequestOpen` | Blocker | a pull request this product opened earlier for the same file (same organization, repository, base branch and path; the parent conversion, an earlier Triggers proposal, another conversion) is still open: the same file on another branch would conflict with it. Merge or close it, then plan again |
+| `EarlierPullRequestUnchecked` | Warning | such a pull request could not be read just now: whether it is still open is not known (never assumed closed) |
+| `AttemptBlocksPlan` | Blocker | an earlier attempt of this *exact* plan (same hash) keeps it blocked in the ledger: failed after a possible write, never finished, or published with its pull request closed and its branch gone. Added only when nothing else explains it; changes `ready`, not the hash. See *Releasing an attempt* |
 
 **Creating or replacing.** A plan puts the file on a new branch either as a new file (`mode: Create`) or, only for a **derived Triggers proposal**, as the replacement of the approved text of
 its parent conversion (`mode: Update`, with `replacesWorkflowSha256`). The file is replaceable only if the parent is still approved (same pipeline) and the file at the planned base commit is exactly
@@ -254,8 +257,32 @@ facts and the ledger's own fields, and `writesPerformed: false`.
 | `TargetUnreadable` / `RepositoryNotFound` | nothing can be said (never shown as a good result) |
 
 Findings (`Info`/`Warning`): `BranchMoved`, `BaseMoved`, `PullRequestMissing`, `MultiplePullRequests`, `OtherPullRequests`, `AttemptNotFinished`, `UnexpectedObjects` (the ledger says nothing was written but
-something with the attempt's name exists), `ProductWillNotRetry`, `LedgerStillBlocksPlan` (an attempt that failed with `writesPossible` keeps that exact plan blocked even after a person removed what it
-left; another plan, with another hash, is possible once the base branch moves). The screen shows it per attempt ("Check at the destination"). Not verified online: see ADR-016.
+something with the attempt's name exists), `ProductWillNotRetry`, `LedgerStillBlocksPlan` (nothing of the attempt is left at the destination, but the ledger still blocks that exact plan: a superadmin can release the attempt, or the base branch can move and make another plan; also
+reported for a published attempt whose pull request was closed unmerged with its branch gone), `AttemptReleased` (a person released the attempt after the product checked the destination). The response also has `ledgerReleased` and
+`ledgerBlocksPlan`. The screen shows it per attempt ("Check at the destination"). Not verified online: see ADR-016.
+
+## Releasing an attempt: `POST /api/workloads/pipelines/proposals/{id}/publications/{publicationId}/release`
+
+Body `{ destinationConnectionId, note }`. **Superadmin only**, rate limited, the note 3 to 500 characters (control characters removed). One live attempt per plan is the lock, so an attempt that failed after a
+possible write, one that never finished and one published whose pull request was closed unmerged all keep that exact plan blocked; a person cleans the destination, and **the product looks again before
+it believes it**: GET requests only, with the destination's read-only credential, nothing written. It releases only if no branch, no open pull request and no merged one remains (a published attempt's own pull
+request must be *seen* closed and unmerged). The attempt stays on record exactly as it was; the release is a mark with who, when, why and what the destination showed (JSON without any workflow text).
+
+| Answer | Meaning |
+| --- | --- |
+| `200` | the attempt, now with `releasedAtUtc`, `releasedBy`, `releaseNote` and `blocksItsPlan: false`; the same plan (same hash) can be published again |
+| `400 NoteRequired` | no note, or fewer than 3 characters; checked before anything is read |
+| `404` | no such attempt for this proposal |
+| `409 PublicationLeftoversExist` | something of it is still there; `details`: `BranchExists`, `PullRequestOpen`, `PullRequestMerged`, `RepositoryNotFound`, `PublishedPullRequestNotClosed`; nothing is marked |
+| `409 PublicationStillRunning` | not final and moved less than 15 minutes ago: never released while it could be writing |
+| `409 PublicationAlreadyReleased` / `PublicationAlreadyFree` | decided already / it failed before any write, so it never blocked anything |
+| `409 PublicationLedgerConflict` / `DestinationMismatch` | the attempt changed while it was checked / the connection is for another organization than the one it wrote to |
+| `422 DestinationUnreadable` | the destination could not be read: never taken as clean |
+
+An attempt that never reached a final state and has not moved for 15 minutes (the writer gives up after two) is first **abandoned** (`Failed`, `PublicationAbandoned`, writes possible: nothing says it did not
+write) and then released, and only if the destination was read clean. The database allows exactly this one transition on a final attempt (the release columns, empty to filled, once, everything else unchanged);
+the unique live index ignores a released attempt. Meanwhile the plan says `AttemptBlocksPlan`. The screen offers the form only after "Check at the destination", to a superadmin, and only where the reconciliation says
+`LedgerStillBlocksPlan`. See [ADR-019](../ADR/ADR-019-earlier-pull-requests-and-releasing-a-blocked-plan.md).
 
 ## What may be sent to a model
 
@@ -292,6 +319,8 @@ they are missing; CI sets `GITHUBMIGRATOR_REQUIRE_TOOLS=true`.
 | `…/Ai/GitHubPublicationWriterTests.cs`, `WorkflowPublicationExecutionTests.cs` | the writer against scripted GitHub answers (what it sends, every way a step can fail and whether something may exist) and the executor's guards with an in-memory ledger |\n| `…/Ai/WorkflowPublicationTests.cs` | the plan (naming, findings, hash, injection-proof description, quoting, order of checks) and the destination reader against scripted GitHub answers |\n| `…/Ai/WorkflowProposalTests.cs` | the approval rules with an in-memory store: binding to the hash, four eyes, gates run again, warnings by name, races, release of the approved text |
 | `…/Ai/ConversionTests.cs`, `OrionConverterEvaluationTests.cs`, `PipelineYamlReaderTests.cs` | plan, prompt, orchestrator (fake model), the converter on the ten Orion pipelines with the real analysers (golden answers must reach `ReadyForReview`; 40 hostile edits must be blocked with the expected code), the YAML reader |
 | `tests/integration/WorkflowPublicationApiTests.cs` | the publisher on the real API, PostgreSQL ledger and GhSim: branch + file + pull request that match the plan and exactly three writes, every guard, a refusal that frees the plan, a write that fails halfway and is never repeated, simultaneous publishes, the database refusing rewrites and skipped steps, disabled by default |\n| `tests/integration/WorkflowPublicationPlanApiTests.cs` | approved workflow → plan against GhSim over real HTTP: GETs only and only that repository, every conflict from what the destination really holds, no read for an unapproved proposal |\n| `tests/integration/WorkflowProposalApprovalApiTests.cs` | kept proposals and approval on the real API and PostgreSQL: the whole decision flow, concurrent approvals, and the database refusing rewrites and skipped states (needs the analysers; CI installs them) |
+| `…/Ai/EarlierPullRequestTests.cs`, `AttemptBlocksPlanTests.cs`, `PublicationReleaseTests.cs`, `WorkflowPublicationReconciliationTests.cs` | the plan's view of an earlier open pull request and of a blocking attempt (what it asks, what it never asks, the hash unchanged), the release service (every leftover, stale versus running, abandonment, races, evidence without text) and the reconciler's offer |
+| `tests/integration/WorkflowPublicationUpdateApiTests.cs` | replacement, reconciliation, the earlier pull request and the release flow on the real API, PostgreSQL and GhSim (the database constraint test for the release transition is in `WorkflowPublicationApiTests.cs`) |
 | `tests/integration/PipelineConversionAgainstSimApiTests.cs` | the endpoint on the real API: end to end with LlmSim, no source secret reaches the model, consent, failures, access |
 | `tests/frontend/ai-connections.spec.ts`, `pipeline-conversion.spec.ts`, `proposal-review.spec.ts`, `publication-plan.spec.ts` | the UI against mocked endpoints |
 | `…/WorkflowGates/Golden/orion` + `OrionGoldenCorpusTests` | ten Orion pipelines converted by hand: gates (policy and real analysers), plan accounting, task coverage, honesty rules, redaction; see its `README.md` and `GATE_FINDINGS.md`. **Never executed on GitHub** |

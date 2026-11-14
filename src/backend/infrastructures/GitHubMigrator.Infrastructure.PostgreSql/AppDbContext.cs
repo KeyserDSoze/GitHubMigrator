@@ -331,7 +331,13 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             entity.Property(x => x.Mode).HasColumnName("mode").HasMaxLength(8).HasDefaultValue("Create");
             entity.Property(x => x.ReplacedBlobSha).HasColumnName("replaced_blob_sha").HasMaxLength(40);
             entity.Property(x => x.ReplacedWorkflowSha256).HasColumnName("replaced_workflow_sha256").HasMaxLength(64);
+            entity.Property(x => x.ReleasedAtUtc).HasColumnName("released_at_utc");
+            entity.Property(x => x.ReleasedById).HasColumnName("released_by_id");
+            entity.Property(x => x.ReleasedBy).HasColumnName("released_by").HasMaxLength(160);
+            entity.Property(x => x.ReleaseNote).HasColumnName("release_note").HasMaxLength(500);
+            entity.Property(x => x.ReleaseEvidence).HasColumnName("release_evidence").HasColumnType("jsonb");
             entity.HasIndex(x => new { x.ProposalId, x.StartedAtUtc }).HasDatabaseName("ix_workflow_publications_proposal");
+            entity.HasIndex(x => new { x.Organization, x.Repository, x.WorkflowPath }).HasDatabaseName("ix_workflow_publications_path");
             entity.HasOne<WorkflowProposalRecord>().WithMany().HasForeignKey(x => x.ProposalId).OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<DiscoveryInventoryRecord>(entity =>

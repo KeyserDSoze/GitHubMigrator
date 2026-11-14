@@ -12,7 +12,7 @@ internal sealed class InMemoryLedger : IPublicationLedger
     // the same rule as the database: one live attempt per plan, a failure before any write frees the plan
     public Task<PublicationRecord?> TryStartAsync(PublicationRecord started, CancellationToken ct)
     {
-        if (Rows.Any(r => r.ProposalId == started.ProposalId && r.PlanSha256 == started.PlanSha256 && !(r.State == PublicationStates.Failed && !r.WritesPossible)))
+        if (Rows.Any(r => r.ProposalId == started.ProposalId && r.PlanSha256 == started.PlanSha256 && r.BlocksItsPlan))
             return Task.FromResult<PublicationRecord?>(null);
         Rows.Add(started);
         return Task.FromResult<PublicationRecord?>(started);
@@ -34,9 +34,35 @@ internal sealed class InMemoryLedger : IPublicationLedger
         return Task.CompletedTask;
     }
 
+    // the same compare-and-swaps as the database
+    public Func<bool>? RefuseNextRelease { get; set; }
+    public List<(Guid Id, string Evidence)> Evidence { get; } = [];
+
+    public Task<bool> AbandonAsync(Guid id, DateTimeOffset staleBefore, DateTimeOffset at, CancellationToken ct)
+    {
+        var i = Rows.FindIndex(r => r.Id == id && r.State != PublicationStates.Published && r.State != PublicationStates.Failed && r.UpdatedAtUtc <= staleBefore);
+        if (i < 0) return Task.FromResult(false);
+        Rows[i] = Rows[i] with { State = PublicationStates.Failed, FailedAtState = Rows[i].State, ErrorCode = "PublicationAbandoned", WritesPossible = true, UpdatedAtUtc = at };
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> ReleaseAsync(Guid id, Guid byId, string by, string note, string evidenceJson, DateTimeOffset at, CancellationToken ct)
+    {
+        if (RefuseNextRelease?.Invoke() == true) return Task.FromResult(false);
+        var i = Rows.FindIndex(r => r.Id == id && r.ReleasedAtUtc is null && r.State is PublicationStates.Failed or PublicationStates.Published);
+        if (i < 0) return Task.FromResult(false);
+        Rows[i] = Rows[i] with { ReleasedAtUtc = at, ReleasedById = byId, ReleasedBy = by, ReleaseNote = note };
+        Evidence.Add((id, evidenceJson));
+        return Task.FromResult(true);
+    }
+
     public Task<PublicationRecord?> GetAsync(Guid id, CancellationToken ct) => Task.FromResult(Rows.FirstOrDefault(r => r.Id == id));
     public Task<IReadOnlyList<PublicationRecord>> ListAsync(Guid proposalId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<PublicationRecord>>(Rows.Where(r => r.ProposalId == proposalId).OrderByDescending(r => r.StartedAtUtc).ToArray());
+
+    public Task<IReadOnlyList<PublicationRecord>> ListForPathAsync(string organization, string repository, string workflowPath, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<PublicationRecord>>(Rows.Where(r => string.Equals(r.Organization, organization, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.Repository, repository, StringComparison.OrdinalIgnoreCase) && r.WorkflowPath == workflowPath).OrderByDescending(r => r.StartedAtUtc).Take(20).ToArray());
 }
 
 internal sealed class FakeWriter : IGitHubPublicationWriter

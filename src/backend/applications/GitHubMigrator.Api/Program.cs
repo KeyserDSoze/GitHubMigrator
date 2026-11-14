@@ -693,6 +693,7 @@ builder.Services.AddTransient<IGitHubPublicationReader>(s => s.GetRequiredServic
 // the same read-only client also looks at what became of an attempt that was made (reconciliation): GET requests only, with the destination connection's credential
 builder.Services.AddTransient<IGitHubPublicationObserver>(s => s.GetRequiredService<GitHubPublicationReader>());
 builder.Services.AddScoped<PublicationReconciliationService>();
+builder.Services.AddScoped<PublicationReleaseService>();
 // Redirects must never be followed (they would carry the API key to another host); each attempt has its own timeout.
 builder.Services.AddHttpClient<GitHubMigrator.Infrastructure.Ai.OpenAiCompatibleChatClient>(c => c.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });

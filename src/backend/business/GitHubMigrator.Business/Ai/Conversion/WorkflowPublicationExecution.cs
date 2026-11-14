@@ -88,7 +88,13 @@ public static class PublicationStates
 public sealed record PublicationRecord(Guid Id, Guid ProposalId, string PlanSha256, string WorkflowSha256, string Organization, string Repository,
     string BaseBranch, string BaseSha, string HeadBranch, string WorkflowPath, string State, string? CommitSha, int? PullNumber, string? PullUrl,
     string? ErrorCode, string? FailedAtState, bool WritesPossible, Guid RequestedById, string RequestedBy, DateTimeOffset StartedAtUtc, DateTimeOffset UpdatedAtUtc,
-    string Mode = PublicationModes.Create, string? ReplacedBlobSha = null, string? ReplacedWorkflowSha256 = null);
+    string Mode = PublicationModes.Create, string? ReplacedBlobSha = null, string? ReplacedWorkflowSha256 = null,
+    DateTimeOffset? ReleasedAtUtc = null, Guid? ReleasedById = null, string? ReleasedBy = null, string? ReleaseNote = null)
+{
+    // The ledger's own definition of "live": everything except an attempt that failed before it wrote anything and one a person released after the product had verified, at the
+    // destination, that nothing of it remains. A live attempt keeps its exact plan blocked.
+    public bool BlocksItsPlan => ReleasedAtUtc is null && !(State == PublicationStates.Failed && !WritesPossible);
+}
 
 public interface IPublicationLedger
 {
@@ -99,6 +105,13 @@ public interface IPublicationLedger
     Task FailAsync(Guid id, string errorCode, bool writesPossible, DateTimeOffset at, CancellationToken ct);
     Task<PublicationRecord?> GetAsync(Guid id, CancellationToken ct);
     Task<IReadOnlyList<PublicationRecord>> ListAsync(Guid proposalId, CancellationToken ct);
+    // Every attempt, of any proposal, that wrote (or tried to write) this workflow file in this repository: what a plan has to know about before it adds the same file again.
+    Task<IReadOnlyList<PublicationRecord>> ListForPathAsync(string organization, string repository, string workflowPath, CancellationToken ct);
+    // An attempt that never reached a final state and has not moved since `staleBefore` (that instant included) is abandoned: it becomes Failed (PublicationAbandoned, writes possible once a write was attempted).
+    // Compare-and-swap: false when it is final, or was updated after `staleBefore`.
+    Task<bool> AbandonAsync(Guid id, DateTimeOffset staleBefore, DateTimeOffset at, CancellationToken ct);
+    // Marks a Failed or Published attempt as released, once, with who, why and what the destination showed. Compare-and-swap: false when it is not final or was already released.
+    Task<bool> ReleaseAsync(Guid id, Guid byId, string by, string note, string evidenceJson, DateTimeOffset at, CancellationToken ct);
 }
 
 public sealed class WorkflowPublicationException(string code, IReadOnlyList<string>? details = null, PublicationRecord? record = null) : Exception("Workflow publication refused")

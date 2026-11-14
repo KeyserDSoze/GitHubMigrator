@@ -67,7 +67,7 @@ public static partial class WorkflowPublicationPlanner
 
     public static PublicationPlan Build(ApprovedWorkflow approved, WorkflowProposal proposal, IReadOnlyList<ProposalEvent> events,
         string organization, string repository, string requestedBase, PublicationTarget? target, bool targetUnreadable, string gitUrl, DateTimeOffset now,
-        string? priorWorkflowSha256 = null)
+        string? priorWorkflowSha256 = null, IReadOnlyList<PublicationFinding>? extraFindings = null)
     {
         var path = WorkflowPathFor(proposal.PipelineId, proposal.Evidence.PipelineName);
         var head = HeadBranchFor(proposal.PipelineId, approved.WorkflowSha256);
@@ -76,6 +76,8 @@ public static partial class WorkflowPublicationPlanner
         // a file is replaced only when the caller named the text it may replace, the reader found exactly that text, and said which blob it is
         var update = triggers && priorWorkflowSha256 is not null && target is { WorkflowFile: WorkflowFileState.PriorVersion, WorkflowFileBlobSha: { } };
         var findings = Findings(target, targetUnreadable, update, priorWorkflowSha256);
+        // things the destination alone does not show: what this product published earlier for the same file and has not seen merged or closed
+        if (extraFindings is { Count: > 0 }) findings.AddRange(extraFindings);
         var approval = events.LastOrDefault(e => e.Type == "Approved");
         var title = update
             ? Truncate($"Add automatic triggers to the GitHub Actions workflow for Azure pipeline #{proposal.PipelineId} ({Plain(proposal.Evidence.PipelineName, 60)})", 120)
@@ -246,7 +248,7 @@ public static partial class WorkflowPublicationPlanner
 // Plans the publication of an approved workflow against a destination repository. Reads only; it never writes to the destination
 // and never records anything: a plan is cheap to produce again and its hash says whether it is still the same plan.
 public sealed class WorkflowPublicationService(WorkflowProposalService proposals, IConnectionRepository connections, IConnectionSecretStore secrets,
-    IGitHubPublicationReader reader, TimeProvider clock)
+    IGitHubPublicationReader reader, TimeProvider clock, IPublicationLedger? ledger = null, IGitHubPublicationObserver? observer = null)
 {
     private static readonly Regex RepoKey = new(@"^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$", RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex BranchKey = new(@"^(?!/)(?!.*//)(?!.*\.\.)(?!.*\.lock$)[A-Za-z0-9._/-]{1,200}(?<!/)$", RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
@@ -273,9 +275,70 @@ public sealed class WorkflowPublicationService(WorkflowProposalService proposals
         try { target = await reader.ReadAsync(destination.Organization, repository, baseBranch, head, path, approved.WorkflowSha256, prior, token, ct); }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException) { unreadable = true; }
 
+        var earlier = target is { RepositoryExists: true, BaseSha: not null, WorkflowFile: WorkflowFileState.Absent or WorkflowFileState.PriorVersion }
+            ? await EarlierPullRequestsAsync(proposal, destination.Organization, repository, target.BaseBranch ?? baseBranch ?? "", head, path, token, ct) : [];
+
         var plan = WorkflowPublicationPlanner.Build(approved, proposal, events, destination.Organization, repository, baseBranch ?? "(default branch)", target, unreadable,
-            reader.GitUrl(destination.Organization, repository), clock.GetUtcNow(), prior);
+            reader.GitUrl(destination.Organization, repository), clock.GetUtcNow(), prior, earlier);
+        plan = await WithBlockingAttemptAsync(plan, ct);
         return (plan, approved.WorkflowYaml);
+    }
+
+    // The destination can look perfectly free while the ledger still keeps THIS exact plan (same proposal, same hash) blocked: an attempt that failed after a write may have happened, one that never
+    // finished, or one published whose pull request was closed unmerged and whose branch is gone. Publishing would be refused at the last moment, so the plan says it first. It is added only
+    // when nothing else stands in the way: a branch or an open pull request already explains the block, and releasing the attempt would be refused. It changes whether the plan is ready,
+    // never its hash: what a person confirms is the same plan.
+    private async Task<PublicationPlan> WithBlockingAttemptAsync(PublicationPlan plan, CancellationToken ct)
+    {
+        if (ledger is null || !plan.Ready) return plan;
+        var attempt = (await ledger.ListAsync(plan.ProposalId, ct)).Where(a => a.PlanSha256 == plan.PlanSha256 && a.BlocksItsPlan).OrderByDescending(a => a.StartedAtUtc).FirstOrDefault();
+        if (attempt is null) return plan;
+
+        var message = attempt.State switch
+        {
+            PublicationStates.Published =>
+                $"An earlier attempt published this exact plan as pull request #{attempt.PullNumber}. That pull request was closed without merging and its branch is gone, but the ledger still counts the plan as published. A superadmin can release the attempt (the product reads the destination again first), or the base branch can move, which makes a different plan.",
+            PublicationStates.Failed =>
+                $"An earlier attempt of this exact plan failed ({attempt.ErrorCode}) after something may have been written. The destination shows nothing of it now, but the ledger keeps this exact plan blocked. A superadmin can release the attempt (the product reads the destination again first), or the base branch can move, which makes a different plan.",
+            _ when clock.GetUtcNow() - attempt.UpdatedAtUtc < PublicationReleaseService.StaleAfter =>
+                $"An earlier attempt of this exact plan is still running (last progress {attempt.UpdatedAtUtc:yyyy-MM-dd HH:mm} UTC). Wait for it to finish; it is never run twice at the same time.",
+            _ => $"An earlier attempt of this exact plan never finished (last progress {attempt.UpdatedAtUtc:yyyy-MM-dd HH:mm} UTC) and the ledger keeps this exact plan blocked. A superadmin can release the attempt (the product reads the destination again first), or the base branch can move, which makes a different plan."
+        };
+        return plan with { Findings = [.. plan.Findings, new("AttemptBlocksPlan", "Blocker", message)], Ready = false };
+    }
+
+    // The same file added (or replaced) on another branch while an earlier pull request for it is still open would make the two conflict the moment either is merged. The plan cannot see
+    // that from the destination alone (the file is not there yet), so it asks the ledger which pull requests THIS PRODUCT opened for this file in this repository and reads their state.
+    // Another branch of this plan is already reported by HeadBranchExists/OpenPullRequestExists; a pull request that cannot be read is said so, not assumed closed.
+    private async Task<IReadOnlyList<PublicationFinding>> EarlierPullRequestsAsync(WorkflowProposal proposal, string organization, string repository, string baseBranch, string head,
+        string path, string token, CancellationToken ct)
+    {
+        if (ledger is null || observer is null) return [];
+        var earlier = (await ledger.ListForPathAsync(organization, repository, path, ct))
+            .Where(a => a.PullNumber is > 0 && a.State is PublicationStates.Published or PublicationStates.PullRequestOpened && a.HeadBranch != head &&
+                string.Equals(a.Organization, organization, StringComparison.OrdinalIgnoreCase) && string.Equals(a.Repository, repository, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(a.BaseBranch, baseBranch, StringComparison.Ordinal))
+            .GroupBy(a => a.PullNumber!.Value).Select(g => g.OrderByDescending(a => a.StartedAtUtc).First()).Take(3).ToArray();
+
+        var findings = new List<PublicationFinding>();
+        foreach (var attempt in earlier)
+        {
+            var number = attempt.PullNumber!.Value;
+            var whose = attempt.ProposalId == proposal.ParentProposalId ? "The conversion this proposal was derived from"
+                : attempt.ProposalId == proposal.Id ? "An earlier publication of this proposal" : "An earlier publication of this workflow file";
+            try
+            {
+                var pull = await observer.ReadPullAsync(organization, repository, number, attempt.HeadBranch, token, ct);
+                if (pull is { State: "open" })
+                    findings.Add(new("EarlierPullRequestOpen", "Blocker",
+                        $"{whose} is still open as pull request #{number} in this repository (not merged): the same file would be added on another branch and the two pull requests would conflict. Merge or close #{number} first, then plan again."));
+            }
+            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+            {
+                findings.Add(new("EarlierPullRequestUnchecked", "Warning", $"{whose} was published as pull request #{number}; it could not be read just now, so whether it is still open is not known."));
+            }
+        }
+        return findings;
     }
 
     // The one text a derived (Triggers) proposal may replace at the destination: the approved text of the conversion it was derived from, and only while that
