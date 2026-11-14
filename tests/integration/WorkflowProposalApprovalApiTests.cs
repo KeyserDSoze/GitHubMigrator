@@ -79,6 +79,8 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
 
     // lines put in front of the stub pipeline's Azure YAML; a test that needs a `pool:` with demands overrides it
     protected virtual string AzureYaml => "";
+    // labels the operator allows for every conversion (WorkflowConversion:RunnerLabels); empty by default
+    protected virtual string OperatorRunnerLabels => "";
 
     protected static string Fenced(string yaml) => "```yaml\n" + yaml + "\n```\n\nNotes: nothing else.";
 
@@ -90,7 +92,7 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
         if (githubSim) { GitHub = new GhSimFixture(); await GitHub.InitializeAsync(); }
         Api = new ApiHarness
         {
-            LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin, AzureYamlPrefix = AzureYaml,
+            LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin, AzureYamlPrefix = AzureYaml, OperatorRunnerLabels = OperatorRunnerLabels,
             Publication = publication ? (PublicationAppId, PublicationAppId + 1, PublicationKeyReference, PublicationRepositories) : null
         };
         await Api.InitializeAsync();
@@ -152,12 +154,12 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
     }
 
     // Converts as the administrator and returns the answer of the endpoint.
-    protected async Task<JsonElement> ConvertAsync(Guid ai, string workflow, int? maxRepairs = null, Who who = Who.Admin)
+    protected async Task<JsonElement> ConvertAsync(Guid ai, string workflow, int? maxRepairs = null, Who who = Who.Admin, string[]? runnerLabels = null)
     {
         await ScriptAsync(new { content = Fenced(workflow) });
         using var response = await SendAsync(HttpMethod.Post, "/api/workloads/pipelines/convert", who, new
         {
-            sourceConnectionId = Api.SourceConnectionId, projectId = "project", pipelineId = 42, aiConnectionId = ai, maxRepairs
+            sourceConnectionId = Api.SourceConnectionId, projectId = "project", pipelineId = 42, aiConnectionId = ai, maxRepairs, runnerLabels
         });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         return await JsonOf(response);

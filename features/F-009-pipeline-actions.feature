@@ -182,3 +182,9 @@ Feature: Convert pipelines to reviewed GitHub Actions
     Then the workflow gets one top-level concurrency setting: pushes wait for the run in progress per ref, pull request runs cancel the run in progress per pull request, every other run has a group of its own
     And each is named as an approximation to accept at approval, drafts: false is named as not translated with its reason, and the real analysers accept the text
     And with the choice switched off nothing is added and batch and autoCancel are only named, and a workflow that already has its own concurrency setting keeps it
+
+  Scenario: Runner labels the pipeline did not demand can come from the operator and from the person asking
+    Given an operator who allows the label orion-build for every conversion, and a conversion requested with the label gpu
+    When the pipeline is converted
+    Then the plan, the model's request and the stored proposal name both labels apart from anything the pool demanded, and the real actionlint accepts exactly those extra labels
+    And a label nobody gave is still refused, a label that is not a plain name is refused before anything is read or sent, and the self-hosted runner warning is still a person's to accept

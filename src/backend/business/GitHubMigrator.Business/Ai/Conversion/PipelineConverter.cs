@@ -12,7 +12,7 @@ public sealed class PipelineConverter(IChatModelClient client, IWorkflowGatePipe
         ConversionOptions? options, CancellationToken ct)
     {
         options ??= new();
-        var plan = ConversionPlanBuilder.Build(pipeline, sourceYaml);
+        var plan = ConversionPlanBuilder.Build(pipeline, sourceYaml, options.OperatorRunnerLabels, options.RunnerLabels);
         if (pipeline.Kind != "yaml") return ConversionProposal.NotAttempted("ClassicPipelineUnsupported", plan);
         if (string.IsNullOrWhiteSpace(sourceYaml)) return ConversionProposal.NotAttempted("SourceYamlUnavailable", plan);
         // defence in depth: the caller resolved the connection with consent required, and nothing here relies on that alone

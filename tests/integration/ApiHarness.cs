@@ -78,6 +78,8 @@ public sealed class ApiHarness : IAsyncLifetime
     public bool SingleReviewer { get; set; }
     // Lines put in front of the stub pipeline's YAML (for example a `pool:` with demands). Empty by default: the other tests see the YAML they always saw.
     public string AzureYamlPrefix { get; set; } = "";
+    // WorkflowConversion:RunnerLabels: extra self-hosted labels the operator allows for every conversion.
+    public string OperatorRunnerLabels { get; set; } = "";
 
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
@@ -202,6 +204,7 @@ public sealed class ApiHarness : IAsyncLifetime
             values["Providers__AzureDevOpsServices__AllowHttp"] = "true";
         }
         if (SingleReviewer) values["WorkflowApproval__RequireSecondApprover"] = "false";
+        if (OperatorRunnerLabels.Length > 0) values["WorkflowConversion__RunnerLabels"] = OperatorRunnerLabels;
         if (Publication is { } publication)
         {
             values["WorkflowPublication__Enabled"] = "true";

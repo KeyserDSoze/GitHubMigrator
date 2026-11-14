@@ -12,27 +12,36 @@ public sealed record ConnectionMapping(string Connection, string Kind, string Gu
 
 // The only secrets and variables a converted workflow may reference. Deterministic: a model is told the list, the gates
 // enforce it, and nothing is created at the destination from it (that stays a human step). Values never appear here.
-// RunnerLabels are the extra self-hosted labels the source's pools demand (see AzureRunnerLabels); plans stored before they existed have none.
+// RunnerLabels are the extra self-hosted labels the source's pools demand (see AzureRunnerLabels); plans stored before they existed have none. ExtraRunnerLabels are the ones added by the
+// operator (for every conversion) or by the person asking (for this one): labels the destination's runners are SAID to have, which no pipeline demanded. Both lists are what a workflow may
+// use in runs-on beyond GitHub's own; neither creates a runner, and the SELF_HOSTED_RUNNER warning is still a person's to accept.
 public sealed record ConversionPlan(IReadOnlyList<PlanEntry> Secrets, IReadOnlyList<PlanEntry> Variables,
-    IReadOnlyList<ConnectionMapping> Connections, IReadOnlyList<string> Notes, IReadOnlyList<string>? RunnerLabels = null)
+    IReadOnlyList<ConnectionMapping> Connections, IReadOnlyList<string> Notes, IReadOnlyList<string>? RunnerLabels = null, IReadOnlyList<string>? ExtraRunnerLabels = null)
 {
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<string> Labels => RunnerLabels ?? [];
 
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<string> ExtraLabels => ExtraRunnerLabels ?? [];
+
+    // every label the gates accept in runs-on: what was demanded and what was added
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<string> GateLabels => Labels.Concat(ExtraLabels).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
     public WorkflowPlanContext ToGateContext(string? sourceYaml) =>
-        WorkflowPlanContext.Of(Secrets.Select(s => s.Name), Variables.Select(v => v.Name)) with { SourceTasks = SourceTaskInventory.From(sourceYaml), RunnerLabels = Labels };
+        WorkflowPlanContext.Of(Secrets.Select(s => s.Name), Variables.Select(v => v.Name)) with { SourceTasks = SourceTaskInventory.From(sourceYaml), RunnerLabels = GateLabels };
 
     // The same context from a stored task list, so a stored proposal can be gated again without its source text.
     public WorkflowPlanContext ToGateContextFor(IEnumerable<string> sourceTasks) =>
         WorkflowPlanContext.Of(Secrets.Select(s => s.Name), Variables.Select(v => v.Name)) with
         {
-            SourceTasks = new HashSet<string>(sourceTasks, StringComparer.OrdinalIgnoreCase), RunnerLabels = Labels
+            SourceTasks = new HashSet<string>(sourceTasks, StringComparer.OrdinalIgnoreCase), RunnerLabels = GateLabels
         };
 
     // Labels enter the hash only when there are some, so the hash of a plan without them is what it always was.
     public string Sha256 => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
         string.Join('\n', Secrets.Select(s => "s:" + s.Name).Order(StringComparer.Ordinal).Concat(Variables.Select(v => "v:" + v.Name).Order(StringComparer.Ordinal))
-            .Concat(Labels.Select(l => "l:" + l).Order(StringComparer.Ordinal))))));
+            .Concat(Labels.Select(l => "l:" + l).Order(StringComparer.Ordinal)).Concat(ExtraLabels.Select(l => "x:" + l).Order(StringComparer.Ordinal))))));
 }
 
 public static partial class ConversionPlanBuilder
@@ -51,7 +60,7 @@ public static partial class ConversionPlanBuilder
         return name.Length > 100 ? name[..100] : name;
     }
 
-    public static ConversionPlan Build(AzurePipelineSource pipeline, string? sourceYaml)
+    public static ConversionPlan Build(AzurePipelineSource pipeline, string? sourceYaml, IReadOnlyList<string>? operatorLabels = null, IReadOnlyList<string>? requestedLabels = null)
     {
         var secrets = new List<PlanEntry>();
         var variables = new List<PlanEntry>();
@@ -87,7 +96,22 @@ public static partial class ConversionPlanBuilder
         var labels = AzureRunnerLabels.From(sourceYaml);
         if (labels.Count > 0)
             notes.Add($"The pipeline's self-hosted pools demand {string.Join(", ", labels)}: a workflow may use these as extra runner labels, and the destination needs runners that have them.");
-        return new(secrets, variables, connections, notes, labels.Count == 0 ? null : labels);
+        // labels the operator allows for every conversion and the person asking says the destination has: only for a pipeline that is converted from its YAML, never beyond the limit
+        var extra = new List<string>();
+        void AddExtra(IReadOnlyList<string>? given, string who)
+        {
+            var added = new List<string>();
+            foreach (var label in given ?? [])
+                if (labels.Count + extra.Count < AzureRunnerLabels.MaxLabels && !labels.Contains(label, StringComparer.OrdinalIgnoreCase) && !extra.Contains(label, StringComparer.OrdinalIgnoreCase))
+                { extra.Add(label); added.Add(label); }
+            if (added.Count > 0) notes.Add($"Runner labels {who}: {string.Join(", ", added)}. A workflow may use them in runs-on, and the destination needs runners that have them.");
+        }
+        if (!string.IsNullOrWhiteSpace(sourceYaml))
+        {
+            AddExtra(operatorLabels, "allowed by the operator for every conversion");
+            AddExtra(requestedLabels, "given for this conversion");
+        }
+        return new(secrets, variables, connections, notes, labels.Count == 0 ? null : labels, extra.Count == 0 ? null : extra);
     }
 
     private static ConnectionMapping Map(AzureServiceReference connection)

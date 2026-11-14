@@ -38,4 +38,4 @@ Consequences:
 - Not verified: that GitHub treats label case the way actionlint does (it is not assumed either way).
 
 Alternatives considered: letting the model name labels (rejected: it would be choosing what the gate accepts); labels from pool *names* (rejected: a pool name is Azure's concept and mapping it to a label is a decision for
-whoever owns the runners); an operator-configured global list (possible later; the per-plan list needs no new setting); ignoring actionlint's `runner-label` kind through policy (rejected: it would accept any label).
+whoever owns the runners); an operator-configured global list (done in [ADR-022](ADR-022-extra-runner-labels-from-the-operator-and-the-person.md), together with labels given for one conversion); ignoring actionlint's `runner-label` kind through policy (rejected: it would accept any label).

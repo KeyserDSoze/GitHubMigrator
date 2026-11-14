@@ -6,6 +6,8 @@ namespace GitHubMigrator.Business;
 // The extra runner labels a self-hosted pool demands, read from the pipeline's own YAML (`pool:` with `demands:`), by the product and never by a model. They exist so that
 // actionlint, which knows only GitHub's labels, does not reject `runs-on: [self-hosted, linux, docker, npm]` for labels the SOURCE asked for. A label here lets a workflow pass
 // that one check; it creates no runner, and the SELF_HOSTED_RUNNER warning still asks a person to confirm that the destination has runners with these labels.
+public sealed record ParsedLabels(IReadOnlyList<string> Labels, IReadOnlyList<string> Rejected);
+
 public static class AzureRunnerLabels
 {
     public const int MaxLabels = 16;
@@ -18,6 +20,24 @@ public static class AzureRunnerLabels
     // labels every self-hosted runner has or GitHub already knows: nothing to add
     private static readonly HashSet<string> Known = new(StringComparer.OrdinalIgnoreCase)
         { "self-hosted", "linux", "windows", "macos", "x64", "x86", "arm", "arm64", "ubuntu-latest", "windows-latest", "macos-latest" };
+
+    // Labels a person or an operator NAMES (they are not read from a pipeline): the same plain-name rule, but nothing is silently dropped. Labels GitHub or every self-hosted runner already has
+    // are not needed and not an error; an empty entry is skipped; anything that is not a plain name is returned as rejected so the caller can refuse or say so.
+    public static ParsedLabels Parse(IEnumerable<string?>? raw)
+    {
+        var labels = new List<string>();
+        var rejected = new List<string>();
+        foreach (var item in raw ?? [])
+        {
+            var text = item?.Trim() ?? "";
+            if (text.Length == 0) continue;
+            if (!Label.IsMatch(text)) { rejected.Add(text.Length > 60 ? text[..60] : text); continue; }
+            if (Known.Contains(text) || labels.Contains(text, StringComparer.OrdinalIgnoreCase)) continue;
+            if (labels.Count >= MaxLabels) { rejected.Add(text); continue; }
+            labels.Add(text);
+        }
+        return new(labels, rejected);
+    }
 
     public static IReadOnlyList<string> From(string? yaml)
     {

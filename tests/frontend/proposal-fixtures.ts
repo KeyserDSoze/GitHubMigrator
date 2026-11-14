@@ -38,8 +38,9 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
   role?: string; publication?: { enabled: boolean; allowed: string[] }; attempts?: Detail[]; published?: Detail; publishRefuse?: { status: number; body: Record<string, unknown> };
   derived?: Detail; deriveRefuse?: { status: number; body: Record<string, unknown> };
   reconcile?: Detail; reconcileRefuse?: { status: number; body: Record<string, unknown>; once?: boolean };
-  release?: Detail; releaseRefuse?: { status: number; body: Record<string, unknown> }; reconcileAfterRelease?: Detail } = {}) {
-  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])], derives: [] as string[], reconciles: [] as { publication: string; body: Record<string, any> }[], releases: [] as { publication: string; body: Record<string, any> }[], released: false, deriveBodies: [] as (Record<string, any> | null)[] };
+  release?: Detail; releaseRefuse?: { status: number; body: Record<string, unknown> }; reconcileAfterRelease?: Detail;
+  convertRefuse?: { status: number; body: Record<string, unknown> } } = {}) {
+  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])], derives: [] as string[], reconciles: [] as { publication: string; body: Record<string, any> }[], releases: [] as { publication: string; body: Record<string, any> }[], released: false, deriveBodies: [] as (Record<string, any> | null)[], converts: [] as Record<string, any>[] };
   const summaries = () => [store.current, ...store.kept.filter(k => k.id !== store.current.id)].map(d => ({
     id: d.id, state: d.state, reason: d.reason, workflowSha256: d.workflowSha256, createdBy: d.createdBy, createdAtUtc: d.createdAtUtc, kind: d.kind ?? 'Conversion' }));
 
@@ -50,7 +51,11 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
   await page.route('**/api/ai-connections', route => route.fulfill({ json: [{
     id: aiId, name: 'Corporate model', provider: 'OpenAICompatible', endpoint: 'https://llm.corp.example/v1', model: 'gpt-4.1', auth: 'ApiKey', verificationCode: 'Verified', sendSourceContent: true }] }));
   await page.route('**/api/workloads/pipelines/convert/status', route => route.fulfill({ json: { actionlint: true, zizmor: true, canBeApprovable: true, policyVersion: 'x', actionCatalogVerifiedOn: 'y' } }));
-  await page.route('**/api/workloads/pipelines/convert', route => route.fulfill({ json: convertAnswer(store.current) }));
+  await page.route('**/api/workloads/pipelines/convert', route => {
+    store.converts.push(route.request().postDataJSON() as Record<string, any>);
+    if (options.convertRefuse) return route.fulfill({ status: options.convertRefuse.status, json: options.convertRefuse.body });
+    return route.fulfill({ json: convertAnswer(store.current) });
+  });
   await page.route('**/api/workloads/pipelines/publication/status', route => route.fulfill({ json: {
     enabled: options.publication?.enabled ?? false, allowedRepositories: options.publication?.allowed ?? [] } }));
   await page.route(/\/api\/workloads\/pipelines\/proposals/, async route => {

@@ -3,6 +3,16 @@ using GitHubMigrator.Domain;
 
 namespace GitHubMigrator.Business;
 
+// The runner labels an operator allows for every conversion (WorkflowConversion:RunnerLabels): plain names only, the rest is ignored and reported at start.
+public sealed record OperatorRunnerLabels(IReadOnlyList<string> Labels, IReadOnlyList<string> Rejected)
+{
+    public static OperatorRunnerLabels From(string? configured)
+    {
+        var parsed = AzureRunnerLabels.Parse(configured?.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries));
+        return new(parsed.Labels, parsed.Rejected);
+    }
+}
+
 // The application service behind "propose a conversion with AI". It reads a pipeline, checks the AI connection (verified,
 // host allowed, key present, source consent given) BEFORE reading any source text, converts, and returns a proposal.
 // It never saves, approves or publishes anything. (The preview reader still fetches the file once to count its tasks and
@@ -12,7 +22,8 @@ public sealed class PipelineConversionService(
     IConnectionSecretStore secrets,
     IAzureWorkloadReader source,
     AiConnectionService ai,
-    PipelineConverter converter)
+    PipelineConverter converter,
+    OperatorRunnerLabels? operatorLabels = null)
 {
     private static readonly Regex SimpleKey = new(@"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$", RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
 
@@ -21,6 +32,11 @@ public sealed class PipelineConversionService(
     {
         if (string.IsNullOrEmpty(projectId) || !SimpleKey.IsMatch(projectId)) throw new WorkloadInputException("InvalidProjectId");
         if (pipelineId < 1) throw new WorkloadInputException("InvalidPipelineId");
+        // labels a person names are refused when they are not plain names or there are too many with the operator's: nothing is silently dropped, and nothing is read or sent before this
+        var requested = AzureRunnerLabels.Parse(options?.RunnerLabels);
+        var allowed = operatorLabels?.Labels ?? [];
+        if (requested.Rejected.Count > 0 || requested.Labels.Count + allowed.Count > AzureRunnerLabels.MaxLabels) throw new WorkloadInputException("InvalidRunnerLabel");
+        options = (options ?? new()) with { RunnerLabels = requested.Labels, OperatorRunnerLabels = allowed };
 
         var connection = await connections.GetAsync(sourceId, ct) ?? throw new WorkloadInputException("SourceNotFound");
         if (connection.Direction != ConnectionDirection.Source || !ProviderKeys.IsAzureDevOpsSource(connection.ProviderKey))

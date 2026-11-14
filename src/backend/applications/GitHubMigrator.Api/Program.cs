@@ -83,6 +83,8 @@ builder.Services.AddSingleton<IWorkflowGatePipelineFactory>(new WorkflowGatePipe
     zizmorPath is null ? null : GitHubMigrator.Infrastructure.WorkflowTools.ProcessWorkflowToolRunner.Zizmor(zizmorPath)));
 builder.Services.AddScoped(sp => new PipelineConverter(sp.GetRequiredService<IChatModelClient>(),
     sp.GetRequiredService<IWorkflowGatePipelineFactory>(), sp.GetRequiredService<TimeProvider>()));
+// Extra self-hosted runner labels the operator says the destination's runners have, for every conversion (plain names; anything else is ignored and logged at start).
+builder.Services.AddSingleton(OperatorRunnerLabels.From(builder.Configuration["WorkflowConversion:RunnerLabels"]));
 builder.Services.AddScoped<PipelineConversionService>();
 builder.Services.AddScoped<WorkflowPublicationService>();
 builder.Services.AddScoped<PipelineTriggerService>();
@@ -847,6 +849,10 @@ if (!builder.Environment.IsDevelopment() &&
     throw new InvalidOperationException("A strong non-default Bootstrap:Password is required outside Development.");
 
 var app = builder.Build();
+
+// A label the operator configured that is not a plain name is not used: say which, by name, so a typo does not silently narrow what conversions may use.
+if (app.Services.GetRequiredService<OperatorRunnerLabels>() is { Rejected.Count: > 0 } rejectedLabels)
+    app.Logger.LogWarning("WorkflowConversion:RunnerLabels ignored these entries (not plain label names, or beyond the limit of 16): {Labels}", string.Join(", ", rejectedLabels.Rejected));
 
 app.UseCors("Frontend");
 app.UseAuthentication();

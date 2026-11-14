@@ -32,7 +32,8 @@ public sealed record ConversionProposal(ConversionStatus Status, string? Reason,
         new(ConversionStatus.NotAttempted, reason, null, null, null, null, plan, provenance);
 }
 
-public sealed record ConversionOptions(int MaxRepairs = 1)
+// RunnerLabels are extra labels the person asking says the destination's runners have; OperatorRunnerLabels are the ones the operator allows for every conversion (set by the service, never by a caller).
+public sealed record ConversionOptions(int MaxRepairs = 1, IReadOnlyList<string>? RunnerLabels = null, IReadOnlyList<string>? OperatorRunnerLabels = null)
 {
     public int EffectiveRepairs => Math.Clamp(MaxRepairs, 0, 3);
 }

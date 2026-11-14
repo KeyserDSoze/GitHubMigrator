@@ -31,7 +31,7 @@ public static class WorkloadEndpoints
             try
             {
                 var proposal = await service.ConvertAsync(input.SourceConnectionId, input.ProjectId ?? "", input.PipelineId,
-                    input.AiConnectionId, input.MaxRepairs is { } repairs ? new ConversionOptions(repairs) : null, ct);
+                    input.AiConnectionId, input.MaxRepairs is not null || input.RunnerLabels is not null ? new ConversionOptions(input.MaxRepairs ?? 1, input.RunnerLabels) : null, ct);
                 var log = logs.CreateLogger("PipelineConversion");
                 WorkflowProposal? kept = null;
                 try { kept = await proposals.RecordAsync(actor, input.SourceConnectionId, input.ProjectId ?? "", input.PipelineId, input.AiConnectionId, proposal, ct); }
@@ -91,7 +91,7 @@ public sealed record PipelinePreviewInput(Guid SourceConnectionId, Guid Destinat
 public sealed record BoardsPreviewInput(Guid SourceConnectionId, string? ProjectId,
     IReadOnlyList<int>? WorkItemIds, IReadOnlyDictionary<int, int>? KnownGitHubIssues);
 
-public sealed record PipelineConversionInput(Guid SourceConnectionId, string? ProjectId, int PipelineId, Guid AiConnectionId, int? MaxRepairs = null);
+public sealed record PipelineConversionInput(Guid SourceConnectionId, string? ProjectId, int PipelineId, Guid AiConnectionId, int? MaxRepairs = null, IReadOnlyList<string>? RunnerLabels = null);
 public sealed record WorkflowAnalyserStatus(bool Actionlint, bool Zizmor);
 public sealed record ConversionStatusResponse(bool Actionlint, bool Zizmor, bool CanBeApprovable, string PolicyVersion, string ActionCatalogVerifiedOn);
 
@@ -100,7 +100,7 @@ public sealed record FindingResponse(string Gate, string Code, string Severity, 
 public sealed record PlanEntryResponse(string Name, string Origin);
 public sealed record ConnectionMappingResponse(string Connection, string Kind, string Guidance, IReadOnlyList<string> Secrets, IReadOnlyList<string> Variables);
 public sealed record PlanResponse(IReadOnlyList<PlanEntryResponse> Secrets, IReadOnlyList<PlanEntryResponse> Variables,
-    IReadOnlyList<ConnectionMappingResponse> Connections, IReadOnlyList<string> Notes, IReadOnlyList<string> RunnerLabels);
+    IReadOnlyList<ConnectionMappingResponse> Connections, IReadOnlyList<string> Notes, IReadOnlyList<string> RunnerLabels, IReadOnlyList<string> ExtraRunnerLabels);
 public sealed record AttemptResponse(int Number, string Outcome, int? PromptTokens, int? CompletionTokens, string? WorkflowSha256, IReadOnlyList<string> BlockerCodes);
 public sealed record ProvenanceResponse(Guid AiConnectionId, string Provider, string Host, string Model, string? ReportedModel, string PromptSha256,
     string PlanSha256, string PolicyVersion, string ActionCatalogVerifiedOn, IReadOnlyList<RedactionSummary> Redactions,
@@ -124,7 +124,7 @@ public static class ConversionMapping
 {
     public static PlanResponse Plan(ConversionPlan plan) => new(
         plan.Secrets.Select(s => new PlanEntryResponse(s.Name, s.Origin)).ToArray(), plan.Variables.Select(v => new PlanEntryResponse(v.Name, v.Origin)).ToArray(),
-        plan.Connections.Select(c => new ConnectionMappingResponse(c.Connection, c.Kind, c.Guidance, c.Secrets, c.Variables)).ToArray(), plan.Notes, plan.Labels);
+        plan.Connections.Select(c => new ConnectionMappingResponse(c.Connection, c.Kind, c.Guidance, c.Secrets, c.Variables)).ToArray(), plan.Notes, plan.Labels, plan.ExtraLabels);
 
     public static ProvenanceResponse? Provenance(ConversionProvenance? p) => p is null ? null : new(p.AiConnectionId, p.Provider, p.Host, p.Model, p.ReportedModel,
         p.PromptSha256, p.PlanSha256, p.PolicyVersion, p.ActionCatalogVerifiedOn, p.Redactions, p.TotalPromptTokens, p.TotalCompletionTokens,

@@ -523,6 +523,8 @@ export type ConversionProposal = {
     connections: { connection: string; kind: string; guidance: string; secrets: string[]; variables: string[] }[]; notes: string[];
     // extra self-hosted runner labels the pipeline's pools demand; older answers have none
     runnerLabels?: string[];
+    // labels the operator allows for every conversion and the person gave for this one; the destination is said to have them
+    extraRunnerLabels?: string[];
   };
   provenance: {
     aiConnectionId: string; provider: string; host: string; model: string; reportedModel: string | null;
@@ -992,10 +994,10 @@ export const api = {
     }),
   conversionStatus: (token: string) =>
     call<ConversionStatus>('/api/workloads/pipelines/convert/status', { headers: withToken(token) }),
-  convertPipeline: (token: string, sourceConnectionId: string, projectId: string, pipelineId: number, aiConnectionId: string) =>
+  convertPipeline: (token: string, sourceConnectionId: string, projectId: string, pipelineId: number, aiConnectionId: string, runnerLabels?: string[]) =>
     call<ConversionProposal>('/api/workloads/pipelines/convert', {
       method: 'POST', headers: withToken(token),
-      body: JSON.stringify({ sourceConnectionId, projectId, pipelineId, aiConnectionId })
+      body: JSON.stringify({ sourceConnectionId, projectId, pipelineId, aiConnectionId, ...(runnerLabels && runnerLabels.length > 0 ? { runnerLabels } : {}) })
     }),
   listProposals: (token: string, sourceConnectionId: string, projectId: string, pipelineId: number) =>
     call<ProposalSummary[]>('/api/workloads/pipelines/proposals?' + new URLSearchParams({

@@ -22,6 +22,7 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
   const [profiles, setProfiles] = useState<AiConnection[]>([]);
   const [status, setStatus] = useState<ConversionStatus | null>(null);
   const [aiId, setAiId] = useState('');
+  const [labels, setLabels] = useState('');
   const [proposal, setProposal] = useState<ConversionProposal | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -64,7 +65,7 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
     if (!Number.isSafeInteger(number) || number < 1) { setError(t('convNeedPipeline')); return; }
     setBusy(true); setError(''); setProposal(null); setDetail(null); setCopied(false);
     try {
-      const answer = await api.convertPipeline(token, sourceId, projectId, number, aiId);
+      const answer = await api.convertPipeline(token, sourceId, projectId, number, aiId, labels.split(/[\s,;]+/).filter(Boolean));
       setProposal(answer);
       if (answer.proposalId) {
         // the kept copy is what a person approves: read it back instead of trusting the answer in hand
@@ -72,7 +73,11 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
       }
       void loadHistory();
     }
-    catch { setError(t('convRequestError')); }
+    catch (e) {
+      // a label that is not a plain name is refused before anything is read or sent: say so, not just that the request failed
+      const code = e instanceof Error ? e.message : '';
+      setError(t('convError_' + code, { defaultValue: t('convRequestError') }));
+    }
     finally { setBusy(false); }
   }
 
@@ -120,6 +125,10 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
           </option>)}
         </select>
       </label>
+      <label>{t('convExtraLabels')}
+        <input value={labels} placeholder="gpu, orion-build" onChange={e => setLabels(e.target.value)} />
+      </label>
+      <p className="connection-hint">{t('convExtraLabelsHint')}</p>
       <button type="button" className="primary" disabled={busy || !aiId || !sourceId || !projectId || !pipelineId}
         onClick={() => { void propose(); }}>
         <Bot size={15} /> {busy ? t('convBusy') : t('convPropose')}
@@ -183,6 +192,7 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
         <p className="connection-hint">{t('convPlanHint')}</p>
         <p><strong>{t('convSecrets')}:</strong> {proposal.plan.secrets.length ? proposal.plan.secrets.map(s => s.name).join(', ') : '—'}</p>
         <p><strong>{t('convVariables')}:</strong> {proposal.plan.variables.length ? proposal.plan.variables.map(s => s.name).join(', ') : '—'}</p>
+        {(proposal.plan.extraRunnerLabels?.length ?? 0) > 0 && <p><strong>{t('convExtraRunnerLabels')}:</strong> {proposal.plan.extraRunnerLabels!.join(', ')} <span className="connection-hint">{t('convExtraRunnerLabelsHint')}</span></p>}
         {(proposal.plan.runnerLabels?.length ?? 0) > 0 && <p><strong>{t('convRunnerLabels')}:</strong> {proposal.plan.runnerLabels!.join(', ')} <span className="connection-hint">{t('convRunnerLabelsHint')}</span></p>}
 
         {proposal.provenance && <><h4>{t('convProvenance')}</h4>
