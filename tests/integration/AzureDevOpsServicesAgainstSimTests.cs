@@ -8,9 +8,11 @@ using GitHubMigrator.Business;
 using GitHubMigrator.Domain;
 using GitHubMigrator.Infrastructure.AzureDevOps;
 using GitHubMigrator.Infrastructure.GitObjects;
+using GitHubMigrator.Infrastructure.PostgreSql;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -221,6 +223,11 @@ public sealed class AzureDevOpsServicesApiAgainstSimTests : IAsyncLifetime
         using var connection = JsonDocument.Parse(text);
         var connectionId = connection.RootElement.GetProperty("id").GetGuid();
         Assert.Equal("source", connection.RootElement.GetProperty("direction").GetString());
+
+        // The queue is global to the test PostgreSQL instance and RunOnceAsync claims the oldest job in it: isolate this test from jobs other tests left queued or with an expired lease.
+        await using (var reset = _api.Host.Services.CreateAsyncScope())
+            await reset.ServiceProvider.GetRequiredService<AppDbContext>().Database
+                .ExecuteSqlRawAsync("TRUNCATE TABLE discovery_acl_observations, discovery_membership_observations, discovery_group_observations, discovery_identity_observations, discovery_ref_chunks, discovery_ref_manifests, discovery_ref_observations, discovery_page_checkpoints, migration_job_events, migration_jobs RESTART IDENTITY");
 
         using var enqueue = await SendAsync(HttpMethod.Post, "/api/jobs/discovery", new { connectionId, requestId = Guid.NewGuid() });
         Assert.Equal(HttpStatusCode.Accepted, enqueue.StatusCode);
