@@ -175,3 +175,10 @@ Feature: Convert pipelines to reviewed GitHub Actions
     Then the plan replaces exactly the blob and text the product published, on a new branch, in the words of a conversion, and says what the earlier version had may be gone
     And the base branch is not written and nothing is merged
     And a file a person edited after it was merged, one the product never published, one whose approval was withdrawn, and one published for another pipeline are not replaced
+
+  Scenario: Azure's batch and autoCancel become one concurrency setting that touches only their own events, unless the person chooses otherwise
+    Given an approved conversion whose Azure pipeline has batch: true on its CI trigger and a pull request trigger without autoCancel: false
+    When the triggers are derived
+    Then the workflow gets one top-level concurrency setting: pushes wait for the run in progress per ref, pull request runs cancel the run in progress per pull request, every other run has a group of its own
+    And each is named as an approximation to accept at approval, drafts: false is named as not translated with its reason, and the real analysers accept the text
+    And with the choice switched off nothing is added and batch and autoCancel are only named, and a workflow that already has its own concurrency setting keeps it

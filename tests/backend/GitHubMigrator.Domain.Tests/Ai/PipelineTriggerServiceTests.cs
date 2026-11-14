@@ -88,7 +88,8 @@ public sealed class PipelineTriggerServiceTests
         Assert.Contains("  push:", after);
         Assert.Contains("  schedule:", after);
 
-        Assert.Equal(["push — branches: main, release/**; paths: ignore docs, ignore docs/**", "pull_request — branches: main", "schedule: 0 3 * * 1-5"], derived.Evidence.Triggers!.Mapped);
+        Assert.Equal(["push — branches: main, release/**; paths: ignore docs, ignore docs/**", "pull_request — branches: main", "schedule: 0 3 * * 1-5",
+            "concurrency: pull request runs cancel the run in progress (per pull request)"], derived.Evidence.Triggers!.Mapped);
         Assert.Contains(derived.Evidence.Findings, f => f.Gate == "triggers" && f.Code == "TRIGGER_PR_AZURE_REPOS_IGNORED" && f.Severity == "Warning");
         Assert.Contains(derived.Evidence.Findings, f => f.Gate == "triggers" && f.Code == "TRIGGER_STARTS_PRIVILEGED_JOBS"); // the sample publishes with a secret
         Assert.Equal(rig.Parent.Evidence.Provenance, derived.Evidence.Provenance);

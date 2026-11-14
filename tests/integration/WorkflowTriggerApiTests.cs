@@ -30,6 +30,25 @@ public sealed class WorkflowTriggerApiTests() : ProposalApiTestBase(singleReview
     }
 
     [RequiresAnalysersFact]
+    public async Task A_person_can_derive_the_triggers_without_translating_batch_and_autocancel_and_they_are_then_only_named()
+    {
+        var (_, parentId) = await ApprovedConversionAsync();
+        using var response = await SendAsync(HttpMethod.Post, DeriveUrl(parentId), Who.Admin, new { translateConcurrency = false });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var derived = await JsonOf(response);
+
+        Assert.DoesNotContain("concurrency", derived.GetProperty("workflowYaml").GetString()!);
+        var triggers = derived.GetProperty("triggers");
+        Assert.Contains("TRIGGER_AUTOCANCEL_NOT_MAPPED", Codes(triggers)); // the pull request trigger is on and Azure's autoCancel is true unless it says false
+        Assert.DoesNotContain("TRIGGER_AUTOCANCEL_APPROXIMATED", Codes(triggers));
+        Assert.DoesNotContain(triggers.GetProperty("mapped").EnumerateArray().Select(m => m.GetString()), m => m!.StartsWith("concurrency"));
+
+        // a body that is not there, or says nothing, is the default: translated
+        using var plain = await SendAsync(HttpMethod.Post, DeriveUrl(parentId), Who.Admin, new { });
+        Assert.Contains("concurrency:", (await JsonOf(plain)).GetProperty("workflowYaml").GetString()!);
+    }
+
+    [RequiresAnalysersFact]
     public async Task The_azure_triggers_become_a_proposal_of_their_own_with_no_model_call_and_are_approved_by_their_own_hash_under_the_trigger_policy()
     {
         var (conversion, parentId) = await ApprovedConversionAsync();
@@ -62,10 +81,15 @@ public sealed class WorkflowTriggerApiTests() : ProposalApiTestBase(singleReview
         var parentLines = conversion.GetProperty("workflowYaml").GetString()!.TrimEnd().Split('\n');
         var derivedLines = yaml.TrimEnd().Split('\n');
         Assert.Equal(parentLines.SkipWhile(l => !l.StartsWith("permissions:")), derivedLines.SkipWhile(l => !l.StartsWith("permissions:")));
+        // the pull request trigger is on and Azure's autoCancel is true by default: the pull request runs cancel the run in progress, and nothing else is ever queued or cancelled.
+        // The real actionlint and zizmor read this text (the proposal below is approvable only if they did)
+        Assert.Contains("concurrency:\n  group: \"${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}\"\n  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n", yaml);
+        Assert.Equal(1, derivedLines.Count(l => l.StartsWith("concurrency:")));
 
         var triggers = derived.GetProperty("triggers");
-        Assert.Equal(["push — branches: main, release/**", "pull_request — branches: main", "schedule: 0 3 * * 1-5"],
+        Assert.Equal(["push — branches: main, release/**", "pull_request — branches: main", "schedule: 0 3 * * 1-5", "concurrency: pull request runs cancel the run in progress (per pull request)"],
             triggers.GetProperty("mapped").EnumerateArray().Select(m => m.GetString()));
+        Assert.Contains("TRIGGER_AUTOCANCEL_APPROXIMATED", Codes(triggers));
         Assert.Contains("TRIGGER_PR_AZURE_REPOS_IGNORED", Codes(triggers));
         Assert.Contains("TRIGGER_STARTS_PRIVILEGED_JOBS", Codes(triggers)); // the stub workflow reads a secret
         Assert.DoesNotContain("SENSITIVE_SOURCE_VALUE", derived.GetRawText());

@@ -68,13 +68,13 @@ public static class WorkflowProposalEndpoints
         // Converts the Azure triggers of an APPROVED conversion into a proposal of its own. The pipeline's YAML is read here and mapped by fixed rules:
         // no model sees it. The result is only a proposal; it is approved (by its own hash) and published separately, and it starts by itself once merged.
         group.MapPost("/{id:guid}/derive-triggers", async Task<IResult> (Guid id, PipelineTriggerService service, WorkflowProposalService proposals,
-            ClaimsPrincipal user, ILoggerFactory logs, CancellationToken ct) =>
+            ClaimsPrincipal user, ILoggerFactory logs, CancellationToken ct, [Microsoft.AspNetCore.Mvc.FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] DeriveTriggersInput? input = null) =>
         {
             var actor = ActorOf(user);
             if (actor is null) return Results.Forbid();
             try
             {
-                var derived = await service.DeriveAsync(actor, id, ct);
+                var derived = await service.DeriveAsync(actor, id, ct, input?.TranslateConcurrency ?? true);
                 logs.CreateLogger("WorkflowProposals").LogInformation(
                     "Workflow trigger proposal Parent={ParentId} Proposal={ProposalId} State={State} Reason={Reason} Sha={Sha} By={Actor}",
                     id, derived.Id, derived.State, derived.Reason, derived.WorkflowSha256, actor.Id);
@@ -282,6 +282,8 @@ public sealed record ProposalDetailResponse(Guid Id, string State, string? Reaso
 
 public sealed record ReconcileInput(Guid DestinationConnectionId);
 public sealed record ReleaseInput(Guid DestinationConnectionId, string? Note);
+// Optional body of derive-triggers: whether Azure's batch and autoCancel become a GitHub concurrency setting (default true) or are only named as differences.
+public sealed record DeriveTriggersInput(bool? TranslateConcurrency);
 public sealed record ReconciliationPullResponse(int Number, string State, bool Merged, string? HeadSha, string? MergeCommitSha);
 public sealed record ReconciliationFactsResponse(bool RepositoryExists, bool Archived, string? BaseTipSha, string? HeadBranchSha,
     IReadOnlyList<ReconciliationPullResponse> Pulls, string FileOnHead, string FileOnBase);

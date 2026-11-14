@@ -21,6 +21,7 @@ export default function ProposalReview({ token, detail, onChanged, destinations,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [deriving, setDeriving] = useState(false);
+  const [translateConcurrency, setTranslateConcurrency] = useState(true);
   const [deriveError, setDeriveError] = useState('');
 
   const seen = new Map(detail.findings.filter(f => f.severity === 'Warning').map(f => [f.code, f.message]));
@@ -44,7 +45,7 @@ export default function ProposalReview({ token, detail, onChanged, destinations,
   // Reads the pipeline's own YAML on the server (no model sees it), maps its triggers by fixed rules and keeps the result as a proposal of its own.
   async function deriveTriggers() {
     setDeriving(true); setDeriveError('');
-    try { onDerived?.(await api.deriveTriggers(token, detail.id)); }
+    try { onDerived?.(await api.deriveTriggers(token, detail.id, translateConcurrency)); }
     catch (e) {
       const code = e instanceof Error ? e.message : '';
       setDeriveError(t('trigError_' + code, { defaultValue: t('reviewError_' + code, { defaultValue: t('trigErrorGeneric') }) }));
@@ -103,6 +104,11 @@ export default function ProposalReview({ token, detail, onChanged, destinations,
         <h5><Workflow size={14} /> {t('trigDeriveTitle')}</h5>
         <p className="connection-hint">{t('trigDeriveHint')}</p>
         {deriveError && <div className="alert" role="alert">{deriveError}</div>}
+        <label className="checkbox-row">
+          <input type="checkbox" checked={translateConcurrency} onChange={e => setTranslateConcurrency(e.target.checked)} />
+          <span>{t('trigConcurrency')}</span>
+        </label>
+        <p className="connection-hint">{t('trigConcurrencyHint')}</p>
         <button type="button" className="secondary-button" disabled={deriving} onClick={() => { void deriveTriggers(); }}>
           <Workflow size={14} /> {deriving ? t('trigBusy') : t('trigDerive')}
         </button>

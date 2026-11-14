@@ -40,8 +40,8 @@ Consequences:
   sources the YAML `pr:` applies, which this ADR does not distinguish.
 - **New file, or replacing the parent's file.** Publishing the derived proposal works on a free path, or (ADR-016) as a replacement of the file the parent conversion put there, when that file is
   still exactly the parent's approved text; anything else at the path is `WorkflowPathOccupied`.
-- **`batch`, `autoCancel` and `drafts` are not translated** into `concurrency` or job conditions; they are named as differences. Resource triggers (pipelines, repositories,
-  containers) have no automatic equivalent and are named too.
+- **`batch`, `autoCancel` and `drafts` were not translated** (see [ADR-021](ADR-021-translating-batch-and-autocancel-into-concurrency.md): since 0.10.0 `batch` and `autoCancel` become a `concurrency` setting, as a choice made when deriving;
+  `drafts` is still only named). Resource triggers (pipelines, repositories, containers) have no automatic equivalent and are named too.
 - The schema change is idempotent (`ADD COLUMN IF NOT EXISTS` with a `Conversion` default, constraint and trigger added if missing): a 0.5.0 database upgrades in place, existing rows become
   conversions (checked by applying both versions of the DDL to a scratch database twice).
 - The restricted-runtime grants script still does not cover the proposal tables (fails closed), as before.

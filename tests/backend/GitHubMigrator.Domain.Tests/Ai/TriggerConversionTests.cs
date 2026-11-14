@@ -142,8 +142,11 @@ public sealed class GitHubTriggerMapperTests
         Assert.Equal(["README.md", "README.md/**", "docs/**"], t.Push.Paths.Ignore); // exclude only: paths-ignore
         Assert.Equal(["main", "develop"], t.PullRequest!.Branches.Patterns);
         Assert.Equal(["0 3 * * 1-5"], t.Schedules);
-        Assert.Equal(["TRIGGER_PATH_PREFIX", "TRIGGER_PR_AZURE_REPOS_IGNORED", "TRIGGER_SCHEDULE_ALWAYS_FALSE", "TRIGGER_SCHEDULE_BRANCHES", "TRIGGER_TIME_ZONE", "TRIGGER_WILDCARD_SEMANTICS"], Codes(t));
-        Assert.Equal(["push — branches: main, develop, feature/**; paths: ignore README.md, ignore README.md/**, ignore docs/**", "pull_request — branches: main, develop", "schedule: 0 3 * * 1-5"], t.Summary());
+        // the pull request trigger is on and autoCancel is not stated: Azure's default (true) applies, so the pull request runs cancel the run in progress
+        Assert.Equal(["TRIGGER_AUTOCANCEL_APPROXIMATED", "TRIGGER_PATH_PREFIX", "TRIGGER_PR_AZURE_REPOS_IGNORED", "TRIGGER_SCHEDULE_ALWAYS_FALSE", "TRIGGER_SCHEDULE_BRANCHES", "TRIGGER_TIME_ZONE", "TRIGGER_WILDCARD_SEMANTICS"], Codes(t));
+        Assert.Equal(new GitHubConcurrency(false, true), t.Concurrency);
+        Assert.Equal(["push — branches: main, develop, feature/**; paths: ignore README.md, ignore README.md/**, ignore docs/**", "pull_request — branches: main, develop", "schedule: 0 3 * * 1-5",
+            "concurrency: pull request runs cancel the run in progress (per pull request)"], t.Summary());
     }
 
     [Fact]
@@ -156,7 +159,8 @@ public sealed class GitHubTriggerMapperTests
         Assert.Equal(["main", "release/**"], t.PullRequest!.Branches.Patterns);
         Assert.Equal(["docs", "docs/**"], t.PullRequest.Paths.Ignore);
         Assert.Empty(t.Schedules);
-        Assert.Equal(["TRIGGER_AUTOCANCEL_NOT_MAPPED", "TRIGGER_BATCH_NOT_MAPPED", "TRIGGER_PATH_PREFIX", "TRIGGER_PR_AZURE_REPOS_IGNORED", "TRIGGER_WILDCARD_SEMANTICS"], Codes(t));
+        Assert.Equal(["TRIGGER_AUTOCANCEL_APPROXIMATED", "TRIGGER_BATCH_APPROXIMATED", "TRIGGER_PATH_PREFIX", "TRIGGER_PR_AZURE_REPOS_IGNORED", "TRIGGER_WILDCARD_SEMANTICS"], Codes(t));
+        Assert.Equal(new GitHubConcurrency(true, true), t.Concurrency); // batch: true on the CI trigger, and the pull request trigger with Azure's default autoCancel
     }
 
     [Fact]
@@ -228,7 +232,7 @@ public sealed class GitHubTriggerMapperTests
     public void Pull_request_runs_are_never_presented_as_something_azure_repos_would_have_run()
     {
         var t = GitHubTriggerMapper.Map(AzureTriggerReader.Read("trigger: none\npr:\n  drafts: false\n  autoCancel: true\n  branches:\n    include: [main]\n")!);
-        Assert.Equal(["TRIGGER_AUTOCANCEL_NOT_MAPPED", "TRIGGER_DRAFTS_NOT_MAPPED", "TRIGGER_PR_AZURE_REPOS_IGNORED"], Codes(t));
+        Assert.Equal(["TRIGGER_AUTOCANCEL_APPROXIMATED", "TRIGGER_DRAFTS_NOT_MAPPED", "TRIGGER_PR_AZURE_REPOS_IGNORED"], Codes(t));
         Assert.Null(t.Push);
         Assert.Equal(["main"], t.PullRequest!.Branches.Patterns);
     }
@@ -268,7 +272,7 @@ public sealed class WorkflowTriggerEditorTests
         var before = ManualOnly.Split('\n');
         var after = derived.Yaml!.Split('\n');
 
-        // everything before `on:` and from `permissions:` on is unchanged, comments included
+        // everything before `on:` and from `permissions:` on is unchanged, comments included; between them only the `on:` entry and the concurrency setting the Azure options ask for
         var onAt = Array.IndexOf(before, "on:");
         Assert.Equal(before.Take(onAt), after.Take(onAt));
         Assert.Equal(before.SkipWhile(l => !l.StartsWith("permissions:")), after.SkipWhile(l => !l.StartsWith("permissions:")));
@@ -295,6 +299,9 @@ public sealed class WorkflowTriggerEditorTests
                   - 'main'
               schedule:
                 - cron: '0 3 * * 1-5'
+            concurrency:
+              group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}"
+              cancel-in-progress: ${{ github.event_name == 'pull_request' }}
             """;
         Assert.Equal(expectedOn.Replace("\r\n", "\n"), string.Join('\n', after.Skip(onAt).TakeWhile(l => !l.StartsWith("permissions:"))));
         Assert.Equal(derived.Yaml, WorkflowTriggerEditor.Derive(ManualOnly, Azure(Both)).Yaml); // deterministic
@@ -308,7 +315,7 @@ public sealed class WorkflowTriggerEditorTests
         Assert.NotNull(parsed);
         Assert.Null(error);
         Assert.Equal(["workflow_dispatch", "push", "pull_request", "schedule"], parsed!.TriggerNames().Select(t => t.Name));
-        Assert.Equal(["jobs", "name", "on", "permissions"], parsed.Root.Children.Keys.OfType<YamlDotNet.RepresentationModel.YamlScalarNode>().Select(k => k.Value!).Order());
+        Assert.Equal(["concurrency", "jobs", "name", "on", "permissions"], parsed.Root.Children.Keys.OfType<YamlDotNet.RepresentationModel.YamlScalarNode>().Select(k => k.Value!).Order());
     }
 
     [Fact]

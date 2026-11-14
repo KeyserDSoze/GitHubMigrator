@@ -31,7 +31,32 @@ public sealed record GitHubFilter(IReadOnlyList<string> Patterns, IReadOnlyList<
 
 public sealed record GitHubEventFilters(GitHubFilter Branches, GitHubFilter Tags, GitHubFilter Paths);
 
-public sealed record GitHubTriggers(GitHubEventFilters? Push, GitHubEventFilters? PullRequest, IReadOnlyList<string> Schedules, IReadOnlyList<TriggerDifference> Differences)
+// What Azure's `batch` (CI) and `autoCancel` (pull requests) become on GitHub: one top-level `concurrency` setting whose group is the same for every event it must not touch ONLY if that event
+// is the one asked for, and unique per run otherwise. Pushes wait for the run in progress, per ref (GitHub keeps one waiting run and replaces it with the newest, which is what batching is);
+// pull request runs cancel the run in progress, per pull request. Every other event (schedule, manual) is in a group of its own and is never queued or cancelled.
+public sealed record GitHubConcurrency(bool QueuePushes, bool CancelPullRequests)
+{
+    public string Group()
+    {
+        var parts = new List<string>();
+        if (QueuePushes) parts.Add("github.event_name == 'push' && github.ref");
+        if (CancelPullRequests) parts.Add("github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)");
+        parts.Add("format('run-{0}', github.run_id)");
+        return "${{ github.workflow }}-${{ " + string.Join(" || ", parts) + " }}";
+    }
+
+    public string? CancelInProgress() => CancelPullRequests ? "${{ github.event_name == 'pull_request' }}" : null;
+
+    public IReadOnlyList<string> Lines()
+    {
+        var lines = new List<string> { "concurrency:", $"  group: \"{Group()}\"" };
+        if (CancelInProgress() is { } cancel) lines.Add($"  cancel-in-progress: {cancel}");
+        return lines;
+    }
+}
+
+public sealed record GitHubTriggers(GitHubEventFilters? Push, GitHubEventFilters? PullRequest, IReadOnlyList<string> Schedules, IReadOnlyList<TriggerDifference> Differences,
+    GitHubConcurrency? Concurrency = null)
 {
     public bool IsEmpty => Push is null && PullRequest is null && Schedules.Count == 0;
 
@@ -45,6 +70,8 @@ public sealed record GitHubTriggers(GitHubEventFilters? Push, GitHubEventFilters
         if (Push is not null) lines.Add(Describe("push", Push));
         if (PullRequest is not null) lines.Add(Describe("pull_request", PullRequest));
         foreach (var cron in Schedules) lines.Add("schedule: " + cron);
+        if (Concurrency is { } c)
+            lines.Add("concurrency: " + string.Join("; ", new[] { c.QueuePushes ? "push runs wait for the run in progress (per ref)" : "", c.CancelPullRequests ? "pull request runs cancel the run in progress (per pull request)" : "" }.Where(x => x.Length > 0)));
         return lines;
     }
 }
@@ -88,7 +115,7 @@ public static partial class AzureTriggerReader
                 return new(false, false, new(Patterns(list, notes), []), AzureFilter.Empty, AzureFilter.Empty, false);
             case YamlMappingNode map:
                 return new(false, false, Filter(Child(map, "branches"), notes), Filter(Child(map, "tags"), notes), Filter(Child(map, "paths"), notes),
-                    Child(map, "batch") is YamlScalarNode { Value: { } b } && b.Equals("true", StringComparison.OrdinalIgnoreCase));
+                    Option(map, "batch", false, notes) ?? false);
             default:
                 notes.Add(new("TRIGGER_SHAPE_UNSUPPORTED", "The CI trigger has a shape this product does not read: no CI trigger is converted."));
                 return new(true, false, AzureFilter.Empty, AzureFilter.Empty, AzureFilter.Empty, false);
@@ -100,17 +127,30 @@ public static partial class AzureTriggerReader
         switch (node)
         {
             case null or YamlScalarNode { Value: "none" }:
-                return new(true, AzureFilter.Empty, AzureFilter.Empty, false, null);
+                return new(true, AzureFilter.Empty, AzureFilter.Empty, true, null);
             case YamlSequenceNode list:
-                return new(false, new(Patterns(list, notes), []), AzureFilter.Empty, false, null);
+                return new(false, new(Patterns(list, notes), []), AzureFilter.Empty, true, null);
             case YamlMappingNode map:
-                return new(false, Filter(Child(map, "branches"), notes), Filter(Child(map, "paths"), notes),
-                    Child(map, "autoCancel") is YamlScalarNode { Value: { } a } && a.Equals("true", StringComparison.OrdinalIgnoreCase),
-                    Child(map, "drafts") is YamlScalarNode { Value: { } d } ? d.Equals("true", StringComparison.OrdinalIgnoreCase) : null);
+                // Azure: autoCancel defaults to true and drafts to true; only an explicit false changes them
+                return new(false, Filter(Child(map, "branches"), notes), Filter(Child(map, "paths"), notes), Option(map, "autoCancel", true, notes) ?? true, Option(map, "drafts", true, notes));
             default:
                 notes.Add(new("TRIGGER_SHAPE_UNSUPPORTED", "The pull request trigger has a shape this product does not read: it is not converted."));
-                return new(true, AzureFilter.Empty, AzureFilter.Empty, false, null);
+                return new(true, AzureFilter.Empty, AzureFilter.Empty, true, null);
         }
+    }
+
+    // A true/false option of a trigger (batch, autoCancel, drafts). Absent: the Azure default (documented: batch false, autoCancel true, drafts true). Present but not a plain true or false
+    // (a variable, an expression, anything else): it is not guessed, the default is assumed and a difference says so.
+    private static bool? Option(YamlMappingNode map, string key, bool azureDefault, List<TriggerDifference> notes)
+    {
+        if (Child(map, key) is not { } node) return azureDefault;
+        if (node is YamlScalarNode { Value: { } v })
+        {
+            if (v.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+            if (v.Trim().Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        notes.Add(new("TRIGGER_OPTION_UNREADABLE", "A trigger option (batch, autoCancel or drafts) has a value this product does not read as true or false (a variable, an expression or something else): Azure's default is assumed."));
+        return key == "drafts" ? null : azureDefault;
     }
 
     private static IReadOnlyList<AzureSchedule> ReadSchedules(YamlNode? node, List<TriggerDifference> notes)
@@ -186,10 +226,13 @@ public static partial class GitHubTriggerMapper
         public void Note(string code, string message) { if (Differences.All(d => d.Code != code)) Differences.Add(new(code, message)); }
     }
 
-    public static GitHubTriggers Map(AzureTriggers azure)
+    // translateConcurrency false: batch and autoCancel are only named (the person chose not to have them translated), exactly as before concurrency was translated at all.
+    public static GitHubTriggers Map(AzureTriggers azure, bool translateConcurrency = true)
     {
         var run = new Run();
         foreach (var note in azure.Notes) run.Note(note.Code, note.Message);
+        var queuePushes = false;
+        var cancelPullRequests = false;
 
         GitHubEventFilters? push = null;
         if (!azure.Ci.Disabled)
@@ -197,7 +240,13 @@ public static partial class GitHubTriggerMapper
             if (azure.Ci.Defaulted)
                 run.Note("TRIGGER_DEFAULT_CI_ALL_BRANCHES", "The pipeline has no trigger section, which in Azure Pipelines means it runs on every push to every branch. The same is mapped to GitHub: review whether that is wanted.");
             push = new(Refs(azure.Ci.Branches, "branch", run), Refs(azure.Ci.Tags, "tag", run), Paths(azure.Ci.Paths, run));
-            if (azure.Ci.Batch) run.Note("TRIGGER_BATCH_NOT_MAPPED", "Azure batches CI runs (one at a time, the newest queued). GitHub starts a run per push: add a concurrency group if that matters.");
+            if (azure.Ci.Batch && !translateConcurrency)
+                run.Note("TRIGGER_BATCH_NOT_MAPPED", "Azure batches CI runs per branch (one at a time, the changes not yet built together). It was not translated, as asked: GitHub starts a run per push. Add a concurrency group if that matters.");
+            else if (azure.Ci.Batch)
+            {
+                queuePushes = true;
+                run.Note("TRIGGER_BATCH_APPROXIMATED", "Azure batches CI runs per branch: while a run is in progress the next waits, then one run starts with all the changes not yet built. This is mapped to a GitHub concurrency group per ref for push runs: one run at a time, and a newer push replaces the run that is still waiting (the replaced run is shown as cancelled). The run in progress is not cancelled.");
+            }
         }
 
         GitHubEventFilters? pull = null;
@@ -205,8 +254,15 @@ public static partial class GitHubTriggerMapper
         {
             pull = new(Refs(azure.Pr.Branches, "branch", run), GitHubFilter.None, Paths(azure.Pr.Paths, run));
             run.Note("TRIGGER_PR_AZURE_REPOS_IGNORED", "In Azure Repos Git the pr: section of the YAML is ignored (branch policies start pull request builds). Enabling pull_request here adds runs that did not come from the YAML: review it.");
-            if (azure.Pr.AutoCancel) run.Note("TRIGGER_AUTOCANCEL_NOT_MAPPED", "Azure cancels superseded pull request runs (autoCancel). GitHub does not unless a concurrency group is added.");
-            if (azure.Pr.Drafts == false) run.Note("TRIGGER_DRAFTS_NOT_MAPPED", "Azure skips draft pull requests (drafts: false). GitHub runs on them unless a job condition is added.");
+            if (azure.Pr.AutoCancel && !translateConcurrency)
+                run.Note("TRIGGER_AUTOCANCEL_NOT_MAPPED", "Azure cancels the running pull request build when a new commit lands on the branch (autoCancel, true unless set to false). It was not translated, as asked: GitHub does not unless a concurrency group is added.");
+            else if (azure.Pr.AutoCancel)
+            {
+                cancelPullRequests = true;
+                run.Note("TRIGGER_AUTOCANCEL_APPROXIMATED", "Azure cancels the running pull request build when a new commit lands on the branch (autoCancel, true unless set to false). This is mapped to a GitHub concurrency group per pull request that cancels the run in progress (the cancelled run is shown as cancelled).");
+            }
+            if (azure.Pr.Drafts == false)
+                run.Note("TRIGGER_DRAFTS_NOT_MAPPED", "Azure skips draft pull requests (drafts: false). GitHub starts runs for them too: skipping them needs a condition on the jobs (for example github.event.pull_request.draft == false), which this product does not add to an approved workflow. Add it by hand if it matters.");
         }
 
         var crons = new List<string>();
@@ -220,7 +276,7 @@ public static partial class GitHubTriggerMapper
         run.Note("TRIGGER_TIME_ZONE", "Cron expressions are read as UTC on both sides.");
         if (crons.Count == 0) run.Differences.RemoveAll(d => d.Code == "TRIGGER_TIME_ZONE");
 
-        return new(push, pull, crons.Distinct().ToArray(), run.Differences);
+        return new(push, pull, crons.Distinct().ToArray(), run.Differences, queuePushes || cancelPullRequests ? new(queuePushes, cancelPullRequests) : null);
     }
 
     private static GitHubFilter Refs(AzureFilter filter, string kind, Run run)
@@ -294,9 +350,9 @@ public static class WorkflowTriggerEditor
 {
     private static readonly string[] Automatic = ["push", "pull_request", "schedule"];
 
-    public static TriggerDerivation Derive(string approvedYaml, AzureTriggers azure)
+    public static TriggerDerivation Derive(string approvedYaml, AzureTriggers azure, bool translateConcurrency = true)
     {
-        var mapped = GitHubTriggerMapper.Map(azure);
+        var mapped = GitHubTriggerMapper.Map(azure, translateConcurrency);
         var differences = mapped.Differences.ToList();
         if (mapped.IsEmpty) return new(false, "NoAutomaticTriggers", null, mapped, differences);
 
@@ -307,6 +363,13 @@ public static class WorkflowTriggerEditor
         if (stream.Documents.Count != 1 || stream.Documents[0].RootNode is not YamlMappingNode root) return new(false, "WorkflowNotReadable", null, mapped, differences);
 
         var rootKeys = root.Children.Where(p => p.Key is YamlScalarNode).OrderBy(p => p.Key.Start.Line).ToList();
+        // a workflow that already has its own concurrency setting keeps it: the product adds one only where there is none, and says so when it could not
+        if (mapped.Concurrency is not null && rootKeys.Any(p => ((YamlScalarNode)p.Key).Value == "concurrency"))
+        {
+            differences.RemoveAll(d => d.Code is "TRIGGER_BATCH_APPROXIMATED" or "TRIGGER_AUTOCANCEL_APPROXIMATED");
+            differences.Add(new("TRIGGER_CONCURRENCY_EXISTS", "The workflow already has its own concurrency setting, so Azure's batching of push runs and cancellation of superseded pull request runs were not added. Check that its group does what the Azure trigger did."));
+            mapped = mapped with { Concurrency = null, Differences = differences };
+        }
         var onIndex = rootKeys.FindIndex(p => ((YamlScalarNode)p.Key).Value == "on");
         if (onIndex < 0) return new(false, "OnSectionNotFound", null, mapped, differences);
         var lines = text.Split('\n').ToList();
@@ -365,18 +428,27 @@ public static class WorkflowTriggerEditor
         var onBlock = new List<string> { "on:" };
         onBlock.AddRange(dispatch);
         onBlock.AddRange(generated);
-        var result = string.Join('\n', lines.Take(start).Concat(onBlock).Concat(lines.Skip(end)));
+        var result = string.Join('\n', lines.Take(start).Concat(onBlock).Concat(mapped.Concurrency?.Lines() ?? []).Concat(lines.Skip(end)));
 
         // prove it: parses, one document, the same top-level keys, and `on` holds workflow_dispatch plus exactly what was generated
         try
         {
             var check = SafeYaml.Load(result);
             if (check.Documents.Count != 1 || check.Documents[0].RootNode is not YamlMappingNode after ||
-                !after.Children.Keys.OfType<YamlScalarNode>().Select(k => k.Value).Order().SequenceEqual(root.Children.Keys.OfType<YamlScalarNode>().Select(k => k.Value).Order()) ||
+                !after.Children.Keys.OfType<YamlScalarNode>().Select(k => k.Value).Order().SequenceEqual(root.Children.Keys.OfType<YamlScalarNode>().Select(k => k.Value).Concat(mapped.Concurrency is null ? [] : ["concurrency"]).Order()) ||
                 after.Children.First(p => p.Key is YamlScalarNode { Value: "on" }).Value is not YamlMappingNode onAfter)
                 return new(false, "DerivedWorkflowInvalid", null, mapped, differences);
             var expected = new[] { "workflow_dispatch" }.Concat(new[] { mapped.Push is null ? null : "push", mapped.PullRequest is null ? null : "pull_request", mapped.Schedules.Count == 0 ? null : "schedule" }.OfType<string>());
             if (!onAfter.Children.Keys.OfType<YamlScalarNode>().Select(k => k.Value).SequenceEqual(expected)) return new(false, "DerivedWorkflowInvalid", null, mapped, differences);
+            // and the concurrency setting says exactly what was generated, nothing more
+            if (mapped.Concurrency is { } wanted)
+            {
+                static string? Scalar(YamlMappingNode map, string key) => map.Children.FirstOrDefault(p => p.Key is YamlScalarNode s && s.Value == key).Value is YamlScalarNode { Value: { } v } ? v : null;
+                if (after.Children.First(p => p.Key is YamlScalarNode { Value: "concurrency" }).Value is not YamlMappingNode setting ||
+                    Scalar(setting, "group") != wanted.Group() || Scalar(setting, "cancel-in-progress") != wanted.CancelInProgress() ||
+                    setting.Children.Count != (wanted.CancelInProgress() is null ? 1 : 2))
+                    return new(false, "DerivedWorkflowInvalid", null, mapped, differences);
+            }
         }
         catch (Exception ex) when (ex is YamlException or InvalidOperationException or ArgumentException) { return new(false, "DerivedWorkflowInvalid", null, mapped, differences); }
 

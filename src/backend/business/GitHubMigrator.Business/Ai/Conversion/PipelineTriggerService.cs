@@ -14,7 +14,8 @@ public sealed class TriggerDerivationException(string code) : Exception("Trigger
 public sealed class PipelineTriggerService(WorkflowProposalService proposals, IConnectionRepository connections, IConnectionSecretStore secrets,
     IAzureWorkloadReader source, IWorkflowGatePipelineFactory gates)
 {
-    public async Task<WorkflowProposal> DeriveAsync(ProposalActor actor, Guid parentId, CancellationToken ct)
+    // translateConcurrency: whether Azure's batch and autoCancel become a GitHub concurrency setting (the default) or are only named as differences.
+    public async Task<WorkflowProposal> DeriveAsync(ProposalActor actor, Guid parentId, CancellationToken ct, bool translateConcurrency = true)
     {
         // only an approved, intact conversion is a parent: what a person approved is what the triggers are added to
         var (approved, parent, _) = await proposals.RequireApprovedWithRecordAsync(parentId, ct);
@@ -37,7 +38,7 @@ public sealed class PipelineTriggerService(WorkflowProposalService proposals, IC
         if (string.IsNullOrWhiteSpace(yaml)) throw new TriggerDerivationException("SourceYamlUnavailable");
 
         var azure = AzureTriggerReader.Read(yaml) ?? throw new TriggerDerivationException("SourceYamlUnreadable");
-        var derived = WorkflowTriggerEditor.Derive(approved.WorkflowYaml, azure);
+        var derived = WorkflowTriggerEditor.Derive(approved.WorkflowYaml, azure, translateConcurrency);
         if (!derived.Ok) throw new TriggerDerivationException(derived.Error!);
 
         // the same gates as the conversion, under the policy that allows exactly push, pull_request and schedule

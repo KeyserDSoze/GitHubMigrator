@@ -1006,8 +1006,8 @@ export const api = {
     call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/approve`, {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ workflowSha256, acknowledgedWarnings, note })
     }),
-  deriveTriggers: (token: string, id: string) =>
-    call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/derive-triggers`, { method: 'POST', headers: withToken(token) }),
+  deriveTriggers: (token: string, id: string, translateConcurrency = true) =>
+    call<ProposalDetail>(`/api/workloads/pipelines/proposals/${id}/derive-triggers`, { method: 'POST', headers: withToken(token), body: JSON.stringify({ translateConcurrency }) }),
   planPublication: (token: string, id: string, destinationConnectionId: string, repository: string, baseBranch: string) =>
     call<PublicationPlan>(`/api/workloads/pipelines/proposals/${id}/publication-plan`, {
       method: 'POST', headers: withToken(token), body: JSON.stringify({ destinationConnectionId, repository, baseBranch: baseBranch || null })

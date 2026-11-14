@@ -39,7 +39,7 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
   derived?: Detail; deriveRefuse?: { status: number; body: Record<string, unknown> };
   reconcile?: Detail; reconcileRefuse?: { status: number; body: Record<string, unknown>; once?: boolean };
   release?: Detail; releaseRefuse?: { status: number; body: Record<string, unknown> }; reconcileAfterRelease?: Detail } = {}) {
-  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])], derives: [] as string[], reconciles: [] as { publication: string; body: Record<string, any> }[], releases: [] as { publication: string; body: Record<string, any> }[], released: false };
+  const store = { current: initial, kept: options.history ?? [], posts: [] as { verb: string; body: Record<string, any> }[], plans: [] as Record<string, any>[], publishes: [] as Record<string, any>[], attempts: [...(options.attempts ?? [])], derives: [] as string[], reconciles: [] as { publication: string; body: Record<string, any> }[], releases: [] as { publication: string; body: Record<string, any> }[], released: false, deriveBodies: [] as (Record<string, any> | null)[] };
   const summaries = () => [store.current, ...store.kept.filter(k => k.id !== store.current.id)].map(d => ({
     id: d.id, state: d.state, reason: d.reason, workflowSha256: d.workflowSha256, createdBy: d.createdBy, createdAtUtc: d.createdAtUtc, kind: d.kind ?? 'Conversion' }));
 
@@ -91,6 +91,7 @@ export async function setup(page: Page, initial: Detail, options: { history?: De
     }
     if (verb === 'derive-triggers') {
       store.derives.push(id!);
+      store.deriveBodies.push(body);
       if (options.deriveRefuse) return route.fulfill({ status: options.deriveRefuse.status, json: options.deriveRefuse.body });
       const created = options.derived ?? triggersDetail(id!);
       store.kept = [store.current, ...store.kept.filter(k => k.id !== store.current.id)];

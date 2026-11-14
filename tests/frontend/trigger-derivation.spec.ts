@@ -91,3 +91,24 @@ test('a kept derived proposal opened from the history shows its mapping, its kin
   await expect(page.getByLabel(/^trigger automatici$|^automatic triggers$/i).getByText('pull_request — branches: main')).toBeVisible();
   await expect(deriveButton(page)).toHaveCount(0);
 });
+
+test('batch and autoCancel are translated by default, and a person can choose to have them only named', async ({ page }) => {
+  const store = await setup(page, detail({ state: 'Approved', approvedSha256: sha, canApprove: false, findings: [] }), { derived: triggersDetail() });
+  await open(page);
+  await propose(page);
+
+  const choice = page.getByRole('checkbox', { name: /traduci anche batch e autocancel|also translate batch and autocancel/i });
+  await expect(choice).toBeChecked(); // translated unless a person says otherwise
+  await expect(page.getByText(/restano solo nominati come differenze|only named as differences/i)).toBeVisible();
+  await choice.uncheck();
+  await deriveButton(page).click();
+  expect(store.deriveBodies).toEqual([{ translateConcurrency: false }]);
+});
+
+test('the default derivation asks for the translation', async ({ page }) => {
+  const store = await setup(page, detail({ state: 'Approved', approvedSha256: sha, canApprove: false, findings: [] }), { derived: triggersDetail() });
+  await open(page);
+  await propose(page);
+  await deriveButton(page).click();
+  expect(store.deriveBodies).toEqual([{ translateConcurrency: true }]);
+});
