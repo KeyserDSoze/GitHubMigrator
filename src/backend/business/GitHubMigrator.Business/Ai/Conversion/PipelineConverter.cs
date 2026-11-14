@@ -4,15 +4,17 @@ namespace GitHubMigrator.Business;
 
 // Orchestrates one conversion: redact, ask, extract, gate, and (a bounded number of times) ask again with the blocking
 // findings. It decides nothing about approval and publishes nothing: its result is a proposal plus the evidence.
-public sealed class PipelineConverter(IChatModelClient client, IWorkflowGatePipelineFactory gates, TimeProvider clock, WorkflowGatePolicy? policy = null)
+// nonce: where the markers' random value comes from (a test can choose it); never a caller of the API.
+public sealed class PipelineConverter(IChatModelClient client, IWorkflowGatePipelineFactory gates, TimeProvider clock, WorkflowGatePolicy? policy = null, Func<string>? nonceSource = null)
 {
     private readonly WorkflowGatePolicy _policy = policy ?? WorkflowGatePolicy.Default;
 
+    // templates: what the service read of the templates the pipeline includes (already redacted and bounded); null when nobody asked for them.
     public async Task<ConversionProposal> ConvertAsync(AiConnectionUse use, AzurePipelineSource pipeline, string? sourceYaml,
-        ConversionOptions? options, CancellationToken ct)
+        ConversionOptions? options, CancellationToken ct, ResolvedTemplates? templates = null)
     {
         options ??= new();
-        var plan = ConversionPlanBuilder.Build(pipeline, sourceYaml, options.OperatorRunnerLabels, options.RunnerLabels);
+        var plan = ConversionPlanBuilder.Build(pipeline, sourceYaml, options.OperatorRunnerLabels, options.RunnerLabels, templates?.Files.Select(f => f.Text).ToArray());
         if (pipeline.Kind != "yaml") return ConversionProposal.NotAttempted("ClassicPipelineUnsupported", plan);
         if (string.IsNullOrWhiteSpace(sourceYaml)) return ConversionProposal.NotAttempted("SourceYamlUnavailable", plan);
         // defence in depth: the caller resolved the connection with consent required, and nothing here relies on that alone
@@ -23,20 +25,22 @@ public sealed class PipelineConverter(IChatModelClient client, IWorkflowGatePipe
         // a cut-off source would silently drop steps: refuse instead of converting part of a pipeline
         if (redaction.Truncated) return ConversionProposal.NotAttempted("SourceTooLarge", plan);
 
-        var sourceTasks = SourceTaskInventory.From(sourceYaml);
-        var nonce = ConversionPrompt.NewNonce();
-        while (redaction.Text.Contains(nonce, StringComparison.Ordinal)) nonce = ConversionPrompt.NewNonce();
-        var (system, user) = ConversionPrompt.Build(plan, redaction.Text, sourceTasks, nonce, _policy);
+        // the tasks of the pipeline AND of the templates that are sent with it: the workflow has to account for every one of them
+        var sourceTasks = new HashSet<string>(SourceTaskInventory.From(sourceYaml), StringComparer.OrdinalIgnoreCase);
+        foreach (var file in templates?.Files ?? []) sourceTasks.UnionWith(file.Tasks);
+        var nonce = ConversionPrompt.NewNonceAvoiding(nonceSource ?? ConversionPrompt.NewNonce, [redaction.Text, .. templates?.Files.Select(f => f.Text) ?? []]);
+        var (system, user) = ConversionPrompt.Build(plan, redaction.Text, sourceTasks, nonce, _policy, templates);
         var messages = new List<ChatMessage> { ChatMessage.System(system), ChatMessage.User(user) };
         var promptSha = ConversionPrompt.Sha256(messages);
-        var redactions = redaction.Findings.GroupBy(f => f.Kind).Select(g => new RedactionSummary(g.Key, g.Count())).OrderBy(r => r.Kind, StringComparer.Ordinal).ToArray();
+        var redactions = redaction.Findings.Select(f => f.Kind).Concat(templates?.Files.SelectMany(f => f.RedactionKinds) ?? [])
+            .GroupBy(k => k).Select(g => new RedactionSummary(g.Key, g.Count())).OrderBy(r => r.Kind, StringComparer.Ordinal).ToArray();
 
         var attempts = new List<ConversionAttempt>();
         int promptTokens = 0, completionTokens = 0;
         string? reportedModel = null;
         ConversionProposal? proposal = null;
         var pipelineOfGates = gates.Create(_policy);
-        var gateContext = plan.ToGateContext(sourceYaml);
+        var gateContext = plan.ToGateContextFor(sourceTasks);
 
         for (var attempt = 1; attempt <= 1 + options.EffectiveRepairs; attempt++)
         {
@@ -93,7 +97,9 @@ public sealed class PipelineConverter(IChatModelClient client, IWorkflowGatePipe
 
         ConversionProvenance Provenance() => new(use.Connection.Id, use.Connection.Provider.ToString(), new Uri(use.Connection.Endpoint).Host,
             use.Connection.Model, reportedModel, promptSha, plan.Sha256, _policy.Version, ActionCatalog.VerifiedOn.ToString("yyyy-MM-dd"),
-            redactions, promptTokens, completionTokens, attempts.ToArray(), clock.GetUtcNow());
+            redactions, promptTokens, completionTokens, attempts.ToArray(), clock.GetUtcNow(),
+            templates is null ? null : templates.Files.Select(f => new TemplateProvenance(f.Repository, f.Path, f.Ref, f.Sha256, f.Bytes)).ToArray(),
+            templates is null ? null : templates.Unresolved);
 
         static string Cap(string text) => text.Length > 120_000 ? text[..120_000] : text;
     }

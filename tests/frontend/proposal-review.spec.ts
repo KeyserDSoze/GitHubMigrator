@@ -32,7 +32,7 @@ test('whoever asked for the workflow cannot approve it, and rejecting needs a re
 
   await expect(page.getByText(/un.altra persona|another person has to approve/i)).toBeVisible();
   await expect(approve(page)).toHaveCount(0);
-  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  await expect(review(page).getByRole('checkbox')).toHaveCount(0); // no warning to accept: that is for the person who approves
   await expect(reject(page)).toBeDisabled();
   await note(page).fill('no');
   await expect(reject(page)).toBeDisabled();

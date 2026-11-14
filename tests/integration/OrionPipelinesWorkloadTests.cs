@@ -85,6 +85,46 @@ public sealed class OrionPipelinesReadByTheProductTests(OrionSimFixture sim) : I
         Assert.Equal(sim.Expected.GetProperty("yamlPipelines").GetInt32(), read);
     }
 
+    // The estate's own pipelines include templates of their repository and of orion-templates (another project of the organization): they are read through the product's reader from the simulator, with the
+    // very paths the pipelines wrote. (A simulator is not an oracle: that the real Azure DevOps answers the same way is what the live smoke test checks.)
+    [Fact]
+    public async Task The_templates_the_orion_pipelines_include_are_found_and_read_from_their_own_repository_and_from_the_templates_repository()
+    {
+        var server = (IServerAwareWorkloadReader)new AzureDevOpsWorkloadReader(new HttpClient(), Policy);
+        var yamlReader = (IPipelineYamlReader)server.ForServer(sim.ServerRoot);
+        var files = (IRepositoryFileReader)server.ForServer(sim.ServerRoot);
+        var found = new Dictionary<string, ResolvedTemplates>();
+        foreach (var project in (await sim.GetAsync("/_apis/projects")).GetProperty("value").EnumerateArray())
+        {
+            var projectId = project.GetProperty("id").GetString()!;
+            foreach (var pipeline in (await sim.GetAsync($"/{projectId}/_apis/pipelines")).GetProperty("value").EnumerateArray())
+            {
+                var id = pipeline.GetProperty("id").GetInt32();
+                var yaml = await yamlReader.ReadPipelineYamlAsync("DefaultCollection", projectId, id, OrionSimFixture.Pat, default);
+                if (yaml.Content is null) continue;
+                Assert.False(string.IsNullOrEmpty(yaml.RepositoryId)); // where the pipeline's own file is
+                Assert.False(string.IsNullOrEmpty(yaml.Path));
+                var resolved = await PipelineTemplates.ResolveAsync(yaml.Content, new(projectId, yaml.RepositoryId, yaml.Path), files, "DefaultCollection", OrionSimFixture.Pat, new(), default);
+                if (!resolved.IsEmpty) found[$"{projectId}/{pipeline.GetProperty("name").GetString()}"] = resolved;
+            }
+        }
+
+        // the estate: orion-api includes two templates of its own repository (relative to its file) and one of orion-templates, orion-web one of orion-templates, orion-infra one of a repository named
+        // without a project, which is a repository of its own project
+        Assert.Equal(3, found.Count);
+        var api = found.Single(f => f.Key.EndsWith("/orion-api CI-CD")).Value;
+        Assert.Equal([("self", "/pipelines/templates/variables.yml", (string?)null), ("self", "/pipelines/templates/dotnet-quality.yml", null), ("Orion Platform/orion-templates", "/steps/security-scan.yml", "refs/heads/main")],
+            api.Files.Select(f => (f.Repository, f.Path, f.Ref)));
+        var web = found.Single(f => f.Key.EndsWith("/orion-web CI-CD")).Value;
+        Assert.Equal([("Orion Platform/orion-templates", "/variables/common.yml", (string?)"refs/heads/main")], web.Files.Select(f => (f.Repository, f.Path, f.Ref)));
+        var infra = found.Single(f => f.Key.EndsWith("/orion-infra Terraform"));
+        var infraFile = Assert.Single(infra.Value.Files);
+        Assert.Equal((infra.Key.Split('/')[0] + "/orion-templates", "/steps/terraform-plan.yml"), (infraFile.Repository, infraFile.Path));
+        Assert.All(found.Values, r => Assert.Empty(r.Unresolved)); // everything the estate includes is readable
+        Assert.All(found.Values.SelectMany(r => r.Files), f => { Assert.False(string.IsNullOrWhiteSpace(f.Text)); Assert.Matches("^[0-9a-f]{64}$", f.Sha256); });
+        Assert.Contains(api.Files.SelectMany(f => f.Tasks).Concat(found.Values.SelectMany(r => r.Files).SelectMany(f => f.Tasks)), t => t.Contains('@')); // the templates carry tasks of their own
+    }
+
     [Fact]
     public async Task Every_orion_pipeline_is_read_and_yaml_pipelines_are_structurally_analysed()
     {

@@ -80,6 +80,8 @@ public sealed class ApiHarness : IAsyncLifetime
     public string AzureYamlPrefix { get; set; } = "";
     // WorkflowConversion:RunnerLabels: extra self-hosted labels the operator allows for every conversion.
     public string OperatorRunnerLabels { get; set; } = "";
+    // Files of other paths and repositories the Azure stub serves (the templates a pipeline includes), keyed "project|repository|/path"; a path that is not here is a 404.
+    public IReadOnlyDictionary<string, string> AzureTemplateFiles { get; set; } = new Dictionary<string, string>();
 
     public string AdminName { get; } = "admin-" + Guid.NewGuid().ToString("N");
     public string UserName { get; } = "user-" + Guid.NewGuid().ToString("N");
@@ -227,7 +229,7 @@ public sealed class ApiHarness : IAsyncLifetime
             Environment.SetEnvironmentVariable(pair.Key, pair.Value);
         }
 
-        var azure = new WireStub(request => ReplyAzure(request, AzureYamlPrefix), Calls);
+        var azure = new WireStub(request => ReplyAzure(request, AzureYamlPrefix, AzureTemplateFiles), Calls);
         var github = new WireStub(request => ReplyGitHub(request), Calls);
         Host = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
@@ -319,9 +321,18 @@ public sealed class ApiHarness : IAsyncLifetime
         return token;
     }
 
-    private static HttpResponseMessage ReplyAzure(HttpRequestMessage req, string yamlPrefix = "")
+    private static HttpResponseMessage ReplyAzure(HttpRequestMessage req, string yamlPrefix = "", IReadOnlyDictionary<string, string>? templateFiles = null)
     {
         var path = req.RequestUri!.AbsolutePath;
+        // a file of some repository: the pipeline's own file is served below; any other is a template and is served only if the test put it there
+        if (path.EndsWith("/items", StringComparison.Ordinal) && path.Contains("/_apis/git/repositories/", StringComparison.Ordinal))
+        {
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var filePath = System.Web.HttpUtility.ParseQueryString(req.RequestUri.Query)["path"];
+            var key = $"{Uri.UnescapeDataString(segments[1])}|{Uri.UnescapeDataString(segments[5])}|{filePath}";
+            if (templateFiles is not null && templateFiles.TryGetValue(key, out var template)) return Json(JsonSerializer.Serialize(new { content = template }));
+            if (!(segments[5] == "source-git" && filePath == "/azure-pipelines.yml")) return new(HttpStatusCode.NotFound);
+        }
         // F-008 integration: actual Azure DevOps discovery reader, fixed-host
         // paginated GETs, Graph users/groups and raw security evidence.
         if (path == "/az-org/_apis/projects")

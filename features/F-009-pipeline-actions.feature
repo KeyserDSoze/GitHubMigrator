@@ -188,3 +188,13 @@ Feature: Convert pipelines to reviewed GitHub Actions
     When the pipeline is converted
     Then the plan, the model's request and the stored proposal name both labels apart from anything the pool demanded, and the real actionlint accepts exactly those extra labels
     And a label nobody gave is still refused, a label that is not a plain name is refused before anything is read or sent, and the self-hosted runner warning is still a person's to accept
+
+  Scenario: The templates a pipeline includes are read and sent only when the person asks, redacted file by file, and what was sent is on record
+    Given a pipeline that includes a template of its own repository and one of a shared git repository of the same organization, and a source connection with consent to send source
+    When it is converted without choosing to include templates
+    Then nothing but the pipeline's own file is read, the model is told it cannot see the templates, and the proposal lists none
+    When it is converted with the templates included
+    Then each template is read with a GET from the place the pipeline points at, redacted on its own and sent apart from the pipeline, and a secret in one of them never reaches the model
+    And a task only a template uses has to be accounted for by the real gates, and approving and deriving the triggers gate the kept text against the same tasks
+    And the proposal keeps the repository, path, ref, hash and size of each template sent and never its text, and lists what was not sent with a reason
+    And a computed path, a path that leaves the repository, a repository of another type, a file that cannot be read and one that cannot be redacted are reported and never read or sent

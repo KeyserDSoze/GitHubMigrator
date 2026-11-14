@@ -31,7 +31,8 @@ public static class WorkloadEndpoints
             try
             {
                 var proposal = await service.ConvertAsync(input.SourceConnectionId, input.ProjectId ?? "", input.PipelineId,
-                    input.AiConnectionId, input.MaxRepairs is not null || input.RunnerLabels is not null ? new ConversionOptions(input.MaxRepairs ?? 1, input.RunnerLabels) : null, ct);
+                    input.AiConnectionId, input.MaxRepairs is not null || input.RunnerLabels is not null || input.IncludeTemplates is not null
+                        ? new ConversionOptions(input.MaxRepairs ?? 1, input.RunnerLabels, null, input.IncludeTemplates ?? false) : null, ct);
                 var log = logs.CreateLogger("PipelineConversion");
                 WorkflowProposal? kept = null;
                 try { kept = await proposals.RecordAsync(actor, input.SourceConnectionId, input.ProjectId ?? "", input.PipelineId, input.AiConnectionId, proposal, ct); }
@@ -91,7 +92,7 @@ public sealed record PipelinePreviewInput(Guid SourceConnectionId, Guid Destinat
 public sealed record BoardsPreviewInput(Guid SourceConnectionId, string? ProjectId,
     IReadOnlyList<int>? WorkItemIds, IReadOnlyDictionary<int, int>? KnownGitHubIssues);
 
-public sealed record PipelineConversionInput(Guid SourceConnectionId, string? ProjectId, int PipelineId, Guid AiConnectionId, int? MaxRepairs = null, IReadOnlyList<string>? RunnerLabels = null);
+public sealed record PipelineConversionInput(Guid SourceConnectionId, string? ProjectId, int PipelineId, Guid AiConnectionId, int? MaxRepairs = null, IReadOnlyList<string>? RunnerLabels = null, bool? IncludeTemplates = null);
 public sealed record WorkflowAnalyserStatus(bool Actionlint, bool Zizmor);
 public sealed record ConversionStatusResponse(bool Actionlint, bool Zizmor, bool CanBeApprovable, string PolicyVersion, string ActionCatalogVerifiedOn);
 
@@ -104,7 +105,8 @@ public sealed record PlanResponse(IReadOnlyList<PlanEntryResponse> Secrets, IRea
 public sealed record AttemptResponse(int Number, string Outcome, int? PromptTokens, int? CompletionTokens, string? WorkflowSha256, IReadOnlyList<string> BlockerCodes);
 public sealed record ProvenanceResponse(Guid AiConnectionId, string Provider, string Host, string Model, string? ReportedModel, string PromptSha256,
     string PlanSha256, string PolicyVersion, string ActionCatalogVerifiedOn, IReadOnlyList<RedactionSummary> Redactions,
-    int TotalPromptTokens, int TotalCompletionTokens, IReadOnlyList<AttemptResponse> Attempts, DateTimeOffset GeneratedAtUtc);
+    int TotalPromptTokens, int TotalCompletionTokens, IReadOnlyList<AttemptResponse> Attempts, DateTimeOffset GeneratedAtUtc,
+    IReadOnlyList<TemplateProvenance> Templates, IReadOnlyList<UnresolvedTemplate> UnresolvedTemplates);
 
 // Never carries the source YAML, only the proposed workflow, the evidence and a statement of what this is not.
 // Saved means the proposal was kept and can be reviewed (ProposalId); it never means approved or published.
@@ -128,5 +130,6 @@ public static class ConversionMapping
 
     public static ProvenanceResponse? Provenance(ConversionProvenance? p) => p is null ? null : new(p.AiConnectionId, p.Provider, p.Host, p.Model, p.ReportedModel,
         p.PromptSha256, p.PlanSha256, p.PolicyVersion, p.ActionCatalogVerifiedOn, p.Redactions, p.TotalPromptTokens, p.TotalCompletionTokens,
-        p.Attempts.Select(a => new AttemptResponse(a.Number, a.Outcome, a.PromptTokens, a.CompletionTokens, a.WorkflowSha256, a.BlockerCodes)).ToArray(), p.GeneratedAtUtc);
+        p.Attempts.Select(a => new AttemptResponse(a.Number, a.Outcome, a.PromptTokens, a.CompletionTokens, a.WorkflowSha256, a.BlockerCodes)).ToArray(), p.GeneratedAtUtc,
+        p.Templates ?? [], p.UnresolvedTemplates ?? []);
 }

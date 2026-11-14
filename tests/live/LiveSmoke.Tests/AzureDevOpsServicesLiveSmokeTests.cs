@@ -198,6 +198,106 @@ public sealed class AzureDevOpsServicesLiveSmokeTests(LiveReport report, ITestOu
         }
     }
 
+    // What the template reader (ADR-023) assumes of the real service, by GET only: the pipeline definition says where its file is, a file is readable by repository id and by branch, a missing path is an
+    // error and not content, and what a real pipeline's `template:` lines resolve to. Names, counts and reasons are reported; no text of any file ever is.
+    [LiveAdoFact]
+    public async Task Template_reading_asks_the_real_service_what_the_simulator_assumes()
+    {
+        using var http = Raw();
+        var reader = new AzureDevOpsWorkloadReader(LiveEnvironment.ReadOnlyClient(), null, null, Endpoints);
+        var projects = await GetAsync(http, $"{Endpoints.Core(Ado.Organization)}/_apis/projects?$top=200&api-version=7.1");
+        (string ProjectId, int PipelineId, PipelineYaml Yaml)? located = null;
+        (string ProjectId, int PipelineId, PipelineYaml Yaml, ResolvedTemplates Templates)? withTemplates = null;
+        var looked = 0;
+        foreach (var project in projects.Json!.RootElement.GetProperty("value").EnumerateArray())
+        {
+            if (Ado.Project is not null && !Ado.Project.Equals(project.GetProperty("name").GetString(), StringComparison.OrdinalIgnoreCase)) continue;
+            var projectId = project.GetProperty("id").GetString()!;
+            var list = await GetAsync(http, $"{Endpoints.Core(Ado.Organization)}/{projectId}/_apis/pipelines?api-version=7.1");
+            if (list.Status != 200) continue;
+            foreach (var pipeline in list.Json!.RootElement.GetProperty("value").EnumerateArray())
+            {
+                if (++looked > 25) break;
+                var id = pipeline.GetProperty("id").GetInt32();
+                var yaml = await reader.ReadPipelineYamlAsync(Ado.Organization, projectId, id, Ado.Pat, default);
+                if (yaml.Content is null) continue;
+                located ??= (projectId, id, yaml);
+                var resolved = await PipelineTemplates.ResolveAsync(yaml.Content, new(projectId, yaml.RepositoryId, yaml.Path), reader, Ado.Organization, Ado.Pat, new(), default);
+                if (!resolved.IsEmpty) { withTemplates = (projectId, id, yaml, resolved); break; }
+            }
+            if (withTemplates is not null || looked > 25) break;
+        }
+        if (located is null)
+        {
+            report.Record("ado-services", "template-read", "info", "No YAML pipeline was found to read templates for.");
+            return;
+        }
+
+        var (locatedProject, _, root) = located.Value;
+        var hasLocation = !string.IsNullOrEmpty(root.RepositoryId) && !string.IsNullOrEmpty(root.Path);
+        report.Record("ado-services", "template-root-location", hasLocation ? "confirmed" : "differs",
+            hasLocation ? "The pipeline definition names the repository (by id) and the path of its YAML file." :
+                "The pipeline definition did NOT give the repository and path of its file: relative templates cannot be found.");
+        Assert.True(hasLocation);
+
+        // the file the definition points at, read again by repository id (what a relative template read does) and compared with what the pipeline read returned
+        var files = (IRepositoryFileReader)reader;
+        var again = await files.ReadRepositoryFileAsync(Ado.Organization, locatedProject, root.RepositoryId!, root.Path!, null, null, Ado.Pat, default);
+        report.Record("ado-services", "repository-file-read-by-repository-id", again.Content == root.Content ? "confirmed" : "differs",
+            again.Content == root.Content ? "A file is read by repository id and path, on the default branch, with the same content the pipeline read returned." :
+                $"Reading the pipeline's own file by repository id returned different content (null: {again.Content is null}).");
+        Assert.Equal(root.Content, again.Content);
+
+        // by branch: the repository's default branch, as a `ref: refs/heads/...` of a repository resource would name it
+        var repository = await GetAsync(http, $"{Endpoints.Core(Ado.Organization)}/{locatedProject}/_apis/git/repositories/{Uri.EscapeDataString(root.RepositoryId!)}?api-version=7.1");
+        var defaultBranch = repository.Json is not null && repository.Json.RootElement.TryGetProperty("defaultBranch", out var b) ? b.GetString() : null;
+        var (type, version, ok) = PipelineTemplates.ParseRef(defaultBranch);
+        if (!ok || type is null)
+            report.Record("ado-services", "repository-file-read-at-branch", "info", "The repository has no default branch name this reader can use; the read by branch was not tried.");
+        else
+        {
+            var atBranch = await files.ReadRepositoryFileAsync(Ado.Organization, locatedProject, root.RepositoryId!, root.Path!, type, version, Ado.Pat, default);
+            report.Record("ado-services", "repository-file-read-at-branch", atBranch.Content is not null ? "confirmed" : "differs",
+                atBranch.Content is not null ? "A file is read at a branch with versionDescriptor (type branch)." : "Reading at the default branch with versionDescriptor returned no content.");
+            Assert.NotNull(atBranch.Content);
+        }
+
+        // a path that is not there is an error (the resolver reports it as NotReadable), never content
+        try
+        {
+            var missing = await files.ReadRepositoryFileAsync(Ado.Organization, locatedProject, root.RepositoryId!, "/__no_such_template__/never.yml", null, null, Ado.Pat, default);
+            report.Record("ado-services", "repository-file-missing-path", missing.Content is null ? "info" : "differs",
+                missing.Content is null ? "A missing path answered without content (no error)." : "A missing path answered WITH content: the reader would send a file that does not exist.");
+            Assert.Null(missing.Content);
+        }
+        catch (HttpRequestException)
+        {
+            report.Record("ado-services", "repository-file-missing-path", "confirmed", "A missing path is an HTTP error (the resolver reports the template as NotReadable).");
+        }
+
+        // a folder is not a template
+        try
+        {
+            var folder = await files.ReadRepositoryFileAsync(Ado.Organization, locatedProject, root.RepositoryId!, "/", null, null, Ado.Pat, default);
+            report.Record("ado-services", "repository-file-folder", folder.Content is null ? "confirmed" : "differs",
+                folder.Content is null ? "A folder answers without content." : "A folder answered WITH content.");
+        }
+        catch (HttpRequestException ex) { report.Record("ado-services", "repository-file-folder", "info", "A folder is an HTTP error: " + ex.Message); }
+
+        // what a real pipeline's templates resolve to: counts, locations and reasons only
+        if (withTemplates is null)
+            report.Record("ado-services", "template-resolution", "info", $"None of the {looked} YAML pipelines looked at includes a `template:`; point GITHUBMIGRATOR_LIVE_ADO_PROJECT at a project that does to measure it.");
+        else
+        {
+            var resolved = withTemplates.Value.Templates;
+            output.WriteLine($"pipeline {withTemplates.Value.PipelineId}: {resolved.Files.Count} templates read, {resolved.Unresolved.Count} not");
+            report.Record("ado-services", "template-resolution", resolved.Files.Count > 0 ? "confirmed" : "info",
+                $"{resolved.Files.Count} template file(s) read ({string.Join("; ", resolved.Files.Select(f => $"{(f.Repository == "self" ? "self" : "another repository")}:{f.Path} {f.Bytes} B, tasks {f.Tasks.Count}"))}); " +
+                $"{resolved.Unresolved.Count} not read ({string.Join("; ", resolved.Unresolved.Select(u => $"{u.Reference} {u.Reason}"))}).");
+        }
+        Assert.DoesNotContain(Ado.Pat, JsonSerializer.Serialize(located.Value.Yaml with { Content = null }));
+    }
+
     [LiveAdoFact]
     public async Task Contract_probes_record_how_the_real_graph_and_security_apis_answer()
     {

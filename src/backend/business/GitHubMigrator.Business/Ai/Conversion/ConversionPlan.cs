@@ -60,8 +60,11 @@ public static partial class ConversionPlanBuilder
         return name.Length > 100 ? name[..100] : name;
     }
 
-    public static ConversionPlan Build(AzurePipelineSource pipeline, string? sourceYaml, IReadOnlyList<string>? operatorLabels = null, IReadOnlyList<string>? requestedLabels = null)
+    // templateTexts: the (redacted) templates the pipeline includes, when they are sent with it: the service connections they name and the pools they demand are the pipeline's too.
+    public static ConversionPlan Build(AzurePipelineSource pipeline, string? sourceYaml, IReadOnlyList<string>? operatorLabels = null, IReadOnlyList<string>? requestedLabels = null,
+        IReadOnlyList<string>? templateTexts = null)
     {
+        var scanned = templateTexts is { Count: > 0 } ? sourceYaml + "\n" + string.Join("\n", templateTexts) : sourceYaml;
         var secrets = new List<PlanEntry>();
         var variables = new List<PlanEntry>();
         var notes = new List<string>();
@@ -85,7 +88,7 @@ public static partial class ConversionPlanBuilder
         foreach (var connection in pipeline.ServiceConnections.DistinctBy(c => c.Name))
         {
             // The project inventory is not pipeline-scoped: only connections the YAML names are mapped.
-            if (string.IsNullOrEmpty(sourceYaml) || !Regex.IsMatch(sourceYaml, @"(?<![\w.-])" + Regex.Escape(connection.Name) + @"(?![\w.-])", RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(200)))
+            if (string.IsNullOrEmpty(scanned) || !Regex.IsMatch(scanned, @"(?<![\w.-])" + Regex.Escape(connection.Name) + @"(?![\w.-])", RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(200)))
                 continue;
             var mapping = Map(connection);
             connections.Add(mapping);
@@ -93,7 +96,10 @@ public static partial class ConversionPlanBuilder
             foreach (var variable in mapping.Variables) Add(variables, variable, $"service connection '{connection.Name}' ({connection.Kind})");
         }
         notes.Add("Service connections are mapped only when the pipeline YAML names them; the project inventory is not pipeline-scoped.");
-        var labels = AzureRunnerLabels.From(sourceYaml);
+        var labels = AzureRunnerLabels.From(sourceYaml).ToList();
+        foreach (var text in templateTexts ?? [])
+            foreach (var label in AzureRunnerLabels.From(text))
+                if (labels.Count < AzureRunnerLabels.MaxLabels && !labels.Contains(label, StringComparer.OrdinalIgnoreCase)) labels.Add(label);
         if (labels.Count > 0)
             notes.Add($"The pipeline's self-hosted pools demand {string.Join(", ", labels)}: a workflow may use these as extra runner labels, and the destination needs runners that have them.");
         // labels the operator allows for every conversion and the person asking says the destination has: only for a pipeline that is converted from its YAML, never beyond the limit

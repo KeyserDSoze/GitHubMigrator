@@ -28,7 +28,7 @@ export function detail(overrides: Detail = {}): Detail {
 export function convertAnswer(d: Detail) {
   return {
     status: 'ReadyForReview', reason: null, workflowYaml: d.workflowYaml, workflowSha256: d.workflowSha256, modelNotes: d.modelNotes, approvable: true, proposalOnly: true,
-    saved: true, proposalId: d.id, proposalState: d.state, gates: d.gates, findings: d.findings, plan: d.plan, provenance: null
+    saved: true, proposalId: d.id, proposalState: d.state, gates: d.gates, findings: d.findings, plan: d.plan, provenance: d.provenance ?? null
   };
 }
 

@@ -81,6 +81,8 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
     protected virtual string AzureYaml => "";
     // labels the operator allows for every conversion (WorkflowConversion:RunnerLabels); empty by default
     protected virtual string OperatorRunnerLabels => "";
+    // files the Azure stub serves besides the pipeline itself (templates), keyed "project|repository|/path"
+    protected virtual IReadOnlyDictionary<string, string> AzureTemplateFiles => new Dictionary<string, string>();
 
     protected static string Fenced(string yaml) => "```yaml\n" + yaml + "\n```\n\nNotes: nothing else.";
 
@@ -92,7 +94,7 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
         if (githubSim) { GitHub = new GhSimFixture(); await GitHub.InitializeAsync(); }
         Api = new ApiHarness
         {
-            LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin, AzureYamlPrefix = AzureYaml, OperatorRunnerLabels = OperatorRunnerLabels,
+            LlmSimOrigin = Origin, SingleReviewer = singleReviewer, GitHubSimOrigin = GitHub?.Origin, AzureYamlPrefix = AzureYaml, OperatorRunnerLabels = OperatorRunnerLabels, AzureTemplateFiles = AzureTemplateFiles,
             Publication = publication ? (PublicationAppId, PublicationAppId + 1, PublicationKeyReference, PublicationRepositories) : null
         };
         await Api.InitializeAsync();
@@ -154,12 +156,12 @@ public abstract class ProposalApiTestBase(bool singleReviewer, bool githubSim = 
     }
 
     // Converts as the administrator and returns the answer of the endpoint.
-    protected async Task<JsonElement> ConvertAsync(Guid ai, string workflow, int? maxRepairs = null, Who who = Who.Admin, string[]? runnerLabels = null)
+    protected async Task<JsonElement> ConvertAsync(Guid ai, string workflow, int? maxRepairs = null, Who who = Who.Admin, string[]? runnerLabels = null, bool? includeTemplates = null)
     {
         await ScriptAsync(new { content = Fenced(workflow) });
         using var response = await SendAsync(HttpMethod.Post, "/api/workloads/pipelines/convert", who, new
         {
-            sourceConnectionId = Api.SourceConnectionId, projectId = "project", pipelineId = 42, aiConnectionId = ai, maxRepairs, runnerLabels
+            sourceConnectionId = Api.SourceConnectionId, projectId = "project", pipelineId = 42, aiConnectionId = ai, maxRepairs, runnerLabels, includeTemplates
         });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         return await JsonOf(response);

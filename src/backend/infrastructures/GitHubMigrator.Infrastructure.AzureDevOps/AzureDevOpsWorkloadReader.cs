@@ -8,7 +8,7 @@ namespace GitHubMigrator.Infrastructure.AzureDevOps;
 // Read-only source adapter. Never project credential payloads or variable values.
 public sealed class AzureDevOpsWorkloadReader(HttpClient client, ServerEndpointPolicy? policy = null,
     string? serverRoot = null, AzureDevOpsServicesEndpoints? services = null)
-    : IAzureWorkloadReader, IServerAwareWorkloadReader, IPipelineYamlReader
+    : IAzureWorkloadReader, IServerAwareWorkloadReader, IPipelineYamlReader, IRepositoryFileReader
 {
     // Cloud keeps the fixed Microsoft host; a server root was already policy-checked.
     private string Collection(string organization) => serverRoot is null
@@ -115,9 +115,23 @@ public sealed class AzureDevOpsWorkloadReader(HttpClient client, ServerEndpointP
                       $"?path={Uri.EscapeDataString(path)}&includeContent=true&$format=json&api-version={Api}";
             using var item = await GetAsync(url, token, ct);
             if (Text(item.RootElement, "content") is not { Length: > 0 } raw) return new(null, false);
-            return raw.Length > MaxPipelineYamlChars ? new(null, true) : new(raw, false);
+            return raw.Length > MaxPipelineYamlChars ? new(null, true, repo, path) : new(raw, false, repo, path);
         }
-        catch (HttpRequestException) { return new(null, false); }
+        catch (HttpRequestException) { return new(null, false, repo, path); }
+    }
+
+    // One file of one repository (a template the pipeline includes), GET only, in the organization of the connection. The project, repository and path were validated as plain names by the caller and are
+    // escaped here; `versionType` is "branch" or "tag" with a plain `version`, or both null for the default branch. A folder, a missing file or a refusal is "not readable" (an exception), never content.
+    public async Task<RepositoryFile> ReadRepositoryFileAsync(string organization, string projectId, string repository, string path, string? versionType, string? version,
+        string token, CancellationToken ct)
+    {
+        if (versionType is not (null or "branch" or "tag") || (versionType is null) != (version is null)) throw new HttpRequestException("SourceReadFailed");
+        var url = $"{Collection(organization)}/{Uri.EscapeDataString(projectId)}/_apis/git/repositories/{Uri.EscapeDataString(repository)}/items" +
+                  $"?path={Uri.EscapeDataString(path)}&includeContent=true&$format=json&api-version={Api}" +
+                  (version is null ? "" : $"&versionDescriptor.version={Uri.EscapeDataString(version)}&versionDescriptor.versionType={versionType}");
+        using var item = await GetAsync(url, token, ct);
+        if (Text(item.RootElement, "content") is not { Length: > 0 } raw) return new(null, false);
+        return raw.Length > MaxPipelineYamlChars ? new(null, true) : new(raw, false);
     }
 
     public async Task<IReadOnlyList<AzureBoardItem>> GetBoardItemsAsync(

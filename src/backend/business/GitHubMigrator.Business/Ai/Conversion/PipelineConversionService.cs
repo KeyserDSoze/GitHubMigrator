@@ -56,14 +56,24 @@ public sealed class PipelineConversionService(
             return ConversionProposal.NotAttempted(reason, ConversionPlanBuilder.Build(pipeline, null));
         }
 
-        string? yaml = null;
+        string? yaml = null, rootRepository = null, rootPath = null;
         if (pipeline.Kind == "yaml")
         {
             var yamlReader = reader as IPipelineYamlReader ?? throw new WorkloadInputException("UnsupportedSource");
             var read = await yamlReader.ReadPipelineYamlAsync(connection.Organization, projectId, pipelineId, token, ct);
             if (read.TooLarge) return ConversionProposal.NotAttempted("SourceTooLarge", ConversionPlanBuilder.Build(pipeline, null));
             yaml = read.Content;
+            rootRepository = read.RepositoryId;
+            rootPath = read.Path;
         }
-        return await converter.ConvertAsync(use, pipeline, yaml, options, ct);
+        // the templates the pipeline includes are source too: read only when the person asked, after the consent above, from this organization, redacted, within what the model may be sent
+        ResolvedTemplates? templates = null;
+        if (options.IncludeTemplates && yaml is not null)
+        {
+            var budget = Math.Max(0, Math.Min(SourceRedactor.DefaultMaxBytes, Math.Max(1_000, use.Endpoint.MaxInputBytes / 2)) - yaml.Length);
+            templates = await PipelineTemplates.ResolveAsync(yaml, new(projectId, rootRepository, rootPath), reader as IRepositoryFileReader, connection.Organization, token,
+                new TemplateLimits(MaxTotalBytes: budget), ct);
+        }
+        return await converter.ConvertAsync(use, pipeline, yaml, options, ct, templates);
     }
 }

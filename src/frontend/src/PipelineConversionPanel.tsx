@@ -23,6 +23,7 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
   const [status, setStatus] = useState<ConversionStatus | null>(null);
   const [aiId, setAiId] = useState('');
   const [labels, setLabels] = useState('');
+  const [includeTemplates, setIncludeTemplates] = useState(false);
   const [proposal, setProposal] = useState<ConversionProposal | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -65,7 +66,7 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
     if (!Number.isSafeInteger(number) || number < 1) { setError(t('convNeedPipeline')); return; }
     setBusy(true); setError(''); setProposal(null); setDetail(null); setCopied(false);
     try {
-      const answer = await api.convertPipeline(token, sourceId, projectId, number, aiId, labels.split(/[\s,;]+/).filter(Boolean));
+      const answer = await api.convertPipeline(token, sourceId, projectId, number, aiId, labels.split(/[\s,;]+/).filter(Boolean), includeTemplates);
       setProposal(answer);
       if (answer.proposalId) {
         // the kept copy is what a person approves: read it back instead of trusting the answer in hand
@@ -129,6 +130,11 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
         <input value={labels} placeholder="gpu, orion-build" onChange={e => setLabels(e.target.value)} />
       </label>
       <p className="connection-hint">{t('convExtraLabelsHint')}</p>
+      <label className="checkbox-row">
+        <input type="checkbox" checked={includeTemplates} onChange={e => setIncludeTemplates(e.target.checked)} />
+        <span>{t('convIncludeTemplates')}</span>
+      </label>
+      <p className="connection-hint">{t('convIncludeTemplatesHint')}</p>
       <button type="button" className="primary" disabled={busy || !aiId || !sourceId || !projectId || !pipelineId}
         onClick={() => { void propose(); }}>
         <Bot size={15} /> {busy ? t('convBusy') : t('convPropose')}
@@ -201,6 +207,12 @@ export default function PipelineConversionPanel({ token, sourceId, projectId, pi
             <dt>{t('convAttempts')}</dt><dd>{proposal.provenance.attempts.map(a => `${a.number}: ${a.outcome}`).join(' → ')}</dd>
             <dt>{t('convTokens')}</dt><dd>{proposal.provenance.totalPromptTokens} / {proposal.provenance.totalCompletionTokens}</dd>
             <dt>{t('convRedactions')}</dt><dd>{proposal.provenance.redactions.length ? proposal.provenance.redactions.map(r => `${r.kind} × ${r.count}`).join(', ') : t('convNoRedactions')}</dd>
+            {(proposal.provenance.templates?.length ?? 0) > 0 && <><dt>{t('convTemplatesSent')}</dt><dd>
+              {proposal.provenance.templates!.map(f => `${f.repository}:${f.path}${f.ref ? ` @ ${f.ref}` : ''} (${f.bytes} B)`).join('; ')}
+            </dd></>}
+            {(proposal.provenance.unresolvedTemplates?.length ?? 0) > 0 && <><dt>{t('convTemplatesNotSent')}</dt><dd>
+              {proposal.provenance.unresolvedTemplates!.map(u => `${u.reference} — ${t('convTemplateReason_' + u.reason, { defaultValue: u.reason })}`).join('; ')}
+            </dd></>}
             <dt>{t('convHashes')}</dt><dd><code>{proposal.workflowSha256?.slice(0, 12) ?? '—'}</code> · <code>{proposal.provenance.promptSha256.slice(0, 12)}</code></dd>
             <dt>{t('convPolicy')}</dt><dd>{proposal.provenance.policyVersion} · {t('convCatalog')} {proposal.provenance.actionCatalogVerifiedOn}</dd>
           </dl></>}

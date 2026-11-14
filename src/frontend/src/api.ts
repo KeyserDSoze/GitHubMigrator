@@ -531,6 +531,9 @@ export type ConversionProposal = {
     promptSha256: string; planSha256: string; policyVersion: string; actionCatalogVerifiedOn: string;
     redactions: { kind: string; count: number }[]; totalPromptTokens: number; totalCompletionTokens: number;
     attempts: ConversionAttempt[]; generatedAtUtc: string;
+    // the templates the pipeline includes that were read and sent with it (names, sizes and hashes, never their text), and the ones that were not, with a reason; older answers have neither
+    templates?: { repository: string; path: string; ref: string | null; sha256: string; bytes: number }[];
+    unresolvedTemplates?: { reference: string; reason: string }[];
   } | null;
 };
 export type ProposalState = 'Proposed' | 'Blocked' | 'Approved' | 'Rejected' | 'Revoked';
@@ -994,10 +997,10 @@ export const api = {
     }),
   conversionStatus: (token: string) =>
     call<ConversionStatus>('/api/workloads/pipelines/convert/status', { headers: withToken(token) }),
-  convertPipeline: (token: string, sourceConnectionId: string, projectId: string, pipelineId: number, aiConnectionId: string, runnerLabels?: string[]) =>
+  convertPipeline: (token: string, sourceConnectionId: string, projectId: string, pipelineId: number, aiConnectionId: string, runnerLabels?: string[], includeTemplates?: boolean) =>
     call<ConversionProposal>('/api/workloads/pipelines/convert', {
       method: 'POST', headers: withToken(token),
-      body: JSON.stringify({ sourceConnectionId, projectId, pipelineId, aiConnectionId, ...(runnerLabels && runnerLabels.length > 0 ? { runnerLabels } : {}) })
+      body: JSON.stringify({ sourceConnectionId, projectId, pipelineId, aiConnectionId, ...(runnerLabels && runnerLabels.length > 0 ? { runnerLabels } : {}), ...(includeTemplates ? { includeTemplates: true } : {}) })
     }),
   listProposals: (token: string, sourceConnectionId: string, projectId: string, pipelineId: number) =>
     call<ProposalSummary[]>('/api/workloads/pipelines/proposals?' + new URLSearchParams({

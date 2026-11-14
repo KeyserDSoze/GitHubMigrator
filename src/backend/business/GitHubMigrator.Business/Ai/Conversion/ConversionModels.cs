@@ -17,7 +17,8 @@ public sealed record ConversionAttempt(int Number, string Outcome, int? PromptTo
 public sealed record ConversionProvenance(Guid AiConnectionId, string Provider, string Host, string Model, string? ReportedModel,
     string PromptSha256, string PlanSha256, string PolicyVersion, string ActionCatalogVerifiedOn,
     IReadOnlyList<RedactionSummary> Redactions, int TotalPromptTokens, int TotalCompletionTokens,
-    IReadOnlyList<ConversionAttempt> Attempts, DateTimeOffset GeneratedAtUtc);
+    IReadOnlyList<ConversionAttempt> Attempts, DateTimeOffset GeneratedAtUtc,
+    IReadOnlyList<TemplateProvenance>? Templates = null, IReadOnlyList<UnresolvedTemplate>? UnresolvedTemplates = null);
 
 public sealed record ConversionProposal(ConversionStatus Status, string? Reason, string? WorkflowYaml, string? WorkflowSha256,
     string? ModelNotes, WorkflowGateReport? Gates, ConversionPlan Plan, ConversionProvenance? Provenance)
@@ -33,7 +34,8 @@ public sealed record ConversionProposal(ConversionStatus Status, string? Reason,
 }
 
 // RunnerLabels are extra labels the person asking says the destination's runners have; OperatorRunnerLabels are the ones the operator allows for every conversion (set by the service, never by a caller).
-public sealed record ConversionOptions(int MaxRepairs = 1, IReadOnlyList<string>? RunnerLabels = null, IReadOnlyList<string>? OperatorRunnerLabels = null)
+// IncludeTemplates: also read the templates the pipeline includes (same organization, redacted, bounded) and send them with it; off unless the person asks.
+public sealed record ConversionOptions(int MaxRepairs = 1, IReadOnlyList<string>? RunnerLabels = null, IReadOnlyList<string>? OperatorRunnerLabels = null, bool IncludeTemplates = false)
 {
     public int EffectiveRepairs => Math.Clamp(MaxRepairs, 0, 3);
 }

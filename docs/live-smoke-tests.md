@@ -12,6 +12,7 @@ Everything against Azure DevOps and GitHub is **read-only**: all HTTP goes throu
 | | discovery | projects, repositories, refs, Graph users/groups/memberships and ACLs are read; no credential appears in the inventory; the share of ACE principals that resolve through Graph `legacyDescriptor` |
 | | git fetch | a real repository (smallest non-empty one up to 100 MB, or the one you name) becomes an exact mirror: refs equal the REST refs, `fsck --strict` passes |
 | | pipelines | the first pipeline is read with variables, variable groups and service connections; the shape of `variableGroups` in the build definition |
+| | template reading | the pipeline definition names the repository and path of its file; a file is read by repository id and at a branch with `versionDescriptor`; a missing path is an HTTP error and a folder has no content; what a real pipeline's `template:` lines resolve to (counts, locations and reasons only, never file text). Set `..._ADO_PROJECT` to a project whose pipelines include templates |
 | | contract probes | Graph field names (`legacyDescriptor`), continuation headers, membership edge shape, ACL shape and descriptor kinds |
 | GitHub | validator and access | token, organization, membership and role, private-repository policy |
 | | missing repository | a missing name is `NotVisibleOrMissing` |
