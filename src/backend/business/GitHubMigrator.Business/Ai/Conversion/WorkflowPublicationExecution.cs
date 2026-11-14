@@ -126,7 +126,7 @@ public sealed class WorkflowPublicationException(string code, IReadOnlyList<stri
 // operator enabled it and allow-listed the repository; the person confirms the hash of the plan they saw; that plan is made again now and is
 // still the same, with nothing in the way; the attempt is written to a ledger before any write; the writer re-checks the base commit with its own
 // credential. Nothing is retried and nothing is merged: a write whose answer was lost leaves a ledger entry that says so.
-public sealed class WorkflowPublicationExecutor(WorkflowPublicationService planner, WorkflowProposalService proposals, IConnectionRepository connections,
+public sealed class WorkflowPublicationExecutor(WorkflowPublicationService planner, IConnectionRepository connections,
     IConnectionSecretStore secrets, IPublicationLedger ledger, IGitHubPublicationWriter writer, WorkflowPublicationOptions options, TimeProvider clock)
 {
     private static readonly Regex Sha = new("^[0-9a-f]{64}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);

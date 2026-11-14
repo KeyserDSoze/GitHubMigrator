@@ -110,7 +110,7 @@ public sealed class WorkflowPublicationExecutorTests
         if (pem is not null) setup.Secrets.Values[KeyReference] = pem;
         var writer = new FakeWriter();
         var ledger = new InMemoryLedger();
-        var executor = new WorkflowPublicationExecutor(setup.Service, setup.Proposals, setup.Connections, setup.Secrets, ledger, writer, options ?? Options(), new Clock());
+        var executor = new WorkflowPublicationExecutor(setup.Service, setup.Connections, setup.Secrets, ledger, writer, options ?? Options(), new Clock());
         return new(executor, setup, writer, ledger, await PlanAsync(setup));
     }
 
@@ -204,7 +204,7 @@ public sealed class WorkflowPublicationExecutorTests
 
         var pending = await ApprovedAsync(approve: false);
         pending.Secrets.Values[KeyReference] = "pem";
-        var executor = new WorkflowPublicationExecutor(pending.Service, pending.Proposals, pending.Connections, pending.Secrets, new InMemoryLedger(), new FakeWriter(), Options(), new Clock());
+        var executor = new WorkflowPublicationExecutor(pending.Service, pending.Connections, pending.Secrets, new InMemoryLedger(), new FakeWriter(), Options(), new Clock());
         Assert.Equal("ProposalNotApproved", (await Assert.ThrowsAsync<WorkflowProposalException>(() =>
             executor.PublishAsync(Publisher, pending.Proposal.Id, DestinationId, "orion-api", null, new string('a', 64), default))).Code);
 
@@ -362,7 +362,7 @@ public sealed class WorkflowPublicationExecutorTests
     }
 
     private static WorkflowPublicationExecutor WorkflowPublicationExecutorFor(WorkflowPublicationOptions options, Rig rig) =>
-        new(rig.Setup.Service, rig.Setup.Proposals, rig.Setup.Connections, rig.Setup.Secrets, rig.Ledger, rig.Writer, options, new Clock());
+        new(rig.Setup.Service, rig.Setup.Connections, rig.Setup.Secrets, rig.Ledger, rig.Writer, options, new Clock());
 
     [Fact]
     public void Configuration_lists_and_states_are_read_strictly()

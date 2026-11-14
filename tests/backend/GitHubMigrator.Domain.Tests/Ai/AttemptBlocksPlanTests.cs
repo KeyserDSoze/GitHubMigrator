@@ -121,7 +121,7 @@ public sealed class AttemptBlocksPlanTests
 
         rig.Setup.Secrets.Values["publication-key"] = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----";
         var writer = new FakeWriter();
-        var executor = new WorkflowPublicationExecutor(rig.Service, rig.Setup.Proposals, rig.Setup.Connections, rig.Setup.Secrets, rig.Ledger, writer,
+        var executor = new WorkflowPublicationExecutor(rig.Service, rig.Setup.Connections, rig.Setup.Secrets, rig.Ledger, writer,
             new WorkflowPublicationOptions(true, 11, 22, "publication-key", ["target-org/orion-api"]), new Clock());
         var actor = new ProposalActor(Guid.NewGuid(), "publisher");
 

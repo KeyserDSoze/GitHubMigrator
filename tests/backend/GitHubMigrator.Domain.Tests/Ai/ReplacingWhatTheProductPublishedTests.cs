@@ -20,7 +20,7 @@ public sealed class ReplacingWhatTheProductPublishedTests
     {
         var kept = (await rig.Proposals.RecordAsync(Author, source ?? SourceId, project, pipeline, AiId, await ConvertedAsync(Clean + $"# {marker}\n"), default))!;
         await rig.Proposals.ApproveAsync(Reviewer, kept.Id, kept.WorkflowSha256, [], "Reviewed.", default);
-        return (kept.Id, kept.WorkflowSha256);
+        return (kept.Id, kept.WorkflowSha256!);
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public sealed class ReplacingWhatTheProductPublishedTests
 
         rig.Secrets.Values["publication-key"] = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----";
         var writer = new FakeWriter();
-        var executor = new WorkflowPublicationExecutor(rig.Service, rig.Proposals, rig.Connections, rig.Secrets, rig.Ledger, writer,
+        var executor = new WorkflowPublicationExecutor(rig.Service, rig.Connections, rig.Secrets, rig.Ledger, writer,
             new WorkflowPublicationOptions(true, 11, 22, "publication-key", ["target-org/orion-api"]), new Clock());
         var record = await executor.PublishAsync(new ProposalActor(Guid.NewGuid(), "publisher"), rig.Parent.Id, WorkflowPublicationPlanTests.DestinationId, "orion-api", null, plan.PlanSha256, default);
 

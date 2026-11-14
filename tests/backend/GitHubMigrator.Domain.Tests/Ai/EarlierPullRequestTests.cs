@@ -261,7 +261,7 @@ public sealed class EarlierPullRequestTests
         rig.Secrets.Values["publication-key"] = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----";
         var writer = new FakeWriter();
         var publishLedger = new InMemoryLedger();
-        var executor = new WorkflowPublicationExecutor(rig.Service, rig.Proposals, rig.Connections, rig.Secrets, publishLedger, writer,
+        var executor = new WorkflowPublicationExecutor(rig.Service, rig.Connections, rig.Secrets, publishLedger, writer,
             new WorkflowPublicationOptions(true, 11, 22, "publication-key", ["target-org/orion-api"]), new Clock());
         var refused = await Assert.ThrowsAsync<WorkflowPublicationException>(() =>
             executor.PublishAsync(new ProposalActor(Guid.NewGuid(), "publisher"), rig.Derived.Id, WorkflowPublicationPlanTests.DestinationId, "orion-api", null, before.PlanSha256, default));

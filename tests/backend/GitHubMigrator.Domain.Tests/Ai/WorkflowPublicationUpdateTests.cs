@@ -178,7 +178,7 @@ public sealed class WorkflowPublicationUpdateTests
     // ---- the executor: what the person confirmed is what the writer is told and what the ledger keeps ----------------------------------------
 
     private static WorkflowPublicationExecutor Executor(Rig rig, FakeWriter writer, InMemoryLedger ledger) =>
-        new(rig.Service, rig.Proposals, rig.Connections, rig.Secrets, ledger, writer,
+        new(rig.Service, rig.Connections, rig.Secrets, ledger, writer,
             new WorkflowPublicationOptions(true, 11, 22, Key, ["target-org/orion-api"]), new Clock());
 
     [Fact]
@@ -233,7 +233,7 @@ public sealed class WorkflowPublicationUpdateTests
         setup.Secrets.Values[Key] = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----";
         var (plan, _) = await setup.Service.PlanAsync(setup.Proposal.Id, WorkflowPublicationPlanTests.DestinationId, "orion-api", null, default);
         var writer = new FakeWriter();
-        var executor = new WorkflowPublicationExecutor(setup.Service, setup.Proposals, setup.Connections, setup.Secrets, new InMemoryLedger(), writer,
+        var executor = new WorkflowPublicationExecutor(setup.Service, setup.Connections, setup.Secrets, new InMemoryLedger(), writer,
             new WorkflowPublicationOptions(true, 11, 22, Key, ["target-org/orion-api"]), new Clock());
 
         var record = await executor.PublishAsync(Publisher, setup.Proposal.Id, WorkflowPublicationPlanTests.DestinationId, "orion-api", null, plan.PlanSha256, default);
