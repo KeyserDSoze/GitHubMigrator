@@ -25,16 +25,16 @@ internal sealed class FakePullObserver : IGitHubPublicationObserver
 // A file added (or replaced) while an earlier pull request of this product for the same file is still open would make the two conflict. The plan asks the ledger and reads those pull requests.
 public sealed class EarlierPullRequestTests
 {
-    private static readonly string Blob = new('b', 40);
-    private static readonly string Path = WorkflowPublicationPlanner.WorkflowPathFor(42, "Orion API CI/CD");
+    internal static readonly string Blob = new('b', 40);
+    internal static readonly string Path = WorkflowPublicationPlanner.WorkflowPathFor(42, "Orion API CI/CD");
 
-    private sealed record Rig(WorkflowPublicationService Service, FakePublicationReader Reader, FakePullObserver Observer, InMemoryLedger Ledger, WorkflowProposal Parent, WorkflowProposal Derived,
+    internal sealed record Rig(WorkflowPublicationService Service, FakePublicationReader Reader, FakePullObserver Observer, InMemoryLedger Ledger, WorkflowProposal Parent, WorkflowProposal Derived,
         WorkflowProposalService Proposals, MemorySecrets Secrets, FakeDestinations Connections);
 
     private static PullObservation Pull(int number, string state = "open", bool merged = false) => new(number, state, merged, new string('e', 40), "main", null);
 
     // An approved conversion of pipeline 42 and a Triggers proposal derived from it and approved; the ledger holds what the product wrote for the conversion.
-    private static async Task<Rig> RigAsync(WorkflowFileState file = WorkflowFileState.Absent)
+    internal static async Task<Rig> RigAsync(WorkflowFileState file = WorkflowFileState.Absent)
     {
         var repo = new InMemoryProposalRepository();
         var proposals = Service(repo);
@@ -54,11 +54,11 @@ public sealed class EarlierPullRequestTests
         return new(service, reader, observer, ledger, (await repo.GetAsync(parent.Id, default))!, (await repo.GetAsync(derived.Id, default))!, proposals, secrets, connections);
     }
 
-    private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now.AddHours(2); }
+    internal sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now.AddHours(2); }
 
-    private static PublicationRecord Attempt(Guid proposal, int? pull = 7, string state = PublicationStates.Published, string repository = "orion-api", string baseBranch = "main",
-        string head = "migrate/azdo-42-aaaaaaaa", string organization = "target-org", string path = "", bool writes = false) =>
-        new(Guid.NewGuid(), proposal, new string('d', 64), new string('a', 64), organization, repository, baseBranch, new string('c', 40), head, path.Length == 0 ? Path : path, state, new string('e', 40),
+    internal static PublicationRecord Attempt(Guid proposal, int? pull = 7, string state = PublicationStates.Published, string repository = "orion-api", string baseBranch = "main",
+        string head = "migrate/azdo-42-aaaaaaaa", string organization = "target-org", string path = "", bool writes = false, string? workflow = null) =>
+        new(Guid.NewGuid(), proposal, new string('d', 64), workflow ?? new string('a', 64), organization, repository, baseBranch, new string('c', 40), head, path.Length == 0 ? Path : path, state, new string('e', 40),
             pull, pull is null ? null : $"https://github.example/{organization}/{repository}/pull/{pull}", state == PublicationStates.Failed ? "PublicationFileFailed" : null,
             state == PublicationStates.Failed ? PublicationStates.FileCommitting : null, writes, Guid.NewGuid(), "publisher", Now, Now);
 
@@ -198,7 +198,7 @@ public sealed class EarlierPullRequestTests
     }
 
     // a ledger that answers with everything it has, whatever was asked for: the service does not rely on the ledger having filtered
-    private sealed class AllRowsLedger(InMemoryLedger inner) : IPublicationLedger
+    internal sealed class AllRowsLedger(InMemoryLedger inner) : IPublicationLedger
     {
         public Task<PublicationRecord?> TryStartAsync(PublicationRecord started, CancellationToken ct) => inner.TryStartAsync(started, ct);
         public Task<bool> AdvanceAsync(Guid id, string from, string to, string? commitSha, int? pullNumber, string? pullUrl, DateTimeOffset at, CancellationToken ct) => inner.AdvanceAsync(id, from, to, commitSha, pullNumber, pullUrl, at, ct);

@@ -19,7 +19,7 @@ public sealed class GitHubPublicationReader(HttpClient client, GitHubEndpoints? 
     public string GitUrl(string organization, string repository) => Endpoints.GitUrl(organization, repository);
 
     public async Task<PublicationTarget> ReadAsync(string organization, string repository, string? baseBranch, string headBranch, string workflowPath,
-        string workflowSha256, string? priorWorkflowSha256, string token, CancellationToken ct)
+        string workflowSha256, IReadOnlyCollection<string> replaceableSha256, string token, CancellationToken ct)
     {
         var root = $"repos/{Uri.EscapeDataString(organization)}/{Uri.EscapeDataString(repository)}";
         using var repo = await GetAsync(root, token, ct);
@@ -33,7 +33,7 @@ public sealed class GitHubPublicationReader(HttpClient client, GitHubEndpoints? 
         var baseSha = branch is null ? null : Text(Property(branch.RootElement, "commit"), "sha");
         if (baseSha is null) return new(true, archived, defaultBranch, resolvedBase, null, WorkflowFileState.Absent, false, null, []);
 
-        var (file, blobSha) = await FileStateAsync($"{root}/contents/{PathEscape(workflowPath)}?ref={baseSha}", workflowSha256, priorWorkflowSha256, requireBlob: true, token, ct);
+        var (file, blobSha, textSha) = await FileStateAsync($"{root}/contents/{PathEscape(workflowPath)}?ref={baseSha}", workflowSha256, replaceableSha256, requireBlob: true, token, ct);
 
         using var head = await GetAsync($"{root}/git/ref/heads/{PathEscape(headBranch)}", token, ct);
         var headSha = head is null ? null : Text(Property(head.RootElement, "object"), "sha");
@@ -45,31 +45,32 @@ public sealed class GitHubPublicationReader(HttpClient client, GitHubEndpoints? 
                 // the filter is the server's job; a server that ignored it must not make every open pull request look like ours
                 if (pull.ValueKind == JsonValueKind.Object && Text(Property(pull, "head"), "ref") == headBranch &&
                     pull.TryGetProperty("number", out var n) && n.TryGetInt32(out var number)) pulls.Add(number);
-        return new(true, archived, defaultBranch, resolvedBase, baseSha, file, headSha is not null, headSha, pulls, blobSha);
+        return new(true, archived, defaultBranch, resolvedBase, baseSha, file, headSha is not null, headSha, pulls, blobSha, textSha);
     }
 
-    // The state of the file at a path: the approved text, the text the caller named as replaceable, something else, or nothing. For PriorVersion the blob id the
-    // destination reports must be the git id of the bytes that were read; a file whose id cannot be vouched for is "something else", never replaceable.
-    private async Task<(WorkflowFileState State, string? BlobSha)> FileStateAsync(string path, string expectedSha256, string? priorSha256, bool requireBlob, string token, CancellationToken ct)
+    // The state of the file at a path: the approved text, one of the texts the caller named as replaceable, something else, or nothing. For PriorVersion the blob id the
+    // destination reports must be the git id of the bytes that were read; a file whose id cannot be vouched for is "something else", never replaceable. The hash of the text
+    // is reported with it, so the caller knows WHICH of the named texts it is.
+    private async Task<(WorkflowFileState State, string? BlobSha, string? TextSha)> FileStateAsync(string path, string expectedSha256, IReadOnlyCollection<string> replaceableSha256, bool requireBlob, string token, CancellationToken ct)
     {
         using var file = await GetAsync(path, token, ct);
-        if (file is null) return (WorkflowFileState.Absent, null);
+        if (file is null) return (WorkflowFileState.Absent, null, null);
         // a directory (array) or anything that is not a base64 file is "something else is there", never "nothing is there"
         if (file.RootElement.ValueKind != JsonValueKind.Object || Text(file.RootElement, "type") != "file" || Text(file.RootElement, "encoding") != "base64")
-            return (WorkflowFileState.Different, null);
+            return (WorkflowFileState.Different, null, null);
         var encoded = Text(file.RootElement, "content");
-        if (encoded is null) return (WorkflowFileState.Different, null);
+        if (encoded is null) return (WorkflowFileState.Different, null, null);
         try
         {
             var bytes = Convert.FromBase64String(encoded.Replace("\n", "").Replace("\r", ""));
             var hash = WorkflowHash.Sha256(new UTF8Encoding(false, true).GetString(bytes));
-            if (hash == expectedSha256) return (WorkflowFileState.Identical, null);
-            if (priorSha256 is null || hash != priorSha256) return (WorkflowFileState.Different, null);
-            if (!requireBlob) return (WorkflowFileState.PriorVersion, null);
+            if (hash == expectedSha256) return (WorkflowFileState.Identical, null, null);
+            if (!replaceableSha256.Contains(hash)) return (WorkflowFileState.Different, null, null);
+            if (!requireBlob) return (WorkflowFileState.PriorVersion, null, hash);
             var blob = Text(file.RootElement, "sha");
-            return blob is not null && blob == GitBlob.Sha(bytes) ? (WorkflowFileState.PriorVersion, blob) : (WorkflowFileState.Different, null);
+            return blob is not null && blob == GitBlob.Sha(bytes) ? (WorkflowFileState.PriorVersion, blob, hash) : (WorkflowFileState.Different, null, null);
         }
-        catch (Exception ex) when (ex is FormatException or DecoderFallbackException) { return (WorkflowFileState.Different, null); }
+        catch (Exception ex) when (ex is FormatException or DecoderFallbackException) { return (WorkflowFileState.Different, null, null); }
     }
 
     // ---- reconciliation: what became of an attempt that was made -------------------------------------------------------------------------------
@@ -101,9 +102,9 @@ public sealed class GitHubPublicationReader(HttpClient client, GitHubEndpoints? 
         }
 
         var onHead = headSha is null ? WorkflowFileState.Absent
-            : (await FileStateAsync($"{root}/contents/{PathEscape(workflowPath)}?ref={headSha}", workflowSha256, replacedWorkflowSha256, requireBlob: false, token, ct)).State;
+            : (await FileStateAsync($"{root}/contents/{PathEscape(workflowPath)}?ref={headSha}", workflowSha256, replacedWorkflowSha256 is null ? [] : [replacedWorkflowSha256], requireBlob: false, token, ct)).State;
         var onBase = baseTip is null ? WorkflowFileState.Absent
-            : (await FileStateAsync($"{root}/contents/{PathEscape(workflowPath)}?ref={baseTip}", workflowSha256, replacedWorkflowSha256, requireBlob: false, token, ct)).State;
+            : (await FileStateAsync($"{root}/contents/{PathEscape(workflowPath)}?ref={baseTip}", workflowSha256, replacedWorkflowSha256 is null ? [] : [replacedWorkflowSha256], requireBlob: false, token, ct)).State;
         return new(true, archived, baseTip, headSha, pulls.OrderByDescending(p => p.Number).ToArray(), onHead, onBase);
     }
 

@@ -45,8 +45,8 @@ Consequences:
   blocked in the ledger even after a person removes what it left. Since 0.9.0 a superadmin can release it after the product has read the destination again; the plan says `AttemptBlocksPlan` meanwhile.
 - **A pull request still open for the parent (resolved in ADR-019).** A derived proposal planned while the pull request of an earlier publication of the same file is open is now blocked
   (`EarlierPullRequestOpen`) until that pull request is merged or closed.
-- Updating is for the one case "triggers over the file this product put there". Replacing a file after a *re*-conversion (another approved conversion of the same pipeline) is not covered and stays
-  `WorkflowPathOccupied`.
+- Updating was for the one case "triggers over the file this product put there". Replacing a file after a *re*-conversion, and a Triggers proposal replacing a text this product published, are covered
+  since 0.10.0 by [ADR-020](ADR-020-replacing-a-text-the-product-published.md) (a set of texts the product still stands behind, not only the parent's).
 
 Alternatives considered: replacing whatever file is at the path when a person confirms (rejected: the confirmation would be for a file the product cannot describe, and a person's edit would be
 lost); committing to the base branch (rejected: the pull request is the review); remembering reconciliations in a table (rejected for now: a view of "now" is what a person needs, and a history of

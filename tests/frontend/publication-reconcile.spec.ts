@@ -319,3 +319,21 @@ test('an attempt that was released is shown as released from the start, with who
   await expect(panel(page).getByText(/ha visto il prodotto sul destinatario|the product saw at the destination/i)).toContainText(/non esiste|does not exist/i);
   await expect(panel(page).getByText(/ha visto il prodotto sul destinatario|the product saw at the destination/i)).toContainText(/#7 .*(chiusa|closed)/i);
 });
+
+test('a re-conversion that replaces a workflow the product published says what it replaces and that what the earlier version had may be gone', async ({ page }) => {
+  const reconversion = publicationPlan('orion-api', {
+    mode: 'Update', replacesWorkflowSha256: 'cd'.repeat(32),
+    pullRequestTitle: 'Replace the GitHub Actions workflow for Azure pipeline #123 (Orion API) with a new conversion',
+    findings: [{ code: 'WorkflowWillBeReplaced', severity: 'Info', message: 'The base branch has exactly a workflow approved earlier.' }]
+  });
+  await setup(page, approved(), { publication: enabled, plan: reconversion });
+  await openPanel(page);
+  await repositoryField(page).fill('orion-api');
+  await plan(page).click();
+
+  await expect(panel(page).getByText(/sostituisce un file|replaces a file/i)).toBeVisible();
+  await expect(panel(page).getByText(/questo prodotto ha pubblicato e di cui risponde ancora|this product published itself and still stands behind/i).first()).toBeVisible();
+  await expect(panel(page).getByText(/ciò che la versione precedente aveva e questa no va perso|anything the earlier version had and this one does not is gone/i)).toBeVisible();
+  await expect(panel(page).getByText(/Replace the GitHub Actions workflow for Azure pipeline #123/)).toBeVisible();
+  await expect(confirmBox(page)).toBeVisible();
+});

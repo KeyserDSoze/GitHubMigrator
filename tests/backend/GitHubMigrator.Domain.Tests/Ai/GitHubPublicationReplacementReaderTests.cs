@@ -39,7 +39,43 @@ public sealed class GitHubPublicationReplacementReaderTests
     private static async Task<PublicationTarget> ReadAsync(Func<HttpResponseMessage> file, string? prior)
     {
         var handler = new StubHandler().Then(() => Repo()).Then(() => Tip()).Then(file).Then(() => NotFound()).Then(() => Json(Array.Empty<object>()));
-        return await Reader(handler).ReadAsync("target-org", "orion-api", null, Head, Path, WorkflowHash.Sha256(Approved), prior, "pat", default);
+        return await Reader(handler).ReadAsync("target-org", "orion-api", null, Head, Path, WorkflowHash.Sha256(Approved), prior is null ? [] : [prior], "pat", default);
+    }
+
+    private static async Task<PublicationTarget> ReadSetAsync(Func<HttpResponseMessage> file, params string[] named)
+    {
+        var handler = new StubHandler().Then(() => Repo()).Then(() => Tip()).Then(file).Then(() => NotFound()).Then(() => Json(Array.Empty<object>()));
+        return await Reader(handler).ReadAsync("target-org", "orion-api", null, Head, Path, WorkflowHash.Sha256(Approved), named, "pat", default);
+    }
+
+    [Fact]
+    public async Task Of_several_texts_named_as_replaceable_the_one_found_is_reported_with_its_hash_and_a_text_not_named_is_something_else()
+    {
+        var other = "name: an older conversion\non: workflow_dispatch\njobs: {}\n";
+        var named = new[] { WorkflowHash.Sha256(other), WorkflowHash.Sha256(Prior), new string('1', 64) };
+
+        var found = await ReadSetAsync(() => File(Prior), named);
+        Assert.Equal((WorkflowFileState.PriorVersion, BlobOf(Prior)), (found.WorkflowFile, found.WorkflowFileBlobSha));
+        Assert.Equal(WorkflowHash.Sha256(Prior), found.WorkflowFileSha256); // which one it is, so the plan can name it
+
+        var first = await ReadSetAsync(() => File(other), named);
+        Assert.Equal((WorkflowFileState.PriorVersion, WorkflowHash.Sha256(other)), (first.WorkflowFile, first.WorkflowFileSha256));
+
+        foreach (var notNamed in new[] { await ReadSetAsync(() => File(Prior)), await ReadSetAsync(() => File(Prior), new string('1', 64), new string('2', 64)) })
+        {
+            Assert.Equal((WorkflowFileState.Different, (string?)null, (string?)null), (notNamed.WorkflowFile, notNamed.WorkflowFileBlobSha, notNamed.WorkflowFileSha256));
+        }
+    }
+
+    [Fact]
+    public async Task The_hash_of_the_text_is_reported_only_for_a_prior_version_and_never_for_a_blob_id_that_cannot_be_vouched_for()
+    {
+        var approved = await ReadSetAsync(() => File(Approved), WorkflowHash.Sha256(Prior));
+        Assert.Equal((WorkflowFileState.Identical, (string?)null), (approved.WorkflowFile, approved.WorkflowFileSha256));
+        var absent = await ReadSetAsync(NotFound, WorkflowHash.Sha256(Prior));
+        Assert.Equal((WorkflowFileState.Absent, (string?)null), (absent.WorkflowFile, absent.WorkflowFileSha256));
+        var lie = await ReadSetAsync(() => File(Prior, new string('0', 40)), WorkflowHash.Sha256(Prior));
+        Assert.Equal((WorkflowFileState.Different, (string?)null, (string?)null), (lie.WorkflowFile, lie.WorkflowFileBlobSha, lie.WorkflowFileSha256));
     }
 
     [Fact]

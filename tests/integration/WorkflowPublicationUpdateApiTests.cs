@@ -421,6 +421,82 @@ public sealed class WorkflowPublicationUpdateApiTests : PublicationApiTestBase
         Assert.Null((await RowsAsync(conversion)).Single().ReleasedAtUtc);
     }
 
+    // A second conversion of the same pipeline: another approved text for the same workflow path.
+    private async Task<JsonElement> ApprovedReConversionAsync(string marker)
+    {
+        var conversion = await ReadyProposalAsync(GoodWorkflow + $"# {marker}\n");
+        using var approved = await SendAsync(HttpMethod.Post, Url(conversion, "/approve"), Who.Superadmin,
+            new { workflowSha256 = conversion.GetProperty("workflowSha256").GetString(), acknowledgedWarnings = Warned(conversion), note = "Reviewed the new conversion." });
+        Assert.Equal(HttpStatusCode.OK, approved.StatusCode);
+        return conversion;
+    }
+
+    [RequiresAnalysersFact]
+    public async Task A_re_conversion_replaces_the_workflow_the_product_published_and_merged_on_a_new_branch_and_touches_nothing_else()
+    {
+        var (first, oldText, _) = await PublishedAndMergedAsync("pub-reconv");
+        var firstSha = first.GetProperty("workflowSha256").GetString()!;
+        var second = await ApprovedReConversionAsync("second conversion");
+        var secondSha = second.GetProperty("workflowSha256").GetString()!;
+        Assert.NotEqual(firstSha, secondSha);
+        var baseTip = await TipAsync("pub-reconv");
+
+        // the file on the base branch is exactly the text this product published: the plan replaces it, in the words of a conversion
+        var (planStatus, plan) = await PlanAsync(second, "pub-reconv");
+        Assert.Equal(HttpStatusCode.OK, planStatus);
+        Assert.Equal(("Update", firstSha, true), (plan.GetProperty("mode").GetString(), plan.GetProperty("replacesWorkflowSha256").GetString(), plan.GetProperty("ready").GetBoolean()));
+        Assert.Contains("WorkflowWillBeReplaced", Codes(plan));
+        Assert.DoesNotContain(plan.GetProperty("findings").EnumerateArray(), f => f.GetProperty("severity").GetString() == "Blocker");
+        Assert.StartsWith("Replace the GitHub Actions workflow for Azure pipeline #42", plan.GetProperty("pullRequestTitle").GetString());
+        Assert.Contains("a new conversion", plan.GetProperty("pullRequestBody").GetString());
+        Assert.Contains(plan.GetProperty("steps").EnumerateArray(), s => s.GetProperty("code").GetString() == "Replace");
+        var planHash = plan.GetProperty("planSha256").GetString()!;
+        await GitHub!.SendAsync("DELETE", "/_sim/requests");
+
+        var (status, published) = await PublishAsync(second, "pub-reconv", planHash);
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(("Published", "Update", firstSha, 2), (published.GetProperty("state").GetString(), published.GetProperty("mode").GetString(),
+            published.GetProperty("replacedWorkflowSha256").GetString(), published.GetProperty("pullNumber").GetInt32()));
+
+        // a branch, one file replaced with the old blob named, and a pull request: no merge, no deletion, and the base branch is where it was
+        var writes = (await WritesAsync("pub-reconv")).Select(w => w.Method + " " + w.Path.Replace("/api/v3/repos/orion-org/pub-reconv", "")).ToArray();
+        Assert.Equal(["POST /git/refs", "PUT /contents/" + WorkflowPath, "POST /pulls"], writes);
+        Assert.Equal(baseTip, await TipAsync("pub-reconv"));
+        var onBase = await GitHub.SendAsync("GET", $"/repos/orion-org/pub-reconv/contents/{WorkflowPath}?ref=main");
+        Assert.Equal(oldText, Decode(onBase));
+        var head = published.GetProperty("headBranch").GetString()!;
+        var onBranch = await GitHub.SendAsync("GET", $"/repos/orion-org/pub-reconv/contents/{WorkflowPath}?ref={head}");
+        Assert.Equal(second.GetProperty("workflowYaml").GetString()!.TrimEnd(), Decode(onBranch).TrimEnd());
+        var row = (await RowsAsync(second)).Single();
+        Assert.Equal(("Update", firstSha, "Published"), (row.Mode, row.ReplacedWorkflowSha256, row.State));
+    }
+
+    [RequiresAnalysersFact]
+    public async Task A_re_conversion_does_not_replace_a_file_a_person_wrote_or_edited_or_one_the_product_never_published()
+    {
+        // 1. published and merged by the product, then edited by a person: the edit is theirs
+        var (first, _, _) = await PublishedAndMergedAsync("pub-reconv");
+        var onBase = await GitHub!.SendAsync("GET", $"/repos/orion-org/pub-reconv/contents/{WorkflowPath}?ref=main");
+        await GitHub.SendAsync("PUT", $"/repos/orion-org/pub-reconv/contents/{WorkflowPath}", new { message = "tweak", content = B64(Decode(onBase) + "# a person's tweak\n"), sha = onBase.GetProperty("sha").GetString(), branch = "main" });
+        var second = await ApprovedReConversionAsync("second conversion");
+        await GitHub.SendAsync("DELETE", "/_sim/requests");
+        var (_, edited) = await PlanAsync(second, "pub-reconv");
+        Assert.False(edited.GetProperty("ready").GetBoolean());
+        Assert.Equal("Create", edited.GetProperty("mode").GetString());
+        Assert.Contains("WorkflowPathOccupied", Codes(edited));
+        var (blocked, refusal) = await PublishAsync(second, "pub-reconv", edited.GetProperty("planSha256").GetString());
+        Assert.Equal((HttpStatusCode.Conflict, "PublicationPlanNotReady"), (blocked, refusal.GetProperty("error").GetString()));
+        Assert.Empty(await WritesAsync("pub-reconv"));
+
+        // 2. a file the product never published, at the same path: not the product's to replace, even though a conversion is planned for exactly that path
+        await RepoAsync("pub-reconv2");
+        await GitHub.SendAsync("PUT", $"/repos/orion-org/pub-reconv2/contents/{WorkflowPath}", new { message = "by hand", content = B64(first.GetProperty("workflowYaml").GetString()!), branch = "main" });
+        var (_, byHand) = await PlanAsync(second, "pub-reconv2");
+        Assert.Equal("Create", byHand.GetProperty("mode").GetString());
+        Assert.Contains("WorkflowPathOccupied", Codes(byHand));
+        Assert.False(byHand.GetProperty("ready").GetBoolean());
+    }
+
     [RequiresAnalysersFact]
     public async Task A_superadmin_releases_an_attempt_after_the_product_has_looked_at_the_destination_and_then_the_same_plan_goes_through()
     {

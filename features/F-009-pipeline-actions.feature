@@ -168,3 +168,10 @@ Feature: Convert pipelines to reviewed GitHub Actions
     Given an attempt that stopped before a final state
     When a superadmin asks to release it
     Then it is refused while it moved less than fifteen minutes ago, and afterwards it is abandoned as a failure after which writes are possible and released, but only if the destination is clean
+
+  Scenario: A re-conversion replaces the workflow this product published, and only that
+    Given a conversion that was published and merged, and a second approved conversion of the same pipeline with another text
+    When a plan is made against the same repository and the person confirms it by its hash
+    Then the plan replaces exactly the blob and text the product published, on a new branch, in the words of a conversion, and says what the earlier version had may be gone
+    And the base branch is not written and nothing is merged
+    And a file a person edited after it was merged, one the product never published, one whose approval was withdrawn, and one published for another pipeline are not replaced
