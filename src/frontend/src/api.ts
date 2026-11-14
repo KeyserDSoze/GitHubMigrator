@@ -564,6 +564,8 @@ export type Publication = {
   mode?: 'Create' | 'Update'; replacedWorkflowSha256?: string | null;
   // 0.9: a superadmin can release an attempt that keeps its exact plan blocked, after the product has read the destination again. Older answers carry none of these.
   releasedAtUtc?: string | null; releasedBy?: string | null; releaseNote?: string | null; blocksItsPlan?: boolean;
+  // what the destination showed when it was released (facts only, never workflow text)
+  releaseEvidence?: { readAtUtc: string; headBranchExists: boolean; pulls: { number: number; state: string; merged: boolean }[]; fileOnBase: string } | null;
 };
 // An attempt set beside what the destination shows now (read only): the verdict is what is there, the findings what to make of it.
 export type ReconciliationFile = 'Identical' | 'Absent' | 'Different' | 'PriorVersion';

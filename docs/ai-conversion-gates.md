@@ -266,7 +266,7 @@ reported for a published attempt whose pull request was closed unmerged with its
 Body `{ destinationConnectionId, note }`. **Superadmin only**, rate limited, the note 3 to 500 characters (control characters removed). One live attempt per plan is the lock, so an attempt that failed after a
 possible write, one that never finished and one published whose pull request was closed unmerged all keep that exact plan blocked; a person cleans the destination, and **the product looks again before
 it believes it**: GET requests only, with the destination's read-only credential, nothing written. It releases only if no branch, no open pull request and no merged one remains (a published attempt's own pull
-request must be *seen* closed and unmerged). The attempt stays on record exactly as it was; the release is a mark with who, when, why and what the destination showed (JSON without any workflow text).
+request must be *seen* closed and unmerged). The attempt stays on record exactly as it was; the release is a mark with who, when, why and what the destination showed (facts only, no workflow text, no credential): it is stored with the attempt, returned as `releaseEvidence` (`readAtUtc`, `ledgerState`, `headBranchExists`, `pulls` with number/state/merged, `fileOnBase`) and shown on the attempt in the screen.
 
 | Answer | Meaning |
 | --- | --- |

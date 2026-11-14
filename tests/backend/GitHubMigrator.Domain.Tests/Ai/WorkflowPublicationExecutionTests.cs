@@ -51,7 +51,7 @@ internal sealed class InMemoryLedger : IPublicationLedger
         if (RefuseNextRelease?.Invoke() == true) return Task.FromResult(false);
         var i = Rows.FindIndex(r => r.Id == id && r.ReleasedAtUtc is null && r.State is PublicationStates.Failed or PublicationStates.Published);
         if (i < 0) return Task.FromResult(false);
-        Rows[i] = Rows[i] with { ReleasedAtUtc = at, ReleasedById = byId, ReleasedBy = by, ReleaseNote = note };
+        Rows[i] = Rows[i] with { ReleasedAtUtc = at, ReleasedById = byId, ReleasedBy = by, ReleaseNote = note, ReleaseEvidence = evidenceJson };
         Evidence.Add((id, evidenceJson));
         return Task.FromResult(true);
     }

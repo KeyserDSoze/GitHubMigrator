@@ -309,9 +309,13 @@ test('a plan an earlier attempt keeps blocked says so, in words, with nothing to
   await expect(publishButton(page)).toHaveCount(0);
 });
 
-test('an attempt that was released is shown as released from the start, with who and why', async ({ page }) => {
-  await setup(page, approved(), { publication: enabled, attempts: [{ ...failedWrote(), blocksItsPlan: false, releasedAtUtc: '2026-11-13T17:00:00Z', releasedBy: 'ops-lead', releaseNote: 'Branch removed, checked by hand.' }] });
+test('an attempt that was released is shown as released from the start, with who, why and what the product saw', async ({ page }) => {
+  await setup(page, approved(), { publication: enabled, attempts: [{ ...failedWrote(), blocksItsPlan: false, releasedAtUtc: '2026-11-13T17:00:00Z', releasedBy: 'ops-lead', releaseNote: 'Branch removed, checked by hand.',
+    releaseEvidence: { readAtUtc: '2026-11-13T17:00:00Z', headBranchExists: false, pulls: [{ number: 7, state: 'closed', merged: false }], fileOnBase: 'Absent' } }] });
   await openPanel(page);
   await expect(panel(page).getByText(/rilasciato da ops-lead|released by ops-lead/i)).toBeVisible();
   await expect(panel(page).getByText(/Branch removed, checked by hand\./)).toBeVisible();
+  // and what the product saw at the destination when it was released, not only that a person said so
+  await expect(panel(page).getByText(/ha visto il prodotto sul destinatario|the product saw at the destination/i)).toContainText(/non esiste|does not exist/i);
+  await expect(panel(page).getByText(/ha visto il prodotto sul destinatario|the product saw at the destination/i)).toContainText(/#7 .*(chiusa|closed)/i);
 });

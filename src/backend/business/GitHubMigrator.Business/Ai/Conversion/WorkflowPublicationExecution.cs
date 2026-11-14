@@ -89,7 +89,8 @@ public sealed record PublicationRecord(Guid Id, Guid ProposalId, string PlanSha2
     string BaseBranch, string BaseSha, string HeadBranch, string WorkflowPath, string State, string? CommitSha, int? PullNumber, string? PullUrl,
     string? ErrorCode, string? FailedAtState, bool WritesPossible, Guid RequestedById, string RequestedBy, DateTimeOffset StartedAtUtc, DateTimeOffset UpdatedAtUtc,
     string Mode = PublicationModes.Create, string? ReplacedBlobSha = null, string? ReplacedWorkflowSha256 = null,
-    DateTimeOffset? ReleasedAtUtc = null, Guid? ReleasedById = null, string? ReleasedBy = null, string? ReleaseNote = null)
+    DateTimeOffset? ReleasedAtUtc = null, Guid? ReleasedById = null, string? ReleasedBy = null, string? ReleaseNote = null,
+    string? ReleaseEvidence = null)
 {
     // The ledger's own definition of "live": everything except an attempt that failed before it wrote anything and one a person released after the product had verified, at the
     // destination, that nothing of it remains. A live attempt keeps its exact plan blocked.

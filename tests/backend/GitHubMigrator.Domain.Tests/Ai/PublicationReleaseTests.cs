@@ -78,7 +78,8 @@ public sealed class PublicationReleaseTests
         Assert.Equal((Later, Admin.Id, "admin", "Deleted the branch by hand."), (released.ReleasedAtUtc, released.ReleasedById, released.ReleasedBy, released.ReleaseNote));
         Assert.False(released.BlocksItsPlan);
         // the attempt itself is as it was: what failed, where, and that a write was possible stay on record
-        Assert.Equal(rig.Row with { ReleasedAtUtc = Later, ReleasedById = Admin.Id, ReleasedBy = "admin", ReleaseNote = "Deleted the branch by hand." }, released);
+        Assert.Equal(rig.Row with { ReleasedAtUtc = Later, ReleasedById = Admin.Id, ReleasedBy = "admin", ReleaseNote = "Deleted the branch by hand.", ReleaseEvidence = released.ReleaseEvidence }, released);
+        Assert.Equal(Assert.Single(rig.Ledger.Evidence).Evidence, released.ReleaseEvidence); // what is shown is what was stored
         Assert.Equal((PublicationStates.Failed, "PublicationFileFailed", true), (released.State, released.ErrorCode, released.WritesPossible));
 
         // read with the destination's credential, for the branch and base the ledger recorded, and nothing else
@@ -314,7 +315,7 @@ public sealed class PublicationReleaseTests
             (root.GetProperty("ledgerState").GetString(), root.GetProperty("ledgerWritesPossible").GetBoolean(), root.GetProperty("headBranchExists").GetBoolean(),
              root.GetProperty("baseTipSha").GetString(), root.GetProperty("fileOnBase").GetString()));
         var pull = Assert.Single(root.GetProperty("pulls").EnumerateArray());
-        Assert.Equal((7, "closed", false), (pull.GetProperty("Number").GetInt32(), pull.GetProperty("State").GetString(), pull.GetProperty("Merged").GetBoolean()));
+        Assert.Equal((7, "closed", false), (pull.GetProperty("number").GetInt32(), pull.GetProperty("state").GetString(), pull.GetProperty("merged").GetBoolean()));
         Assert.DoesNotContain("destination-pat", json);
         Assert.DoesNotContain("workflowYaml", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("run:", json);

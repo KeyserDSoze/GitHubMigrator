@@ -108,5 +108,5 @@ public sealed class PostgresPublicationLedger(AppDbContext db) : IPublicationLed
 
     private static PublicationRecord From(WorkflowPublicationRecord r) => new(r.Id, r.ProposalId, r.PlanSha256, r.WorkflowSha256, r.Organization, r.Repository, r.BaseBranch,
         r.BaseSha, r.HeadBranch, r.WorkflowPath, r.State, r.CommitSha, r.PullNumber, r.PullUrl, r.ErrorCode, r.FailedAtState, r.WritesPossible, r.RequestedById, r.RequestedBy,
-        r.StartedAtUtc, r.UpdatedAtUtc, r.Mode, r.ReplacedBlobSha, r.ReplacedWorkflowSha256, r.ReleasedAtUtc, r.ReleasedById, r.ReleasedBy, r.ReleaseNote);
+        r.StartedAtUtc, r.UpdatedAtUtc, r.Mode, r.ReplacedBlobSha, r.ReplacedWorkflowSha256, r.ReleasedAtUtc, r.ReleasedById, r.ReleasedBy, r.ReleaseNote, r.ReleaseEvidence);
 }

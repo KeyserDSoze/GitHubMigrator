@@ -449,6 +449,11 @@ public sealed class WorkflowPublicationUpdateApiTests : PublicationApiTestBase
         Assert.Empty(await WritesAsync(repo));
         Assert.Equal(("Failed", true, false, "The branch was deleted from the web page."), (body.GetProperty("state").GetString(), body.GetProperty("writesPossible").GetBoolean(), body.GetProperty("blocksItsPlan").GetBoolean(), body.GetProperty("releaseNote").GetString()));
         Assert.False(string.IsNullOrEmpty(body.GetProperty("releasedBy").GetString()));
+        // what the destination showed is part of the answer (facts only), and is what was stored
+        var saw = body.GetProperty("releaseEvidence");
+        Assert.False(saw.GetProperty("headBranchExists").GetBoolean());
+        Assert.Equal(0, saw.GetProperty("pulls").GetArrayLength());
+        Assert.DoesNotContain("run:", saw.ToString());
         var row = Assert.Single(await RowsAsync(conversion));
         Assert.Equal(("Failed", "PublicationFileFailed", true), (row.State, row.ErrorCode, row.WritesPossible));
         Assert.NotNull(row.ReleasedAtUtc);

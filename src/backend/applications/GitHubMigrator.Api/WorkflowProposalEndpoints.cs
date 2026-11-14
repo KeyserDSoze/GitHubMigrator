@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Security.Claims;
 using GitHubMigrator.Business;
 using Microsoft.AspNetCore.Authorization;
@@ -302,11 +303,19 @@ public sealed record PublicationStatusResponse(bool Enabled, IReadOnlyList<strin
 public sealed record CredentialCheckInput(string? Repository);
 public sealed record PublicationResponse(Guid Id, Guid ProposalId, string State, string Organization, string Repository, string BaseBranch, string BaseSha, string HeadBranch,
     string WorkflowPath, string PlanSha256, string? CommitSha, int? PullNumber, string? PullUrl, string? ErrorCode, string? FailedAtState, bool WritesPossible, string RequestedBy,
-    DateTimeOffset StartedAtUtc, DateTimeOffset UpdatedAtUtc, string Mode, string? ReplacedWorkflowSha256, DateTimeOffset? ReleasedAtUtc, string? ReleasedBy, string? ReleaseNote, bool BlocksItsPlan)
+    DateTimeOffset StartedAtUtc, DateTimeOffset UpdatedAtUtc, string Mode, string? ReplacedWorkflowSha256, DateTimeOffset? ReleasedAtUtc, string? ReleasedBy, string? ReleaseNote, bool BlocksItsPlan, JsonElement? ReleaseEvidence = null)
 {
     public static PublicationResponse From(PublicationRecord r) => new(r.Id, r.ProposalId, r.State, r.Organization, r.Repository, r.BaseBranch, r.BaseSha, r.HeadBranch,
         r.WorkflowPath, r.PlanSha256, r.CommitSha, r.PullNumber, r.PullUrl, r.ErrorCode, r.FailedAtState, r.WritesPossible, r.RequestedBy, r.StartedAtUtc, r.UpdatedAtUtc,
-        r.Mode, r.ReplacedWorkflowSha256, r.ReleasedAtUtc, r.ReleasedBy, r.ReleaseNote, r.BlocksItsPlan);
+        r.Mode, r.ReplacedWorkflowSha256, r.ReleasedAtUtc, r.ReleasedBy, r.ReleaseNote, r.BlocksItsPlan, EvidenceOf(r.ReleaseEvidence));
+
+    // What the destination showed when a person released the attempt, as the product stored it: facts (branch, pull requests, file state), never workflow text.
+    private static JsonElement? EvidenceOf(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        try { using var document = JsonDocument.Parse(json); return document.RootElement.Clone(); }
+        catch (JsonException) { return null; }
+    }
 }
 public sealed record PublicationPlanInput(Guid DestinationConnectionId, string? Repository, string? BaseBranch);
 public sealed record PublicationFindingResponse(string Code, string Severity, string Message);

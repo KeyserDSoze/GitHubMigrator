@@ -264,7 +264,11 @@ export default function PublicationPlanPanel({ token, proposalId, destinations, 
           {reconcileErrors[a.id] && <div className="alert" role="alert">{reconcileErrors[a.id]}</div>}
           {a.releasedAtUtc && <p className="connection-hint publication-released">
             <CheckCircle2 size={13} /> {t('pubReleasedBy', { who: a.releasedBy ?? '', when: new Date(a.releasedAtUtc).toLocaleString() })}
-            {a.releaseNote ? <> — “{a.releaseNote}”</> : null}</p>}
+            {a.releaseNote ? <> — “{a.releaseNote}”</> : null}
+            {a.releaseEvidence && <> · {t('pubReleaseSaw', {
+              branch: a.releaseEvidence.headBranchExists ? t('pubRecExists') : t('pubRecMissing'),
+              pulls: a.releaseEvidence.pulls.length === 0 ? t('pubRecNone')
+                : a.releaseEvidence.pulls.map(p => `#${p.number} ${p.merged ? t('pubRecMerged') : p.state === 'open' ? t('pubRecOpen') : t('pubRecClosed')}`).join(', ') })}</>}</p>}
           {reconciled[a.id] && reconciliation(reconciled[a.id])}
           {reconciled[a.id] && releasable(reconciled[a.id]) && releaseForm(a)}
         </li>)}

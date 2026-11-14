@@ -54,7 +54,7 @@ public sealed class PublicationReleaseService(IPublicationLedger ledger, IConnec
         var evidence = JsonSerializer.Serialize(new
         {
             readAtUtc = now, ledgerState = record.State, ledgerWritesPossible = record.WritesPossible, baseTipSha = seen.BaseTipSha, headBranchExists = false,
-            pulls = seen.Pulls.Select(p => new { p.Number, p.State, p.Merged }).Take(10), fileOnBase = seen.FileOnBase.ToString()
+            pulls = seen.Pulls.Select(p => new { number = p.Number, state = p.State, merged = p.Merged }).Take(10), fileOnBase = seen.FileOnBase.ToString()
         });
         if (!await ledger.ReleaseAsync(record.Id, actor.Id, actor.Name, clean, evidence, now, ct))
             throw new WorkflowPublicationException("PublicationLedgerConflict", record: await ledger.GetAsync(record.Id, ct));
