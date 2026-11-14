@@ -298,6 +298,101 @@ public sealed class AzureDevOpsServicesLiveSmokeTests(LiveReport report, ITestOu
         Assert.DoesNotContain(Ado.Pat, JsonSerializer.Serialize(located.Value.Yaml with { Content = null }));
     }
 
+    // The documented BuildDefinition.process has only `type`: how a classic (designer) pipeline's phases, steps and tasks really look is not in Microsoft's reference, and the simulator's shape is an assumption.
+    // This records the shape of the first classic pipeline found, as key NAMES and value kinds only (never a value), plus whether the task catalogue answers and resolves a step's task. It is what a converter
+    // of classic pipelines would have to be built on.
+    [LiveAdoFact]
+    public async Task Classic_pipeline_shape_is_recorded_as_key_names_only()
+    {
+        using var http = Raw();
+        var projects = await GetAsync(http, $"{Endpoints.Core(Ado.Organization)}/_apis/projects?$top=200&api-version=7.1");
+        string? projectId = null; int definitionId = 0; string? configurationType = null;
+        var looked = 0;
+        foreach (var project in projects.Json!.RootElement.GetProperty("value").EnumerateArray())
+        {
+            if (Ado.Project is not null && !Ado.Project.Equals(project.GetProperty("name").GetString(), StringComparison.OrdinalIgnoreCase)) continue;
+            var id = project.GetProperty("id").GetString()!;
+            var list = await GetAsync(http, $"{Endpoints.Core(Ado.Organization)}/{id}/_apis/pipelines?api-version=7.1");
+            if (list.Status != 200) continue;
+            foreach (var pipeline in list.Json!.RootElement.GetProperty("value").EnumerateArray())
+            {
+                if (++looked > 40) break;
+                var one = await GetAsync(http, $"{Endpoints.Core(Ado.Organization)}/{id}/_apis/pipelines/{pipeline.GetProperty("id").GetInt32()}?api-version=7.1");
+                if (one.Json is null || !one.Json.RootElement.TryGetProperty("configuration", out var configuration) || !configuration.TryGetProperty("type", out var type)) continue;
+                if (type.GetString() is "yaml" or null) continue;
+                projectId = id; definitionId = pipeline.GetProperty("id").GetInt32(); configurationType = type.GetString();
+                break;
+            }
+            if (projectId is not null || looked > 40) break;
+        }
+        if (projectId is null)
+        {
+            report.Record("ado-services", "classic-pipeline-shape", "info", $"None of the {looked} pipelines looked at is a classic one: the shape could not be recorded. Point ..._ADO_PROJECT at a project that has one.");
+            return;
+        }
+        report.Record("ado-services", "classic-pipeline-configuration-type", "info", $"`configuration.type` of a classic pipeline in _apis/pipelines is '{configurationType}' (the product treats anything but 'yaml' as classic).");
+
+        var definition = await GetAsync(http, $"{Endpoints.Core(Ado.Organization)}/{projectId}/_apis/build/definitions/{definitionId}?api-version=7.1");
+        Assert.Equal(200, definition.Status);
+        var root = definition.Json!.RootElement;
+        report.Record("ado-services", "classic-definition-keys", "info", "definition keys: " + Keys(root));
+        if (!root.TryGetProperty("process", out var process))
+        {
+            report.Record("ado-services", "classic-process-shape", "differs", "The build definition has no `process`.");
+            return;
+        }
+        report.Record("ado-services", "classic-process-shape", "info", "process keys: " + Keys(process) + (process.TryGetProperty("type", out var processType) ? $"; type={processType}" : ""));
+        if (root.TryGetProperty("variables", out var variables) && variables.ValueKind == JsonValueKind.Object)
+        {
+            var first = variables.EnumerateObject().FirstOrDefault();
+            report.Record("ado-services", "classic-variables-shape", "info", $"{variables.EnumerateObject().Count()} variable(s); a variable's keys: " + (first.Value.ValueKind == JsonValueKind.Object ? Keys(first.Value) : "none"));
+        }
+        foreach (var name in new[] { "queue", "triggers", "options", "repository", "demands" })
+            if (root.TryGetProperty(name, out var part))
+                report.Record("ado-services", "classic-" + name + "-shape", "info", part.ValueKind == JsonValueKind.Array
+                    ? $"array of {part.GetArrayLength()}; an item's keys: " + (part.GetArrayLength() > 0 ? Keys(part[0]) : "none")
+                    : "keys: " + Keys(part));
+
+        if (!process.TryGetProperty("phases", out var phases) || phases.ValueKind != JsonValueKind.Array || phases.GetArrayLength() == 0)
+        {
+            report.Record("ado-services", "classic-phases-shape", "differs", "process has no `phases` array: the steps of a classic pipeline are not where the simulator puts them.");
+            return;
+        }
+        var phase = phases[0];
+        report.Record("ado-services", "classic-phases-shape", "info", $"{phases.GetArrayLength()} phase(s); a phase's keys: " + Keys(phase));
+        if (!phase.TryGetProperty("steps", out var steps) || steps.ValueKind != JsonValueKind.Array || steps.GetArrayLength() == 0)
+        {
+            report.Record("ado-services", "classic-steps-shape", "differs", "the first phase has no `steps` array.");
+            return;
+        }
+        var step = steps[0];
+        report.Record("ado-services", "classic-steps-shape", "info", $"{steps.GetArrayLength()} step(s) in the first phase; a step's keys: " + Keys(step));
+        string? taskId = null;
+        if (step.TryGetProperty("task", out var task))
+        {
+            var kind = task.ValueKind;
+            taskId = kind == JsonValueKind.Object && task.TryGetProperty("id", out var idProperty) ? idProperty.GetString() : null;
+            report.Record("ado-services", "classic-step-task-shape", kind == JsonValueKind.String ? "differs" : "info",
+                kind == JsonValueKind.String ? "A step's `task` is a plain string (that is what the simulator emits, 'Name@N'): confirm it is the same on the real service." :
+                    $"A step's `task` is {kind}; keys: " + Keys(task) + "; id is a GUID: " + Guid.TryParse(taskId, out _));
+        }
+        if (step.TryGetProperty("inputs", out var inputs) && inputs.ValueKind == JsonValueKind.Object)
+            report.Record("ado-services", "classic-step-inputs-shape", "info", $"{inputs.EnumerateObject().Count()} input(s); names only: " + string.Join(",", inputs.EnumerateObject().Select(p => p.Name).Order().Take(12)));
+
+        // task GUIDs are only meaningful with the catalogue: does it answer, and does it know this step's task?
+        var catalogue = await GetAsync(http, $"{Endpoints.Core(Ado.Organization)}/_apis/distributedtask/tasks?api-version=7.1");
+        if (catalogue.Status != 200 || catalogue.Json is null || !catalogue.Json.RootElement.TryGetProperty("value", out var tasks) || tasks.ValueKind != JsonValueKind.Array)
+            report.Record("ado-services", "task-catalogue", "differs", $"GET _apis/distributedtask/tasks answered HTTP {catalogue.Status} without a `value` array.");
+        else
+        {
+            report.Record("ado-services", "task-catalogue", "info", $"{tasks.GetArrayLength()} task definitions; an item's keys: " + (tasks.GetArrayLength() > 0 ? Keys(tasks[0]) : "none"));
+            if (taskId is not null)
+                report.Record("ado-services", "task-catalogue-resolves-step-task", tasks.EnumerateArray().Any(t => t.TryGetProperty("id", out var i) && string.Equals(i.GetString(), taskId, StringComparison.OrdinalIgnoreCase)) ? "confirmed" : "differs",
+                    "whether the catalogue has the id of the first step's task (the name and version of a step come from there).");
+        }
+        output.WriteLine("classic pipeline shape recorded as key names only; see live-smoke-report.json");
+    }
+
     [LiveAdoFact]
     public async Task Contract_probes_record_how_the_real_graph_and_security_apis_answer()
     {
